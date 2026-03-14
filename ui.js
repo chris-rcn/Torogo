@@ -433,17 +433,19 @@ function aiGetMove(game) {
   return candidates[bestIdx];
 }
 
+let computerBusy = false;
+
 function scheduleComputerMove() {
   if (game.gameOver || game.current !== 'black') return;
-  // Ensure the browser paints the shield / "thinking" state before the
-  // blocking AI computation starts.  requestAnimationFrame fires before
-  // the next paint, then a setTimeout(0) lets the paint actually
-  // commit — critical on iOS Safari.
+  computerBusy = true;
   updateUI();
   renderer.draw();
   requestAnimationFrame(() => {
     setTimeout(() => {
-      if (game.gameOver || game.current !== 'black') return;
+      if (game.gameOver || game.current !== 'black') {
+        computerBusy = false;
+        return;
+      }
       const move = aiGetMove(game);
       if (move.type === 'place') {
         game.placeStone(move.x, move.y);
@@ -451,7 +453,8 @@ function scheduleComputerMove() {
         game.pass();
       }
       renderer.draw();
-      updateUI();
+      // Brief cooldown so queued pointer events don't sneak through
+      setTimeout(() => { computerBusy = false; updateUI(); }, 50);
     }, 0);
   });
 }
@@ -498,7 +501,7 @@ function updateUI() {
     sp.style.display = 'none';
   }
 
-  const isHumanTurn = !g.gameOver && g.current === 'white';
+  const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
   canvas.classList.toggle('shielded', !isHumanTurn);
 }
@@ -561,7 +564,7 @@ canvas.addEventListener('pointerleave', () => {
 
 canvas.addEventListener('pointerup', (e) => {
   canvas.classList.remove('panning', 'placing');
-  if (!isPanning && game.current === 'white') {
+  if (!isPanning && !computerBusy && game.current === 'white') {
     // Short tap / click → place human (white) stone
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -582,7 +585,7 @@ canvas.addEventListener('pointerup', (e) => {
 });
 
 document.getElementById('pass-btn').addEventListener('click', () => {
-  if (game.current !== 'white') return;
+  if (computerBusy || game.current !== 'white') return;
   game.pass();
   renderer.draw();
   updateUI();
