@@ -68,6 +68,13 @@ class Renderer {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
+    // Clip to the board interior so adjacent-tile leakage never bleeds
+    // into the padding zone, keeping overlap consistent across board sizes.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(this.padding, this.padding, W - 2 * this.padding, H - 2 * this.padding);
+    ctx.clip();
+
     // Compute which tile indices are needed to cover the canvas viewport,
     // so panning works infinitely in any direction.
     const dxMin = Math.floor((-this.panX - this.padding) / ts);
@@ -90,6 +97,8 @@ class Renderer {
     // painted exactly once (the per-tile OVERLAP regions would otherwise
     // overlap and compound the alpha).
     this.drawGhostStone();
+
+    ctx.restore();
   }
 
   drawGrid(offX = 0, offY = 0) {
