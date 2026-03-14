@@ -572,23 +572,21 @@ class Renderer {
 
         const isPrimary = dx === 0 && dy === 0;
 
-        // Faint overlay on non-primary tiles to distinguish them
-        this.drawGrid(offX, offY, !isPrimary);
+        this.drawGrid(offX, offY);
         this.drawStarPoints(offX, offY);
         this.drawStones(offX, offY);
         this.drawLastMove(offX, offY);
         if (isPrimary) {
-          this.drawGhostLines();
           this.drawIllegalFlash();
         }
       }
     }
   }
 
-  drawGrid(offX = 0, offY = 0, faint = false) {
+  drawGrid(offX = 0, offY = 0) {
     const ctx = this.ctx;
     const N = this.game.boardSize;
-    ctx.strokeStyle = faint ? 'rgba(90,58,16,0.35)' : '#5a3a10';
+    ctx.strokeStyle = '#5a3a10';
     ctx.lineWidth = 1;
 
     const [, topY] = this.toCanvas(0, 0, offX, offY);
@@ -609,34 +607,6 @@ class Renderer {
       ctx.lineTo(rightX, cy);
       ctx.stroke();
     }
-  }
-
-  // Faint dashed lines hinting at toroidal continuity (primary tile only)
-  drawGhostLines() {
-    const ctx = this.ctx;
-    const N = this.game.boardSize;
-    const ghost = this.cellSize * 0.4;
-    ctx.strokeStyle = 'rgba(90, 58, 16, 0.25)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 4]);
-
-    const [leftX]  = this.toCanvas(0, 0);
-    const [rightX] = this.toCanvas(N - 1, 0);
-    const [, topY] = this.toCanvas(0, 0);
-    const [, botY] = this.toCanvas(0, N - 1);
-
-    for (let i = 0; i < N; i++) {
-      const [cx] = this.toCanvas(i, 0);
-      ctx.beginPath(); ctx.moveTo(cx, topY); ctx.lineTo(cx, topY - ghost); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx, botY); ctx.lineTo(cx, botY + ghost); ctx.stroke();
-    }
-    for (let i = 0; i < N; i++) {
-      const [, cy] = this.toCanvas(0, i);
-      ctx.beginPath(); ctx.moveTo(leftX, cy); ctx.lineTo(leftX - ghost, cy); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(rightX, cy); ctx.lineTo(rightX + ghost, cy); ctx.stroke();
-    }
-
-    ctx.setLineDash([]);
   }
 
   drawStarPoints(offX = 0, offY = 0) {
