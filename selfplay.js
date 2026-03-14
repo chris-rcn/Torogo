@@ -103,6 +103,10 @@ function printBoard(game) {
     if (last && last.y === y && last.x === size - 1) line += ')';
     console.log(line);
   }
+  if (!last) {
+    const passer = game.current === 'black' ? 'White' : 'Black';
+    console.log('   ' + passer + ' passed');
+  }
   console.log();
 }
 
