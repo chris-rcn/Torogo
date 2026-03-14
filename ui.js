@@ -72,7 +72,12 @@ class Renderer {
     // into the padding zone, keeping overlap consistent across board sizes.
     ctx.save();
     ctx.beginPath();
-    ctx.rect(this.padding, this.padding, W - 2 * this.padding, H - 2 * this.padding);
+    // Expand by half a cell on each side so stones/lines at boundary
+    // intersections are fully visible (stone radius = 0.46 cs < 0.5 cs),
+    // while still excluding adjacent-tile leakage (≥ 1 cs outside boundary).
+    const halfCs = this.cellSize / 2;
+    ctx.rect(this.padding - halfCs, this.padding - halfCs,
+             W - 2 * this.padding + 2 * halfCs, H - 2 * this.padding + 2 * halfCs);
     ctx.clip();
 
     // Compute which tile indices are needed to cover the canvas viewport,
