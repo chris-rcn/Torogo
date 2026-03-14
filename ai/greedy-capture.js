@@ -16,20 +16,7 @@
  *   game  - a live Game instance (read-only; do not mutate)
  */
 
-const { Game } = require('../game.js');
-
 // ── helpers ────────────────────────────────────────────────────────────────
-
-function cloneGame(game) {
-  const g = new Game(game.boardSize);
-  g.board          = game.board.clone();
-  g.current        = game.current;
-  g.captured       = { ...game.captured };
-  g.prevHash       = game.prevHash;
-  g.consecutivePasses = game.consecutivePasses;
-  g.gameOver       = game.gameOver;
-  return g;
-}
 
 function isTrueEye(board, x, y, color) {
   const N = board.size;
@@ -84,7 +71,7 @@ function findCapture(game) {
   shuffle(moves);
   for (const [x, y] of moves) {
     // Capturing an atari group is always legal, but double-check for Ko.
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
   return null;
@@ -96,7 +83,7 @@ function findEscape(game) {
   const moves = groupsWithLibCount(game.board, color, 1);
   shuffle(moves);
   for (const [x, y] of moves) {
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
   return null;
@@ -106,7 +93,7 @@ function findEscape(game) {
 function findThreat(game, candidates) {
   const opp = game.current === 'black' ? 'white' : 'black';
   for (const [x, y] of candidates) {
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (!clone.placeStone(x, y)) continue;
     // Check whether any opponent group now has exactly 1 liberty.
     const visited = new Set();
@@ -133,7 +120,7 @@ function findThreat(game, candidates) {
 // Tier 4: random legal non-eye move.
 function findRandom(game, candidates) {
   for (const [x, y] of candidates) {
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
   return null;

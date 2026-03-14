@@ -17,8 +17,6 @@
  *     2. At least 3 of the 4 diagonal neighbours are occupied by `color`.
  */
 
-const { Game } = require('../game.js');
-
 function isTrueEye(board, x, y, color) {
   const N = board.size;
   const ortho = board.getNeighbors(x, y);
@@ -33,16 +31,6 @@ function isTrueEye(board, x, y, color) {
   return friendly >= 3;
 }
 
-function cloneGame(game) {
-  const g = new Game(game.boardSize);
-  g.board = game.board.clone();
-  g.current = game.current;
-  g.captured = { ...game.captured };
-  g.prevHash = game.prevHash;
-  g.consecutivePasses = game.consecutivePasses;
-  g.gameOver = game.gameOver;
-  return g;
-}
 
 module.exports = function getMove(game) {
   if (game.gameOver) return { type: 'pass' };
@@ -76,7 +64,7 @@ module.exports = function getMove(game) {
     }
 
     // All four neighbours are occupied — verify legality with a clone.
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
 
