@@ -176,7 +176,7 @@ module.exports = function getMove(game) {
     }
   }
   // Only consider passing after enough moves have been played.
-  if (candidates.length === 0 || game.moveCount > N * N / 3) {
+  if (candidates.length === 0 || game.moveCount > N * N / 2) {
     candidates.push({ type: 'pass' });
   }
 
