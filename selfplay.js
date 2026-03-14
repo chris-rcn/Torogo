@@ -144,4 +144,5 @@ const wCol  = (n) => String(n).padStart(wW);
 console.log(`  ${''.padEnd(6)}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  policy`);
 console.log(`  P1:     ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${p1Name}`);
 console.log(`  P2:     ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${p2Name}`);
-console.log(`  Black:  ${wCol(tally.black)}  ${pct(tally.black)}          (color win rate, komi=${komi})`);
+if (p1Name === p2Name)
+  console.log(`  Black:  ${wCol(tally.black)}  ${pct(tally.black)}          (color win rate, komi=${komi})`);
