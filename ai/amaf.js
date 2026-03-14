@@ -251,11 +251,11 @@ module.exports = function getMove(game) {
   // ends now matches the winner in every single pass playout.  If there is
   // any disagreement, fall back to the best non-pass candidate.
   if (candidates[bestIdx].type === 'pass' && plays[PASS_IDX] > 0) {
-    const probe = game.clone();
-    probe.endGame();
-    const s = probe.scores;
-    const actualWinner = s.black.total > s.white.total ? 'black'
-                       : s.white.total > s.black.total ? 'white'
+    const territory = game.calcTerritory();
+    const blackTotal = territory.black + game.captured.white;
+    const whiteTotal = territory.white + game.captured.black + game.komi;
+    const actualWinner = blackTotal > whiteTotal ? 'black'
+                       : whiteTotal > blackTotal ? 'white'
                        : null;
     const allPlayoutsAgree = actualWinner === player
       ? wins[PASS_IDX] === plays[PASS_IDX]
