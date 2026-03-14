@@ -23,7 +23,7 @@ const candidate_playouts = 50; // playouts per candidate (same as mc.js)
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
-  : 0.9;
+  : 0.5;
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
 const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
   ? parseFloat(process.env.AMAF_OPP_WEIGHT)
