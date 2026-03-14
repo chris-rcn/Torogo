@@ -119,33 +119,22 @@ function printLeaderboard(round) {
   const rows = [];
   for (const [w, s] of stats) {
     const rate = s.games > 0 ? s.wins / s.games : null;
-    // 95% Wilson confidence interval half-width
-    let lo = 0, hi = 1;
-    if (s.games > 0 && rate !== null) {
-      const z = 1.96, n = s.games, p = rate;
-      const centre = (p + z * z / (2 * n)) / (1 + z * z / n);
-      const margin  = z / (1 + z * z / n) * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
-      lo = centre - margin;
-      hi = centre + margin;
-    }
-    rows.push({ w, rate, lo, hi, games: s.games, wins: s.wins });
+    rows.push({ w, rate, games: s.games, wins: s.wins });
   }
   rows.sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1));
 
   console.log(`\n${'─'.repeat(62)}`);
   console.log(`Round ${round} complete  [${ts()}]  size=${boardSize}  discount=${FIXED_DISCOUNT}`);
   console.log(`${'─'.repeat(62)}`);
-  console.log(`  opp_weight    win%   95% CI              games`);
+  console.log(`  opp_weight    win%    games`);
   console.log(`${'─'.repeat(62)}`);
   for (const r of rows) {
     if (r.rate === null) {
       console.log(`  ${String(r.w).padEnd(10)}  —`);
     } else {
       const pct  = (r.rate  * 100).toFixed(1).padStart(5);
-      const plo  = (r.lo    * 100).toFixed(1).padStart(5);
-      const phi  = (r.hi    * 100).toFixed(1).padStart(5);
       const mark = r.rate > 0.5 ? ' ←' : '';
-      console.log(`  ${String(r.w).padEnd(10)}  ${pct}%   [${plo}%, ${phi}%]   ${String(r.games).padStart(5)}${mark}`);
+      console.log(`  ${String(r.w).padEnd(10)}  ${pct}%   ${String(r.games).padStart(5)}${mark}`);
     }
   }
   console.log(`${'─'.repeat(62)}\n`);
