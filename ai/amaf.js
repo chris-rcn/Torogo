@@ -247,5 +247,41 @@ module.exports = function getMove(game) {
     if (passCandIdx !== -1) bestIdx = passCandIdx;
   }
 
+  // Before committing to a pass, verify that the actual winner if the game
+  // ends now matches the winner in every single pass playout.  If there is
+  // any disagreement, fall back to the best non-pass candidate.
+  if (candidates[bestIdx].type === 'pass' && plays[PASS_IDX] > 0) {
+    const probe = game.clone();
+    probe.endGame();
+    const s = probe.scores;
+    const actualWinner = s.black.total > s.white.total ? 'black'
+                       : s.white.total > s.black.total ? 'white'
+                       : null;
+    const allPlayoutsAgree = actualWinner === player
+      ? wins[PASS_IDX] === plays[PASS_IDX]
+      : wins[PASS_IDX] === 0;
+    if (!allPlayoutsAgree) {
+      // Pick best non-pass candidate instead.
+      let altRatio = -1;
+      let altCount = 0;
+      let altIdx = -1;
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].type === 'pass') continue;
+        const idx = candidates[i].y * N + candidates[i].x;
+        if (plays[idx] === 0) continue;
+        const ratio = wins[idx] / plays[idx];
+        if (ratio > altRatio) {
+          altRatio = ratio;
+          altIdx = i;
+          altCount = 1;
+        } else if (ratio === altRatio) {
+          altCount++;
+          if (Math.random() * altCount < 1) altIdx = i;
+        }
+      }
+      if (altIdx !== -1) bestIdx = altIdx;
+    }
+  }
+
   return candidates[bestIdx];
 };
