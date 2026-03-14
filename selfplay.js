@@ -66,8 +66,8 @@ if (isNaN(numGames) || numGames < 1) {
   console.error('--games must be a positive integer');
   process.exit(1);
 }
-if (![9, 13, 19].includes(boardSize)) {
-  console.error('--size must be 9, 13, or 19');
+if (!Number.isInteger(boardSize) || boardSize < 7 || boardSize > 19 || boardSize % 2 === 0) {
+  console.error('--size must be an odd integer between 7 and 19');
   process.exit(1);
 }
 if (!Number.isFinite(komi)) {
