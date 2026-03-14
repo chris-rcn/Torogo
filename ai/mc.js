@@ -28,13 +28,64 @@ function cloneGame(game) {
 }
 
 function playRandom(game) {
+  const size = game.boardSize;
+
+  // Build the initial list of empty cells once.
+  const empty = [];
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++)
+      if (game.board.get(x, y) === null) empty.push([x, y]);
+
   while (!game.gameOver) {
-    const move = randomAgent(game);
-    if (move.type === 'place') {
-      game.placeStone(move.x, move.y);
-    } else {
-      game.pass();
+    let placed = false;
+
+    // Scan candidates in random order without replacement using a partition
+    // index `end`.  Elements in [0, end) are untried this turn; elements in
+    // [end, empty.length) were tried but were illegal (Ko/suicide) and stay
+    // in the list for future turns.
+    let end = empty.length;
+
+    while (end > 0) {
+      const i = Math.floor(Math.random() * end);
+      const [x, y] = empty[i];
+
+      // Move candidate to the boundary so we can remove it cheaply if needed.
+      empty[i] = empty[end - 1];
+      empty[end - 1] = [x, y];
+      end--;
+
+      // Stale entry: cell was filled by a prior move in this playout.
+      if (game.board.get(x, y) !== null) {
+        // Permanently remove (it is sitting at index `end`).
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
+        continue;
+      }
+
+      const capBefore = game.captured.black + game.captured.white;
+
+      if (game.placeStone(x, y)) {
+        // Permanently remove the now-occupied cell (sitting at index `end`).
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
+
+        // If any stones were captured they are now empty again.  Since the
+        // Game API does not expose which cells were freed, rebuild the list.
+        if (game.captured.black + game.captured.white > capBefore) {
+          empty.length = 0;
+          for (let ey = 0; ey < size; ey++)
+            for (let ex = 0; ex < size; ex++)
+              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
+        }
+
+        placed = true;
+        break;
+      }
+      // Illegal move (Ko or suicide): element stays at index `end` and will
+      // be reconsidered in a future turn.
     }
+
+    if (!placed) game.pass();
   }
 }
 
