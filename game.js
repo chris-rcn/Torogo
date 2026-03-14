@@ -487,18 +487,43 @@ class Board {
   isTrueEye(x, y, color) {
     const N = this.size;
     const ortho = this.getNeighbors(x, y);
-    if (!ortho.every(([nx, ny]) => this.grid[ny][nx] === color)) return false;
-    // Same group → unconditionally true.
-    const gids = ortho.map(([nx, ny]) => this._gid[this._idx(nx, ny)]);
-    if (gids[0] === gids[1] && gids[1] === gids[2] && gids[2] === gids[3]) return true;
-    // Different friendly groups: fall back to the diagonal heuristic.
-    const diags = [
-      [(x + 1) % N,       (y + 1) % N],
-      [(x - 1 + N) % N,   (y + 1) % N],
-      [(x + 1) % N,       (y - 1 + N) % N],
-      [(x - 1 + N) % N,   (y - 1 + N) % N],
-    ];
-    return diags.filter(([dx, dy]) => this.grid[dy][dx] === color).length >= 3;
+
+    // Count friendly neighbors and track group IDs.
+    let friendCount = 0;
+    let emptyCount = 0;
+    let sameGroupCount = 0;
+    let firstGid = -2; // sentinel distinct from untracked (-1)
+    for (const [nx, ny] of ortho) {
+      const c = this.grid[ny][nx];
+      if (c === color) {
+        friendCount++;
+        const gid = this._gid[this._idx(nx, ny)];
+        if (gid !== -1) { // only count tracked stones
+          if (firstGid === -2) firstGid = gid;
+          if (gid === firstGid) sameGroupCount++;
+        }
+      } else if (c === null) {
+        emptyCount++;
+      }
+    }
+
+    // All 4 neighbors are friendly: classic true-eye check.
+    if (friendCount === 4) {
+      if (sameGroupCount === 4) return true; // same group → unconditionally true
+      // Different friendly groups: fall back to the diagonal heuristic.
+      const diags = [
+        [(x + 1) % N,       (y + 1) % N],
+        [(x - 1 + N) % N,   (y + 1) % N],
+        [(x + 1) % N,       (y - 1 + N) % N],
+        [(x - 1 + N) % N,   (y - 1 + N) % N],
+      ];
+      return diags.filter(([dx, dy]) => this.grid[dy][dx] === color).length >= 3;
+    }
+
+    // 3 neighbors are the same friendly group + 1 empty → proto-eye, skip.
+    if (friendCount === 3 && emptyCount === 1 && sameGroupCount === 3) return true;
+
+    return false;
   }
 }
 
