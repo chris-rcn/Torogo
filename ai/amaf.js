@@ -3,8 +3,9 @@
 /**
  * AMAF (All-Moves-As-First) Monte Carlo policy.
  *
- * Structured like mc.js: for each candidate, run candidate_playouts random
- * playouts starting with that move.  Unlike mc.js, every move the current
+ * For each candidate, run random playouts starting with that move in
+ * round-robin order until a total work budget is exhausted (where one unit
+ * of work = one move inside a playout).  Unlike mc.js, every move the current
  * player makes during the playout is credited — not just the opening move.
  * Moves later in the playout receive less credit via an exponential discount,
  * since they are less representative of what playing there "first" would mean.
@@ -19,7 +20,7 @@
 
 const randomAgent = require('./random.js');
 
-const candidate_playouts = 50; // playouts per candidate (same as mc.js)
+const WORK_BUDGET = 250_000; // total playout moves per turn
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
@@ -156,7 +157,7 @@ function playTracked(game, trackColor) {
                : s.white.total > s.black.total ? 'white'
                : null;
 
-  return { winner, played, oppPlayed };
+  return { winner, played, oppPlayed, moves };
 }
 
 module.exports = function getMove(game) {
@@ -183,50 +184,55 @@ module.exports = function getMove(game) {
   const plays = new Float64Array(N * N + 1);
   const PASS_IDX = N * N;
 
-  for (let cidx = 0; cidx < candidates.length; cidx++) {
+  // Round-robin playouts across candidates until the work budget is spent.
+  // One unit of work = one move inside a playout.
+  let totalWork = 0;
+  let cidx = 0;
+  while (totalWork < WORK_BUDGET) {
     const move = candidates[cidx];
-    for (let t = 0; t < candidate_playouts; t++) {
-      const clone = game.clone();
-      if (move.type === 'place') {
-        clone.placeStone(move.x, move.y);
-      } else {
-        clone.pass();
-      }
-      const { winner, played, oppPlayed } = playTracked(clone, player);
-      const won = winner === player ? 1 : 0;
+    const clone = game.clone();
+    if (move.type === 'place') {
+      clone.placeStone(move.x, move.y);
+    } else {
+      clone.pass();
+    }
+    const { winner, played, oppPlayed, moves } = playTracked(clone, player);
+    totalWork += moves;
+    const won = winner === player ? 1 : 0;
 
-      // Credit the opening move at full weight (it was played "first").
-      if (move.type === 'place') {
-        const firstIdx = move.y * N + move.x;
-        plays[firstIdx] += 1.0;
-        wins[firstIdx]  += won;
-      } else {
-        plays[PASS_IDX] += 1.0;
-        wins[PASS_IDX]  += won;
-      }
+    // Credit the opening move at full weight (it was played "first").
+    if (move.type === 'place') {
+      const firstIdx = move.y * N + move.x;
+      plays[firstIdx] += 1.0;
+      wins[firstIdx]  += won;
+    } else {
+      plays[PASS_IDX] += 1.0;
+      wins[PASS_IDX]  += won;
+    }
 
-      // Credit subsequent player moves with exponential discount: the i-th
-      // subsequent move gets weight DISCOUNT^(i+1).  Moves near the end of
-      // the game are the least representative of a "first move" choice.
-      let weight = DISCOUNT;
-      for (const idx of played) {
-        plays[idx] += weight;
-        wins[idx]  += won * weight;
-        weight *= DISCOUNT;
-      }
+    // Credit subsequent player moves with exponential discount: the i-th
+    // subsequent move gets weight DISCOUNT^(i+1).  Moves near the end of
+    // the game are the least representative of a "first move" choice.
+    let weight = DISCOUNT;
+    for (const idx of played) {
+      plays[idx] += weight;
+      wins[idx]  += won * weight;
+      weight *= DISCOUNT;
+    }
 
-      // Credit opponent moves with inverted outcome, scaled by OPP_MOVE_WEIGHT.
-      // If the opponent played at X and the opponent won, X is probably an
-      // important move — credit it as a win for us too (at reduced weight).
-      if (OPP_MOVE_WEIGHT > 0) {
-        let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
-        for (const idx of oppPlayed) {
-          plays[idx] += oppWeight;
-          wins[idx]  += (1 - won) * oppWeight;
-          oppWeight *= DISCOUNT;
-        }
+    // Credit opponent moves with inverted outcome, scaled by OPP_MOVE_WEIGHT.
+    // If the opponent played at X and the opponent won, X is probably an
+    // important move — credit it as a win for us too (at reduced weight).
+    if (OPP_MOVE_WEIGHT > 0) {
+      let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
+      for (const idx of oppPlayed) {
+        plays[idx] += oppWeight;
+        wins[idx]  += (1 - won) * oppWeight;
+        oppWeight *= DISCOUNT;
       }
     }
+
+    cidx = (cidx + 1) % candidates.length;
   }
 
   // Select the candidate with the highest AMAF win ratio.
