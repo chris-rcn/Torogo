@@ -86,15 +86,21 @@ const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 function printBoard(game) {
   const size = game.boardSize;
   const cols = 'ABCDEFGHJKLMNOPQRST'.slice(0, size); // skip 'I' like real Go
-  console.log('   ' + cols.split('').join(' '));
+  console.log('   ' + cols.split('').map(c => ' ' + c + ' ').join(''));
+  const last = game.lastMove; // { x, y } or null
   for (let y = 0; y < size; y++) {
     const row = String(size - y).padStart(2) + ' ';
     const cells = [];
     for (let x = 0; x < size; x++) {
       const v = game.board.get(x, y);
-      cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
+      const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
+      if (last && x === last.x && y === last.y) {
+        cells.push('(' + ch + ')');
+      } else {
+        cells.push(' ' + ch + ' ');
+      }
     }
-    console.log(row + cells.join(' '));
+    console.log(row + cells.join(''));
   }
   console.log();
 }
