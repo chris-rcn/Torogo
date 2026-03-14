@@ -78,8 +78,6 @@ if (!Number.isFinite(komi)) {
 const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
 const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
-console.log(`P1: ${p1Name}  |  P2: ${p2Name}  |  Games: ${numGames}  |  Board: ${boardSize}x${boardSize}  |  Komi: ${komi}`);
-console.log(`Colors alternate each game (P1=black in game 1, P1=white in game 2, …)\n`);
 
 const tally = { p1: 0, p2: 0, draw: 0, black: 0, white: 0 };
 const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
@@ -143,8 +141,7 @@ const wW = Math.max(4, String(numGames).length); // "wins" column width
 const pct   = (n) => ((100 * n) / numGames).toFixed(1).padStart(6) + '%';
 const avgMs = (s) => s.moves ? (s.ms / s.moves).toFixed(2).padStart(7) : '      —';
 const wCol  = (n) => String(n).padStart(wW);
-console.log(`\n${'='.repeat(50)}`);
-console.log(`Results after ${numGames} game${numGames === 1 ? '' : 's'} on ${boardSize}x${boardSize}:`);
+console.log();
 console.log(`  ${''.padEnd(6)}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  policy`);
 console.log(`  P1:     ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${p1Name}`);
 console.log(`  P2:     ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${p2Name}`);
