@@ -35,9 +35,18 @@
 
   #board-canvas {
     display: block;
-    cursor: crosshair;
+    cursor: grab;
     border-radius: 4px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    touch-action: none;
+  }
+
+  #board-canvas.placing {
+    cursor: crosshair;
+  }
+
+  #board-canvas.panning {
+    cursor: grabbing;
   }
 
   .info-panel {
@@ -496,6 +505,8 @@ class Renderer {
     this.ctx = canvas.getContext('2d');
     this.game = game;
     this.padding = 32;
+    this.panX = 0;
+    this.panY = 0;
     this.resize();
   }
 
@@ -508,27 +519,35 @@ class Renderer {
     this.cellSize = (size - this.padding * 2) / (N - 1);
   }
 
-  toCanvas(x, y) {
+  // Convert grid coords to canvas pixels, accounting for pan and tile offset
+  toCanvas(x, y, offX = 0, offY = 0) {
     return [
-      this.padding + x * this.cellSize,
-      this.padding + y * this.cellSize,
+      this.padding + this.panX + offX + x * this.cellSize,
+      this.padding + this.panY + offY + y * this.cellSize,
     ];
   }
 
-  // Returns the nearest grid intersection to canvas coords (px, py)
+  // Convert canvas pixel to nearest grid intersection, with toroidal wrapping
   fromCanvas(px, py) {
-    const x = Math.round((px - this.padding) / this.cellSize);
-    const y = Math.round((py - this.padding) / this.cellSize);
     const N = this.game.boardSize;
-    if (x < 0 || x >= N || y < 0 || y >= N) return null;
+    const rx = px - this.padding - this.panX;
+    const ry = py - this.padding - this.panY;
+    const x = ((Math.round(rx / this.cellSize) % N) + N) % N;
+    const y = ((Math.round(ry / this.cellSize) % N) + N) % N;
     return { x, y };
+  }
+
+  // Tile size: the pixel distance between equivalent points on adjacent copies
+  tileSize() {
+    return this.game.boardSize * this.cellSize;
   }
 
   draw() {
     const ctx = this.ctx;
-    const N = this.game.boardSize;
     const W = this.canvas.width;
     const H = this.canvas.height;
+    const N = this.game.boardSize;
+    const ts = this.tileSize();
 
     // Board background
     const grad = ctx.createLinearGradient(0, 0, W, H);
@@ -537,33 +556,54 @@ class Renderer {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
-    this.drawGhostLines();
-    this.drawGrid();
-    this.drawStarPoints();
-    this.drawIllegalFlash();
-    this.drawStones();
-    this.drawLastMove();
+    // Draw 3×3 tile grid so panning reveals the toroidal wrapping
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const offX = dx * ts;
+        const offY = dy * ts;
+
+        // Visibility cull: skip tiles fully outside canvas
+        const left  = this.padding + this.panX + offX;
+        const top   = this.padding + this.panY + offY;
+        const right = left + (N - 1) * this.cellSize;
+        const bot   = top  + (N - 1) * this.cellSize;
+        if (right < -this.padding || left > W + this.padding ||
+            bot   < -this.padding || top  > H + this.padding) continue;
+
+        const isPrimary = dx === 0 && dy === 0;
+
+        // Faint overlay on non-primary tiles to distinguish them
+        this.drawGrid(offX, offY, !isPrimary);
+        this.drawStarPoints(offX, offY);
+        this.drawStones(offX, offY);
+        this.drawLastMove(offX, offY);
+        if (isPrimary) {
+          this.drawGhostLines();
+          this.drawIllegalFlash();
+        }
+      }
+    }
   }
 
-  drawGrid() {
+  drawGrid(offX = 0, offY = 0, faint = false) {
     const ctx = this.ctx;
     const N = this.game.boardSize;
-    ctx.strokeStyle = '#5a3a10';
+    ctx.strokeStyle = faint ? 'rgba(90,58,16,0.35)' : '#5a3a10';
     ctx.lineWidth = 1;
 
-    const [, topY] = this.toCanvas(0, 0);
-    const [, botY] = this.toCanvas(0, N - 1);
-    const [leftX] = this.toCanvas(0, 0);
-    const [rightX] = this.toCanvas(N - 1, 0);
+    const [, topY] = this.toCanvas(0, 0, offX, offY);
+    const [, botY] = this.toCanvas(0, N - 1, offX, offY);
+    const [leftX]  = this.toCanvas(0, 0, offX, offY);
+    const [rightX] = this.toCanvas(N - 1, 0, offX, offY);
 
     for (let i = 0; i < N; i++) {
-      const [cx] = this.toCanvas(i, 0);
+      const [cx] = this.toCanvas(i, 0, offX, offY);
       ctx.beginPath();
       ctx.moveTo(cx, topY);
       ctx.lineTo(cx, botY);
       ctx.stroke();
 
-      const [, cy] = this.toCanvas(0, i);
+      const [, cy] = this.toCanvas(0, i, offX, offY);
       ctx.beginPath();
       ctx.moveTo(leftX, cy);
       ctx.lineTo(rightX, cy);
@@ -571,7 +611,7 @@ class Renderer {
     }
   }
 
-  // Faint extra lines hinting at toroidal continuity
+  // Faint dashed lines hinting at toroidal continuity (primary tile only)
   drawGhostLines() {
     const ctx = this.ctx;
     const N = this.game.boardSize;
@@ -580,56 +620,34 @@ class Renderer {
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 4]);
 
-    const [leftX] = this.toCanvas(0, 0);
+    const [leftX]  = this.toCanvas(0, 0);
     const [rightX] = this.toCanvas(N - 1, 0);
     const [, topY] = this.toCanvas(0, 0);
     const [, botY] = this.toCanvas(0, N - 1);
 
-    // Ghost lines beyond the edges
     for (let i = 0; i < N; i++) {
       const [cx] = this.toCanvas(i, 0);
-      // above
-      ctx.beginPath();
-      ctx.moveTo(cx, topY);
-      ctx.lineTo(cx, topY - ghost);
-      ctx.stroke();
-      // below
-      ctx.beginPath();
-      ctx.moveTo(cx, botY);
-      ctx.lineTo(cx, botY + ghost);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, topY); ctx.lineTo(cx, topY - ghost); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, botY); ctx.lineTo(cx, botY + ghost); ctx.stroke();
     }
-
     for (let i = 0; i < N; i++) {
       const [, cy] = this.toCanvas(0, i);
-      // left
-      ctx.beginPath();
-      ctx.moveTo(leftX, cy);
-      ctx.lineTo(leftX - ghost, cy);
-      ctx.stroke();
-      // right
-      ctx.beginPath();
-      ctx.moveTo(rightX, cy);
-      ctx.lineTo(rightX + ghost, cy);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(leftX, cy); ctx.lineTo(leftX - ghost, cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rightX, cy); ctx.lineTo(rightX + ghost, cy); ctx.stroke();
     }
 
     ctx.setLineDash([]);
   }
 
-  drawStarPoints() {
+  drawStarPoints(offX = 0, offY = 0) {
     const N = this.game.boardSize;
     let stars = [];
-    if (N === 9) {
-      stars = [[2,2],[6,2],[4,4],[2,6],[6,6]];
-    } else if (N === 13) {
-      stars = [[3,3],[9,3],[6,6],[3,9],[9,9]];
-    } else if (N === 19) {
-      stars = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
-    }
+    if (N === 9)  stars = [[2,2],[6,2],[4,4],[2,6],[6,6]];
+    else if (N === 13) stars = [[3,3],[9,3],[6,6],[3,9],[9,9]];
+    else if (N === 19) stars = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
     this.ctx.fillStyle = '#4a2a08';
     for (const [sx, sy] of stars) {
-      const [cx, cy] = this.toCanvas(sx, sy);
+      const [cx, cy] = this.toCanvas(sx, sy, offX, offY);
       this.ctx.beginPath();
       this.ctx.arc(cx, cy, 3, 0, Math.PI * 2);
       this.ctx.fill();
@@ -650,7 +668,7 @@ class Renderer {
     this.ctx.restore();
   }
 
-  drawStones() {
+  drawStones(offX = 0, offY = 0) {
     const ctx = this.ctx;
     const N = this.game.boardSize;
     const r = this.cellSize * 0.46;
@@ -660,16 +678,14 @@ class Renderer {
         const color = this.game.board.get(x, y);
         if (!color) continue;
 
-        const [cx, cy] = this.toCanvas(x, y);
+        const [cx, cy] = this.toCanvas(x, y, offX, offY);
 
-        // Drop shadow
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.shadowBlur = 4;
         ctx.shadowOffsetX = 2;
         ctx.shadowOffsetY = 2;
 
-        // Stone body
         const grad = ctx.createRadialGradient(
           cx - r * 0.3, cy - r * 0.3, r * 0.05,
           cx, cy, r
@@ -687,7 +703,6 @@ class Renderer {
         ctx.fill();
         ctx.restore();
 
-        // Subtle rim
         ctx.strokeStyle = color === 'black' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.18)';
         ctx.lineWidth = 0.5;
         ctx.beginPath();
@@ -697,12 +712,13 @@ class Renderer {
     }
   }
 
-  drawLastMove() {
+  drawLastMove(offX = 0, offY = 0) {
     const lm = this.game.lastMove;
     if (!lm) return;
-    const [cx, cy] = this.toCanvas(lm.x, lm.y);
-    const color = this.game.current === 'black' ? 'white' : 'black'; // previous player
-    this.ctx.fillStyle = color === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
+    const [cx, cy] = this.toCanvas(lm.x, lm.y, offX, offY);
+    // previous player's color (opposite of current)
+    const prev = this.game.current === 'black' ? 'white' : 'black';
+    this.ctx.fillStyle = prev === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
     const r = this.cellSize * 0.14;
     this.ctx.beginPath();
     this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -714,6 +730,7 @@ class Renderer {
 
 let game;
 let renderer;
+const canvas = document.getElementById('board-canvas');
 
 function updateUI() {
   const g = game;
@@ -761,31 +778,64 @@ function updateUI() {
 
 function startGame(boardSize) {
   game = new Game(boardSize);
-  const canvas = document.getElementById('board-canvas');
   renderer = new Renderer(canvas, game);
+  renderer.panX = 0;
+  renderer.panY = 0;
   renderer.draw();
   updateUI();
 }
 
-// Canvas click handler
-document.getElementById('board-canvas').addEventListener('click', (e) => {
-  const rect = e.target.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const py = e.clientY - rect.top;
-  const pos = renderer.fromCanvas(px, py);
-  if (!pos) return;
+// ─── Pointer events: unified mouse / touch / pen drag-to-pan + tap-to-place ──
 
-  const legal = game.placeStone(pos.x, pos.y);
-  renderer.draw();
-  updateUI();
+const DRAG_THRESHOLD = 6; // pixels before a press becomes a pan
+let isPanning = false;
+let pointerDownX = 0, pointerDownY = 0;
+let panOriginX = 0, panOriginY = 0;
 
-  // Clear the illegal flash after a short delay
-  if (!legal && game.illegalFlash) {
-    setTimeout(() => {
-      game.illegalFlash = null;
-      renderer.draw();
-    }, 400);
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  isPanning = false;
+  pointerDownX = e.clientX;
+  pointerDownY = e.clientY;
+  panOriginX = renderer.panX;
+  panOriginY = renderer.panY;
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!(e.buttons & 1)) return; // only when primary button/finger held
+  const dx = e.clientX - pointerDownX;
+  const dy = e.clientY - pointerDownY;
+  if (!isPanning && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+    isPanning = true;
+    canvas.classList.add('panning');
+    canvas.classList.remove('placing');
   }
+  if (isPanning) {
+    renderer.panX = panOriginX + dx;
+    renderer.panY = panOriginY + dy;
+    renderer.draw();
+  }
+});
+
+canvas.addEventListener('pointerup', (e) => {
+  canvas.classList.remove('panning', 'placing');
+  if (!isPanning) {
+    // Short tap / click → place stone
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const pos = renderer.fromCanvas(px, py);
+
+    const legal = game.placeStone(pos.x, pos.y);
+    renderer.draw();
+    updateUI();
+
+    if (!legal && game.illegalFlash) {
+      setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
+    }
+  }
+  isPanning = false;
 });
 
 document.getElementById('pass-btn').addEventListener('click', () => {
@@ -806,6 +856,8 @@ document.getElementById('size-select').addEventListener('change', () => {
 
 window.addEventListener('resize', () => {
   renderer.resize();
+  renderer.panX = 0;
+  renderer.panY = 0;
   renderer.draw();
 });
 
