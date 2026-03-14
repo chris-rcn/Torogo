@@ -1,4 +1,5 @@
 'use strict';
+const { performance } = require('perf_hooks');
 /**
  * Self-play script — play multiple games of one AI policy against another.
  *
@@ -75,6 +76,7 @@ console.log(`P1: ${p1Name}  |  P2: ${p2Name}  |  Games: ${numGames}  |  Board: $
 console.log(`Colors alternate each game (P1=black in game 1, P1=white in game 2, …)\n`);
 
 const tally = { p1: 0, p2: 0, draw: 0 };
+const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
 const verbose = numGames <= 20;
 
 for (let g = 0; g < numGames; g++) {
@@ -86,8 +88,13 @@ for (let g = 0; g < numGames; g++) {
   const game = new Game(boardSize);
 
   while (!game.gameOver) {
-    const policy = game.current === 'black' ? black : white;
+    const isBlackTurn = game.current === 'black';
+    const policy = isBlackTurn ? black : white;
+    const mover  = (isBlackTurn === p1IsBlack) ? 'p1' : 'p2';
+    const t0 = performance.now();
     const move = policy(game);
+    stats[mover].ms    += performance.now() - t0;
+    stats[mover].moves += 1;
     if (move.type === 'place') {
       game.placeStone(move.x, move.y);
     } else {
@@ -124,9 +131,11 @@ for (let g = 0; g < numGames; g++) {
   }
 }
 
-const pct = (n) => ((100 * n) / numGames).toFixed(1) + '%';
+const pct     = (n) => ((100 * n) / numGames).toFixed(1).padStart(5) + '%';
+const avgMs   = (s) => s.moves ? (s.ms / s.moves).toFixed(2).padStart(6) : '  —   ';
+const winStr  = (n) => String(n).padStart(String(numGames).length);
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results after ${numGames} game${numGames === 1 ? '' : 's'} on ${boardSize}x${boardSize}:`);
-console.log(`  P1 (${p1Name}): ${tally.p1} wins (${pct(tally.p1)})`);
-console.log(`  P2 (${p2Name}): ${tally.p2} wins (${pct(tally.p2)})`);
-console.log(`  Draws:        ${tally.draw}  (${pct(tally.draw)})`);
+console.log(`  P1: ${winStr(tally.p1)} wins (${pct(tally.p1)})  avg ${avgMs(stats.p1)} ms/move  [${p1Name}]`);
+console.log(`  P2: ${winStr(tally.p2)} wins (${pct(tally.p2)})  avg ${avgMs(stats.p2)} ms/move  [${p2Name}]`);
+console.log(`  Draws: ${winStr(tally.draw)} (${pct(tally.draw)})`);
