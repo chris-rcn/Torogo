@@ -11,6 +11,7 @@ const { performance } = require('perf_hooks');
  *   --p2    <policy>   AI policy for player 2      (default: random-move)
  *   --games <n>        Number of games to play     (default: 100)
  *   --size  <n>        Board size: 9, 13, or 19    (default: 9)
+ *   --komi  <n>        Komi (white's bonus points) (default: 4.5)
  *   --help             Show this help message
  *
  * Colors alternate each game: p1 is black in odd games, white in even games.
@@ -51,7 +52,7 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--games <n>] [--size <n>]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--games <n>] [--size <n>] [--komi <n>]`);
   process.exit(0);
 }
 
@@ -59,6 +60,7 @@ const p1Name    = opts.p1    || 'random-move';
 const p2Name    = opts.p2    || 'random-move';
 const numGames  = parseInt(opts.games || '100', 10);
 const boardSize = parseInt(opts.size  || '9',   10);
+const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : 4.5;
 
 if (isNaN(numGames) || numGames < 1) {
   console.error('--games must be a positive integer');
@@ -68,14 +70,18 @@ if (![9, 13, 19].includes(boardSize)) {
   console.error('--size must be 9, 13, or 19');
   process.exit(1);
 }
+if (!Number.isFinite(komi)) {
+  console.error('--komi must be a number');
+  process.exit(1);
+}
 
 const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
 const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
-console.log(`P1: ${p1Name}  |  P2: ${p2Name}  |  Games: ${numGames}  |  Board: ${boardSize}x${boardSize}`);
+console.log(`P1: ${p1Name}  |  P2: ${p2Name}  |  Games: ${numGames}  |  Board: ${boardSize}x${boardSize}  |  Komi: ${komi}`);
 console.log(`Colors alternate each game (P1=black in game 1, P1=white in game 2, …)\n`);
 
-const tally = { p1: 0, p2: 0, draw: 0 };
+const tally = { p1: 0, p2: 0, draw: 0, black: 0, white: 0 };
 const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
 const verbose = numGames <= 20;
 
@@ -85,7 +91,7 @@ for (let g = 0; g < numGames; g++) {
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  const game = new Game(boardSize);
+  const game = new Game(boardSize, komi);
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === 'black';
@@ -108,10 +114,12 @@ for (let g = 0; g < numGames; g++) {
 
   let winner;
   if (blackScore > whiteScore) {
+    tally.black++;
     const winningPlayer = p1IsBlack ? 'p1' : 'p2';
     tally[winningPlayer]++;
     winner = `BLACK (${winningPlayer === 'p1' ? p1Name : p2Name})`;
   } else if (whiteScore > blackScore) {
+    tally.white++;
     const winningPlayer = p1IsBlack ? 'p2' : 'p1';
     tally[winningPlayer]++;
     winner = `WHITE (${winningPlayer === 'p1' ? p1Name : p2Name})`;
@@ -140,3 +148,5 @@ console.log(`Results after ${numGames} game${numGames === 1 ? '' : 's'} on ${boa
 console.log(`  ${''.padEnd(6)}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  policy`);
 console.log(`  P1:     ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${p1Name}`);
 console.log(`  P2:     ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${p2Name}`);
+console.log(`  ${'─'.repeat(wW + 18)}`);
+console.log(`  Black:  ${wCol(tally.black)}  ${pct(tally.black)}          (color win rate, komi=${komi})`);

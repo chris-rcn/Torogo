@@ -110,7 +110,7 @@ class Board {
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
-  constructor(boardSize = 9) {
+  constructor(boardSize = 9, komi = 4.5) {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
@@ -119,7 +119,7 @@ class Game {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
-    this.komi = 4.5;          // compensation for white going second
+    this.komi = komi;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
   }
