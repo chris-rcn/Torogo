@@ -556,29 +556,22 @@ class Renderer {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
-    // Draw 3×3 tile grid so panning reveals the toroidal wrapping
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    // Compute which tile indices are needed to cover the canvas viewport,
+    // so panning works infinitely in any direction.
+    const dxMin = Math.floor((-this.panX - this.padding) / ts);
+    const dxMax = Math.ceil((W - this.panX - this.padding) / ts);
+    const dyMin = Math.floor((-this.panY - this.padding) / ts);
+    const dyMax = Math.ceil((H - this.panY - this.padding) / ts);
+
+    for (let dy = dyMin; dy <= dyMax; dy++) {
+      for (let dx = dxMin; dx <= dxMax; dx++) {
         const offX = dx * ts;
         const offY = dy * ts;
-
-        // Visibility cull: skip tiles fully outside canvas
-        const left  = this.padding + this.panX + offX;
-        const top   = this.padding + this.panY + offY;
-        const right = left + (N - 1) * this.cellSize;
-        const bot   = top  + (N - 1) * this.cellSize;
-        if (right < -this.padding || left > W + this.padding ||
-            bot   < -this.padding || top  > H + this.padding) continue;
-
-        const isPrimary = dx === 0 && dy === 0;
-
         this.drawGrid(offX, offY);
         this.drawStarPoints(offX, offY);
         this.drawStones(offX, offY);
         this.drawLastMove(offX, offY);
-        if (isPrimary) {
-          this.drawIllegalFlash();
-        }
+        this.drawIllegalFlash(offX, offY);
       }
     }
   }
@@ -586,6 +579,7 @@ class Renderer {
   drawGrid(offX = 0, offY = 0) {
     const ctx = this.ctx;
     const N = this.game.boardSize;
+    const cs = this.cellSize;
     ctx.strokeStyle = '#5a3a10';
     ctx.lineWidth = 1;
 
@@ -598,13 +592,13 @@ class Renderer {
       const [cx] = this.toCanvas(i, 0, offX, offY);
       ctx.beginPath();
       ctx.moveTo(cx, topY);
-      ctx.lineTo(cx, botY);
+      ctx.lineTo(cx, botY + cs); // extend one cell to bridge gap to next tile
       ctx.stroke();
 
       const [, cy] = this.toCanvas(0, i, offX, offY);
       ctx.beginPath();
       ctx.moveTo(leftX, cy);
-      ctx.lineTo(rightX, cy);
+      ctx.lineTo(rightX + cs, cy); // extend one cell to bridge gap to next tile
       ctx.stroke();
     }
   }
@@ -624,10 +618,10 @@ class Renderer {
     }
   }
 
-  drawIllegalFlash() {
+  drawIllegalFlash(offX = 0, offY = 0) {
     const flash = this.game.illegalFlash;
     if (!flash) return;
-    const [cx, cy] = this.toCanvas(flash.x, flash.y);
+    const [cx, cy] = this.toCanvas(flash.x, flash.y, offX, offY);
     const r = this.cellSize * 0.38;
     this.ctx.save();
     this.ctx.globalAlpha = 0.35;
