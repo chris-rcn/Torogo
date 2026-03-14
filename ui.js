@@ -1,7 +1,7 @@
 // How many extra intersections to render beyond each tile edge.
 // 0 = exact tile boundaries; increase to show wrapping rows/cols and make
 // the toroidal topology more intuitive.
-const OVERLAP = 1;
+let OVERLAP = 1;
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
@@ -414,6 +414,12 @@ document.getElementById('new-game-btn').addEventListener('click', () => {
 document.getElementById('size-select').addEventListener('change', () => {
   const size = parseInt(document.getElementById('size-select').value, 10);
   startGame(size);
+});
+
+document.getElementById('overlap-select').addEventListener('change', () => {
+  OVERLAP = parseInt(document.getElementById('overlap-select').value, 10);
+  renderer.resize();
+  renderer.draw();
 });
 
 window.addEventListener('resize', () => {
