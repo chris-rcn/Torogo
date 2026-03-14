@@ -63,6 +63,7 @@ function runBatch(discount) {
         env: { ...process.env, AMAF_DISCOUNT: String(discount) },
         encoding: 'utf8',
         timeout: 7200000, // 2-hour safety limit per batch
+        maxBuffer: 50 * 1024 * 1024, // 50 MB
       }
     );
 
