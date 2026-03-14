@@ -56,7 +56,10 @@ function playRandom(game) {
     for (let x = 0; x < size; x++)
       if (game.board.get(x, y) === null) empty.push([x, y]);
 
-  while (!game.gameOver) {
+  const moveLimit = 2 * empty.length;
+  let moves = 0;
+
+  while (!game.gameOver && moves < moveLimit) {
     let placed = false;
 
     // Scan candidates in random order without replacement using a partition
@@ -94,6 +97,7 @@ function playRandom(game) {
               if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
         }
         placed = true;
+        moves++;
         break;
       }
 
@@ -109,14 +113,20 @@ function playRandom(game) {
               if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
         }
         placed = true;
+        moves++;
         break;
       }
       // Illegal move (Ko or suicide): element stays at index `end` and will
       // be reconsidered in a future turn.
     }
 
-    if (!placed) game.pass();
+    if (!placed) {
+      game.pass();
+      moves++;
+    }
   }
+
+  if (!game.gameOver) game.endGame();
 }
 
 module.exports = function getMove(game) {
