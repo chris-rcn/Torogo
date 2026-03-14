@@ -592,13 +592,7 @@ document.getElementById('pass-btn').addEventListener('click', () => {
 });
 
 document.getElementById('new-game-btn').addEventListener('click', () => {
-  const size = parseInt(document.getElementById('size-select').value, 10);
-  startGame(size);
-});
-
-document.getElementById('size-select').addEventListener('change', () => {
-  const size = parseInt(document.getElementById('size-select').value, 10);
-  startGame(size);
+  startGame(13);
 });
 
 document.getElementById('overlap-select').addEventListener('change', () => {
