@@ -134,7 +134,8 @@ module.exports = function getMove(game) {
 
   // All positions are equivalent on a toroidal board — skip MC on move one.
   if (game.lastMove === null && game.consecutivePasses === 0) {
-    return randomAgent(game);
+    const c = Math.floor(game.boardSize / 2);
+    return { type: 'place', x: c, y: c };
   }
 
   const player = game.current;
