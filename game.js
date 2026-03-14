@@ -499,6 +499,10 @@ class Game {
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
     this.moveCount = 0;
+
+    // First move is always at the center of the board.
+    const c = Math.floor(boardSize / 2);
+    this.placeStone(c, c);
   }
 
   clone() {
