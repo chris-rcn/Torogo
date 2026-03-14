@@ -10,7 +10,7 @@
  *                 One clone per candidate to verify legality.
  *   3. Threaten — play the first shuffled candidate that puts an opponent
  *                 group into atari (reduces it to 1 liberty).
- *   4. Fallback — random legal non-eye move (same as random-move).
+ *   4. Fallback — random legal non-eye move (same as random).
  *
  * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
  *   game  - a live Game instance (read-only; do not mutate)

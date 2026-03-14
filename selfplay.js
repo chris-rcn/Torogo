@@ -7,8 +7,8 @@ const { performance } = require('perf_hooks');
  *   node selfplay.js [options]
  *
  * Options:
- *   --p1    <policy>   AI policy for player 1      (default: random-move)
- *   --p2    <policy>   AI policy for player 2      (default: random-move)
+ *   --p1    <policy>   AI policy for player 1      (default: random)
+ *   --p2    <policy>   AI policy for player 2      (default: random)
  *   --games <n>        Number of games to play     (default: 100)
  *   --size  <n>        Board size: 9, 13, or 19    (default: 9)
  *   --komi  <n>        Komi (white's bonus points) (default: 3.5)
@@ -18,7 +18,7 @@ const { performance } = require('perf_hooks');
  * Policy names are filenames without the .js extension inside the ai/ folder.
  *
  * Examples:
- *   node selfplay.js --p1 random-move --p2 always-pass --games 20
+ *   node selfplay.js --p1 random --p2 always-pass --games 20
  *   node selfplay.js --size 13 --games 50
  *   node selfplay.js --p1 always-pass --p2 always-pass --games 5 --size 9
  */
@@ -56,8 +56,8 @@ if (opts.help) {
   process.exit(0);
 }
 
-const p1Name    = opts.p1    || 'random-move';
-const p2Name    = opts.p2    || 'random-move';
+const p1Name    = opts.p1    || 'random';
+const p2Name    = opts.p2    || 'random';
 const numGames  = parseInt(opts.games || '100', 10);
 const boardSize = parseInt(opts.size  || '9',   10);
 const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : DEFAULT_KOMI;
