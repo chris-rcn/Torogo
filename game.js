@@ -147,6 +147,7 @@ class Game {
     this.komi = komi;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
+    this.moveCount = 0;
   }
 
   clone() {
@@ -158,6 +159,7 @@ class Game {
     g.prevHash          = this.prevHash;
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
+    g.moveCount         = this.moveCount;
     return g;
   }
 
@@ -204,7 +206,16 @@ class Game {
     this.lastMove = { x, y };
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
+    this._incrementMoveCount();
     return true;
+  }
+
+  _incrementMoveCount() {
+    this.moveCount++;
+    const threshold = 5 * this.boardSize * this.boardSize;
+    if (this.moveCount === threshold + 1) {
+      console.warn(`Game moveCount (${this.moveCount}) exceeded 5× board area (${threshold})`);
+    }
   }
 
   pass() {
@@ -214,6 +225,7 @@ class Game {
     this.illegalFlash = null;
     const passer = this.current;
     this.current = this.current === 'black' ? 'white' : 'black';
+    this._incrementMoveCount();
     if (this.consecutivePasses >= 2) {
       this.endGame();
     }
