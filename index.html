@@ -252,7 +252,7 @@
 // How many extra intersections to render beyond each tile edge.
 // 0 = exact tile boundaries; increase to show wrapping rows/cols and make
 // the toroidal topology more intuitive.
-const OVERLAP = 2;
+const OVERLAP = 1;
 
 // ─── Board ────────────────────────────────────────────────────────────────────
 
@@ -579,11 +579,15 @@ class Renderer {
         const offY = dy * ts;
         this.drawGrid(offX, offY);
         this.drawStones(offX, offY);
-        this.drawGhostStone(offX, offY);
         this.drawLastMove(offX, offY);
         this.drawIllegalFlash(offX, offY);
       }
     }
+
+    // Ghost stone is drawn in its own pass so each canvas position is
+    // painted exactly once (the per-tile OVERLAP regions would otherwise
+    // overlap and compound the alpha).
+    this.drawGhostStone();
   }
 
   drawGrid(offX = 0, offY = 0) {
@@ -683,20 +687,36 @@ class Renderer {
     }
   }
 
-  drawGhostStone(offX = 0, offY = 0) {
+  drawGhostStone() {
     const h = this.hoverPos;
     if (!h || this.game.gameOver) return;
     if (this.game.board.get(h.x, h.y) !== null) return;
-    const N = this.game.boardSize;
-    const r = this.cellSize * 0.46;
+    const cs = this.cellSize;
+    const ts = this.tileSize();
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const r = cs * 0.46;
     const color = this.game.current;
     const ctx = this.ctx;
+
+    // Canvas position of this cell in the base tile
+    const baseX = this.padding + this.panX + h.x * cs;
+    const baseY = this.padding + this.panY + h.y * cs;
+
+    // Range of tile repetitions whose instance of this cell is on-screen,
+    // including OVERLAP margin so edge duplicates are covered.
+    const kMin = Math.floor((-baseX - OVERLAP * cs) / ts);
+    const kMax = Math.ceil((W - baseX + OVERLAP * cs) / ts);
+    const mMin = Math.floor((-baseY - OVERLAP * cs) / ts);
+    const mMax = Math.ceil((H - baseY + OVERLAP * cs) / ts);
+
     ctx.save();
     ctx.globalAlpha = 0.4;
-    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
-      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
-        if (((gx % N) + N) % N !== h.x || ((gy % N) + N) % N !== h.y) continue;
-        const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
+    for (let m = mMin; m <= mMax; m++) {
+      for (let k = kMin; k <= kMax; k++) {
+        const cx = baseX + k * ts;
+        const cy = baseY + m * ts;
+        if (cx < -r || cx > W + r || cy < -r || cy > H + r) continue;
         const grad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.05, cx, cy, r);
         if (color === 'black') {
           grad.addColorStop(0, '#666');
