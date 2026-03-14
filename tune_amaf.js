@@ -1,18 +1,17 @@
 'use strict';
 
 /**
- * Tune the AMAF discount factor against the influence policy.
+ * Tune the AMAF discount factor against the mc policy.
  *
  * Runs indefinitely, cycling through candidate discount values and playing
- * games_per_round games per value per round.  After each complete round the
- * cumulative leaderboard is printed and appended to results.jsonl so you can
- * inspect progress at any time.
+ * 2 games per value per round (1 as each colour).  After each complete round
+ * the cumulative leaderboard is printed and appended to results.jsonl so you
+ * can inspect progress at any time.
  *
  * Usage:
- *   node tune_amaf.js [--size <n>] [--games <n>] [--discounts <d,d,...>]
+ *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>]
  *
  *   --size      Board size (default: 9)
- *   --games     Games per discount value per round (default: 20)
  *   --discounts Comma-separated discount values to test
  *               (default: 0.0,0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95,1.0)
  */
@@ -29,8 +28,8 @@ function argVal(name, def) {
   return i !== -1 ? argv[i + 1] : def;
 }
 
-const boardSize     = parseInt(argVal('size',  '9'), 10);
-const gamesPerRound = parseInt(argVal('games', '20'), 10);
+const boardSize     = parseInt(argVal('size', '9'), 10);
+const GAMES_PER_ROUND = 2; // 1 game as each colour per round
 const discounts     = (argVal('discounts', '0.0,0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95,1.0'))
   .split(',').map(Number).sort((a, b) => a - b);
 
@@ -48,18 +47,16 @@ function ts() {
   return new Date().toTimeString().slice(0, 8);
 }
 
-// Run selfplay.js with AMAF_DISCOUNT set, alternating amaf as p1 and p2
-// to cancel colour bias.  Returns amaf win count out of `games` total.
-function runBatch(discount, games) {
-  const half = Math.ceil(games / 2);
+// Run selfplay.js with AMAF_DISCOUNT set, once as each colour against mc.
+// Returns amaf win count out of GAMES_PER_ROUND total.
+function runBatch(discount) {
   let amafWins = 0;
 
   for (const [p1, p2, amafPlayer] of [
-    ['amaf', 'influence', 'P1'],
-    ['influence', 'amaf',  'P2'],
+    ['amaf', 'mc', 'P1'],
+    ['mc',   'amaf', 'P2'],
   ]) {
-    const g = (amafPlayer === 'P1') ? half : games - half;
-    if (g === 0) continue;
+    const g = 1;
 
     const result = spawnSync(
       process.execPath,
@@ -129,7 +126,7 @@ function printLeaderboard(round) {
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
-console.log(`AMAF discount tuning  size=${boardSize}  ${gamesPerRound} games/value/round`);
+console.log(`AMAF discount tuning  size=${boardSize}  ${GAMES_PER_ROUND} games/value/round  control=mc`);
 console.log(`Discounts: ${discounts.join(', ')}`);
 console.log(`Results appended to: ${RESULTS_FILE}\n`);
 
@@ -141,12 +138,12 @@ while (true) {
 
   for (const d of discounts) {
     process.stdout.write(`  [${ts()}] discount=${d} ... `);
-    const wins = runBatch(d, gamesPerRound);
+    const wins = runBatch(d);
     const s = stats.get(d);
     s.wins  += wins;
-    s.games += gamesPerRound;
+    s.games += GAMES_PER_ROUND;
     const pct = (100 * s.wins / s.games).toFixed(1);
-    console.log(`${wins}/${gamesPerRound}  (cumulative: ${s.wins}/${s.games} = ${pct}%)`);
+    console.log(`${wins}/${GAMES_PER_ROUND}  (cumulative: ${s.wins}/${s.games} = ${pct}%)`);
   }
 
   printLeaderboard(round);
