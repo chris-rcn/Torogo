@@ -471,7 +471,7 @@ function updateUI() {
   const thinking = !g.gameOver && g.current === 'black';
   statusEl.textContent =
     g.gameOver ? 'Game over' :
-    thinking ? 'Computer thinking…' : 'Your turn (White)';
+    thinking ? 'Computer thinking…' : 'Your turn (white)';
   statusEl.classList.toggle('thinking', thinking);
 
   // Score panel
