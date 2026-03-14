@@ -40,8 +40,8 @@ function isTrueEye(board, x, y, color) {
 function applyFast(game, x, y) {
   game.board.set(x, y, game.current);
   const cap = game.board.captureGroups(x, y);
-  game.captured.black += cap.black;
-  game.captured.white += cap.white;
+  game.captured.black += cap.black.length;
+  game.captured.white += cap.white.length;
   game.consecutivePasses = 0;
   game.current = game.current === 'black' ? 'white' : 'black';
   return cap.black + cap.white;
@@ -52,6 +52,7 @@ function cloneGame(game) {
   g.board = game.board.clone();
   g.current = game.current;
   g.captured = { ...game.captured };
+  g.hash = game.hash;
   g.prevHash = game.prevHash;
   g.consecutivePasses = game.consecutivePasses;
   g.gameOver = game.gameOver;

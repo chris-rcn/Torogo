@@ -1,3 +1,27 @@
+// ─── Zobrist hash table ───────────────────────────────────────────────────────
+// One deterministic 64-bit random value per (row, col, color) triple,
+// sized for the largest supported board (19×19).  Used for O(1) Ko detection.
+const ZOBRIST = (() => {
+  let s = 0xdeadbeef;
+  function rand32() {
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    return s >>> 0;
+  }
+  function rand64() {
+    return (BigInt(rand32()) << 32n) | BigInt(rand32());
+  }
+  const t = [];
+  for (let y = 0; y < 19; y++) {
+    t.push([]);
+    for (let x = 0; x < 19; x++) {
+      t[y].push({ black: rand64(), white: rand64() });
+    }
+  }
+  return t;
+})();
+
 // ─── Board ────────────────────────────────────────────────────────────────────
 
 class Board {
@@ -72,11 +96,11 @@ class Board {
   }
 
   // After placing at (lastX, lastY), capture groups with 0 liberties.
-  // Returns count of captured stones per color: { black: N, white: N }
+  // Returns positions of captured stones per color: { black: [[x,y],...], white: [...] }
   captureGroups(lastX, lastY) {
     const placedColor = this.get(lastX, lastY);
     const opponentColor = placedColor === 'black' ? 'white' : 'black';
-    const captured = { black: 0, white: 0 };
+    const captured = { black: [], white: [] };
 
     // Check opponent groups adjacent to the placed stone
     const checked = new Set();
@@ -88,7 +112,7 @@ class Board {
         if (this.hasNoLiberties(group)) {
           for (const [gx, gy] of group) {
             this.set(gx, gy, null);
-            captured[opponentColor]++;
+            captured[opponentColor].push([gx, gy]);
           }
         }
       }
@@ -99,7 +123,7 @@ class Board {
     if (this.hasNoLiberties(ownGroup)) {
       for (const [gx, gy] of ownGroup) {
         this.set(gx, gy, null);
-        captured[placedColor]++;
+        captured[placedColor].push([gx, gy]);
       }
     }
 
@@ -115,17 +139,14 @@ class Game {
     this.board = new Board(boardSize);
     this.current = 'black';
     this.captured = { black: 0, white: 0 }; // stones captured of each color
-    this.prevHash = null;     // board hash before the most recent move (for Ko)
+    this.hash     = 0n;       // Zobrist hash of current board position
+    this.prevHash = 0n;       // hash before the most recent move (for Ko)
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
     this.komi = komi;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
-  }
-
-  boardHash() {
-    return this.board.grid.map(row => row.map(c => c ? c[0] : '.').join('')).join('|');
   }
 
   // Returns true if move was legal and placed
@@ -136,34 +157,37 @@ class Game {
       return false;
     }
 
-    const hashBefore = this.boardHash();
+    const hashBefore = this.hash;
 
     // Clone board for potential rollback
     const savedGrid = this.board.grid.map(row => row.slice());
 
     this.board.set(x, y, this.current);
-    const newCaptured = this.board.captureGroups(x, y);
+    this.hash ^= ZOBRIST[y][x][this.current];
+    const caps = this.board.captureGroups(x, y);
+    for (const [cx, cy] of caps.black) this.hash ^= ZOBRIST[cy][cx].black;
+    for (const [cx, cy] of caps.white) this.hash ^= ZOBRIST[cy][cx].white;
 
     // Suicide: if our stone was removed, it's illegal
     if (this.board.get(x, y) === null) {
       this.board.grid = savedGrid;
+      this.hash = hashBefore;
       this.illegalFlash = { x, y };
       return false;
     }
 
-    const hashAfter = this.boardHash();
-
     // Ko rule: reject if this recreates the board state before previous move
-    if (hashAfter === this.prevHash) {
+    if (this.hash === this.prevHash) {
       this.board.grid = savedGrid;
+      this.hash = hashBefore;
       this.illegalFlash = { x, y };
       return false;
     }
 
     // Move is legal — commit
     this.illegalFlash = null;
-    this.captured.black += newCaptured.black;
-    this.captured.white += newCaptured.white;
+    this.captured.black += caps.black.length;
+    this.captured.white += caps.white.length;
     this.prevHash = hashBefore;
     this.lastMove = { x, y };
     this.consecutivePasses = 0;
@@ -248,4 +272,4 @@ class Game {
 }
 
 const DEFAULT_KOMI = new Game().komi;
-if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI };
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, ZOBRIST };

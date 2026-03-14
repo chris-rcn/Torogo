@@ -285,6 +285,7 @@ function aiCloneGame(game) {
   g.board             = game.board.clone();
   g.current           = game.current;
   g.captured          = { ...game.captured };
+  g.hash              = game.hash;
   g.prevHash          = game.prevHash;
   g.consecutivePasses = game.consecutivePasses;
   g.gameOver          = game.gameOver;
