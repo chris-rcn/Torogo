@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torogo — Toroidal Go</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #1a1a2e;
+    color: #e0d8c8;
+    font-family: 'Georgia', serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+    letter-spacing: 0.12em;
+    margin-bottom: 4px;
+    color: #f0e6c8;
+  }
+
+  .subtitle {
+    font-size: 0.78rem;
+    color: #a09888;
+    letter-spacing: 0.18em;
+    margin-bottom: 14px;
+    text-transform: uppercase;
+  }
+
+  #board-canvas {
+    display: block;
+    cursor: crosshair;
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  }
+
+  .info-panel {
+    display: flex;
+    gap: 24px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .player-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    background: #12122a;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+    min-width: 130px;
+    justify-content: center;
+  }
+
+  .player-info.active {
+    border-color: #c8a84a;
+  }
+
+  .stone-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .stone-dot.black {
+    background: radial-gradient(circle at 35% 35%, #555, #111);
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+  }
+
+  .stone-dot.white {
+    background: radial-gradient(circle at 35% 35%, #fff, #ccc);
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+  }
+
+  .player-label {
+    font-size: 0.85rem;
+    color: #c8c0b0;
+  }
+
+  .capture-count {
+    font-size: 0.78rem;
+    color: #a09080;
+  }
+
+  #status-msg {
+    margin-top: 10px;
+    font-size: 0.88rem;
+    color: #c8a84a;
+    letter-spacing: 0.05em;
+    min-height: 1.2em;
+    text-align: center;
+  }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: 1px solid #4a4060;
+    background: #2a2a4a;
+    color: #e0d8c8;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  button:hover {
+    background: #3a3a5a;
+    border-color: #6a60a0;
+  }
+
+  button:active {
+    background: #1e1e3a;
+  }
+
+  button#pass-btn {
+    background: #2a3a2a;
+    border-color: #4a604a;
+  }
+
+  button#pass-btn:hover {
+    background: #3a4a3a;
+    border-color: #6a906a;
+  }
+
+  select {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #4a4060;
+    background: #2a2a4a;
+    color: #e0d8c8;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  #score-panel {
+    display: none;
+    margin-top: 14px;
+    padding: 14px 24px;
+    background: #12122a;
+    border-radius: 10px;
+    border: 1px solid #4a4060;
+    text-align: center;
+    min-width: 240px;
+  }
+
+  #score-panel h2 {
+    font-size: 1.1rem;
+    color: #c8a84a;
+    margin-bottom: 8px;
+  }
+
+  #score-panel table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  #score-panel td {
+    padding: 3px 10px;
+    color: #c0b8a8;
+  }
+
+  #score-panel td:first-child {
+    text-align: left;
+    color: #a09888;
+  }
+
+  #score-panel td:last-child {
+    text-align: right;
+    font-weight: bold;
+  }
+
+  #winner-text {
+    margin-top: 10px;
+    font-size: 1.1rem;
+    color: #f0e060;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<h1>Torogo</h1>
+<p class="subtitle">Toroidal Go</p>
+
+<canvas id="board-canvas"></canvas>
+
+<div class="info-panel">
+  <div class="player-info" id="black-info">
+    <div class="stone-dot black"></div>
+    <div>
+      <div class="player-label">Black</div>
+      <div class="capture-count" id="black-captures">Captured: 0</div>
+    </div>
+  </div>
+  <div class="player-info" id="white-info">
+    <div class="stone-dot white"></div>
+    <div>
+      <div class="player-label">White</div>
+      <div class="capture-count" id="white-captures">Captured: 0</div>
+    </div>
+  </div>
+</div>
+
+<div id="status-msg">Black to play</div>
+
+<div class="controls">
+  <button id="pass-btn">Pass</button>
+  <button id="new-game-btn">New Game</button>
+  <select id="size-select">
+    <option value="9">9 × 9</option>
+    <option value="13">13 × 13</option>
+    <option value="19">19 × 19</option>
+  </select>
+</div>
+
+<div id="score-panel">
+  <h2>Final Score</h2>
+  <table id="score-table"></table>
+  <div id="winner-text"></div>
+</div>
+
+<script>
+// ─── Board ────────────────────────────────────────────────────────────────────
+
+class Board {
+  constructor(size) {
+    this.size = size;
+    this.grid = Array.from({ length: size }, () => Array(size).fill(null));
+  }
+
+  clone() {
+    const b = new Board(this.size);
+    b.grid = this.grid.map(row => row.slice());
+    return b;
+  }
+
+  get(x, y) {
+    return this.grid[y][x];
+  }
+
+  set(x, y, color) {
+    this.grid[y][x] = color;
+  }
+
+  // Toroidal wrapping: 4 neighbors with modular arithmetic
+  getNeighbors(x, y) {
+    const N = this.size;
+    return [
+      [(x + 1) % N, y],
+      [(x - 1 + N) % N, y],
+      [x, (y + 1) % N],
+      [x, (y - 1 + N) % N],
+    ];
+  }
+
+  // BFS flood-fill: returns array of [x,y] for connected same-color stones
+  getGroup(x, y) {
+    const color = this.get(x, y);
+    if (!color) return [];
+    const visited = new Set();
+    const queue = [[x, y]];
+    const group = [];
+    visited.add(`${x},${y}`);
+    while (queue.length) {
+      const [cx, cy] = queue.shift();
+      group.push([cx, cy]);
+      for (const [nx, ny] of this.getNeighbors(cx, cy)) {
+        const key = `${nx},${ny}`;
+        if (!visited.has(key) && this.get(nx, ny) === color) {
+          visited.add(key);
+          queue.push([nx, ny]);
+        }
+      }
+    }
+    return group;
+  }
+
+  // Count unique empty intersections adjacent to the group
+  getLiberties(group) {
+    const liberties = new Set();
+    for (const [x, y] of group) {
+      for (const [nx, ny] of this.getNeighbors(x, y)) {
+        if (this.get(nx, ny) === null) {
+          liberties.add(`${nx},${ny}`);
+        }
+      }
+    }
+    return liberties;
+  }
+
+  // Check if a group has zero liberties
+  hasNoLiberties(group) {
+    return this.getLiberties(group).size === 0;
+  }
+
+  // After placing at (lastX, lastY), capture groups with 0 liberties.
+  // Returns count of captured stones per color: { black: N, white: N }
+  captureGroups(lastX, lastY) {
+    const placedColor = this.get(lastX, lastY);
+    const opponentColor = placedColor === 'black' ? 'white' : 'black';
+    const captured = { black: 0, white: 0 };
+
+    // Check opponent groups adjacent to the placed stone
+    const checked = new Set();
+    for (const [nx, ny] of this.getNeighbors(lastX, lastY)) {
+      const key = `${nx},${ny}`;
+      if (!checked.has(key) && this.get(nx, ny) === opponentColor) {
+        const group = this.getGroup(nx, ny);
+        group.forEach(([gx, gy]) => checked.add(`${gx},${gy}`));
+        if (this.hasNoLiberties(group)) {
+          for (const [gx, gy] of group) {
+            this.set(gx, gy, null);
+            captured[opponentColor]++;
+          }
+        }
+      }
+    }
+
+    // Check own group for suicide
+    const ownGroup = this.getGroup(lastX, lastY);
+    if (this.hasNoLiberties(ownGroup)) {
+      for (const [gx, gy] of ownGroup) {
+        this.set(gx, gy, null);
+        captured[placedColor]++;
+      }
+    }
+
+    return captured;
+  }
+}
+
+// ─── Game ─────────────────────────────────────────────────────────────────────
+
+class Game {
+  constructor(boardSize = 9) {
+    this.boardSize = boardSize;
+    this.board = new Board(boardSize);
+    this.current = 'black';
+    this.captured = { black: 0, white: 0 }; // stones captured of each color
+    this.prevHash = null;     // board hash before the most recent move (for Ko)
+    this.consecutivePasses = 0;
+    this.gameOver = false;
+    this.lastMove = null;
+    this.scores = null;       // set on game end
+    this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
+  }
+
+  boardHash() {
+    return this.board.grid.map(row => row.map(c => c ? c[0] : '.').join('')).join('|');
+  }
+
+  // Returns true if move was legal and placed
+  placeStone(x, y) {
+    if (this.gameOver) return false;
+    if (this.board.get(x, y) !== null) {
+      this.illegalFlash = { x, y };
+      return false;
+    }
+
+    const hashBefore = this.boardHash();
+
+    // Clone board for potential rollback
+    const savedGrid = this.board.grid.map(row => row.slice());
+
+    this.board.set(x, y, this.current);
+    const newCaptured = this.board.captureGroups(x, y);
+
+    // Suicide: if our stone was removed, it's illegal
+    if (this.board.get(x, y) === null) {
+      this.board.grid = savedGrid;
+      this.illegalFlash = { x, y };
+      return false;
+    }
+
+    const hashAfter = this.boardHash();
+
+    // Ko rule: reject if this recreates the board state before previous move
+    if (hashAfter === this.prevHash) {
+      this.board.grid = savedGrid;
+      this.illegalFlash = { x, y };
+      return false;
+    }
+
+    // Move is legal — commit
+    this.illegalFlash = null;
+    this.captured.black += newCaptured.black;
+    this.captured.white += newCaptured.white;
+    this.prevHash = hashBefore;
+    this.lastMove = { x, y };
+    this.consecutivePasses = 0;
+    this.current = this.current === 'black' ? 'white' : 'black';
+    return true;
+  }
+
+  pass() {
+    if (this.gameOver) return;
+    this.consecutivePasses++;
+    this.lastMove = null;
+    this.illegalFlash = null;
+    const passer = this.current;
+    this.current = this.current === 'black' ? 'white' : 'black';
+    if (this.consecutivePasses >= 2) {
+      this.endGame();
+    }
+    return passer;
+  }
+
+  endGame() {
+    this.gameOver = true;
+    const territory = this.calcTerritory();
+    this.scores = {
+      black: { territory: territory.black, captures: this.captured.white },
+      white: { territory: territory.white, captures: this.captured.black },
+    };
+    this.scores.black.total = this.scores.black.territory + this.scores.black.captures;
+    this.scores.white.total = this.scores.white.territory + this.scores.white.captures;
+  }
+
+  // BFS over empty cells; attribute to a color if all reachable boundary
+  // stones are of one color (toroidal wrapping respected).
+  calcTerritory() {
+    const N = this.board.size;
+    const visited = new Set();
+    const territory = { black: 0, white: 0, neutral: 0 };
+
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const key = `${x},${y}`;
+        if (this.board.get(x, y) !== null || visited.has(key)) continue;
+
+        // BFS to find the empty region and its border colors
+        const region = [];
+        const borderColors = new Set();
+        const queue = [[x, y]];
+        visited.add(key);
+
+        while (queue.length) {
+          const [cx, cy] = queue.shift();
+          region.push([cx, cy]);
+          for (const [nx, ny] of this.board.getNeighbors(cx, cy)) {
+            const nkey = `${nx},${ny}`;
+            const cell = this.board.get(nx, ny);
+            if (cell !== null) {
+              borderColors.add(cell);
+            } else if (!visited.has(nkey)) {
+              visited.add(nkey);
+              queue.push([nx, ny]);
+            }
+          }
+        }
+
+        if (borderColors.size === 1) {
+          const [owner] = borderColors;
+          territory[owner] += region.length;
+        } else {
+          territory.neutral += region.length;
+        }
+      }
+    }
+
+    return territory;
+  }
+
+  statusText() {
+    if (this.gameOver) return 'Game over';
+    const name = this.current === 'black' ? 'Black' : 'White';
+    return `${name} to play`;
+  }
+}
+
+// ─── Renderer ─────────────────────────────────────────────────────────────────
+
+class Renderer {
+  constructor(canvas, game) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.game = game;
+    this.padding = 32;
+    this.resize();
+  }
+
+  resize() {
+    const N = this.game.boardSize;
+    const maxSize = Math.min(window.innerWidth - 32, window.innerHeight - 220, 640);
+    const size = Math.max(maxSize, 280);
+    this.canvas.width = size;
+    this.canvas.height = size;
+    this.cellSize = (size - this.padding * 2) / (N - 1);
+  }
+
+  toCanvas(x, y) {
+    return [
+      this.padding + x * this.cellSize,
+      this.padding + y * this.cellSize,
+    ];
+  }
+
+  // Returns the nearest grid intersection to canvas coords (px, py)
+  fromCanvas(px, py) {
+    const x = Math.round((px - this.padding) / this.cellSize);
+    const y = Math.round((py - this.padding) / this.cellSize);
+    const N = this.game.boardSize;
+    if (x < 0 || x >= N || y < 0 || y >= N) return null;
+    return { x, y };
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const N = this.game.boardSize;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+
+    // Board background
+    const grad = ctx.createLinearGradient(0, 0, W, H);
+    grad.addColorStop(0, '#d4a84a');
+    grad.addColorStop(1, '#c49840');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    this.drawGhostLines();
+    this.drawGrid();
+    this.drawStarPoints();
+    this.drawIllegalFlash();
+    this.drawStones();
+    this.drawLastMove();
+  }
+
+  drawGrid() {
+    const ctx = this.ctx;
+    const N = this.game.boardSize;
+    ctx.strokeStyle = '#5a3a10';
+    ctx.lineWidth = 1;
+
+    const [, topY] = this.toCanvas(0, 0);
+    const [, botY] = this.toCanvas(0, N - 1);
+    const [leftX] = this.toCanvas(0, 0);
+    const [rightX] = this.toCanvas(N - 1, 0);
+
+    for (let i = 0; i < N; i++) {
+      const [cx] = this.toCanvas(i, 0);
+      ctx.beginPath();
+      ctx.moveTo(cx, topY);
+      ctx.lineTo(cx, botY);
+      ctx.stroke();
+
+      const [, cy] = this.toCanvas(0, i);
+      ctx.beginPath();
+      ctx.moveTo(leftX, cy);
+      ctx.lineTo(rightX, cy);
+      ctx.stroke();
+    }
+  }
+
+  // Faint extra lines hinting at toroidal continuity
+  drawGhostLines() {
+    const ctx = this.ctx;
+    const N = this.game.boardSize;
+    const ghost = this.cellSize * 0.4;
+    ctx.strokeStyle = 'rgba(90, 58, 16, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+
+    const [leftX] = this.toCanvas(0, 0);
+    const [rightX] = this.toCanvas(N - 1, 0);
+    const [, topY] = this.toCanvas(0, 0);
+    const [, botY] = this.toCanvas(0, N - 1);
+
+    // Ghost lines beyond the edges
+    for (let i = 0; i < N; i++) {
+      const [cx] = this.toCanvas(i, 0);
+      // above
+      ctx.beginPath();
+      ctx.moveTo(cx, topY);
+      ctx.lineTo(cx, topY - ghost);
+      ctx.stroke();
+      // below
+      ctx.beginPath();
+      ctx.moveTo(cx, botY);
+      ctx.lineTo(cx, botY + ghost);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < N; i++) {
+      const [, cy] = this.toCanvas(0, i);
+      // left
+      ctx.beginPath();
+      ctx.moveTo(leftX, cy);
+      ctx.lineTo(leftX - ghost, cy);
+      ctx.stroke();
+      // right
+      ctx.beginPath();
+      ctx.moveTo(rightX, cy);
+      ctx.lineTo(rightX + ghost, cy);
+      ctx.stroke();
+    }
+
+    ctx.setLineDash([]);
+  }
+
+  drawStarPoints() {
+    const N = this.game.boardSize;
+    let stars = [];
+    if (N === 9) {
+      stars = [[2,2],[6,2],[4,4],[2,6],[6,6]];
+    } else if (N === 13) {
+      stars = [[3,3],[9,3],[6,6],[3,9],[9,9]];
+    } else if (N === 19) {
+      stars = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
+    }
+    this.ctx.fillStyle = '#4a2a08';
+    for (const [sx, sy] of stars) {
+      const [cx, cy] = this.toCanvas(sx, sy);
+      this.ctx.beginPath();
+      this.ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+
+  drawIllegalFlash() {
+    const flash = this.game.illegalFlash;
+    if (!flash) return;
+    const [cx, cy] = this.toCanvas(flash.x, flash.y);
+    const r = this.cellSize * 0.38;
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.35;
+    this.ctx.fillStyle = '#ff4444';
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.restore();
+  }
+
+  drawStones() {
+    const ctx = this.ctx;
+    const N = this.game.boardSize;
+    const r = this.cellSize * 0.46;
+
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const color = this.game.board.get(x, y);
+        if (!color) continue;
+
+        const [cx, cy] = this.toCanvas(x, y);
+
+        // Drop shadow
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+
+        // Stone body
+        const grad = ctx.createRadialGradient(
+          cx - r * 0.3, cy - r * 0.3, r * 0.05,
+          cx, cy, r
+        );
+        if (color === 'black') {
+          grad.addColorStop(0, '#666');
+          grad.addColorStop(1, '#111');
+        } else {
+          grad.addColorStop(0, '#fff');
+          grad.addColorStop(1, '#bbb');
+        }
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Subtle rim
+        ctx.strokeStyle = color === 'black' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.18)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  drawLastMove() {
+    const lm = this.game.lastMove;
+    if (!lm) return;
+    const [cx, cy] = this.toCanvas(lm.x, lm.y);
+    const color = this.game.current === 'black' ? 'white' : 'black'; // previous player
+    this.ctx.fillStyle = color === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
+    const r = this.cellSize * 0.14;
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+}
+
+// ─── App wiring ───────────────────────────────────────────────────────────────
+
+let game;
+let renderer;
+
+function updateUI() {
+  const g = game;
+  document.getElementById('status-msg').textContent = g.statusText();
+
+  // Captured counts: black captures = white stones captured by black
+  document.getElementById('black-captures').textContent =
+    `Captured: ${g.captured.white}`;
+  document.getElementById('white-captures').textContent =
+    `Captured: ${g.captured.black}`;
+
+  // Active player highlight
+  document.getElementById('black-info').classList.toggle('active', g.current === 'black' && !g.gameOver);
+  document.getElementById('white-info').classList.toggle('active', g.current === 'white' && !g.gameOver);
+
+  // Score panel
+  const sp = document.getElementById('score-panel');
+  if (g.gameOver && g.scores) {
+    sp.style.display = 'block';
+    const bs = g.scores.black;
+    const ws = g.scores.white;
+    document.getElementById('score-table').innerHTML = `
+      <tr><td></td><td>Black</td><td>White</td></tr>
+      <tr><td>Territory</td><td>${bs.territory}</td><td>${ws.territory}</td></tr>
+      <tr><td>Captures</td><td>${bs.captures}</td><td>${ws.captures}</td></tr>
+      <tr><td style="border-top:1px solid #4a4060;padding-top:6px">Total</td>
+          <td style="border-top:1px solid #4a4060;padding-top:6px">${bs.total}</td>
+          <td style="border-top:1px solid #4a4060;padding-top:6px">${ws.total}</td></tr>
+    `;
+    let winnerText;
+    if (bs.total > ws.total) {
+      winnerText = `Black wins by ${bs.total - ws.total} point${bs.total - ws.total !== 1 ? 's' : ''}!`;
+    } else if (ws.total > bs.total) {
+      winnerText = `White wins by ${ws.total - bs.total} point${ws.total - bs.total !== 1 ? 's' : ''}!`;
+    } else {
+      winnerText = 'Tie game!';
+    }
+    document.getElementById('winner-text').textContent = winnerText;
+  } else {
+    sp.style.display = 'none';
+  }
+
+  document.getElementById('pass-btn').disabled = g.gameOver;
+}
+
+function startGame(boardSize) {
+  game = new Game(boardSize);
+  const canvas = document.getElementById('board-canvas');
+  renderer = new Renderer(canvas, game);
+  renderer.draw();
+  updateUI();
+}
+
+// Canvas click handler
+document.getElementById('board-canvas').addEventListener('click', (e) => {
+  const rect = e.target.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+  const pos = renderer.fromCanvas(px, py);
+  if (!pos) return;
+
+  const legal = game.placeStone(pos.x, pos.y);
+  renderer.draw();
+  updateUI();
+
+  // Clear the illegal flash after a short delay
+  if (!legal && game.illegalFlash) {
+    setTimeout(() => {
+      game.illegalFlash = null;
+      renderer.draw();
+    }, 400);
+  }
+});
+
+document.getElementById('pass-btn').addEventListener('click', () => {
+  game.pass();
+  renderer.draw();
+  updateUI();
+});
+
+document.getElementById('new-game-btn').addEventListener('click', () => {
+  const size = parseInt(document.getElementById('size-select').value, 10);
+  startGame(size);
+});
+
+document.getElementById('size-select').addEventListener('change', () => {
+  const size = parseInt(document.getElementById('size-select').value, 10);
+  startGame(size);
+});
+
+window.addEventListener('resize', () => {
+  renderer.resize();
+  renderer.draw();
+});
+
+// Boot
+startGame(9);
+</script>
+</body>
+</html>
