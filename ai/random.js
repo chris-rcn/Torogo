@@ -49,25 +49,33 @@ module.exports = function getMove(game) {
 
   const N = game.boardSize;
   const color = game.current;
+  const board = game.board;
 
   // Collect empty cells that are not true eyes for the current player.
   const candidates = [];
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (isTrueEye(game.board, x, y, color)) continue;
+      if (board.get(x, y) !== null) continue;
+      if (isTrueEye(board, x, y, color)) continue;
       candidates.push([x, y]);
     }
   }
 
-  // Fisher-Yates shuffle.
-  for (let i = candidates.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
+  // Pick candidates in random order using swap-with-last-and-pop (avoids a
+  // full Fisher-Yates shuffle of candidates we may never need to inspect).
+  while (candidates.length > 0) {
+    const i = Math.floor(Math.random() * candidates.length);
+    const [x, y] = candidates[i];
+    candidates[i] = candidates[candidates.length - 1];
+    candidates.pop();
 
-  // Return the first candidate that is legal (rules out suicide and Ko).
-  for (const [x, y] of candidates) {
+    // Fast legality check: if any orthogonal neighbour is empty the move
+    // cannot be suicide or Ko, so skip the expensive clone.
+    if (board.getNeighbors(x, y).some(([nx, ny]) => board.get(nx, ny) === null)) {
+      return { type: 'place', x, y };
+    }
+
+    // All four neighbours are occupied — verify legality with a clone.
     const clone = cloneGame(game);
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
