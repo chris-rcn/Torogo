@@ -522,11 +522,13 @@ class Renderer {
     const size = Math.max(maxSize, 280);
     this.canvas.width = size;
     this.canvas.height = size;
-    // Fit N-1+2*OVERLAP spacings so the OVERLAP duplicate intersections are visible
-    this.cellSize = (size - this.padding * 2) / (N - 1 + 2 * OVERLAP);
-    // Centre the view so OVERLAP intersections are visible on each side
-    this.panX = OVERLAP * this.cellSize;
-    this.panY = OVERLAP * this.cellSize;
+    // Fit N-1+OVERLAP spacings so OVERLAP extra intersections are visible in total
+    this.cellSize = (size - this.padding * 2) / (N - 1 + OVERLAP);
+    // Split OVERLAP as evenly as possible: floor(OVERLAP/2) on left/top,
+    // ceil(OVERLAP/2) on right/bottom
+    const panOffset = Math.floor(OVERLAP / 2) * this.cellSize;
+    this.panX = panOffset;
+    this.panY = panOffset;
   }
 
   // Convert grid coords to canvas pixels, accounting for pan and tile offset
