@@ -119,6 +119,7 @@ class Game {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
+    this.komi = 4.5;          // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
   }
@@ -191,7 +192,7 @@ class Game {
       white: { territory: territory.white, captures: this.captured.black },
     };
     this.scores.black.total = this.scores.black.territory + this.scores.black.captures;
-    this.scores.white.total = this.scores.white.territory + this.scores.white.captures;
+    this.scores.white.total = this.scores.white.territory + this.scores.white.captures + this.komi;
   }
 
   // BFS over empty cells; attribute to a color if all reachable boundary
