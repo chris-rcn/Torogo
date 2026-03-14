@@ -7,12 +7,13 @@ const { performance } = require('perf_hooks');
  *   node selfplay.js [options]
  *
  * Options:
- *   --p1    <policy>   AI policy for player 1      (default: random)
- *   --p2    <policy>   AI policy for player 2      (default: random)
- *   --games <n>        Number of games to play     (default: 100)
- *   --size  <n>        Board size: 9, 13, or 19    (default: 9)
- *   --komi  <n>        Komi (white's bonus points) (default: 3.5)
- *   --help             Show this help message
+ *   --p1      <policy>   AI policy for player 1      (default: random)
+ *   --p2      <policy>   AI policy for player 2      (default: random)
+ *   --games   <n>        Number of games to play     (default: 100)
+ *   --size    <n>        Board size: 9, 13, or 19    (default: 9)
+ *   --komi    <n>        Komi (white's bonus points) (default: 3.5)
+ *   --verbose            Print the board after every move
+ *   --help               Show this help message
  *
  * Colors alternate each game: p1 is black in odd games, white in even games.
  * Policy names are filenames without the .js extension inside the ai/ folder.
@@ -26,6 +27,9 @@ const { performance } = require('perf_hooks');
 const path = require('path');
 const { Game, DEFAULT_KOMI } = require('./game.js');
 
+// Boolean flags that take no value.
+const BOOL_FLAGS = new Set(['help', 'verbose']);
+
 // Parse --key value switches from argv.
 function parseArgs(argv) {
   const opts = {};
@@ -34,6 +38,7 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
     if (arg.startsWith('--')) {
       const key = arg.slice(2);
+      if (BOOL_FLAGS.has(key)) { opts[key] = true; continue; }
       const val = argv[i + 1];
       if (val === undefined || val.startsWith('--')) {
         console.error(`Missing value for ${arg}`);
@@ -52,7 +57,7 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--games <n>] [--size <n>] [--komi <n>]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--games <n>] [--size <n>] [--komi <n>] [--verbose]`);
   process.exit(0);
 }
 
@@ -78,10 +83,27 @@ if (!Number.isFinite(komi)) {
 const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
 const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
+function printBoard(game) {
+  const size = game.boardSize;
+  const cols = 'ABCDEFGHJKLMNOPQRST'.slice(0, size); // skip 'I' like real Go
+  console.log('   ' + cols.split('').join(' '));
+  for (let y = 0; y < size; y++) {
+    const row = String(size - y).padStart(2) + ' ';
+    const cells = [];
+    for (let x = 0; x < size; x++) {
+      const v = game.board.get(x, y);
+      cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
+    }
+    console.log(row + cells.join(' '));
+  }
+  console.log();
+}
+
 
 const tally = { p1: 0, p2: 0, draw: 0, black: 0, white: 0 };
 const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
 const verbose = numGames <= 20;
+const verboseBoard = !!opts.verbose;
 
 for (let g = 0; g < numGames; g++) {
   // Alternate colors: even g → p1=black, odd g → p1=white
@@ -104,6 +126,7 @@ for (let g = 0; g < numGames; g++) {
     } else {
       game.pass();
     }
+    if (verboseBoard) printBoard(game);
   }
 
   const scores = game.scores;
