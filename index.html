@@ -254,9 +254,26 @@
 <p style="margin-top:20px;font-size:0.9rem;color:#c8c0b0;letter-spacing:0.04em;">Last modified: <span id="last-modified"></span></p>
 
 <script>
-  const d = new Date(document.lastModified);
-  document.getElementById('last-modified').textContent =
-    d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  (async () => {
+    const files = ['index.html', 'game.js', 'ui.js'];
+    let latest = null;
+    try {
+      const results = await Promise.all(
+        files.map(f => fetch(f, { method: 'HEAD' }).catch(() => null))
+      );
+      for (const res of results) {
+        if (!res || !res.ok) continue;
+        const lm = res.headers.get('Last-Modified');
+        if (!lm) continue;
+        const d = new Date(lm);
+        if (!latest || d > latest) latest = d;
+      }
+    } catch (_) {}
+
+    const stamp = latest ?? new Date(document.lastModified);
+    document.getElementById('last-modified').textContent =
+      stamp.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  })();
 </script>
 </body>
 </html>
