@@ -359,6 +359,61 @@ class Board {
     return this._groups.get(gid).liberties.size === 0;
   }
 
+  // Returns true if placing a lone stone at (x, y) would be suicide:
+  // all 4 neighbours are occupied by opponents, no opponent is in atari at (x,y).
+  // Does not modify board state.
+  isSingleSuicide(x, y, color) {
+    const placedIdx = this._idx(x, y);
+    for (const [nx, ny] of this.getNeighbors(x, y)) {
+      const cell = this.grid[ny][nx];
+      if (cell === null) return false;   // empty → immediate liberty
+      if (cell === color) return false;  // friendly neighbour → not a lone stone
+      // Opponent: would it be captured? (its only liberty is (x,y))
+      const group = this._groups.get(this._gid[this._idx(nx, ny)]);
+      if (group.liberties.size === 1 && group.liberties.has(placedIdx)) return false;
+    }
+    return true;
+  }
+
+  // Returns true if placing `color` at (x, y) would fill the last shared liberty
+  // of the adjacent friendly groups: every friendly neighbour group's only liberty
+  // is (x,y), and no opponent capture would free a new liberty.
+  // Does not modify board state.
+  isMultiSuicide(x, y, color) {
+    const placedIdx = this._idx(x, y);
+    let hasFriendly = false;
+    const seenGids = new Set();
+
+    for (const [nx, ny] of this.getNeighbors(x, y)) {
+      const cell = this.grid[ny][nx];
+      if (cell === null) return false; // empty → immediate liberty
+
+      const gid = this._gid[this._idx(nx, ny)];
+      if (seenGids.has(gid)) continue;
+      seenGids.add(gid);
+
+      const group = this._groups.get(gid);
+      if (cell === color) {
+        hasFriendly = true;
+        // Friendly group contributes liberties besides (x,y)?
+        if (group.liberties.size > 1) return false;
+        if (group.liberties.size === 1 && !group.liberties.has(placedIdx)) return false;
+        // else: sole liberty is (x,y) — no gain after placement
+      } else {
+        // Opponent captured → frees at least one cell adjacent to us
+        if (group.liberties.size === 1 && group.liberties.has(placedIdx)) return false;
+      }
+    }
+
+    return hasFriendly; // must have at least one friendly group to qualify
+  }
+
+  // Returns true if placing `color` at (x, y) would be suicide (either kind).
+  // Does not modify board state.
+  isSuicide(x, y, color) {
+    return this.isSingleSuicide(x, y, color) || this.isMultiSuicide(x, y, color);
+  }
+
   // After placing at (lastX, lastY), capture groups with 0 liberties.
   // Returns positions of captured stones per color: { black: [[x,y],...], white: [...] }
   captureGroups(lastX, lastY) {
@@ -443,9 +498,15 @@ class Game {
       return false;
     }
 
+    // Suicide check: inspect tracker without touching the board
+    if (this.board.isSuicide(x, y, this.current)) {
+      this.illegalFlash = { x, y };
+      return false;
+    }
+
     const hashBefore = this.hash;
 
-    // Clone board for potential rollback
+    // Clone board for potential rollback (only needed for Ko)
     const savedGrid = this.board.grid.map(row => row.slice());
 
     this.board.set(x, y, this.current);
@@ -453,15 +514,6 @@ class Game {
     const caps = this.board.captureGroups(x, y);
     for (const [cx, cy] of caps.black) this.hash ^= ZOBRIST[cy][cx].black;
     for (const [cx, cy] of caps.white) this.hash ^= ZOBRIST[cy][cx].white;
-
-    // Suicide: if our stone was removed, it's illegal
-    if (this.board.get(x, y) === null) {
-      this.board.grid = savedGrid;
-      this.board._rebuildGroups();
-      this.hash = hashBefore;
-      this.illegalFlash = { x, y };
-      return false;
-    }
 
     // Ko rule: reject if this recreates the board state before previous move
     if (this.hash === this.prevHash) {
