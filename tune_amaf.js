@@ -17,7 +17,6 @@
  */
 
 const { spawnSync } = require('child_process');
-const fs   = require('fs');
 const path = require('path');
 
 // ─── Argument parsing ─────────────────────────────────────────────────────────
@@ -33,7 +32,6 @@ const GAMES_PER_ROUND = 2; // 1 game as each colour per round
 const discounts     = (argVal('discounts', '0.0,0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95,1.0'))
   .split(',').map(Number).sort((a, b) => a - b);
 
-const RESULTS_FILE = path.join(__dirname, 'amaf_tune_results.jsonl');
 const selfplayScript = path.join(__dirname, 'selfplay.js');
 
 // ─── Per-discount accumulators ────────────────────────────────────────────────
@@ -119,16 +117,12 @@ function printLeaderboard(round) {
   }
   console.log(`${'─'.repeat(58)}\n`);
 
-  // Append a machine-readable snapshot
-  const snapshot = { round, ts: new Date().toISOString(), boardSize, rows };
-  fs.appendFileSync(RESULTS_FILE, JSON.stringify(snapshot) + '\n');
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
 console.log(`AMAF discount tuning  size=${boardSize}  ${GAMES_PER_ROUND} games/value/round  control=mc`);
 console.log(`Discounts: ${discounts.join(', ')}`);
-console.log(`Results appended to: ${RESULTS_FILE}\n`);
 
 let round = 0;
 // eslint-disable-next-line no-constant-condition
