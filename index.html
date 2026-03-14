@@ -249,6 +249,11 @@
 </div>
 
 <script>
+// How many extra intersections to render beyond each tile edge.
+// 0 = exact tile boundaries; increase to show wrapping rows/cols and make
+// the toroidal topology more intuitive.
+const OVERLAP = 0;
+
 // ─── Board ────────────────────────────────────────────────────────────────────
 
 class Board {
@@ -582,22 +587,25 @@ class Renderer {
     ctx.strokeStyle = '#5a3a10';
     ctx.lineWidth = 1;
 
-    const [, topY] = this.toCanvas(0, 0, offX, offY);
-    const [, botY] = this.toCanvas(0, N - 1, offX, offY);
-    const [leftX]  = this.toCanvas(0, 0, offX, offY);
-    const [rightX] = this.toCanvas(N - 1, 0, offX, offY);
+    const lo = -OVERLAP;
+    const hi = N - 1 + OVERLAP;
 
-    for (let i = 0; i < N; i++) {
+    const [, topY] = this.toCanvas(0,  lo, offX, offY);
+    const [, botY] = this.toCanvas(0,  hi, offX, offY);
+    const [leftX]  = this.toCanvas(lo, 0,  offX, offY);
+    const [rightX] = this.toCanvas(hi, 0,  offX, offY);
+
+    for (let i = lo; i <= hi; i++) {
       const [cx] = this.toCanvas(i, 0, offX, offY);
       ctx.beginPath();
       ctx.moveTo(cx, topY);
-      ctx.lineTo(cx, botY + cs); // extend one cell to bridge gap to next tile
+      ctx.lineTo(cx, botY + cs); // +cs bridges gap to adjacent tile when OVERLAP=0
       ctx.stroke();
 
       const [, cy] = this.toCanvas(0, i, offX, offY);
       ctx.beginPath();
       ctx.moveTo(leftX, cy);
-      ctx.lineTo(rightX + cs, cy); // extend one cell to bridge gap to next tile
+      ctx.lineTo(rightX + cs, cy);
       ctx.stroke();
     }
   }
@@ -605,14 +613,20 @@ class Renderer {
   drawIllegalFlash(offX = 0, offY = 0) {
     const flash = this.game.illegalFlash;
     if (!flash) return;
-    const [cx, cy] = this.toCanvas(flash.x, flash.y, offX, offY);
+    const N = this.game.boardSize;
     const r = this.cellSize * 0.38;
     this.ctx.save();
     this.ctx.globalAlpha = 0.35;
     this.ctx.fillStyle = '#ff4444';
-    this.ctx.beginPath();
-    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    this.ctx.fill();
+    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
+      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+        if (((gx % N) + N) % N !== flash.x || ((gy % N) + N) % N !== flash.y) continue;
+        const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    }
     this.ctx.restore();
   }
 
@@ -621,12 +635,15 @@ class Renderer {
     const N = this.game.boardSize;
     const r = this.cellSize * 0.46;
 
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const color = this.game.board.get(x, y);
+    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
+      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+        // Wrap visual index to logical grid coordinate
+        const bx = ((gx % N) + N) % N;
+        const by = ((gy % N) + N) % N;
+        const color = this.game.board.get(bx, by);
         if (!color) continue;
 
-        const [cx, cy] = this.toCanvas(x, y, offX, offY);
+        const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
 
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
@@ -663,14 +680,20 @@ class Renderer {
   drawLastMove(offX = 0, offY = 0) {
     const lm = this.game.lastMove;
     if (!lm) return;
-    const [cx, cy] = this.toCanvas(lm.x, lm.y, offX, offY);
-    // previous player's color (opposite of current)
+    const N = this.game.boardSize;
     const prev = this.game.current === 'black' ? 'white' : 'black';
     this.ctx.fillStyle = prev === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
     const r = this.cellSize * 0.14;
-    this.ctx.beginPath();
-    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    this.ctx.fill();
+    // Draw marker at every visual position that maps to the last-move cell
+    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
+      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+        if (((gx % N) + N) % N !== lm.x || ((gy % N) + N) % N !== lm.y) continue;
+        const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
+        this.ctx.beginPath();
+        this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    }
   }
 }
 
