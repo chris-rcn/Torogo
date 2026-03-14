@@ -166,7 +166,7 @@ for (let g = 0; g < numGames; g++) {
     const fmtScore = (n) => String(n).padStart(scoreW);
     const fmtStat  = (n) => String(n).padStart(statW);
     console.log(
-      `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}]:` +
+      `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}] ${String(game.moveCount).padStart(3)} moves:` +
       `  B ${fmtScore(blackScore)} (${fmtStat(scores.black.territory)}t+${fmtStat(scores.black.captures)}c)` +
       `  W ${fmtScore(whiteScore)} (${fmtStat(scores.white.territory)}t+${fmtStat(scores.white.captures)}c)` +
       `  → ${winner}`
