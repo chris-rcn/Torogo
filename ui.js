@@ -464,12 +464,6 @@ function updateUI() {
     thinking ? 'Computer thinking…' : 'Your turn (White)';
   statusEl.classList.toggle('thinking', thinking);
 
-  // Captured counts: black captures = white stones captured by black
-  document.getElementById('black-captures').textContent =
-    `Captured: ${g.captured.white}`;
-  document.getElementById('white-captures').textContent =
-    `Captured: ${g.captured.black}`;
-
   // Active player highlight
   document.getElementById('black-info').classList.toggle('active', g.current === 'black' && !g.gameOver);
   document.getElementById('white-info').classList.toggle('active', g.current === 'white' && !g.gameOver);
