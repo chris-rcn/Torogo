@@ -245,3 +245,5 @@ class Game {
     return `${name} to play`;
   }
 }
+
+if (typeof module !== 'undefined') module.exports = { Board, Game };
