@@ -220,14 +220,14 @@ module.exports = function getMove(game) {
         weight *= DISCOUNT;
       }
 
-      // Credit opponent moves with the same exponential discount, scaled
-      // down by OPP_MOVE_WEIGHT.  If the opponent played at X and we won,
-      // X may also be a good move for us.
+      // Credit opponent moves with inverted outcome, scaled by OPP_MOVE_WEIGHT.
+      // If the opponent played at X and the opponent won, X is probably an
+      // important move — credit it as a win for us too (at reduced weight).
       if (OPP_MOVE_WEIGHT > 0) {
         let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
         for (const idx of oppPlayed) {
           plays[idx] += oppWeight;
-          wins[idx]  += won * oppWeight;
+          wins[idx]  += (1 - won) * oppWeight;
           oppWeight *= DISCOUNT;
         }
       }
