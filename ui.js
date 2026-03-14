@@ -435,18 +435,25 @@ function aiGetMove(game) {
 
 function scheduleComputerMove() {
   if (game.gameOver || game.current !== 'black') return;
-  // Small delay so the board redraws before the (potentially slow) AI runs
-  setTimeout(() => {
-    if (game.gameOver || game.current !== 'black') return;
-    const move = aiGetMove(game);
-    if (move.type === 'place') {
-      game.placeStone(move.x, move.y);
-    } else {
-      game.pass();
-    }
-    renderer.draw();
-    updateUI();
-  }, 50);
+  // Ensure the browser paints the shield / "thinking" state before the
+  // blocking AI computation starts.  requestAnimationFrame fires before
+  // the next paint, then a setTimeout(0) lets the paint actually
+  // commit — critical on iOS Safari.
+  updateUI();
+  renderer.draw();
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      if (game.gameOver || game.current !== 'black') return;
+      const move = aiGetMove(game);
+      if (move.type === 'place') {
+        game.placeStone(move.x, move.y);
+      } else {
+        game.pass();
+      }
+      renderer.draw();
+      updateUI();
+    }, 0);
+  });
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
