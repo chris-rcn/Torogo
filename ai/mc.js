@@ -15,21 +15,6 @@ const randomAgent = require('./random.js');
 
 const candidate_playouts = 50; // number of playouts per candidate move
 
-// Single-point true eye: all 4 orthogonal neighbours are `color`, and at
-// least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
-// cell has exactly 4 orthogonal and 4 diagonal neighbours.
-function isTrueEye(board, x, y, color) {
-  const N = board.size;
-  const ortho = board.getNeighbors(x, y);
-  if (!ortho.every(([nx, ny]) => board.get(nx, ny) === color)) return false;
-  const diags = [
-    [(x + 1) % N,     (y + 1) % N],
-    [(x - 1 + N) % N, (y + 1) % N],
-    [(x + 1) % N,     (y - 1 + N) % N],
-    [(x - 1 + N) % N, (y - 1 + N) % N],
-  ];
-  return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
-}
 
 // Lightweight move application for use inside playouts.
 // Precondition: (x, y) has at least one empty orthogonal neighbour, which
@@ -80,7 +65,7 @@ function playRandom(game) {
       // Skip single-point true eyes for the current player — filling them is
       // always suicide.  Leave the cell in the list so the opponent can use it
       // and so captures can later dissolve the eye.
-      if (isTrueEye(game.board, x, y, game.current)) continue;
+      if (game.board.isTrueEye(x, y, game.current)) continue;
 
       // Fast path: at least one empty neighbour means the move cannot be
       // suicide and Ko is effectively impossible.  Use the lightweight helper

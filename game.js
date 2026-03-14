@@ -477,6 +477,29 @@ class Board {
 
     return captured;
   }
+
+  // Single-point true eye detection (toroidal board — every cell has exactly
+  // 4 orthogonal and 4 diagonal neighbours).
+  // An empty cell (x, y) is a true eye for `color` when:
+  //   1. All 4 orthogonal neighbours are occupied by `color`.
+  //   2. All 4 ortho neighbours belong to the same group (unconditional true
+  //      eye), OR at least 3 of the 4 diagonal neighbours are `color`.
+  isTrueEye(x, y, color) {
+    const N = this.size;
+    const ortho = this.getNeighbors(x, y);
+    if (!ortho.every(([nx, ny]) => this.grid[ny][nx] === color)) return false;
+    // Same group → unconditionally true.
+    const gids = ortho.map(([nx, ny]) => this._gid[this._idx(nx, ny)]);
+    if (gids[0] === gids[1] && gids[1] === gids[2] && gids[2] === gids[3]) return true;
+    // Different friendly groups: fall back to the diagonal heuristic.
+    const diags = [
+      [(x + 1) % N,       (y + 1) % N],
+      [(x - 1 + N) % N,   (y + 1) % N],
+      [(x + 1) % N,       (y - 1 + N) % N],
+      [(x - 1 + N) % N,   (y - 1 + N) % N],
+    ];
+    return diags.filter(([dx, dy]) => this.grid[dy][dx] === color).length >= 3;
+  }
 }
 
 // Fraction of captureGroups calls that run BFS verification (0 = off)
