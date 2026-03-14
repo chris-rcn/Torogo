@@ -14,7 +14,7 @@
 const { Game } = require('../game.js');
 const randomAgent = require('./random.js');
 
-const N = 100; // minimum number of playouts
+const N = 10; // number of playouts per candidate move
 
 function cloneGame(game) {
   const g = new Game(game.boardSize);
@@ -58,26 +58,26 @@ module.exports = function getMove(game) {
   // Per-candidate playout statistics.
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
-  // Round-robin playouts until at least N have been performed.
-  for (let t = 0; t < N; t++) {
-    const idx = t % candidates.length;
+  // N playouts per candidate move.
+  for (let idx = 0; idx < candidates.length; idx++) {
     const move = candidates[idx];
+    for (let t = 0; t < N; t++) {
+      const clone = cloneGame(game);
+      if (move.type === 'place') {
+        clone.placeStone(move.x, move.y);
+      } else {
+        clone.pass();
+      }
+      playRandom(clone);
 
-    const clone = cloneGame(game);
-    if (move.type === 'place') {
-      clone.placeStone(move.x, move.y);
-    } else {
-      clone.pass();
+      const s = clone.scores;
+      const winner = s.black.total > s.white.total ? 'black'
+                   : s.white.total > s.black.total ? 'white'
+                   : null;
+
+      stats[idx].plays++;
+      if (winner === player) stats[idx].wins++;
     }
-    playRandom(clone);
-
-    const s = clone.scores;
-    const winner = s.black.total > s.white.total ? 'black'
-                 : s.white.total > s.black.total ? 'white'
-                 : null;
-
-    stats[idx].plays++;
-    if (winner === player) stats[idx].wins++;
   }
 
   // Select the candidate with the highest win ratio.
