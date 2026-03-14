@@ -22,21 +22,7 @@
  *   game  - a live Game instance (read-only; do not mutate)
  */
 
-const { Game } = require('../game.js');
-
 // ── helpers ────────────────────────────────────────────────────────────────
-
-function cloneGame(game) {
-  const g = new Game(game.boardSize);
-  g.board             = game.board.clone();
-  g.current           = game.current;
-  g.captured          = { ...game.captured };
-  g.hash              = game.hash;
-  g.prevHash          = game.prevHash;
-  g.consecutivePasses = game.consecutivePasses;
-  g.gameOver          = game.gameOver;
-  return g;
-}
 
 function isTrueEye(board, x, y, color) {
   const N = board.size;
@@ -103,7 +89,7 @@ function findCapture(game) {
   const atari = groupsByColor(game.board, opp).filter(({ libs }) => libs.size === 1);
   for (const { libs } of atari) {
     const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
   }
   return null;
@@ -115,7 +101,7 @@ function findEscape(game) {
   const atari = groupsByColor(game.board, color).filter(({ libs }) => libs.size === 1);
   for (const { libs } of atari) {
     const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
   }
   return null;
@@ -128,7 +114,7 @@ function findShoreUp(game) {
   for (const { libs } of vulnerable) {
     for (const libStr of libs) {
       const [x, y] = libStr.split(',').map(Number);
-      const clone = cloneGame(game);
+      const clone = game.clone();
       if (!clone.placeStone(x, y)) continue;
       const afterGroup = clone.board.getGroup(x, y);
       if (clone.board.getLiberties(afterGroup).size >= 3)
@@ -145,7 +131,7 @@ function findThreat(game, candidates) {
   let bestSize = -1;
 
   for (const [x, y] of candidates) {
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (!clone.placeStone(x, y)) continue;
 
     const visited = new Set();
@@ -214,7 +200,7 @@ function findInfluence(game, candidates) {
   let bestMove  = null;
   let bestScore = -1;
   for (const [x, y] of candidates) {
-    const clone = cloneGame(game);
+    const clone = game.clone();
     if (!clone.placeStone(x, y)) continue;
     if (leavesOwnGroupAtari(clone, color)) continue;
     const score = voronoiScore(clone.board, N, color);

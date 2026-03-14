@@ -149,6 +149,18 @@ class Game {
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
   }
 
+  clone() {
+    const g = new Game(this.boardSize);
+    g.board             = this.board.clone();
+    g.current           = this.current;
+    g.captured          = { ...this.captured };
+    g.hash              = this.hash;
+    g.prevHash          = this.prevHash;
+    g.consecutivePasses = this.consecutivePasses;
+    g.gameOver          = this.gameOver;
+    return g;
+  }
+
   // Returns true if move was legal and placed
   placeStone(x, y) {
     if (this.gameOver) return false;

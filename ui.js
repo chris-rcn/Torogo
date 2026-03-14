@@ -281,15 +281,7 @@ class Renderer {
 // ─── Influence AI (computer plays black) ──────────────────────────────────────
 
 function aiCloneGame(game) {
-  const g = new Game(game.boardSize);
-  g.board             = game.board.clone();
-  g.current           = game.current;
-  g.captured          = { ...game.captured };
-  g.hash              = game.hash;
-  g.prevHash          = game.prevHash;
-  g.consecutivePasses = game.consecutivePasses;
-  g.gameOver          = game.gameOver;
-  return g;
+  return game.clone();
 }
 
 function aiIsTrueEye(board, x, y, color) {

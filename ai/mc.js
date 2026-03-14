@@ -11,7 +11,6 @@
  *   game  - a live Game instance (read-only; do not mutate)
  */
 
-const { Game } = require('../game.js');
 const randomAgent = require('./random.js');
 
 const N = 10; // number of playouts per candidate move
@@ -47,17 +46,6 @@ function applyFast(game, x, y) {
   return cap.black + cap.white;
 }
 
-function cloneGame(game) {
-  const g = new Game(game.boardSize);
-  g.board = game.board.clone();
-  g.current = game.current;
-  g.captured = { ...game.captured };
-  g.hash = game.hash;
-  g.prevHash = game.prevHash;
-  g.consecutivePasses = game.consecutivePasses;
-  g.gameOver = game.gameOver;
-  return g;
-}
 
 function playRandom(game) {
   const size = game.boardSize;
@@ -154,7 +142,7 @@ module.exports = function getMove(game) {
   for (let y = 0; y < game.boardSize; y++) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
-      const probe = cloneGame(game);
+      const probe = game.clone();
       if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
     }
   }
@@ -168,7 +156,7 @@ module.exports = function getMove(game) {
   for (let idx = 0; idx < candidates.length; idx++) {
     const move = candidates[idx];
     for (let t = 0; t < N; t++) {
-      const clone = cloneGame(game);
+      const clone = game.clone();
       if (move.type === 'place') {
         clone.placeStone(move.x, move.y);
       } else {
