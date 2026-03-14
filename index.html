@@ -205,11 +205,29 @@
     color: #f0e060;
     font-weight: bold;
   }
+
+  .top-bar {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
 </style>
 </head>
 <body>
-<h1>Torogo</h1>
-<p class="subtitle">Toroidal Go</p>
+<div class="top-bar">
+  <select id="size-select">
+    <option value="9">9 × 9</option>
+    <option value="13">13 × 13</option>
+    <option value="19">19 × 19</option>
+  </select>
+  <div>
+    <h1 style="text-align:center;">Torogo</h1>
+    <p class="subtitle" style="text-align:center;">Toroidal Go</p>
+  </div>
+  <button id="new-game-btn">New Game</button>
+</div>
 
 <canvas id="board-canvas"></canvas>
 
@@ -236,12 +254,6 @@
 
 <div class="controls">
   <button id="pass-btn">Pass</button>
-  <button id="new-game-btn">New Game</button>
-  <select id="size-select">
-    <option value="9">9 × 9</option>
-    <option value="13">13 × 13</option>
-    <option value="19">19 × 19</option>
-  </select>
   <label for="overlap-select">Overlap</label>
   <select id="overlap-select">
     <option value="0">0</option>
