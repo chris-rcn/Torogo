@@ -3,10 +3,10 @@
 /**
  * Tune the AMAF discount factor against the mc policy.
  *
- * Runs indefinitely, cycling through candidate discount values and playing
- * 2 games per value per round (1 as each colour).  After each complete round
- * the cumulative leaderboard is printed and appended to results.jsonl so you
- * can inspect progress at any time.
+ * Runs indefinitely, cycling through candidate discount values.  The first
+ * few rounds test all values equally (warmup).  After warmup, batches are
+ * allocated adaptively: top third by Wilson CI upper bound get 3x batches,
+ * middle third get 1x, bottom third are skipped.
  *
  * Usage:
  *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>]
@@ -83,6 +83,39 @@ function runBatch(discount) {
   return amafWins;
 }
 
+// Wilson CI upper bound for a discount's win rate.
+function wilsonUpper(s) {
+  if (s.games === 0) return Infinity; // untested → explore first
+  const z = 1.96, n = s.games, p = s.wins / s.games;
+  const centre = (p + z * z / (2 * n)) / (1 + z * z / n);
+  const margin  = z / (1 + z * z / n) * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+  return centre + margin;
+}
+
+const WARMUP_ROUNDS = 3;
+
+// After warmup, allocate batches adaptively:
+//   top third  → 3 batches,  middle third → 1 batch,  bottom third → skipped
+function batchesForRound(round) {
+  const alloc = new Map();
+  if (round <= WARMUP_ROUNDS) {
+    for (const d of discounts) alloc.set(d, 1);
+    return alloc;
+  }
+
+  const scored = discounts
+    .map(d => ({ d, upper: wilsonUpper(stats.get(d)) }))
+    .sort((a, b) => b.upper - a.upper);
+
+  const top = Math.max(1, Math.ceil(discounts.length / 3));
+  for (let i = 0; i < scored.length; i++) {
+    if (i < top)          alloc.set(scored[i].d, 3);
+    else if (i < top * 2) alloc.set(scored[i].d, 1);
+    // bottom third: 0 batches (skipped)
+  }
+  return alloc;
+}
+
 function printLeaderboard(round) {
   const rows = [];
   for (const [d, s] of stats) {
@@ -124,21 +157,25 @@ function printLeaderboard(round) {
 
 console.log(`AMAF discount tuning  size=${boardSize}  ${GAMES_PER_ROUND} games/value/round  control=mc`);
 console.log(`Discounts: ${discounts.join(', ')}`);
+console.log(`Warmup: ${WARMUP_ROUNDS} rounds (all values), then adaptive allocation`);
 
 let round = 0;
 // eslint-disable-next-line no-constant-condition
 while (true) {
   round++;
-  console.log(`[${ts()}] Starting round ${round}...`);
+  const alloc = batchesForRound(round);
+  const totalBatches = [...alloc.values()].reduce((a, b) => a + b, 0);
+  console.log(`[${ts()}] Starting round ${round}  (${alloc.size} values, ${totalBatches} batches)...`);
 
-  for (const d of discounts) {
-    process.stdout.write(`  [${ts()}] discount=${d} ... `);
-    const wins = runBatch(d);
+  for (const [d, batches] of alloc) {
+    process.stdout.write(`  [${ts()}] discount=${d} x${batches} ... `);
+    let wins = 0;
+    for (let b = 0; b < batches; b++) wins += runBatch(d);
     const s = stats.get(d);
     s.wins  += wins;
-    s.games += GAMES_PER_ROUND;
+    s.games += GAMES_PER_ROUND * batches;
     const pct = (100 * s.wins / s.games).toFixed(1);
-    console.log(`${wins}/${GAMES_PER_ROUND}  (cumulative: ${s.wins}/${s.games} = ${pct}%)`);
+    console.log(`${wins}/${GAMES_PER_ROUND * batches}  (cumulative: ${s.wins}/${s.games} = ${pct}%)`);
   }
 
   printLeaderboard(round);
