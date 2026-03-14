@@ -3,37 +3,67 @@
  * Self-play script — play multiple games of one AI policy against another.
  *
  * Usage:
- *   node selfplay.js [policy1] [policy2] [numGames] [boardSize]
+ *   node selfplay.js [options]
  *
- * Arguments (all optional, positional):
- *   policy1   - AI policy for Black (default: random-move)
- *   policy2   - AI policy for White (default: random-move)
- *   numGames  - Number of games to play  (default: 100)
- *   boardSize - Board size: 9, 13, or 19 (default: 9)
+ * Options:
+ *   --black <policy>   AI policy for Black        (default: random-move)
+ *   --white <policy>   AI policy for White        (default: random-move)
+ *   --games <n>        Number of games to play    (default: 100)
+ *   --size  <n>        Board size: 9, 13, or 19   (default: 9)
+ *   --help             Show this help message
  *
  * Policy names are filenames without the .js extension inside the ai/ folder.
  *
  * Examples:
- *   node selfplay.js random-move always-pass 20 9
- *   node selfplay.js always-pass always-pass 5
- *   node selfplay.js random-move random-move 100 13
+ *   node selfplay.js --black random-move --white always-pass --games 20
+ *   node selfplay.js --size 13 --games 50
+ *   node selfplay.js --black always-pass --white always-pass --games 5 --size 9
  */
 
 const path = require('path');
 const { Game } = require('./game.js');
 
-const args = process.argv.slice(2);
-const p1Name    = args[0] || 'random-move';
-const p2Name    = args[1] || 'random-move';
-const numGames  = parseInt(args[2] || '100', 10);
-const boardSize = parseInt(args[3] || '9',   10);
+// Parse --key value switches from argv.
+function parseArgs(argv) {
+  const opts = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      const val = argv[i + 1];
+      if (val === undefined || val.startsWith('--')) {
+        console.error(`Missing value for ${arg}`);
+        process.exit(1);
+      }
+      opts[key] = val;
+      i++;
+    } else {
+      console.error(`Unknown argument: ${arg}`);
+      process.exit(1);
+    }
+  }
+  return opts;
+}
+
+const opts = parseArgs(process.argv.slice(2));
+
+if (opts.help) {
+  console.log(`Usage: node selfplay.js [--black <policy>] [--white <policy>] [--games <n>] [--size <n>]`);
+  process.exit(0);
+}
+
+const p1Name    = opts.black || 'random-move';
+const p2Name    = opts.white || 'random-move';
+const numGames  = parseInt(opts.games || '100', 10);
+const boardSize = parseInt(opts.size  || '9',   10);
 
 if (isNaN(numGames) || numGames < 1) {
-  console.error('numGames must be a positive integer');
+  console.error('--games must be a positive integer');
   process.exit(1);
 }
 if (![9, 13, 19].includes(boardSize)) {
-  console.error('boardSize must be 9, 13, or 19');
+  console.error('--size must be 9, 13, or 19');
   process.exit(1);
 }
 
