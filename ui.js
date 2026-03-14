@@ -99,25 +99,34 @@ class Renderer {
     ctx.strokeStyle = '#5a3a10';
     ctx.lineWidth = 1;
 
-    const lo = -OVERLAP;
-    const hi = N - 1 + OVERLAP;
+    // Show floor(OVERLAP/2) extra intersections on the left/top side and
+    // ceil(OVERLAP/2) on the right/bottom, matching the panOffset split.
+    const lo = -Math.floor(OVERLAP / 2);
+    const hi = N - 1 + Math.ceil(OVERLAP / 2);
+    const ts = this.tileSize();
 
     const [, topY] = this.toCanvas(0,  lo, offX, offY);
     const [, botY] = this.toCanvas(0,  hi, offX, offY);
     const [leftX]  = this.toCanvas(lo, 0,  offX, offY);
     const [rightX] = this.toCanvas(hi, 0,  offX, offY);
 
+    // Lines must reach at least the start of the adjacent tile so that
+    // tiled copies connect seamlessly.  When OVERLAP=0 botY/rightX fall
+    // one cell short of that boundary; for OVERLAP>0 they already reach it.
+    const lineBot   = Math.max(botY,   topY  + ts);
+    const lineRight = Math.max(rightX, leftX + ts);
+
     for (let i = lo; i <= hi; i++) {
       const [cx] = this.toCanvas(i, 0, offX, offY);
       ctx.beginPath();
       ctx.moveTo(cx, topY);
-      ctx.lineTo(cx, botY + cs); // +cs bridges gap to adjacent tile when OVERLAP=0
+      ctx.lineTo(cx, lineBot);
       ctx.stroke();
 
       const [, cy] = this.toCanvas(0, i, offX, offY);
       ctx.beginPath();
       ctx.moveTo(leftX, cy);
-      ctx.lineTo(rightX + cs, cy);
+      ctx.lineTo(lineRight, cy);
       ctx.stroke();
     }
   }
@@ -130,8 +139,9 @@ class Renderer {
     this.ctx.save();
     this.ctx.globalAlpha = 0.35;
     this.ctx.fillStyle = '#ff4444';
-    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
-      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+    const loF = -Math.floor(OVERLAP / 2), hiF = N + Math.ceil(OVERLAP / 2);
+    for (let gy = loF; gy < hiF; gy++) {
+      for (let gx = loF; gx < hiF; gx++) {
         if (((gx % N) + N) % N !== flash.x || ((gy % N) + N) % N !== flash.y) continue;
         const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
         this.ctx.beginPath();
@@ -147,8 +157,9 @@ class Renderer {
     const N = this.game.boardSize;
     const r = this.cellSize * 0.46;
 
-    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
-      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+    const loS = -Math.floor(OVERLAP / 2), hiS = N + Math.ceil(OVERLAP / 2);
+    for (let gy = loS; gy < hiS; gy++) {
+      for (let gx = loS; gx < hiS; gx++) {
         // Wrap visual index to logical grid coordinate
         const bx = ((gx % N) + N) % N;
         const by = ((gy % N) + N) % N;
@@ -244,8 +255,9 @@ class Renderer {
     this.ctx.fillStyle = prev === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
     const r = this.cellSize * 0.14;
     // Draw marker at every visual position that maps to the last-move cell
-    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
-      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+    const loL = -Math.floor(OVERLAP / 2), hiL = N + Math.ceil(OVERLAP / 2);
+    for (let gy = loL; gy < hiL; gy++) {
+      for (let gx = loL; gx < hiL; gx++) {
         if (((gx % N) + N) % N !== lm.x || ((gy % N) + N) % N !== lm.y) continue;
         const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
         this.ctx.beginPath();
