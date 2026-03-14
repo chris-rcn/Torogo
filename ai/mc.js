@@ -4,7 +4,7 @@
  * Monte Carlo policy.
  *
  * For each candidate move, performs random playouts to the end of the game
- * and tracks the win ratio.  After at least N total playouts the move with
+ * and tracks the win ratio.  After candidate_playouts per move the move with
  * the highest win ratio is returned.
  *
  * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
@@ -13,7 +13,7 @@
 
 const randomAgent = require('./random.js');
 
-const N = 10; // number of playouts per candidate move
+const candidate_playouts = 20; // number of playouts per candidate move
 
 // Single-point true eye: all 4 orthogonal neighbours are `color`, and at
 // least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
@@ -154,10 +154,10 @@ module.exports = function getMove(game) {
   // Per-candidate playout statistics.
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
-  // N playouts per candidate move.
+  // candidate_playouts playouts per candidate move.
   for (let idx = 0; idx < candidates.length; idx++) {
     const move = candidates[idx];
-    for (let t = 0; t < N; t++) {
+    for (let t = 0; t < candidate_playouts; t++) {
       const clone = game.clone();
       if (move.type === 'place') {
         clone.placeStone(move.x, move.y);
