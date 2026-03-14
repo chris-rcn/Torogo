@@ -278,11 +278,9 @@ class Renderer {
 
 // ─── App wiring ───────────────────────────────────────────────────────────────
 
-// ─── Influence AI (computer plays black) ──────────────────────────────────────
+// ─── Monte Carlo AI (computer plays black) ────────────────────────────────────
 
-function aiCloneGame(game) {
-  return game.clone();
-}
+const MC_CANDIDATE_PLAYOUTS = 50;
 
 function aiIsTrueEye(board, x, y, color) {
   const N = board.size;
@@ -297,184 +295,146 @@ function aiIsTrueEye(board, x, y, color) {
   return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
 }
 
-function aiShuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+function aiApplyFast(game, x, y) {
+  game.board.set(x, y, game.current);
+  const cap = game.board.captureGroups(x, y);
+  game.captured.black += cap.black.length;
+  game.captured.white += cap.white.length;
+  game.consecutivePasses = 0;
+  game.current = game.current === 'black' ? 'white' : 'black';
+  return cap.black.length + cap.white.length;
 }
 
-function aiGroupsByColor(board, color) {
-  const visited = new Set();
-  const results = [];
-  const N = board.size;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const key = `${x},${y}`;
-      if (board.get(x, y) !== color || visited.has(key)) continue;
-      const group = board.getGroup(x, y);
-      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
-      const libs = board.getLiberties(group);
-      results.push({ group, libs });
-    }
-  }
-  results.sort((a, b) => b.group.length - a.group.length);
-  return results;
-}
+function aiPlayRandom(game) {
+  const size = game.boardSize;
+  const empty = [];
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++)
+      if (game.board.get(x, y) === null) empty.push([x, y]);
 
-function aiLeavesOwnGroupAtari(clone, color) {
-  const visited = new Set();
-  const N = clone.board.size;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const key = `${x},${y}`;
-      if (clone.board.get(x, y) !== color || visited.has(key)) continue;
-      const group = clone.board.getGroup(x, y);
-      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
-      if (clone.board.getLiberties(group).size === 1) return true;
-    }
-  }
-  return false;
-}
+  const moveLimit = empty.length + 20;
+  let moves = 0;
 
-function aiCapture(game) {
-  const opp = game.current === 'black' ? 'white' : 'black';
-  const atari = aiGroupsByColor(game.board, opp).filter(({ libs }) => libs.size === 1);
-  for (const { libs } of atari) {
-    const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = aiCloneGame(game);
-    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
-  }
-  return null;
-}
+  while (!game.gameOver && moves < moveLimit) {
+    let placed = false;
+    let end = empty.length;
 
-function aiEscape(game) {
-  const color = game.current;
-  const atari = aiGroupsByColor(game.board, color).filter(({ libs }) => libs.size === 1);
-  for (const { libs } of atari) {
-    const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = aiCloneGame(game);
-    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
-  }
-  return null;
-}
+    while (end > 0) {
+      const i = Math.floor(Math.random() * end);
+      const [x, y] = empty[i];
+      empty[i] = empty[end - 1];
+      empty[end - 1] = [x, y];
+      end--;
 
-function aiShoreUp(game) {
-  const color = game.current;
-  const vulnerable = aiGroupsByColor(game.board, color).filter(({ libs }) => libs.size === 2);
-  for (const { libs } of vulnerable) {
-    for (const libStr of libs) {
-      const [x, y] = libStr.split(',').map(Number);
-      const clone = aiCloneGame(game);
-      if (!clone.placeStone(x, y)) continue;
-      const afterGroup = clone.board.getGroup(x, y);
-      if (clone.board.getLiberties(afterGroup).size >= 3)
-        return { type: 'place', x, y };
-    }
-  }
-  return null;
-}
+      if (aiIsTrueEye(game.board, x, y, game.current)) continue;
 
-function aiThreat(game, candidates) {
-  const opp = game.current === 'black' ? 'white' : 'black';
-  let bestMove = null;
-  let bestSize = -1;
-  for (const [x, y] of candidates) {
-    const clone = aiCloneGame(game);
-    if (!clone.placeStone(x, y)) continue;
-    const visited = new Set();
-    const N = clone.board.size;
-    for (let gy = 0; gy < N; gy++) {
-      for (let gx = 0; gx < N; gx++) {
-        const key = `${gx},${gy}`;
-        if (clone.board.get(gx, gy) !== opp || visited.has(key)) continue;
-        const group = clone.board.getGroup(gx, gy);
-        group.forEach(([ax, ay]) => visited.add(`${ax},${ay}`));
-        if (clone.board.getLiberties(group).size === 1 && group.length > bestSize) {
-          bestSize = group.length;
-          bestMove = { type: 'place', x, y };
+      const neighbors = game.board.getNeighbors(x, y);
+      if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
+        const captures = aiApplyFast(game, x, y);
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
+        if (captures > 0) {
+          empty.length = 0;
+          for (let ey = 0; ey < size; ey++)
+            for (let ex = 0; ex < size; ex++)
+              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
         }
+        placed = true;
+        moves++;
+        break;
+      }
+
+      const capBefore = game.captured.black + game.captured.white;
+      if (game.placeStone(x, y)) {
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
+        if (game.captured.black + game.captured.white > capBefore) {
+          empty.length = 0;
+          for (let ey = 0; ey < size; ey++)
+            for (let ex = 0; ex < size; ex++)
+              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
+        }
+        placed = true;
+        moves++;
+        break;
       }
     }
-  }
-  return bestMove;
-}
 
-function aiBfsDistances(board, N, seeds) {
-  const dist = Array.from({ length: N }, () => new Float32Array(N).fill(Infinity));
-  const queue = [];
-  for (const [x, y] of seeds) { dist[y][x] = 0; queue.push([x, y]); }
-  let head = 0;
-  while (head < queue.length) {
-    const [cx, cy] = queue[head++];
-    for (const [nx, ny] of board.getNeighbors(cx, cy)) {
-      if (board.get(nx, ny) === null && dist[ny][nx] === Infinity) {
-        dist[ny][nx] = dist[cy][cx] + 1;
-        queue.push([nx, ny]);
-      }
+    if (!placed) {
+      game.pass();
+      moves++;
     }
   }
-  return dist;
+
+  if (!game.gameOver) game.endGame();
 }
 
-function aiVoronoiScore(board, N, myColor) {
-  const opp = myColor === 'black' ? 'white' : 'black';
-  const mySeeds = [], oppSeeds = [];
+function aiRandomMove(game) {
+  const N = game.boardSize;
+  const color = game.current;
+  const board = game.board;
+  const candidates = [];
   for (let y = 0; y < N; y++)
     for (let x = 0; x < N; x++) {
-      if (board.get(x, y) === myColor) mySeeds.push([x, y]);
-      else if (board.get(x, y) === opp) oppSeeds.push([x, y]);
+      if (board.get(x, y) !== null) continue;
+      if (aiIsTrueEye(board, x, y, color)) continue;
+      candidates.push([x, y]);
     }
-  const myDist  = aiBfsDistances(board, N, mySeeds);
-  const oppDist = aiBfsDistances(board, N, oppSeeds);
-  let score = 0;
-  for (let y = 0; y < N; y++)
-    for (let x = 0; x < N; x++)
-      if (board.get(x, y) === null && myDist[y][x] < oppDist[y][x]) score++;
-  return score;
-}
-
-function aiInfluence(game, candidates) {
-  const color = game.current;
-  const N = game.boardSize;
-  let bestMove = null, bestScore = -1;
-  for (const [x, y] of candidates) {
-    const clone = aiCloneGame(game);
-    if (!clone.placeStone(x, y)) continue;
-    if (aiLeavesOwnGroupAtari(clone, color)) continue;
-    const score = aiVoronoiScore(clone.board, N, color);
-    if (score > bestScore) { bestScore = score; bestMove = { type: 'place', x, y }; }
+  while (candidates.length > 0) {
+    const i = Math.floor(Math.random() * candidates.length);
+    const [x, y] = candidates[i];
+    candidates[i] = candidates[candidates.length - 1];
+    candidates.pop();
+    if (board.getNeighbors(x, y).some(([nx, ny]) => board.get(nx, ny) === null))
+      return { type: 'place', x, y };
+    const clone = game.clone();
+    if (clone.placeStone(x, y)) return { type: 'place', x, y };
   }
-  return bestMove;
+  return { type: 'pass' };
 }
 
 function aiGetMove(game) {
   if (game.gameOver) return { type: 'pass' };
-  const N = game.boardSize;
-  const color = game.current;
 
-  const capture = aiCapture(game);
-  if (capture) return capture;
+  // All positions equivalent on first move of toroidal board — skip MC.
+  if (game.lastMove === null && game.consecutivePasses === 0)
+    return aiRandomMove(game);
 
-  const escape = aiEscape(game);
-  if (escape) return escape;
-
-  const shoreUp = aiShoreUp(game);
-  if (shoreUp) return shoreUp;
-
+  const player = game.current;
   const candidates = [];
-  for (let y = 0; y < N; y++)
-    for (let x = 0; x < N; x++) {
+  for (let y = 0; y < game.boardSize; y++) {
+    for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
-      if (aiIsTrueEye(game.board, x, y, color)) continue;
-      candidates.push([x, y]);
+      const probe = game.clone();
+      if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
     }
-  aiShuffle(candidates);
+  }
+  candidates.push({ type: 'pass' });
 
-  return aiThreat(game, candidates)
-      || aiInfluence(game, candidates)
-      || { type: 'pass' };
+  const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
+
+  for (let idx = 0; idx < candidates.length; idx++) {
+    const move = candidates[idx];
+    for (let t = 0; t < MC_CANDIDATE_PLAYOUTS; t++) {
+      const clone = game.clone();
+      if (move.type === 'place') clone.placeStone(move.x, move.y);
+      else clone.pass();
+      aiPlayRandom(clone);
+      const s = clone.scores;
+      const winner = s.black.total > s.white.total ? 'black'
+                   : s.white.total > s.black.total ? 'white'
+                   : null;
+      stats[idx].plays++;
+      if (winner === player) stats[idx].wins++;
+    }
+  }
+
+  let bestIdx = 0, bestRatio = -1;
+  for (let i = 0; i < candidates.length; i++) {
+    const ratio = stats[i].plays > 0 ? stats[i].wins / stats[i].plays : 0;
+    if (ratio > bestRatio) { bestRatio = ratio; bestIdx = i; }
+  }
+  return candidates[bestIdx];
 }
 
 function scheduleComputerMove() {

@@ -13,7 +13,7 @@
 
 const randomAgent = require('./random.js');
 
-const candidate_playouts = 20; // number of playouts per candidate move
+const candidate_playouts = 50; // number of playouts per candidate move
 
 // Single-point true eye: all 4 orthogonal neighbours are `color`, and at
 // least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
