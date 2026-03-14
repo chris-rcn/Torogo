@@ -3,10 +3,10 @@
 /**
  * Tune the AMAF discount factor against the mc policy.
  *
- * Runs indefinitely, cycling through candidate discount values.  The first
- * few rounds test all values equally (warmup).  After warmup, batches are
- * allocated adaptively: top third by Wilson CI upper bound get 3x batches,
- * middle third get 1x, bottom third are skipped.
+ * Runs indefinitely, cycling through candidate discount values.  Each round
+ * allocates batches via Wilson CI upper bounds — promising values get more
+ * games while all values retain a minimum allocation for continuous
+ * exploration.
  *
  * Usage:
  *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>]
@@ -92,26 +92,18 @@ function wilsonUpper(s) {
   return centre + margin;
 }
 
-const WARMUP_ROUNDS = 3;
-
-// After warmup, allocate batches adaptively:
-//   top third  → 3 batches,  middle third → 1 batch,  bottom third → skipped
-function batchesForRound(round) {
-  const alloc = new Map();
-  if (round <= WARMUP_ROUNDS) {
-    for (const d of discounts) alloc.set(d, 1);
-    return alloc;
-  }
-
+// Allocate batches per discount using Wilson CI upper bounds.
+// Every value gets at least 1 batch (continuous exploration);
+// top third by upper bound get 3 batches for faster convergence.
+function batchesForRound() {
   const scored = discounts
     .map(d => ({ d, upper: wilsonUpper(stats.get(d)) }))
     .sort((a, b) => b.upper - a.upper);
 
   const top = Math.max(1, Math.ceil(discounts.length / 3));
+  const alloc = new Map();
   for (let i = 0; i < scored.length; i++) {
-    if (i < top)          alloc.set(scored[i].d, 3);
-    else if (i < top * 2) alloc.set(scored[i].d, 1);
-    // bottom third: 0 batches (skipped)
+    alloc.set(scored[i].d, i < top ? 3 : 1);
   }
   return alloc;
 }
@@ -157,13 +149,13 @@ function printLeaderboard(round) {
 
 console.log(`AMAF discount tuning  size=${boardSize}  ${GAMES_PER_ROUND} games/value/round  control=mc`);
 console.log(`Discounts: ${discounts.join(', ')}`);
-console.log(`Warmup: ${WARMUP_ROUNDS} rounds (all values), then adaptive allocation`);
+console.log(`Adaptive: top third by Wilson CI upper bound get 3x batches, rest get 1x`);
 
 let round = 0;
 // eslint-disable-next-line no-constant-condition
 while (true) {
   round++;
-  const alloc = batchesForRound(round);
+  const alloc = batchesForRound();
   const totalBatches = [...alloc.values()].reduce((a, b) => a + b, 0);
   console.log(`[${ts()}] Starting round ${round}  (${alloc.size} values, ${totalBatches} batches)...`);
 
