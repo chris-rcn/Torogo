@@ -162,11 +162,6 @@ function playTracked(game, trackColor) {
 module.exports = function getMove(game) {
   if (game.gameOver) return { type: 'pass' };
 
-  // All positions are equivalent on a toroidal board — skip on move one.
-  if (game.lastMove === null && game.consecutivePasses === 0) {
-    return randomAgent(game);
-  }
-
   const player = game.current;
   const N = game.boardSize;
 

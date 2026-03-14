@@ -132,11 +132,6 @@ function playRandom(game) {
 module.exports = function getMove(game) {
   if (game.gameOver) return { type: 'pass' };
 
-  // All positions are equivalent on a toroidal board — skip MC on move one.
-  if (game.lastMove === null && game.consecutivePasses === 0) {
-    return randomAgent(game);
-  }
-
   const player = game.current;
 
   // Build list of legal candidate moves.

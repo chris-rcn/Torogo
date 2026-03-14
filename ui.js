@@ -396,10 +396,6 @@ function aiRandomMove(game) {
 function aiGetMove(game) {
   if (game.gameOver) return { type: 'pass' };
 
-  // All positions equivalent on first move of toroidal board — skip MC.
-  if (game.lastMove === null && game.consecutivePasses === 0)
-    return aiRandomMove(game);
-
   const player = game.current;
   const candidates = [];
   for (let y = 0; y < game.boardSize; y++) {
@@ -592,13 +588,7 @@ document.getElementById('pass-btn').addEventListener('click', () => {
 });
 
 document.getElementById('new-game-btn').addEventListener('click', () => {
-  const size = parseInt(document.getElementById('size-select').value, 10);
-  startGame(size);
-});
-
-document.getElementById('size-select').addEventListener('change', () => {
-  const size = parseInt(document.getElementById('size-select').value, 10);
-  startGame(size);
+  startGame(13);
 });
 
 document.getElementById('overlap-select').addEventListener('change', () => {
