@@ -246,8 +246,8 @@ module.exports = function getMove(game) {
     cidx = (cidx + 1) % candidates.length;
   }
 
-  // Select the candidate with the highest AMAF win ratio, breaking ties
-  // randomly so that equal-valued moves aren't biased by board scan order.
+  // Select the candidate with the highest AMAF win ratio.  If pass is
+  // tied for best it wins outright; otherwise ties are broken randomly.
   let bestRatio = -1;
   let bestCount = 0;
   let bestIdx = 0;
@@ -264,6 +264,12 @@ module.exports = function getMove(game) {
       bestCount++;
       if (Math.random() * bestCount < 1) bestIdx = i;
     }
+  }
+
+  // Prefer pass when it ties for best ratio.
+  if (plays[PASS_IDX] > 0 && wins[PASS_IDX] / plays[PASS_IDX] === bestRatio) {
+    const passCandIdx = candidates.findIndex(c => c.type === 'pass');
+    if (passCandIdx !== -1) bestIdx = passCandIdx;
   }
 
   return candidates[bestIdx];
