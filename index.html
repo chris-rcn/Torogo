@@ -568,7 +568,6 @@ class Renderer {
         const offX = dx * ts;
         const offY = dy * ts;
         this.drawGrid(offX, offY);
-        this.drawStarPoints(offX, offY);
         this.drawStones(offX, offY);
         this.drawLastMove(offX, offY);
         this.drawIllegalFlash(offX, offY);
@@ -600,21 +599,6 @@ class Renderer {
       ctx.moveTo(leftX, cy);
       ctx.lineTo(rightX + cs, cy); // extend one cell to bridge gap to next tile
       ctx.stroke();
-    }
-  }
-
-  drawStarPoints(offX = 0, offY = 0) {
-    const N = this.game.boardSize;
-    let stars = [];
-    if (N === 9)  stars = [[2,2],[6,2],[4,4],[2,6],[6,6]];
-    else if (N === 13) stars = [[3,3],[9,3],[6,6],[3,9],[9,9]];
-    else if (N === 19) stars = [[3,3],[9,3],[15,3],[3,9],[9,9],[15,9],[3,15],[9,15],[15,15]];
-    this.ctx.fillStyle = '#4a2a08';
-    for (const [sx, sy] of stars) {
-      const [cx, cy] = this.toCanvas(sx, sy, offX, offY);
-      this.ctx.beginPath();
-      this.ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-      this.ctx.fill();
     }
   }
 
