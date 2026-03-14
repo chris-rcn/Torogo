@@ -278,13 +278,239 @@ class Renderer {
 
 // ─── App wiring ───────────────────────────────────────────────────────────────
 
+// ─── Influence AI (computer plays black) ──────────────────────────────────────
+
+function aiCloneGame(game) {
+  const g = new Game(game.boardSize);
+  g.board             = game.board.clone();
+  g.current           = game.current;
+  g.captured          = { ...game.captured };
+  g.prevHash          = game.prevHash;
+  g.consecutivePasses = game.consecutivePasses;
+  g.gameOver          = game.gameOver;
+  return g;
+}
+
+function aiIsTrueEye(board, x, y, color) {
+  const N = board.size;
+  const ortho = board.getNeighbors(x, y);
+  if (!ortho.every(([nx, ny]) => board.get(nx, ny) === color)) return false;
+  const diags = [
+    [(x + 1) % N,     (y + 1) % N],
+    [(x - 1 + N) % N, (y + 1) % N],
+    [(x + 1) % N,     (y - 1 + N) % N],
+    [(x - 1 + N) % N, (y - 1 + N) % N],
+  ];
+  return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
+}
+
+function aiShuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function aiGroupsByColor(board, color) {
+  const visited = new Set();
+  const results = [];
+  const N = board.size;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const key = `${x},${y}`;
+      if (board.get(x, y) !== color || visited.has(key)) continue;
+      const group = board.getGroup(x, y);
+      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
+      const libs = board.getLiberties(group);
+      results.push({ group, libs });
+    }
+  }
+  results.sort((a, b) => b.group.length - a.group.length);
+  return results;
+}
+
+function aiLeavesOwnGroupAtari(clone, color) {
+  const visited = new Set();
+  const N = clone.board.size;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const key = `${x},${y}`;
+      if (clone.board.get(x, y) !== color || visited.has(key)) continue;
+      const group = clone.board.getGroup(x, y);
+      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
+      if (clone.board.getLiberties(group).size === 1) return true;
+    }
+  }
+  return false;
+}
+
+function aiCapture(game) {
+  const opp = game.current === 'black' ? 'white' : 'black';
+  const atari = aiGroupsByColor(game.board, opp).filter(({ libs }) => libs.size === 1);
+  for (const { libs } of atari) {
+    const [lx, ly] = [...libs][0].split(',').map(Number);
+    const clone = aiCloneGame(game);
+    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
+  }
+  return null;
+}
+
+function aiEscape(game) {
+  const color = game.current;
+  const atari = aiGroupsByColor(game.board, color).filter(({ libs }) => libs.size === 1);
+  for (const { libs } of atari) {
+    const [lx, ly] = [...libs][0].split(',').map(Number);
+    const clone = aiCloneGame(game);
+    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
+  }
+  return null;
+}
+
+function aiShoreUp(game) {
+  const color = game.current;
+  const vulnerable = aiGroupsByColor(game.board, color).filter(({ libs }) => libs.size === 2);
+  for (const { libs } of vulnerable) {
+    for (const libStr of libs) {
+      const [x, y] = libStr.split(',').map(Number);
+      const clone = aiCloneGame(game);
+      if (!clone.placeStone(x, y)) continue;
+      const afterGroup = clone.board.getGroup(x, y);
+      if (clone.board.getLiberties(afterGroup).size >= 3)
+        return { type: 'place', x, y };
+    }
+  }
+  return null;
+}
+
+function aiThreat(game, candidates) {
+  const opp = game.current === 'black' ? 'white' : 'black';
+  let bestMove = null;
+  let bestSize = -1;
+  for (const [x, y] of candidates) {
+    const clone = aiCloneGame(game);
+    if (!clone.placeStone(x, y)) continue;
+    const visited = new Set();
+    const N = clone.board.size;
+    for (let gy = 0; gy < N; gy++) {
+      for (let gx = 0; gx < N; gx++) {
+        const key = `${gx},${gy}`;
+        if (clone.board.get(gx, gy) !== opp || visited.has(key)) continue;
+        const group = clone.board.getGroup(gx, gy);
+        group.forEach(([ax, ay]) => visited.add(`${ax},${ay}`));
+        if (clone.board.getLiberties(group).size === 1 && group.length > bestSize) {
+          bestSize = group.length;
+          bestMove = { type: 'place', x, y };
+        }
+      }
+    }
+  }
+  return bestMove;
+}
+
+function aiBfsDistances(board, N, seeds) {
+  const dist = Array.from({ length: N }, () => new Float32Array(N).fill(Infinity));
+  const queue = [];
+  for (const [x, y] of seeds) { dist[y][x] = 0; queue.push([x, y]); }
+  let head = 0;
+  while (head < queue.length) {
+    const [cx, cy] = queue[head++];
+    for (const [nx, ny] of board.getNeighbors(cx, cy)) {
+      if (board.get(nx, ny) === null && dist[ny][nx] === Infinity) {
+        dist[ny][nx] = dist[cy][cx] + 1;
+        queue.push([nx, ny]);
+      }
+    }
+  }
+  return dist;
+}
+
+function aiVoronoiScore(board, N, myColor) {
+  const opp = myColor === 'black' ? 'white' : 'black';
+  const mySeeds = [], oppSeeds = [];
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      if (board.get(x, y) === myColor) mySeeds.push([x, y]);
+      else if (board.get(x, y) === opp) oppSeeds.push([x, y]);
+    }
+  const myDist  = aiBfsDistances(board, N, mySeeds);
+  const oppDist = aiBfsDistances(board, N, oppSeeds);
+  let score = 0;
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++)
+      if (board.get(x, y) === null && myDist[y][x] < oppDist[y][x]) score++;
+  return score;
+}
+
+function aiInfluence(game, candidates) {
+  const color = game.current;
+  const N = game.boardSize;
+  let bestMove = null, bestScore = -1;
+  for (const [x, y] of candidates) {
+    const clone = aiCloneGame(game);
+    if (!clone.placeStone(x, y)) continue;
+    if (aiLeavesOwnGroupAtari(clone, color)) continue;
+    const score = aiVoronoiScore(clone.board, N, color);
+    if (score > bestScore) { bestScore = score; bestMove = { type: 'place', x, y }; }
+  }
+  return bestMove;
+}
+
+function aiGetMove(game) {
+  if (game.gameOver) return { type: 'pass' };
+  const N = game.boardSize;
+  const color = game.current;
+
+  const capture = aiCapture(game);
+  if (capture) return capture;
+
+  const escape = aiEscape(game);
+  if (escape) return escape;
+
+  const shoreUp = aiShoreUp(game);
+  if (shoreUp) return shoreUp;
+
+  const candidates = [];
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      if (game.board.get(x, y) !== null) continue;
+      if (aiIsTrueEye(game.board, x, y, color)) continue;
+      candidates.push([x, y]);
+    }
+  aiShuffle(candidates);
+
+  return aiThreat(game, candidates)
+      || aiInfluence(game, candidates)
+      || { type: 'pass' };
+}
+
+function scheduleComputerMove() {
+  if (game.gameOver || game.current !== 'black') return;
+  // Small delay so the board redraws before the (potentially slow) AI runs
+  setTimeout(() => {
+    if (game.gameOver || game.current !== 'black') return;
+    const move = aiGetMove(game);
+    if (move.type === 'place') {
+      game.placeStone(move.x, move.y);
+    } else {
+      game.pass();
+    }
+    renderer.draw();
+    updateUI();
+  }, 50);
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
 let game;
 let renderer;
 const canvas = document.getElementById('board-canvas');
 
 function updateUI() {
   const g = game;
-  document.getElementById('status-msg').textContent = g.statusText();
+  document.getElementById('status-msg').textContent =
+    g.gameOver ? 'Game over' :
+    g.current === 'black' ? 'Computer thinking…' : 'Your turn (White)';
 
   // Captured counts: black captures = white stones captured by black
   document.getElementById('black-captures').textContent =
@@ -331,6 +557,7 @@ function startGame(boardSize) {
   renderer = new Renderer(canvas, game);
   renderer.draw();
   updateUI();
+  scheduleComputerMove(); // computer is black and moves first
 }
 
 // ─── Pointer events: unified mouse / touch / pen drag-to-pan + tap-to-place ──
@@ -367,9 +594,11 @@ canvas.addEventListener('pointermove', (e) => {
       renderer.draw();
     }
   } else {
-    // Hover — update ghost stone
+    // Hover — update ghost stone (only when it's the human's turn)
     const rect = canvas.getBoundingClientRect();
-    renderer.hoverPos = renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top);
+    renderer.hoverPos = game.current === 'white'
+      ? renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top)
+      : null;
     renderer.draw();
   }
 });
@@ -381,8 +610,8 @@ canvas.addEventListener('pointerleave', () => {
 
 canvas.addEventListener('pointerup', (e) => {
   canvas.classList.remove('panning', 'placing');
-  if (!isPanning) {
-    // Short tap / click → place stone
+  if (!isPanning && game.current === 'white') {
+    // Short tap / click → place human (white) stone
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
@@ -394,15 +623,19 @@ canvas.addEventListener('pointerup', (e) => {
 
     if (!legal && game.illegalFlash) {
       setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
+    } else if (legal) {
+      scheduleComputerMove();
     }
   }
   isPanning = false;
 });
 
 document.getElementById('pass-btn').addEventListener('click', () => {
+  if (game.current !== 'white') return;
   game.pass();
   renderer.draw();
   updateUI();
+  scheduleComputerMove();
 });
 
 document.getElementById('new-game-btn').addEventListener('click', () => {
