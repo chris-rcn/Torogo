@@ -27,7 +27,7 @@ const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
 const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
   ? parseFloat(process.env.AMAF_OPP_WEIGHT)
-  : 0.5;
+  : 0;
 
 // Single-point true eye: all 4 orthogonal neighbours are `color`, and at
 // least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
