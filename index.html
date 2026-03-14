@@ -49,17 +49,9 @@
     cursor: grabbing;
   }
 
-  .board-wrapper {
-    position: relative;
-    display: inline-block;
-  }
-
-  #board-shield {
-    display: none;
-    position: absolute;
-    inset: 0;
-    cursor: not-allowed;
-    z-index: 10;
+  #board-canvas.shielded {
+    pointer-events: none;
+    cursor: default;
   }
 
   .status-row {
@@ -211,10 +203,7 @@
   <button id="new-game-btn">New Game</button>
 </div>
 
-<div class="board-wrapper">
-  <canvas id="board-canvas"></canvas>
-  <div id="board-shield"></div>
-</div>
+<canvas id="board-canvas"></canvas>
 
 <div class="status-row">
   <div id="status-msg">Black to play</div>

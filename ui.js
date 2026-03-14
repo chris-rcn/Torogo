@@ -500,7 +500,7 @@ function updateUI() {
 
   const isHumanTurn = !g.gameOver && g.current === 'white';
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
-  document.getElementById('board-shield').style.display = isHumanTurn ? 'none' : 'block';
+  canvas.classList.toggle('shielded', !isHumanTurn);
 }
 
 function startGame(boardSize) {
