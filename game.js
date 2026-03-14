@@ -110,7 +110,7 @@ class Board {
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
-  constructor(boardSize = 9, komi = 4.5) {
+  constructor(boardSize = 9, komi = 3.5) {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
@@ -247,4 +247,5 @@ class Game {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Game };
+const DEFAULT_KOMI = new Game().komi;
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI };

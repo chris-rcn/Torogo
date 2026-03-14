@@ -11,7 +11,7 @@ const { performance } = require('perf_hooks');
  *   --p2    <policy>   AI policy for player 2      (default: random-move)
  *   --games <n>        Number of games to play     (default: 100)
  *   --size  <n>        Board size: 9, 13, or 19    (default: 9)
- *   --komi  <n>        Komi (white's bonus points) (default: 4.5)
+ *   --komi  <n>        Komi (white's bonus points) (default: 3.5)
  *   --help             Show this help message
  *
  * Colors alternate each game: p1 is black in odd games, white in even games.
@@ -24,7 +24,7 @@ const { performance } = require('perf_hooks');
  */
 
 const path = require('path');
-const { Game } = require('./game.js');
+const { Game, DEFAULT_KOMI } = require('./game.js');
 
 // Parse --key value switches from argv.
 function parseArgs(argv) {
@@ -60,7 +60,7 @@ const p1Name    = opts.p1    || 'random-move';
 const p2Name    = opts.p2    || 'random-move';
 const numGames  = parseInt(opts.games || '100', 10);
 const boardSize = parseInt(opts.size  || '9',   10);
-const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : 4.5;
+const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : DEFAULT_KOMI;
 
 if (isNaN(numGames) || numGames < 1) {
   console.error('--games must be a positive integer');
