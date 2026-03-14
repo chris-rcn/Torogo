@@ -512,6 +512,7 @@ class Renderer {
     this.padding = 32;
     this.panX = 0;
     this.panY = 0;
+    this.hoverPos = null;
     this.resize();
   }
 
@@ -578,6 +579,7 @@ class Renderer {
         const offY = dy * ts;
         this.drawGrid(offX, offY);
         this.drawStones(offX, offY);
+        this.drawGhostStone(offX, offY);
         this.drawLastMove(offX, offY);
         this.drawIllegalFlash(offX, offY);
       }
@@ -681,6 +683,37 @@ class Renderer {
     }
   }
 
+  drawGhostStone(offX = 0, offY = 0) {
+    const h = this.hoverPos;
+    if (!h || this.game.gameOver) return;
+    if (this.game.board.get(h.x, h.y) !== null) return;
+    const N = this.game.boardSize;
+    const r = this.cellSize * 0.46;
+    const color = this.game.current;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    for (let gy = -OVERLAP; gy < N + OVERLAP; gy++) {
+      for (let gx = -OVERLAP; gx < N + OVERLAP; gx++) {
+        if (((gx % N) + N) % N !== h.x || ((gy % N) + N) % N !== h.y) continue;
+        const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
+        const grad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.05, cx, cy, r);
+        if (color === 'black') {
+          grad.addColorStop(0, '#666');
+          grad.addColorStop(1, '#111');
+        } else {
+          grad.addColorStop(0, '#fff');
+          grad.addColorStop(1, '#bbb');
+        }
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   drawLastMove(offX = 0, offY = 0) {
     const lm = this.game.lastMove;
     if (!lm) return;
@@ -776,19 +809,31 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (!(e.buttons & 1)) return; // only when primary button/finger held
-  const dx = e.clientX - pointerDownX;
-  const dy = e.clientY - pointerDownY;
-  if (!isPanning && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
-    isPanning = true;
-    canvas.classList.add('panning');
-    canvas.classList.remove('placing');
-  }
-  if (isPanning) {
-    renderer.panX = panOriginX + dx;
-    renderer.panY = panOriginY + dy;
+  if (e.buttons & 1) {
+    // Drag-to-pan
+    const dx = e.clientX - pointerDownX;
+    const dy = e.clientY - pointerDownY;
+    if (!isPanning && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+      isPanning = true;
+      canvas.classList.add('panning');
+      canvas.classList.remove('placing');
+    }
+    if (isPanning) {
+      renderer.panX = panOriginX + dx;
+      renderer.panY = panOriginY + dy;
+      renderer.draw();
+    }
+  } else {
+    // Hover — update ghost stone
+    const rect = canvas.getBoundingClientRect();
+    renderer.hoverPos = renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top);
     renderer.draw();
   }
+});
+
+canvas.addEventListener('pointerleave', () => {
+  renderer.hoverPos = null;
+  renderer.draw();
 });
 
 canvas.addEventListener('pointerup', (e) => {
