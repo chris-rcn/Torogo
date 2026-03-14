@@ -414,6 +414,30 @@ class Board {
     return this.isSingleSuicide(x, y, color) || this.isMultiSuicide(x, y, color);
   }
 
+  // Returns true if placing `color` at (x, y) is Ko-illegal given koFlag.
+  // koFlag is {x, y} of the single stone captured on the previous move, or null.
+  // A move is Ko-illegal when it is on the koFlag point and would itself capture
+  // exactly one stone (which would recreate the previous board position).
+  // Does not modify board state.
+  isKo(x, y, color, koFlag) {
+    if (!koFlag || x !== koFlag.x || y !== koFlag.y) return false;
+    const placedIdx = this._idx(x, y);
+    const opponentColor = color === 'black' ? 'white' : 'black';
+    const seenGids = new Set();
+    let capturedCount = 0;
+    for (const [nx, ny] of this.getNeighbors(x, y)) {
+      if (this.grid[ny][nx] !== opponentColor) continue;
+      const gid = this._gid[this._idx(nx, ny)];
+      if (seenGids.has(gid)) continue;
+      seenGids.add(gid);
+      const group = this._groups.get(gid);
+      if (group.liberties.size === 1 && group.liberties.has(placedIdx)) {
+        capturedCount += group.stones.size;
+      }
+    }
+    return capturedCount === 1;
+  }
+
   // After placing at (lastX, lastY), capture groups with 0 liberties.
   // Returns positions of captured stones per color: { black: [[x,y],...], white: [...] }
   captureGroups(lastX, lastY) {
@@ -467,7 +491,7 @@ class Game {
     this.current = 'black';
     this.captured = { black: 0, white: 0 }; // stones captured of each color
     this.hash     = 0n;       // Zobrist hash of current board position
-    this.prevHash = 0n;       // hash before the most recent move (for Ko)
+    this.koFlag   = null;     // {x, y} of the single stone captured last move, or null
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
@@ -483,7 +507,7 @@ class Game {
     g.current           = this.current;
     g.captured          = { ...this.captured };
     g.hash              = this.hash;
-    g.prevHash          = this.prevHash;
+    g.koFlag            = this.koFlag;
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
     g.moveCount         = this.moveCount;
@@ -498,37 +522,37 @@ class Game {
       return false;
     }
 
-    // Suicide check: inspect tracker without touching the board
+    // All legality checks use the tracker — no board mutation needed for rejection
     if (this.board.isSuicide(x, y, this.current)) {
       this.illegalFlash = { x, y };
       return false;
     }
+    if (this.board.isKo(x, y, this.current, this.koFlag)) {
+      this.illegalFlash = { x, y };
+      return false;
+    }
 
-    const hashBefore = this.hash;
-
-    // Clone board for potential rollback (only needed for Ko)
-    const savedGrid = this.board.grid.map(row => row.slice());
-
+    // Move is legal — commit (no rollback path remains)
     this.board.set(x, y, this.current);
     this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
     for (const [cx, cy] of caps.black) this.hash ^= ZOBRIST[cy][cx].black;
     for (const [cx, cy] of caps.white) this.hash ^= ZOBRIST[cy][cx].white;
 
-    // Ko rule: reject if this recreates the board state before previous move
-    if (this.hash === this.prevHash) {
-      this.board.grid = savedGrid;
-      this.board._rebuildGroups();
-      this.hash = hashBefore;
-      this.illegalFlash = { x, y };
-      return false;
-    }
-
-    // Move is legal — commit
     this.illegalFlash = null;
     this.captured.black += caps.black.length;
     this.captured.white += caps.white.length;
-    this.prevHash = hashBefore;
+
+    // Update koFlag: set to the captured position only when exactly one stone was taken
+    const totalCaptured = caps.black.length + caps.white.length;
+    if (totalCaptured === 1) {
+      const capturedColor = caps.black.length === 1 ? 'black' : 'white';
+      const [kx, ky] = caps[capturedColor][0];
+      this.koFlag = { x: kx, y: ky };
+    } else {
+      this.koFlag = null;
+    }
+
     this.lastMove = { x, y };
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
@@ -549,6 +573,7 @@ class Game {
     this.consecutivePasses++;
     this.lastMove = null;
     this.illegalFlash = null;
+    this.koFlag = null;
     const passer = this.current;
     this.current = this.current === 'black' ? 'white' : 'black';
     this._incrementMoveCount();
