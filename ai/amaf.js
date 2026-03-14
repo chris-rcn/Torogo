@@ -166,17 +166,26 @@ module.exports = function getMove(game) {
   const player = game.current;
   const N = game.boardSize;
 
-  // Build list of legal candidate moves.
+  // Build list of legal candidate moves, tracking which are "seki-safe":
+  // a move that captures enemy stones or leaves the placed group with 2+
+  // liberties cannot spoil a seki.
   const candidates = [];
+  let hasSafe = false;
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
       const probe = game.clone();
-      if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
+      const capBefore = probe.captured.black + probe.captured.white;
+      if (!probe.placeStone(x, y)) continue;
+      const captured = (probe.captured.black + probe.captured.white) - capBefore;
+      const group = probe.board.getGroup(x, y);
+      const liberties = probe.board.getLiberties(group);
+      if (captured > 0 || liberties.size >= 2) hasSafe = true;
+      candidates.push({ type: 'place', x, y });
     }
   }
-  // Only consider passing after enough moves have been played.
-  if (candidates.length === 0 || game.moveCount > N * N / 2) {
+  // Only consider passing when no seki-safe moves remain.
+  if (!hasSafe) {
     candidates.push({ type: 'pass' });
   }
 
