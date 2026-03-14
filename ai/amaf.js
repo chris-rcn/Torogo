@@ -175,8 +175,10 @@ module.exports = function getMove(game) {
       if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
     }
   }
-  // Pass is always legal.
-  candidates.push({ type: 'pass' });
+  // Only consider passing after enough moves have been played.
+  if (candidates.length === 0 || game.moveCount > N * N / 3) {
+    candidates.push({ type: 'pass' });
+  }
 
   // AMAF stats indexed by cell (y*N + x); pass stored at N*N.
   // Float64 to accommodate fractional discount weights.
