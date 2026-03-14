@@ -457,9 +457,12 @@ const canvas = document.getElementById('board-canvas');
 
 function updateUI() {
   const g = game;
-  document.getElementById('status-msg').textContent =
+  const statusEl = document.getElementById('status-msg');
+  const thinking = !g.gameOver && g.current === 'black';
+  statusEl.textContent =
     g.gameOver ? 'Game over' :
-    g.current === 'black' ? 'Computer thinking…' : 'Your turn (White)';
+    thinking ? 'Computer thinking…' : 'Your turn (White)';
+  statusEl.classList.toggle('thinking', thinking);
 
   // Captured counts: black captures = white stones captured by black
   document.getElementById('black-captures').textContent =

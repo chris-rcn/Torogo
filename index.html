@@ -110,6 +110,23 @@
     text-align: center;
   }
 
+  #status-msg.thinking::after {
+    content: '';
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    margin-left: 0.5em;
+    border: 2px solid #c8a84a;
+    border-top-color: transparent;
+    border-radius: 50%;
+    vertical-align: middle;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
   .controls {
     display: flex;
     gap: 10px;
