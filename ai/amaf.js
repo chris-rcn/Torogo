@@ -4,8 +4,8 @@
  * AMAF (All-Moves-As-First) Monte Carlo policy.
  *
  * For each candidate, run random playouts starting with that move in
- * round-robin order until a total work budget is exhausted (where one unit
- * of work = one move inside a playout).  Unlike mc.js, every move the current
+ * round-robin order until a total work budget is exhausted (where work per
+ * playout = moves played + 10 for per-playout overhead).  Unlike mc.js, every move the current
  * player makes during the playout is credited — not just the opening move.
  * Moves later in the playout receive less credit via an exponential discount,
  * since they are less representative of what playing there "first" would mean.
@@ -171,7 +171,7 @@ module.exports = function getMove(game) {
   const PASS_IDX = N * N;
 
   // Round-robin playouts across candidates until the work budget is spent.
-  // One unit of work = one move inside a playout.
+  // Work per playout = moves played + 10 (per-playout overhead).
   let totalWork = 0;
   let cidx = 0;
   while (totalWork < WORK_BUDGET) {
@@ -183,7 +183,7 @@ module.exports = function getMove(game) {
       clone.pass();
     }
     const { winner, played, oppPlayed, moves } = playTracked(clone, player);
-    totalWork += moves;
+    totalWork += moves + 10; // +10 per playout for clone/setup/scoring overhead
     const won = winner === player ? 1 : 0;
 
     // Credit the opening move at full weight (it was played "first").
