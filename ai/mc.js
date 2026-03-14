@@ -74,14 +74,6 @@ function playRandom(game) {
       empty[end - 1] = [x, y];
       end--;
 
-      // Stale entry: cell was filled by a prior move in this playout.
-      if (game.board.get(x, y) !== null) {
-        // Permanently remove (it is sitting at index `end`).
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        continue;
-      }
-
       // Skip single-point true eyes for the current player — filling them is
       // always suicide.  Leave the cell in the list so the opponent can use it
       // and so captures can later dissolve the eye.
