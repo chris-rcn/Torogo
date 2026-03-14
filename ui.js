@@ -464,10 +464,6 @@ function updateUI() {
     thinking ? 'Computer thinking…' : 'Your turn (White)';
   statusEl.classList.toggle('thinking', thinking);
 
-  // Active player highlight
-  document.getElementById('black-info').classList.toggle('active', g.current === 'black' && !g.gameOver);
-  document.getElementById('white-info').classList.toggle('active', g.current === 'white' && !g.gameOver);
-
   // Score panel
   const sp = document.getElementById('score-panel');
   if (g.gameOver && g.scores) {
