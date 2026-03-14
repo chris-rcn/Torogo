@@ -56,7 +56,7 @@ function playRandom(game) {
     for (let x = 0; x < size; x++)
       if (game.board.get(x, y) === null) empty.push([x, y]);
 
-  const moveLimit = 2 * empty.length;
+  const moveLimit = empty.length + 20;
   let moves = 0;
 
   while (!game.gameOver && moves < moveLimit) {
