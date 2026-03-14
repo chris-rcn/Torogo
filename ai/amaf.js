@@ -20,7 +20,10 @@
 const randomAgent = require('./random.js');
 
 const candidate_playouts = 50; // playouts per candidate (same as mc.js)
-const DISCOUNT = 0.9;          // weight decay per subsequent player move
+// Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
+const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
+  ? parseFloat(process.env.AMAF_DISCOUNT)
+  : 0.9;
 
 // Single-point true eye: all 4 orthogonal neighbours are `color`, and at
 // least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
