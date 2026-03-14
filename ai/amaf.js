@@ -24,6 +24,10 @@ const candidate_playouts = 50; // playouts per candidate (same as mc.js)
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
   : 0.9;
+// Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
+const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
+  ? parseFloat(process.env.AMAF_OPP_WEIGHT)
+  : 0.5;
 
 // Single-point true eye: all 4 orthogonal neighbours are `color`, and at
 // least 3 of 4 diagonal neighbours are `color`.  On a toroidal board every
@@ -57,11 +61,12 @@ function applyFast(game, x, y) {
 }
 
 // Like playRandom in mc.js, but collects the cell indices (y*size+x) of
-// every subsequent move made by trackColor, in order (earliest first).
-// Returns { winner, played } where winner is 'black' | 'white' | null.
+// every subsequent move made by each side, in order (earliest first).
+// Returns { winner, played, oppPlayed } where winner is 'black'|'white'|null.
 function playTracked(game, trackColor) {
   const size = game.boardSize;
   const played = []; // ordered list of cell indices for trackColor's moves
+  const oppPlayed = []; // ordered list of cell indices for opponent's moves
 
   // Build the initial list of empty cells once.
   const empty = [];
@@ -101,6 +106,7 @@ function playTracked(game, trackColor) {
       const neighbors = game.board.getNeighbors(x, y);
       if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
         if (game.current === trackColor) played.push(y * size + x);
+        else oppPlayed.push(y * size + x);
         const captures = applyFast(game, x, y);
         empty[end] = empty[empty.length - 1];
         empty.pop();
@@ -120,6 +126,7 @@ function playTracked(game, trackColor) {
       const color = game.current;
       if (game.placeStone(x, y)) {
         if (color === trackColor) played.push(y * size + x);
+        else oppPlayed.push(y * size + x);
         empty[end] = empty[empty.length - 1];
         empty.pop();
         if (game.captured.black + game.captured.white > capBefore) {
@@ -149,7 +156,7 @@ function playTracked(game, trackColor) {
                : s.white.total > s.black.total ? 'white'
                : null;
 
-  return { winner, played };
+  return { winner, played, oppPlayed };
 }
 
 module.exports = function getMove(game) {
@@ -190,7 +197,7 @@ module.exports = function getMove(game) {
       } else {
         clone.pass();
       }
-      const { winner, played } = playTracked(clone, player);
+      const { winner, played, oppPlayed } = playTracked(clone, player);
       const won = winner === player ? 1 : 0;
 
       // Credit the opening move at full weight (it was played "first").
@@ -211,6 +218,18 @@ module.exports = function getMove(game) {
         plays[idx] += weight;
         wins[idx]  += won * weight;
         weight *= DISCOUNT;
+      }
+
+      // Credit opponent moves with the same exponential discount, scaled
+      // down by OPP_MOVE_WEIGHT.  If the opponent played at X and we won,
+      // X may also be a good move for us.
+      if (OPP_MOVE_WEIGHT > 0) {
+        let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
+        for (const idx of oppPlayed) {
+          plays[idx] += oppWeight;
+          wins[idx]  += won * oppWeight;
+          oppWeight *= DISCOUNT;
+        }
       }
     }
   }
