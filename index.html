@@ -49,8 +49,28 @@
     cursor: grabbing;
   }
 
-  #status-msg {
+  .board-wrapper {
+    position: relative;
+    display: inline-block;
+  }
+
+  #board-shield {
+    display: none;
+    position: absolute;
+    inset: 0;
+    cursor: not-allowed;
+    z-index: 10;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
     margin-top: 14px;
+  }
+
+  #status-msg {
     font-size: 1.3rem;
     font-weight: bold;
     color: #c8a84a;
@@ -191,12 +211,17 @@
   <button id="new-game-btn">New Game</button>
 </div>
 
-<canvas id="board-canvas"></canvas>
+<div class="board-wrapper">
+  <canvas id="board-canvas"></canvas>
+  <div id="board-shield"></div>
+</div>
 
-<div id="status-msg">Black to play</div>
+<div class="status-row">
+  <div id="status-msg">Black to play</div>
+  <button id="pass-btn" style="display:none">Pass</button>
+</div>
 
 <div class="controls">
-  <button id="pass-btn">Pass</button>
   <label for="overlap-select">View overlap</label>
   <select id="overlap-select">
     <option value="0">0</option>

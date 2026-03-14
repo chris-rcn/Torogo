@@ -491,7 +491,9 @@ function updateUI() {
     sp.style.display = 'none';
   }
 
-  document.getElementById('pass-btn').disabled = g.gameOver;
+  const isHumanTurn = !g.gameOver && g.current === 'white';
+  document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
+  document.getElementById('board-shield').style.display = isHumanTurn ? 'none' : 'block';
 }
 
 function startGame(boardSize) {
