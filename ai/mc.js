@@ -32,6 +32,21 @@ function isTrueEye(board, x, y, color) {
   return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
 }
 
+// Lightweight move application for use inside playouts.
+// Precondition: (x, y) has at least one empty orthogonal neighbour, which
+// guarantees the move is not suicide and makes Ko effectively impossible.
+// Skips the two O(n²) board-hash computations that placeStone always does.
+// Returns the total number of stones captured (0 in the common case).
+function applyFast(game, x, y) {
+  game.board.set(x, y, game.current);
+  const cap = game.board.captureGroups(x, y);
+  game.captured.black += cap.black;
+  game.captured.white += cap.white;
+  game.consecutivePasses = 0;
+  game.current = game.current === 'black' ? 'white' : 'black';
+  return cap.black + cap.white;
+}
+
 function cloneGame(game) {
   const g = new Game(game.boardSize);
   g.board = game.board.clone();
@@ -83,22 +98,35 @@ function playRandom(game) {
       // and so captures can later dissolve the eye.
       if (isTrueEye(game.board, x, y, game.current)) continue;
 
-      const capBefore = game.captured.black + game.captured.white;
-
-      if (game.placeStone(x, y)) {
-        // Permanently remove the now-occupied cell (sitting at index `end`).
+      // Fast path: at least one empty neighbour means the move cannot be
+      // suicide and Ko is effectively impossible.  Use the lightweight helper
+      // to avoid the two O(n²) board-hash computations inside placeStone.
+      const neighbors = game.board.getNeighbors(x, y);
+      if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
+        const captures = applyFast(game, x, y);
         empty[end] = empty[empty.length - 1];
         empty.pop();
+        if (captures > 0) {
+          empty.length = 0;
+          for (let ey = 0; ey < size; ey++)
+            for (let ex = 0; ex < size; ex++)
+              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
+        }
+        placed = true;
+        break;
+      }
 
-        // If any stones were captured they are now empty again.  Since the
-        // Game API does not expose which cells were freed, rebuild the list.
+      // Slow path: all four neighbours are occupied — suicide or Ko possible.
+      const capBefore = game.captured.black + game.captured.white;
+      if (game.placeStone(x, y)) {
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
         if (game.captured.black + game.captured.white > capBefore) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
               if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
         }
-
         placed = true;
         break;
       }
