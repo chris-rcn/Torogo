@@ -87,11 +87,12 @@ class Renderer {
     const dyMin = Math.floor((-this.panY - this.padding) / ts);
     const dyMax = Math.ceil((H - this.panY - this.padding) / ts);
 
+    this.drawGrid();
+
     for (let dy = dyMin; dy <= dyMax; dy++) {
       for (let dx = dxMin; dx <= dxMax; dx++) {
         const offX = dx * ts;
         const offY = dy * ts;
-        this.drawGrid(offX, offY);
         this.drawStones(offX, offY);
         this.drawLastMove(offX, offY);
         this.drawIllegalFlash(offX, offY);
@@ -106,43 +107,36 @@ class Renderer {
     ctx.restore();
   }
 
-  drawGrid(offX = 0, offY = 0) {
+  drawGrid() {
     const ctx = this.ctx;
-    const N = this.game.boardSize;
     const cs = this.cellSize;
+    const W = this.canvas.width, H = this.canvas.height;
     ctx.strokeStyle = '#5a3a10';
     ctx.lineWidth = 1;
 
-    // Show floor(OVERLAP/2) extra intersections on the left/top side and
-    // ceil(OVERLAP/2) on the right/bottom, matching the panOffset split.
-    const lo = -Math.floor(OVERLAP / 2);
-    const hi = N - 1 + Math.ceil(OVERLAP / 2);
-    const ts = this.tileSize();
+    // Draw each logical column/row exactly once across the full canvas so
+    // no line is painted twice (per-tile drawing caused double-painting at
+    // tile boundaries, producing faint edge artifacts).
+    const originX = this.padding + this.panX;
+    const originY = this.padding + this.panY;
+    const halfCs = cs / 2;
+    const kxMin = Math.ceil((-originX - halfCs) / cs);
+    const kxMax = Math.floor((W - originX + halfCs) / cs);
+    const kyMin = Math.ceil((-originY - halfCs) / cs);
+    const kyMax = Math.floor((H - originY + halfCs) / cs);
 
-    const [, topY] = this.toCanvas(0,  lo, offX, offY);
-    const [, botY] = this.toCanvas(0,  hi, offX, offY);
-    const [leftX]  = this.toCanvas(lo, 0,  offX, offY);
-    const [rightX] = this.toCanvas(hi, 0,  offX, offY);
-
-    // Lines must reach at least the start of the adjacent tile so that
-    // tiled copies connect seamlessly.  When OVERLAP=0 botY/rightX fall
-    // one cell short of that boundary; for OVERLAP>0 they already reach it.
-    const lineBot   = Math.max(botY,   topY  + ts);
-    const lineRight = Math.max(rightX, leftX + ts);
-
-    for (let i = lo; i <= hi; i++) {
-      const [cx] = this.toCanvas(i, 0, offX, offY);
-      ctx.beginPath();
-      ctx.moveTo(cx, topY);
-      ctx.lineTo(cx, lineBot);
-      ctx.stroke();
-
-      const [, cy] = this.toCanvas(0, i, offX, offY);
-      ctx.beginPath();
-      ctx.moveTo(leftX, cy);
-      ctx.lineTo(lineRight, cy);
-      ctx.stroke();
+    ctx.beginPath();
+    for (let k = kxMin; k <= kxMax; k++) {
+      const x = originX + k * cs;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
     }
+    for (let k = kyMin; k <= kyMax; k++) {
+      const y = originY + k * cs;
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+    }
+    ctx.stroke();
   }
 
   drawIllegalFlash(offX = 0, offY = 0) {
