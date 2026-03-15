@@ -420,6 +420,7 @@ function startGame(boardSize) {
   game = new Game(boardSize);
   renderer = new Renderer(canvas, game);
   renderer.draw();
+  buildLegalMoves();
   updateUI();
   scheduleComputerMove(); // computer is black and moves first
 }
@@ -498,14 +499,11 @@ canvas.addEventListener('pointerup', (e) => {
     if (isLegal) {
       const W = canvas.width;
       const H = canvas.height;
-      const ts = renderer.tileSize();
       const rawTargetX = W / 2 - renderer.padding - pos.x * renderer.cellSize;
       const rawTargetY = H / 2 - renderer.padding - pos.y * renderer.cellSize;
-      let dx = rawTargetX - renderer.panX;
-      let dy = rawTargetY - renderer.panY;
-      dx -= Math.round(dx / ts) * ts;
-      dy -= Math.round(dy / ts) * ts;
-      animatePan(renderer.panX + dx, renderer.panY + dy, 500, applyPlayerMove);
+      // Pan directly toward the clicked position (no shortest-wrap), so the
+      // direction of pan always matches the direction of the user's click.
+      animatePan(rawTargetX, rawTargetY, 500, applyPlayerMove);
     } else {
       applyPlayerMove();
     }
