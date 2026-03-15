@@ -481,15 +481,12 @@ function updateUI() {
     document.getElementById('score-table').innerHTML = `
       <tr><td></td><td>Black</td><td>White</td></tr>
       <tr><td>Territory</td><td>${bs.territory}</td><td>${ws.territory}</td></tr>
-      <tr><td style="border-top:1px solid #4a4060;padding-top:6px">Total</td>
-          <td style="border-top:1px solid #4a4060;padding-top:6px">${bs.total}</td>
-          <td style="border-top:1px solid #4a4060;padding-top:6px">${ws.total}</td></tr>
     `;
     let winnerText;
     if (bs.total > ws.total) {
-      winnerText = `Black wins by ${bs.total - ws.total} point${bs.total - ws.total !== 1 ? 's' : ''}!`;
+      winnerText = 'Black wins!';
     } else if (ws.total > bs.total) {
-      winnerText = `White wins by ${ws.total - bs.total} point${ws.total - bs.total !== 1 ? 's' : ''}!`;
+      winnerText = 'White wins!';
     } else {
       winnerText = 'Tie game!';
     }
