@@ -631,13 +631,15 @@ class Board {
   // ─── ASCII serialization ──────────────────────────────────────────────────
 
   // Render the board as a ● ○ · string (rows separated by '\n').
-  toAscii() {
+  // Optional lastMove {x, y} wraps that cell as (●) or (○).
+  toAscii(lastMove) {
     const rows = [];
     for (let y = 0; y < this.size; y++) {
       const cells = [];
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
-        cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
+        const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
+        cells.push(lastMove && x === lastMove.x && y === lastMove.y ? `(${ch})` : ch);
       }
       rows.push(cells.join(' '));
     }
@@ -645,6 +647,7 @@ class Board {
   }
 
   // Parse a ● ○ · board string produced by toAscii().
+  // Last-move decoration (●) / (○) is accepted and stripped.
   // Returns { size, stones } where stones is [[x, y, color], ...].
   static parse(str) {
     const rows = str.trim().split('\n').map(r => r.trim().split(/\s+/));
@@ -652,7 +655,7 @@ class Board {
     const stones = [];
     for (let y = 0; y < size; y++)
       for (let x = 0; x < size; x++) {
-        const c = rows[y][x];
+        const c = rows[y][x].replace(/[()]/g, '');
         if (c === '●') stones.push([x, y, 'black']);
         else if (c === '○') stones.push([x, y, 'white']);
       }
