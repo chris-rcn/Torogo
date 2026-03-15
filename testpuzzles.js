@@ -1390,7 +1390,7 @@ if (require.main === module) {
   const agent = require(`./ai/${agentName}.js`);
 
   console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles ──\n`);
-  console.log('  #  Size  Comment                                            Result');
+  console.log('  #  Size  Comment                                                       Result');
 
   let correct = 0;
   for (let i = 0; i < PUZZLES.length; i++) {
@@ -1405,7 +1405,7 @@ if (require.main === module) {
 
     const num = String(i + 1).padStart(3);
     const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
-    const name = (puzzle.comment || '').slice(0, 50).padEnd(50);
+    const name = (puzzle.comment || '').slice(0, 60).padEnd(60);
     let result = passed ? '+' : '-';
     if (!passed) {
       const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
