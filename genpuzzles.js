@@ -39,12 +39,16 @@ for (let i = 0; i < args.length; i++) {
 }
 
 
-// ─── Visit ratio from MCTS children ──────────────────────────────────────────
-// Returns fraction of place-move visits captured by the top move, or 0.
-function visitRatio(children) {
+// ─── Move preference from MCTS children ──────────────────────────────────────
+// Returns the difference in visit fraction between the top and second place move.
+// A high value means the top move is strongly preferred over the alternative.
+function movePreference(children) {
   const place = children.filter(c => c.move.type === 'place');
   const total = place.reduce((s, c) => s + c.visits, 0);
-  return total > 0 ? place[0].visits / total : 0;
+  if (total === 0) return 0;
+  const top    = place[0].visits / total;
+  const second = place.length > 1 ? place[1].visits / total : 0;
+  return top - second;
 }
 
 // ─── Self-play harvest ────────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ while (puzzleCount < maxPuzzles) {
     const result = mcts(game, budgetMs);
 
     if (result.type === 'place') {
-      const ratio = visitRatio(result.children);
+      const ratio = movePreference(result.children);
 
       if (!seenHashes.has(hashKey)) {
         if (ratio >= threshold) {
