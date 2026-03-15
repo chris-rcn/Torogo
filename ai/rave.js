@@ -135,7 +135,8 @@ function legalMoves(game) {
       const probe = game.clone();
       if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
-  moves.push({ type: 'pass' });
+  const area = game.boardSize * game.boardSize;
+  if (game.moveCount >= area / 2) moves.push({ type: 'pass' });
   return moves;
 }
 
@@ -275,7 +276,7 @@ function getMove(game, timeBudgetMs) {
   if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
   if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
-  if (result.type === 'pass') result.info = 'pass is highest-visited move';
+  result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
   return result;
 }
 
