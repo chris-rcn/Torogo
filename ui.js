@@ -289,7 +289,7 @@ let moveNumber = 0;
 
 function logMove(player, detail, info) {
   const num = String(moveNumber).padStart(3);
-  const p = player === 'C' ? 'C' : 'H';
+  const p = player === 'C' ? 'computer' : 'human   ';
   console.log(`Move ${num}  ${p}  ${detail}` + (info != null ? `  — ${info}` : ''));
 }
 
@@ -526,7 +526,7 @@ canvas.addEventListener('pointerup', (e) => {
       const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
       animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
     } else {
-      console.log(`         H  (${pos.x}, ${pos.y})  — illegal`);
+      console.log(`            human     (${pos.x}, ${pos.y})  — illegal`);
       const legal = game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
