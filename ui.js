@@ -344,9 +344,11 @@ function scheduleComputerMove() {
       const applyMove = () => {
         if (move.type === 'place') {
           computerPassedLast = false;
+          console.log(`[Computer] place (${move.x}, ${move.y})`  + (move.info != null ? ` — ${move.info}` : ''));
           game.placeStone(move.x, move.y);
         } else {
           computerPassedLast = true;
+          console.log('[Computer] pass' + (move.info != null ? ` — ${move.info}` : ''));
           game.pass();
         }
         renderer.draw();
@@ -495,6 +497,7 @@ canvas.addEventListener('pointerup', (e) => {
     if (isLegal) {
       // Place the stone immediately so it appears (with last-move dot) before
       // the pan animation starts.
+      console.log(`[Human] place (${pos.x}, ${pos.y})`);
       game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
@@ -512,6 +515,7 @@ canvas.addEventListener('pointerup', (e) => {
       const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
       animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
     } else {
+      console.log(`[Human] place (${pos.x}, ${pos.y}) — illegal`);
       const legal = game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
@@ -526,6 +530,7 @@ canvas.addEventListener('pointerup', (e) => {
 document.getElementById('pass-btn').addEventListener('click', () => {
   if (computerBusy || game.current !== 'white') return;
   computerPassedLast = false;
+  console.log('[Human] pass');
   game.pass();
   renderer.draw();
   updateUI();
