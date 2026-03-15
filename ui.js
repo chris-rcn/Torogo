@@ -482,7 +482,7 @@ canvas.addEventListener('pointermove', (e) => {
   } else {
     // Hover — update ghost stone (only when it's the human's turn)
     const rect = canvas.getBoundingClientRect();
-    renderer.hoverPos = game.current === 'white'
+    renderer.hoverPos = !game.gameOver && game.current === 'white'
       ? renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top)
       : null;
     renderer.draw();
