@@ -12,8 +12,8 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
-const { performance } = require('perf_hooks');
-const randomAgent = require('./random.js');
+const performance = (typeof window !== 'undefined') ? window.performance
+  : require('perf_hooks').performance;
 
 const DEFAULT_BUDGET_MS = 500;
 
@@ -114,7 +114,7 @@ function playRandom(game) {
   if (!game.gameOver) game.endGame();
 }
 
-module.exports = function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const player = game.current;
@@ -171,4 +171,6 @@ module.exports = function getMove(game, timeBudgetMs) {
   }
 
   return candidates[bestIdx];
-};
+}
+
+if (typeof module !== 'undefined') module.exports = getMove;

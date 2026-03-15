@@ -278,159 +278,9 @@ class Renderer {
 
 // ─── App wiring ───────────────────────────────────────────────────────────────
 
-// ─── Monte Carlo AI (computer plays black) ────────────────────────────────────
+// ─── AI (calls into ai/mc.js loaded via <script> tag) ─────────────────────────
 
 const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
-
-function aiIsTrueEye(board, x, y, color) {
-  const N = board.size;
-  const ortho = board.getNeighbors(x, y);
-  if (!ortho.every(([nx, ny]) => board.get(nx, ny) === color)) return false;
-  const diags = [
-    [(x + 1) % N,     (y + 1) % N],
-    [(x - 1 + N) % N, (y + 1) % N],
-    [(x + 1) % N,     (y - 1 + N) % N],
-    [(x - 1 + N) % N, (y - 1 + N) % N],
-  ];
-  return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
-}
-
-function aiApplyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
-function aiPlayRandom(game) {
-  const size = game.boardSize;
-  const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (game.board.get(x, y) === null) empty.push([x, y]);
-
-  const moveLimit = empty.length + 20;
-  let moves = 0;
-
-  while (!game.gameOver && moves < moveLimit) {
-    let placed = false;
-    let end = empty.length;
-
-    while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const [x, y] = empty[i];
-      empty[i] = empty[end - 1];
-      empty[end - 1] = [x, y];
-      end--;
-
-      if (aiIsTrueEye(game.board, x, y, game.current)) continue;
-
-      const neighbors = game.board.getNeighbors(x, y);
-      if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
-        const captures = aiApplyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-
-      const result = game.placeStone(x, y);
-      if (result) {
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result > 1) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-    }
-
-    if (!placed) {
-      game.pass();
-      moves++;
-    }
-  }
-
-  if (!game.gameOver) game.endGame();
-}
-
-function aiRandomMove(game) {
-  const N = game.boardSize;
-  const color = game.current;
-  const board = game.board;
-  const candidates = [];
-  for (let y = 0; y < N; y++)
-    for (let x = 0; x < N; x++) {
-      if (board.get(x, y) !== null) continue;
-      if (aiIsTrueEye(board, x, y, color)) continue;
-      candidates.push([x, y]);
-    }
-  while (candidates.length > 0) {
-    const i = Math.floor(Math.random() * candidates.length);
-    const [x, y] = candidates[i];
-    candidates[i] = candidates[candidates.length - 1];
-    candidates.pop();
-    if (board.getNeighbors(x, y).some(([nx, ny]) => board.get(nx, ny) === null))
-      return { type: 'place', x, y };
-    const clone = game.clone();
-    if (clone.placeStone(x, y)) return { type: 'place', x, y };
-  }
-  return { type: 'pass' };
-}
-
-function aiGetMove(game) {
-  if (game.gameOver) return { type: 'pass' };
-
-  const player = game.current;
-  const candidates = [];
-  for (let y = 0; y < game.boardSize; y++) {
-    for (let x = 0; x < game.boardSize; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
-    }
-  }
-  candidates.push({ type: 'pass' });
-
-  const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
-
-  const deadline = performance.now() + UI_BUDGET_MS;
-  let cidx = 0;
-  while (performance.now() < deadline) {
-    const move = candidates[cidx];
-    const clone = game.clone();
-    if (move.type === 'place') clone.placeStone(move.x, move.y);
-    else clone.pass();
-    aiPlayRandom(clone);
-    const s = clone.scores;
-    const winner = s.black.total > s.white.total ? 'black'
-                 : s.white.total > s.black.total ? 'white'
-                 : null;
-    stats[cidx].plays++;
-    if (winner === player) stats[cidx].wins++;
-    cidx = (cidx + 1) % candidates.length;
-  }
-
-  let bestIdx = 0, bestRatio = -1;
-  for (let i = 0; i < candidates.length; i++) {
-    const ratio = stats[i].plays > 0 ? stats[i].wins / stats[i].plays : 0;
-    if (ratio > bestRatio) { bestRatio = ratio; bestIdx = i; }
-  }
-  return candidates[bestIdx];
-}
 
 let computerBusy = false;
 
@@ -445,7 +295,7 @@ function scheduleComputerMove() {
         computerBusy = false;
         return;
       }
-      const move = aiGetMove(game);
+      const move = getMove(game, UI_BUDGET_MS);
       if (move.type === 'place') {
         game.placeStone(move.x, move.y);
       } else {
