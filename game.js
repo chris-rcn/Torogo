@@ -793,46 +793,46 @@ class Game {
     };
   }
 
-  // BFS over empty cells; attribute to a color if all reachable boundary
-  // stones are of one color (toroidal wrapping respected).
+  // For each empty point: check orthogonal neighbors.
+  // If they are stones of a single color, assign to that color.
+  // If all orthogonal neighbors are empty, check diagonals;
+  // if diagonals are empty too, assign no point.
   calcTerritory() {
-    const board = this.board;
-    const N = board.size;
-    const nbr = board._nbr;
-    const grid = board.grid;
-    const visited = new Uint8Array(N * N);
+    const grid = this.board.grid;
+    const N = this.board.size;
     const territory = { black: 0, white: 0, neutral: 0 };
+    const ortho = [[-1,0],[1,0],[0,-1],[0,1]];
+    const diag  = [[-1,-1],[-1,1],[1,-1],[1,1]];
 
-    for (let idx = 0; idx < N * N; idx++) {
-      if (grid[(idx / N) | 0][idx % N] !== null || visited[idx]) continue;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        if (grid[y][x] !== null) continue;
 
-      // BFS to find the empty region and its border colors
-      let regionSize = 0;
-      let hasBlack = false;
-      let hasWhite = false;
-      const queue = [idx];
-      visited[idx] = 1;
-
-      while (queue.length) {
-        const ci = queue.pop();
-        regionSize++;
-        const base = ci * 4;
-        for (let i = 0; i < 4; i++) {
-          const ni = nbr[base + i];
-          const cell = grid[(ni / N) | 0][ni % N];
-          if (cell !== null) {
-            if (cell === 'black') hasBlack = true; else hasWhite = true;
-          } else if (!visited[ni]) {
-            visited[ni] = 1;
-            queue.push(ni);
+        let hasBlack = false, hasWhite = false, allOrthoEmpty = true;
+        for (const [dy, dx] of ortho) {
+          const c = grid[(y + dy + N) % N][(x + dx + N) % N];
+          if (c !== null) {
+            allOrthoEmpty = false;
+            if (c === 'black') hasBlack = true; else hasWhite = true;
           }
         }
-      }
 
-      if (hasBlack !== hasWhite) {
-        territory[hasBlack ? 'black' : 'white'] += regionSize;
-      } else {
-        territory.neutral += regionSize;
+        if (!allOrthoEmpty) {
+          if (hasBlack && !hasWhite) territory.black++;
+          else if (hasWhite && !hasBlack) territory.white++;
+          // else mixed → neutral, no count
+        } else {
+          // All orthogonal neighbors empty — check diagonals
+          let diagAllEmpty = true;
+          for (const [dy, dx] of diag) {
+            if (grid[(y + dy + N) % N][(x + dx + N) % N] !== null) {
+              diagAllEmpty = false;
+              break;
+            }
+          }
+          if (!diagAllEmpty) territory.neutral++;
+          // else completely isolated → no point assigned
+        }
       }
     }
 
