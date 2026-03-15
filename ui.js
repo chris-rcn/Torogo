@@ -284,6 +284,7 @@ class Renderer {
 const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
 let computerBusy = false;
+let computerPassedLast = false;
 
 // Set of (y*N + x) indices that are legal moves for the human on their turn.
 // null when it is not the human's turn.
@@ -342,8 +343,10 @@ function scheduleComputerMove() {
 
       const applyMove = () => {
         if (move.type === 'place') {
+          computerPassedLast = false;
           game.placeStone(move.x, move.y);
         } else {
+          computerPassedLast = true;
           game.pass();
         }
         renderer.draw();
@@ -414,9 +417,13 @@ function updateUI() {
   const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
   canvas.classList.toggle('shielded', !isHumanTurn);
+
+  document.getElementById('computer-passed-label').style.display =
+    computerPassedLast ? '' : 'none';
 }
 
 function startGame(boardSize) {
+  computerPassedLast = false;
   game = new Game(boardSize);
   renderer = new Renderer(canvas, game);
   renderer.draw();
@@ -518,6 +525,7 @@ canvas.addEventListener('pointerup', (e) => {
 
 document.getElementById('pass-btn').addEventListener('click', () => {
   if (computerBusy || game.current !== 'white') return;
+  computerPassedLast = false;
   game.pass();
   renderer.draw();
   updateUI();
