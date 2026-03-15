@@ -96,8 +96,4 @@ while (puzzleCount < maxPuzzles) {
     else game.pass();
   }
 
-  if (!gamePuzzleFound) {
-    console.log(`// Game ended with no move agreement found`);
-  }
-
 }
