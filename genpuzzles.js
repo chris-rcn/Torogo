@@ -4,18 +4,17 @@
  * Auto-generate puzzle positions from MCTS self-play.
  *
  * Strategy:
- *   1. Play `--games` self-play games using MCTS with `--budget` ms per move.
+ *   1. Play self-play games using MCTS with `--budget` ms per move until
+ *      `--max` puzzles have been collected.
  *   2. At each ply, check whether the top root-child visit fraction >= `--threshold`.
  *      If so, the position is "forced" — save it as a puzzle candidate.
  *   3. Deduplicate by Zobrist hash and emit puzzle objects to stdout.
  *
  * Usage:
- *   node genpuzzles.js [--size <n>] [--budget <ms>] [--games <n>]
- *                      [--threshold <ratio>] [--max <n>]
+ *   node genpuzzles.js [--size <n>] [--budget <ms>] [--threshold <ratio>] [--max <n>]
  *
  *   --size       board size (default: 7)
  *   --budget     MCTS budget per move in ms (default: 500)
- *   --games      number of self-play games to run (default: 50)
  *   --threshold  min fraction of visits on the top move to qualify (default: 0.65)
  *   --max        max puzzles to emit (default: 20)
  */
@@ -29,14 +28,12 @@ const randomAgent = require('./ai/random.js');
 const args = process.argv.slice(2);
 let boardSize  = 7;
 let budgetMs   = 500;
-let numGames   = 50;
 let threshold  = 0.65;
 let maxPuzzles = 20;
 
 for (let i = 0; i < args.length; i++) {
   if      (args[i] === '--size'      && args[i+1]) boardSize  = Number(args[++i]);
   else if (args[i] === '--budget'    && args[i+1]) budgetMs   = Number(args[++i]);
-  else if (args[i] === '--games'     && args[i+1]) numGames   = Number(args[++i]);
   else if (args[i] === '--threshold' && args[i+1]) threshold  = Number(args[++i]);
   else if (args[i] === '--max'       && args[i+1]) maxPuzzles = Number(args[++i]);
 }
@@ -194,13 +191,14 @@ function analyzeMCTS(game) {
 const puzzles = [];
 const seenHashes = new Set();
 
-process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms games=${numGames} threshold=${threshold}\n`);
+process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}\n`);
 
-for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx++) {
+let gameIdx = 0;
+while (puzzles.length < maxPuzzles) {
   const game = new Game(boardSize, 0);
 
   // One random move after the constructor's centre stone, to diversify openings.
-  for (let i = 0; i < 1 && !game.gameOver; i++) {
+  if (!game.gameOver) {
     const move = randomAgent(game);
     if (move.type === 'place') game.placeStone(move.x, move.y);
     else game.pass();
@@ -227,7 +225,7 @@ for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx
     game.placeStone(analysis.best.x, analysis.best.y);
   }
 
-  process.stderr.write(`  game ${gameIdx + 1}/${numGames} complete (${puzzles.length} puzzles so far)\n`);
+  process.stderr.write(`  game ${++gameIdx} complete (${puzzles.length} puzzles so far)\n`);
 }
 
 // ─── Output ───────────────────────────────────────────────────────────────────
