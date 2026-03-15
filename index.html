@@ -141,55 +141,25 @@
     cursor: pointer;
   }
 
-  #score-panel {
-    display: none;
-    margin-top: 14px;
-    padding: 14px 24px;
-    background: #12122a;
-    border-radius: 10px;
-    border: 1px solid #4a4060;
-    text-align: center;
-    min-width: 240px;
-  }
-
-  #score-panel h2 {
-    font-size: 1.1rem;
-    color: #c8a84a;
-    margin-bottom: 8px;
-  }
-
-  #score-panel table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.85rem;
-  }
-
-  #score-panel td {
-    padding: 3px 10px;
-    color: #c0b8a8;
-  }
-
-  #score-panel td:first-child {
-    text-align: left;
-    color: #a09888;
-  }
-
-  #score-panel td:last-child {
-    text-align: right;
-    font-weight: bold;
-  }
-
-  #winner-text {
-    margin-top: 10px;
-    font-size: 1.1rem;
-    color: #f0e060;
-    font-weight: bold;
-  }
 
   #board-container {
     display: inline-flex;
     flex-direction: column;
   }
+
+  #score-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 6px;
+    font-size: 1rem;
+    font-weight: bold;
+    color: #c0b8a8;
+    letter-spacing: 0.04em;
+  }
+
+  #score-bar .black-score { color: #e0d8c8; }
+  #score-bar .white-score { color: #e0d8c8; }
 
   #board-wrapper {
     position: relative;
@@ -233,6 +203,10 @@
   <div id="board-wrapper">
     <canvas id="board-canvas"></canvas>
   </div>
+  <div id="score-bar">
+    <span class="black-score" id="black-score-display">Black: —</span>
+    <span class="white-score" id="white-score-display">White: —</span>
+  </div>
   <div id="board-controls">
     <div id="computer-passed-label">computer passed</div>
     <button id="pass-btn" style="display:none">Pass</button>
@@ -244,11 +218,6 @@
 </div>
 
 
-<div id="score-panel">
-  <h2>Final Score</h2>
-  <table id="score-table"></table>
-  <div id="winner-text"></div>
-</div>
 
 <script src="game.js"></script>
 <script src="ai/rave.js"></script>
