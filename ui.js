@@ -524,8 +524,10 @@ document.getElementById('pass-btn').addEventListener('click', () => {
   scheduleComputerMove();
 });
 
+const DEFAULT_BOARD_SIZE = 13;
+
 document.getElementById('new-game-btn').addEventListener('click', () => {
-  startGame(13);
+  startGame(DEFAULT_BOARD_SIZE);
 });
 
 
@@ -536,4 +538,4 @@ window.addEventListener('resize', () => {
 });
 
 // Boot
-startGame(9);
+startGame(DEFAULT_BOARD_SIZE);
