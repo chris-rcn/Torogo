@@ -485,18 +485,13 @@ canvas.addEventListener('pointerup', (e) => {
     const N = game.boardSize;
     const isLegal = legalMovesSet && legalMovesSet.has(pos.y * N + pos.x);
 
-    const applyPlayerMove = () => {
-      const legal = game.placeStone(pos.x, pos.y);
+    if (isLegal) {
+      // Place the stone immediately so it appears (with last-move dot) before
+      // the pan animation starts.
+      game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
-      if (!legal && game.illegalFlash) {
-        setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
-      } else if (legal) {
-        scheduleComputerMove();
-      }
-    };
 
-    if (isLegal) {
       const W = canvas.width;
       const H = canvas.height;
       const cs = renderer.cellSize;
@@ -508,9 +503,14 @@ canvas.addEventListener('pointerup', (e) => {
       const ry = py - renderer.padding - renderer.panY;
       const targetPanX = W / 2 - renderer.padding - Math.round(rx / cs) * cs;
       const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
-      animatePan(targetPanX, targetPanY, 500, applyPlayerMove);
+      animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
     } else {
-      applyPlayerMove();
+      const legal = game.placeStone(pos.x, pos.y);
+      renderer.draw();
+      updateUI();
+      if (!legal && game.illegalFlash) {
+        setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
+      }
     }
   }
   isPanning = false;
