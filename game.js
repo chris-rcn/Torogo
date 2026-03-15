@@ -54,10 +54,12 @@ class Board {
   }
 
   clone() {
-    const b = new Board(this.size);
+    const b = Object.create(Board.prototype);
+    b.size = this.size;
     b.grid = this.grid.map(row => row.slice());
     b._gid = new Int16Array(this._gid);
     b._nextGid = this._nextGid;
+    b._nbr = this._nbr; // immutable, share reference
     b._groups = new Map();
     for (const [gid, g] of this._groups) {
       b._groups.set(gid, {
@@ -186,27 +188,26 @@ class Board {
   }
 
   // Remove a tracked group from the board, updating neighbors' liberties.
-  // Returns array of [x,y] positions removed.
+  // Returns array of flat cell indices removed.
   _trackRemove(gid) {
     const group = this._groups.get(gid);
     const removed = [];
     const N = this.size;
     const nbr = this._nbr;
     const gidArr = this._gid;
+    const grid = this.grid;
 
-    // First pass: clear all stones in grid and groupId map
+    // Single pass: clear stone, then update neighbor liberties.
+    // Check nGid !== gid (not -1) since earlier stones in this group
+    // already had their gidArr cleared.
     for (const idx of group.stones) {
-      this.grid[(idx / N) | 0][idx % N] = null;
+      grid[(idx / N) | 0][idx % N] = null;
       gidArr[idx] = -1;
-      removed.push([idx % N, (idx / N) | 0]);
-    }
-
-    // Second pass: add removed positions as liberties to adjacent groups
-    for (const idx of group.stones) {
+      removed.push(idx);
       const base = idx * 4;
       for (let i = 0; i < 4; i++) {
         const nGid = gidArr[nbr[base + i]];
-        if (nGid !== -1) {
+        if (nGid !== -1 && nGid !== gid) {
           this._groups.get(nGid).liberties.add(idx);
         }
       }
@@ -481,7 +482,7 @@ class Board {
   }
 
   // After placing at (lastX, lastY), capture groups with 0 liberties.
-  // Returns positions of captured stones per color: { black: [[x,y],...], white: [...] }
+  // Returns flat indices of captured stones per color: { black: [idx,...], white: [...] }
   captureGroups(lastX, lastY) {
     const placedColor = this.get(lastX, lastY);
     const opponentColor = placedColor === 'black' ? 'white' : 'black';
@@ -507,7 +508,7 @@ class Board {
       const group = this._groups.get(gid);
       if (group.liberties.size === 0) {
         const removed = this._trackRemove(gid);
-        for (const pos of removed) captured[opponentColor].push(pos);
+        for (let j = 0; j < removed.length; j++) captured[opponentColor].push(removed[j]);
       }
     }
 
@@ -515,7 +516,7 @@ class Board {
     const ownGroup = this._groups.get(placedGid);
     if (ownGroup && ownGroup.liberties.size === 0) {
       const removed = this._trackRemove(placedGid);
-      for (const pos of removed) captured[placedColor].push(pos);
+      for (let j = 0; j < removed.length; j++) captured[placedColor].push(removed[j]);
     }
 
     // Stochastic verification
@@ -605,13 +606,18 @@ class Game {
   }
 
   clone() {
-    const g = new Game(this.boardSize);
+    const g = Object.create(Game.prototype);
+    g.boardSize         = this.boardSize;
     g.board             = this.board.clone();
     g.current           = this.current;
     g.hash              = this.hash;
     g.koFlag            = this.koFlag;
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
+    g.lastMove          = null;
+    g.komi              = this.komi;
+    g.scores            = null;
+    g.illegalFlash      = null;
     g.moveCount         = this.moveCount;
     return g;
   }
@@ -635,20 +641,26 @@ class Game {
     }
 
     // Move is legal — commit (no rollback path remains)
+    const N = this.boardSize;
     this.board.set(x, y, this.current);
     this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
-    for (const [cx, cy] of caps.black) this.hash ^= ZOBRIST[cy][cx].black;
-    for (const [cx, cy] of caps.white) this.hash ^= ZOBRIST[cy][cx].white;
+    for (let i = 0; i < caps.black.length; i++) {
+      const ci = caps.black[i];
+      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
+    }
+    for (let i = 0; i < caps.white.length; i++) {
+      const ci = caps.white[i];
+      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
+    }
 
     this.illegalFlash = null;
 
     // Update koFlag: set to the captured position only when exactly one stone was taken
     const totalCaptured = caps.black.length + caps.white.length;
     if (totalCaptured === 1) {
-      const capturedColor = caps.black.length === 1 ? 'black' : 'white';
-      const [kx, ky] = caps[capturedColor][0];
-      this.koFlag = { x: kx, y: ky };
+      const ci = caps.black.length === 1 ? caps.black[0] : caps.white[0];
+      this.koFlag = { x: ci % N, y: (ci / N) | 0 };
     } else {
       this.koFlag = null;
     }
