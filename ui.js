@@ -287,6 +287,12 @@ let computerBusy = false;
 let computerPassedLast = false;
 let moveNumber = 0;
 
+function logMove(player, detail, info) {
+  const num = String(moveNumber).padStart(3);
+  const p = player === 'C' ? 'C' : 'H';
+  console.log(`Move ${num}  ${p}  ${detail}` + (info != null ? `  — ${info}` : ''));
+}
+
 // Set of (y*N + x) indices that are legal moves for the human on their turn.
 // null when it is not the human's turn.
 let legalMovesSet = null;
@@ -346,11 +352,11 @@ function scheduleComputerMove() {
         moveNumber++;
         if (move.type === 'place') {
           computerPassedLast = false;
-          console.log(`[Move ${moveNumber}] [Computer] place (${move.x}, ${move.y})` + (move.info != null ? ` — ${move.info}` : ''));
+          logMove('C', `(${move.x}, ${move.y})`, move.info);
           game.placeStone(move.x, move.y);
         } else {
           computerPassedLast = true;
-          console.log(`[Move ${moveNumber}] [Computer] pass` + (move.info != null ? ` — ${move.info}` : ''));
+          logMove('C', 'pass', move.info);
           game.pass();
         }
         renderer.draw();
@@ -502,7 +508,7 @@ canvas.addEventListener('pointerup', (e) => {
       // Place the stone immediately so it appears (with last-move dot) before
       // the pan animation starts.
       moveNumber++;
-      console.log(`[Move ${moveNumber}] [Human] place (${pos.x}, ${pos.y})`);
+      logMove('H', `(${pos.x}, ${pos.y})`);
       game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
@@ -520,7 +526,7 @@ canvas.addEventListener('pointerup', (e) => {
       const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
       animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
     } else {
-      console.log(`[Human] place (${pos.x}, ${pos.y}) — illegal`);
+      console.log(`         H  (${pos.x}, ${pos.y})  — illegal`);
       const legal = game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
@@ -536,7 +542,7 @@ document.getElementById('pass-btn').addEventListener('click', () => {
   if (computerBusy || game.current !== 'white') return;
   computerPassedLast = false;
   moveNumber++;
-  console.log(`[Move ${moveNumber}] [Human] pass`);
+  logMove('H', 'pass');
   game.pass();
   renderer.draw();
   updateUI();
