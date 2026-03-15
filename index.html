@@ -186,6 +186,22 @@
     font-weight: bold;
   }
 
+  #board-wrapper {
+    position: relative;
+    display: inline-block;
+  }
+
+  #computer-passed-label {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 5px;
+    font-size: 0.85rem;
+    color: #a09888;
+    letter-spacing: 0.05em;
+  }
+
   .top-bar {
     width: 100%;
     display: flex;
@@ -205,7 +221,10 @@
   <button id="new-game-btn">New Game</button>
 </div>
 
-<canvas id="board-canvas"></canvas>
+<div id="board-wrapper">
+  <canvas id="board-canvas"></canvas>
+  <div id="computer-passed-label">computer passed</div>
+</div>
 
 <div class="status-row">
   <div id="status-msg">Black to play</div>
