@@ -631,26 +631,31 @@ class Board {
   // ─── ASCII serialization ──────────────────────────────────────────────────
 
   // Render the board as a ● ○ · string (rows separated by '\n').
-  // Optional mark {x, y} wraps that cell as (●), (○), or (·) to highlight it.
+  // Optional mark {x, y} highlights that cell using the adjacent separators as
+  // brackets: · ·(●)· · — so the row width is unchanged for interior cells.
   toAscii(mark) {
     const rows = [];
     for (let y = 0; y < this.size; y++) {
-      const cells = [];
+      let row = '';
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
         const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-        cells.push(mark && x === mark.x && y === mark.y ? `(${ch})` : ch);
+        const isMarked  = mark && x === mark.x     && y === mark.y;
+        const prevMarked = mark && x - 1 === mark.x && y === mark.y;
+        if (x > 0) row += isMarked ? '(' : prevMarked ? ')' : ' ';
+        row += ch;
       }
-      rows.push(cells.join(' '));
+      if (mark && mark.y === y && mark.x === this.size - 1) row += ')';
+      rows.push(row);
     }
     return rows.join('\n');
   }
 
   // Parse a ● ○ · board string produced by toAscii().
-  // Last-move decoration (●) / (○) is accepted and stripped.
+  // Mark decoration ( and ) are stripped before splitting.
   // Returns { size, stones } where stones is [[x, y, color], ...].
   static parse(str) {
-    const rows = str.trim().split('\n').map(r => r.trim().split(/\s+/));
+    const rows = str.trim().split('\n').map(r => r.trim().replace(/[()]/g, ' ').split(/\s+/));
     const size = rows.length;
     const stones = [];
     for (let y = 0; y < size; y++)
