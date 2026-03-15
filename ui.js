@@ -409,7 +409,9 @@ function updateUI() {
     const ws = g.scores.white;
     document.getElementById('score-table').innerHTML = `
       <tr><td></td><td>Black</td><td>White</td></tr>
+      <tr><td>Stones</td><td>${bs.stones}</td><td>${ws.stones}</td></tr>
       <tr><td>Territory</td><td>${bs.territory}</td><td>${ws.territory}</td></tr>
+      <tr><td>Total</td><td>${bs.total}</td><td>${ws.total}</td></tr>
     `;
     let winnerText;
     if (bs.total > ws.total) {
