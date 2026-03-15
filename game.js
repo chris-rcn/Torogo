@@ -674,9 +674,9 @@ class Game {
 
   _incrementMoveCount() {
     this.moveCount++;
-    const threshold = 5 * this.boardSize * this.boardSize;
-    if (this.moveCount === threshold + 1) {
-      console.warn(`Game moveCount (${this.moveCount}) exceeded 5× board area (${threshold})`);
+    const threshold = 4 * this.boardSize * this.boardSize;
+    if (this.moveCount > threshold) {
+      this.endGame();
     }
   }
 
