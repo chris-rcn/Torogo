@@ -186,17 +186,25 @@
     font-weight: bold;
   }
 
+  #board-container {
+    display: inline-flex;
+    flex-direction: column;
+  }
+
   #board-wrapper {
     position: relative;
     display: inline-block;
   }
 
+  #board-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+  }
+
   #computer-passed-label {
     display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 5px;
     font-size: 0.85rem;
     color: #a09888;
     letter-spacing: 0.05em;
@@ -221,14 +229,18 @@
   <button id="new-game-btn">New Game</button>
 </div>
 
-<div id="board-wrapper">
-  <canvas id="board-canvas"></canvas>
-  <div id="computer-passed-label">computer passed</div>
+<div id="board-container">
+  <div id="board-wrapper">
+    <canvas id="board-canvas"></canvas>
+  </div>
+  <div id="board-controls">
+    <div id="computer-passed-label">computer passed</div>
+    <button id="pass-btn" style="display:none">Pass</button>
+  </div>
 </div>
 
 <div class="status-row">
   <div id="status-msg">Black to play</div>
-  <button id="pass-btn" style="display:none">Pass</button>
 </div>
 
 
