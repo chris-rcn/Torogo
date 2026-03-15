@@ -67,30 +67,63 @@ while (puzzleCount < maxPuzzles) {
   }
 
   const boardCells = boardSize * boardSize;
+  let gamePuzzleFound = false;
+  let bestRatio = -1;
+  let bestCandidate = null; // { hashKey, toPlayChar, result, indented }
+
   while (!game.gameOver && puzzleCount < maxPuzzles && game.moveCount < boardCells * 0.9) {
     const hashKey = game.hash.toString();
     const result = mcts(game, budgetMs);
 
     if (result.type === 'place') {
-      if (!seenHashes.has(hashKey) && visitRatio(result.children) >= threshold) {
-        seenHashes.add(hashKey);
-        puzzleCount++;
-        const indented = game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n');
-        const id = Math.floor(Math.random() * 1e9);
-        const toPlayChar = game.current === 'black' ? '●' : '○';
-        console.log(`  {`);
-        console.log(`    id: ${id},`);
-        console.log(`    toPlay: '${toPlayChar}',`);
-        console.log(`    answers: [[${result.x}, ${result.y}]],`);
-        console.log(`    board: \``);
-        console.log(indented);
-        console.log(`    \`,`);
-        console.log(`  },`);
+      const ratio = visitRatio(result.children);
+
+      if (!seenHashes.has(hashKey)) {
+        if (ratio >= threshold) {
+          seenHashes.add(hashKey);
+          puzzleCount++;
+          gamePuzzleFound = true;
+          const indented = game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n');
+          const id = Math.floor(Math.random() * 1e9);
+          const toPlayChar = game.current === 'black' ? '●' : '○';
+          console.log(`  {`);
+          console.log(`    id: ${id},`);
+          console.log(`    toPlay: '${toPlayChar}',`);
+          console.log(`    answers: [[${result.x}, ${result.y}]],`);
+          console.log(`    board: \``);
+          console.log(indented);
+          console.log(`    \`,`);
+          console.log(`  },`);
+        } else if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestCandidate = {
+            hashKey,
+            toPlayChar: game.current === 'black' ? '●' : '○',
+            result,
+            indented: game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n'),
+          };
+        }
       }
+
       game.placeStone(result.x, result.y);
     } else {
       game.pass();
     }
+  }
+
+  // No threshold position found this game — emit the best candidate seen.
+  if (!gamePuzzleFound && bestCandidate !== null && !seenHashes.has(bestCandidate.hashKey)) {
+    seenHashes.add(bestCandidate.hashKey);
+    puzzleCount++;
+    const id = Math.floor(Math.random() * 1e9);
+    console.log(`  {`);
+    console.log(`    id: ${id},`);
+    console.log(`    toPlay: '${bestCandidate.toPlayChar}',`);
+    console.log(`    answers: [[${bestCandidate.result.x}, ${bestCandidate.result.y}]],`);
+    console.log(`    board: \``);
+    console.log(bestCandidate.indented);
+    console.log(`    \`,`);
+    console.log(`  },`);
   }
 
 }
