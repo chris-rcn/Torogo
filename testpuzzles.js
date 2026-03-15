@@ -2,33 +2,10 @@
 
 const { Board, Game, ZOBRIST } = require('./game.js');
 
-// ─── Board parser ─────────────────────────────────────────────────────────────
+// ─── Board parser / serializer (thin wrappers around Board methods) ──────────
 
-function parseBoard(boardStr) {
-  const rows = boardStr.trim().split('\n').map(r => r.trim().split(/\s+/));
-  const size = rows.length;
-  const stones = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++) {
-      const c = rows[y][x];
-      if (c === '●') stones.push([x, y, 'black']);
-      else if (c === '○') stones.push([x, y, 'white']);
-    }
-  return { size, stones };
-}
-
-function boardToString(board) {
-  const rows = [];
-  for (let y = 0; y < board.size; y++) {
-    const cells = [];
-    for (let x = 0; x < board.size; x++) {
-      const v = board.get(x, y);
-      cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
-    }
-    rows.push(cells.join(' '));
-  }
-  return rows.join('\n');
-}
+function parseBoard(boardStr) { return Board.parse(boardStr); }
+function boardToString(board)  { return board.toAscii(); }
 
 // ─── Position builder ─────────────────────────────────────────────────────────
 

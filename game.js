@@ -627,6 +627,37 @@ class Board {
 
     return { isTrueEye: false, hasEmptyNeighbor };
   }
+
+  // ─── ASCII serialization ──────────────────────────────────────────────────
+
+  // Render the board as a ● ○ · string (rows separated by '\n').
+  toAscii() {
+    const rows = [];
+    for (let y = 0; y < this.size; y++) {
+      const cells = [];
+      for (let x = 0; x < this.size; x++) {
+        const v = this.grid[y][x];
+        cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
+      }
+      rows.push(cells.join(' '));
+    }
+    return rows.join('\n');
+  }
+
+  // Parse a ● ○ · board string produced by toAscii().
+  // Returns { size, stones } where stones is [[x, y, color], ...].
+  static parse(str) {
+    const rows = str.trim().split('\n').map(r => r.trim().split(/\s+/));
+    const size = rows.length;
+    const stones = [];
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const c = rows[y][x];
+        if (c === '●') stones.push([x, y, 'black']);
+        else if (c === '○') stones.push([x, y, 'white']);
+      }
+    return { size, stones };
+  }
 }
 
 // Fraction of captureGroups calls that run BFS verification (0 = off)

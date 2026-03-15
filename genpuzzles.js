@@ -45,20 +45,6 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--max'       && args[i+1]) maxPuzzles  = Number(args[++i]);
 }
 
-// ─── Board utilities ──────────────────────────────────────────────────────────
-
-function boardToString(board) {
-  const rows = [];
-  for (let y = 0; y < board.size; y++) {
-    const cells = [];
-    for (let x = 0; x < board.size; x++) {
-      const v = board.get(x, y);
-      cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
-    }
-    rows.push(cells.join(' '));
-  }
-  return rows.join('\n');
-}
 
 // ─── Random agent (fast self-play) ───────────────────────────────────────────
 
@@ -233,7 +219,7 @@ for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx
           puzzles.push({
             toPlay: game.current,
             answer: [[analysis.best.x, analysis.best.y]],
-            boardStr: boardToString(game.board),
+            boardStr: game.board.toAscii(),
             boardSize: game.boardSize,
             ratio: analysis.ratio,
             totalVisits: analysis.totalVisits,
