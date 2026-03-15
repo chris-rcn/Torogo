@@ -636,17 +636,20 @@ class Board {
   toAscii(mark) {
     const rows = [];
     for (let y = 0; y < this.size; y++) {
-      let row = '';
+      const rowMarked = mark && mark.y === y;
+      // When a mark is present, reserve a 1-char left gutter (used as '(' when
+      // the marked cell is in column 0) and a 1-char right gutter (used as ')'
+      // when it is in the last column), keeping all rows the same width.
+      let row = mark ? (rowMarked && mark.x === 0 ? '(' : ' ') : '';
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
         const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-        const isMarked   = mark && x === mark.x     && y === mark.y;
-        const prevMarked = mark && x - 1 === mark.x && y === mark.y;
-        if (isMarked) row += '(';
-        else if (x > 0) row += prevMarked ? ')' : ' ';
+        const isMarked   = rowMarked && x === mark.x;
+        const prevMarked = rowMarked && x - 1 === mark.x;
+        if (x > 0) row += isMarked ? '(' : prevMarked ? ')' : ' ';
         row += ch;
       }
-      if (mark && mark.y === y && mark.x === this.size - 1) row += ')';
+      if (mark) row += rowMarked && mark.x === this.size - 1 ? ')' : ' ';
       rows.push(row);
     }
     return rows.join('\n');
