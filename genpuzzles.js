@@ -190,13 +190,10 @@ function analyzeMCTS(game) {
 
 const seenHashes = new Set();
 let puzzleCount = 0;
-let gameIdx = 0;
 
 console.log('// Auto-generated puzzles — paste into PUZZLES array in testpuzzles.js');
 console.log(`// Generated: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}`);
 console.log('');
-
-process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}\n`);
 
 while (puzzleCount < maxPuzzles) {
   const game = new Game(boardSize, 0);
@@ -226,15 +223,11 @@ while (puzzleCount < maxPuzzles) {
       console.log(indented);
       console.log(`    \`,`);
       console.log(`  },`);
-      process.stderr.write(`\n── Puzzle ${puzzleCount} (${game.current} to play, answer ${analysis.best.x},${analysis.best.y}, ratio=${analysis.ratio.toFixed(2)}) ──\n`);
-      process.stderr.write(game.board.toAscii(analysis.best) + '\n');
     }
 
     // Advance game using the MCTS best move
     game.placeStone(analysis.best.x, analysis.best.y);
   }
 
-  process.stderr.write(`  game ${++gameIdx} complete (${puzzleCount} puzzles so far)\n`);
 }
 
-process.stderr.write(`\nDone: ${puzzleCount} puzzles emitted.\n`);
