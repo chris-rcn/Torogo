@@ -499,11 +499,16 @@ canvas.addEventListener('pointerup', (e) => {
     if (isLegal) {
       const W = canvas.width;
       const H = canvas.height;
-      const rawTargetX = W / 2 - renderer.padding - pos.x * renderer.cellSize;
-      const rawTargetY = H / 2 - renderer.padding - pos.y * renderer.cellSize;
-      // Pan directly toward the clicked position (no shortest-wrap), so the
-      // direction of pan always matches the direction of the user's click.
-      animatePan(rawTargetX, rawTargetY, 500, applyPlayerMove);
+      const cs = renderer.cellSize;
+      // Use the raw pixel offset (unsnapped, unwrapped) so the pan target
+      // centres on whichever visual tile-copy the user actually clicked,
+      // not the base-tile copy (which can be in the opposite direction when
+      // fromCanvas wraps the grid coordinate across a board edge).
+      const rx = px - renderer.padding - renderer.panX;
+      const ry = py - renderer.padding - renderer.panY;
+      const targetPanX = W / 2 - renderer.padding - Math.round(rx / cs) * cs;
+      const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
+      animatePan(targetPanX, targetPanY, 500, applyPlayerMove);
     } else {
       applyPlayerMove();
     }
