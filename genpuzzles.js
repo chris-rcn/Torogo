@@ -22,6 +22,7 @@
 
 const { performance } = require('perf_hooks');
 const { Game, ZOBRIST } = require('./game.js');
+const randomAgent = require('./ai/random.js');
 
 // ─── Parse CLI args ───────────────────────────────────────────────────────────
 
@@ -197,6 +198,13 @@ process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms
 
 for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx++) {
   const game = new Game(boardSize, 0);
+
+  // Two random opening moves to diversify starting positions.
+  for (let i = 0; i < 2 && !game.gameOver; i++) {
+    const move = randomAgent(game);
+    if (move.type === 'place') game.placeStone(move.x, move.y);
+    else game.pass();
+  }
 
   while (!game.gameOver && puzzles.length < maxPuzzles) {
     const hashKey = game.hash.toString();
