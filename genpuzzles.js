@@ -65,10 +65,12 @@ while (puzzleCount < maxPuzzles) {
 
   while (!game.gameOver && puzzleCount < maxPuzzles && game.moveCount < boardCells * 0.9) {
     const hashKey = game.hash.toString();
-    const first  = agent(game, budgetMs);
+    const first = agent(game, budgetMs);
+    if (first.type !== 'place') break;
+
     const second = agent(game, budgetMs);
 
-    const agreed = first.type === 'place' && second.type === 'place' &&
+    const agreed = second.type === 'place' &&
                    first.x === second.x   && first.y === second.y;
 
     if (agreed && !seenHashes.has(hashKey)) {
