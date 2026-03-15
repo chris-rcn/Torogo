@@ -636,16 +636,17 @@ class Board {
   toAscii(mark) {
     const rows = [];
     for (let y = 0; y < this.size; y++) {
-      let row = '';
+      const rowMarked = mark && mark.y === y;
+      let row = rowMarked && mark.x === 0 ? '(' : ' ';
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
         const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-        const isMarked  = mark && x === mark.x     && y === mark.y;
-        const prevMarked = mark && x - 1 === mark.x && y === mark.y;
+        const isMarked   = rowMarked && x === mark.x;
+        const prevMarked = rowMarked && x - 1 === mark.x;
         if (x > 0) row += isMarked ? '(' : prevMarked ? ')' : ' ';
         row += ch;
       }
-      if (mark && mark.y === y && mark.x === this.size - 1) row += ')';
+      row += rowMarked && mark.x === this.size - 1 ? ')' : ' ';
       rows.push(row);
     }
     return rows.join('\n');

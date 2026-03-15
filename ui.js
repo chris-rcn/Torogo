@@ -284,6 +284,30 @@ const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
 let computerBusy = false;
 
+// Smoothly animate renderer.panX/panY to (targetX, targetY) over durationMs,
+// then call onComplete.  Uses an ease-in-out cubic curve.
+function animatePan(targetX, targetY, durationMs, onComplete) {
+  const startX = renderer.panX;
+  const startY = renderer.panY;
+  const startTime = performance.now();
+
+  function frame(now) {
+    const t = Math.min((now - startTime) / durationMs, 1);
+    // Ease-in-out cubic
+    const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    renderer.panX = startX + (targetX - startX) * ease;
+    renderer.panY = startY + (targetY - startY) * ease;
+    renderer.draw();
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
 function scheduleComputerMove() {
   if (game.gameOver || game.current !== 'black') return;
   computerBusy = true;
@@ -296,14 +320,29 @@ function scheduleComputerMove() {
         return;
       }
       const move = getMove(game, UI_BUDGET_MS);
+
+      const applyMove = () => {
+        if (move.type === 'place') {
+          game.placeStone(move.x, move.y);
+        } else {
+          game.pass();
+        }
+        renderer.draw();
+        // Brief cooldown so queued pointer events don't sneak through
+        setTimeout(() => { computerBusy = false; updateUI(); }, 50);
+      };
+
       if (move.type === 'place') {
-        game.placeStone(move.x, move.y);
+        // Pan so the computer's chosen intersection is centred on the canvas,
+        // then drop the stone once the animation completes.
+        const W = canvas.width;
+        const H = canvas.height;
+        const targetPanX = W / 2 - renderer.padding - move.x * renderer.cellSize;
+        const targetPanY = H / 2 - renderer.padding - move.y * renderer.cellSize;
+        animatePan(targetPanX, targetPanY, 500, applyMove);
       } else {
-        game.pass();
+        applyMove();
       }
-      renderer.draw();
-      // Brief cooldown so queued pointer events don't sneak through
-      setTimeout(() => { computerBusy = false; updateUI(); }, 50);
     }, 0);
   });
 }
