@@ -519,6 +519,30 @@ section('placeStone return values');
   assert(r2 === false, 'occupied cell returns false');
 }
 
+// ─── Board serialize/parse round-trip ────────────────────────────────────────
+
+section('Board serialize/parse round-trip');
+{
+  const { parseBoard, boardToString } = require('./testpuzzles.js');
+  const g = new Game(7, 3.5);
+  const random = require('./ai/random.js');
+  for (let i = 0; i < 10 && !g.gameOver; i++) {
+    const move = random(g);
+    if (move.type === 'place') g.placeStone(move.x, move.y);
+    else g.pass();
+  }
+  const str = boardToString(g.board);
+  const { size, stones } = parseBoard(str);
+  assert(size === 7, 'parsed size matches');
+  const b2 = new Board(size);
+  for (const [x, y, color] of stones) b2.set(x, y, color);
+  let match = true;
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++)
+      if (g.board.get(x, y) !== b2.get(x, y)) match = false;
+  assert(match, 'round-trip preserves all cells');
+}
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 
 console.log(`\n═══════════════════════`);
