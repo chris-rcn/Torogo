@@ -426,7 +426,9 @@ function updateUI() {
 
   const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
-  canvas.classList.toggle('shielded', !isHumanTurn);
+  // Shield the canvas (pointer-events: none) only while the computer is
+  // thinking — not after game over, so the player can still pan the board.
+  canvas.classList.toggle('shielded', !g.gameOver && !isHumanTurn);
 
   document.getElementById('computer-passed-label').style.display =
     computerPassedLast ? '' : 'none';
@@ -480,7 +482,7 @@ canvas.addEventListener('pointermove', (e) => {
   } else {
     // Hover — update ghost stone (only when it's the human's turn)
     const rect = canvas.getBoundingClientRect();
-    renderer.hoverPos = game.current === 'white'
+    renderer.hoverPos = !game.gameOver && game.current === 'white'
       ? renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top)
       : null;
     renderer.draw();
@@ -551,8 +553,16 @@ document.getElementById('pass-btn').addEventListener('click', () => {
 
 const DEFAULT_BOARD_SIZE = 13;
 
+function sizeFromURL() {
+  const raw = new URLSearchParams(location.search).get('size');
+  const n = parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 5 && n <= 19 ? n : DEFAULT_BOARD_SIZE;
+}
+
+const initialBoardSize = sizeFromURL();
+
 document.getElementById('new-game-btn').addEventListener('click', () => {
-  startGame(DEFAULT_BOARD_SIZE);
+  startGame(initialBoardSize);
 });
 
 
@@ -563,4 +573,4 @@ window.addEventListener('resize', () => {
 });
 
 // Boot
-startGame(DEFAULT_BOARD_SIZE);
+startGame(initialBoardSize);
