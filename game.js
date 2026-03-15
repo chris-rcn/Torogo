@@ -32,6 +32,25 @@ class Board {
     this._gid = new Int16Array(size * size).fill(-1); // groupId per cell
     this._groups = new Map(); // gid → { color, stones: Set<idx>, liberties: Set<idx> }
     this._nextGid = 0;
+    // Precomputed orthogonal neighbor indices (toroidal wrapping)
+    if (!Board._nbrCache) Board._nbrCache = new Map();
+    if (Board._nbrCache.has(size)) {
+      this._nbr = Board._nbrCache.get(size);
+    } else {
+      const n = size * size;
+      const nbr = new Int16Array(n * 4);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const base = (y * size + x) * 4;
+          nbr[base]     = ((x + 1) % size) + y * size;
+          nbr[base + 1] = ((x - 1 + size) % size) + y * size;
+          nbr[base + 2] = x + ((y + 1) % size) * size;
+          nbr[base + 3] = x + ((y - 1 + size) % size) * size;
+        }
+      }
+      Board._nbrCache.set(size, nbr);
+      this._nbr = nbr;
+    }
   }
 
   clone() {
@@ -90,71 +109,72 @@ class Board {
   // Returns the groupId of the placed stone's group.
   _trackPlace(x, y) {
     const color = this.grid[y][x];
-    const idx = this._idx(x, y);
     const N = this.size;
-    const nbors = this.getNeighbors(x, y);
-    const nborIdxs = this._neighborIndices(x, y);
+    const idx = y * N + x;
+    const nbr = this._nbr;
+    const base = idx * 4;
+    const grid = this.grid;
+    const gidArr = this._gid;
 
-    // Remove idx from liberties of all adjacent groups
-    const seenGids = new Set();
-    for (const ni of nborIdxs) {
-      const gid = this._gid[ni];
-      if (gid !== -1 && !seenGids.has(gid)) {
-        seenGids.add(gid);
-        this._groups.get(gid).liberties.delete(idx);
-      }
-    }
-
-    // Find same-color neighbor groups (deduplicated)
-    const sameGids = new Set();
+    // Remove idx from liberties of all adjacent groups (max 4 distinct gids)
+    let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
     for (let i = 0; i < 4; i++) {
-      const [nx, ny] = nbors[i];
-      if (this.grid[ny][nx] === color) {
-        sameGids.add(this._gid[nborIdxs[i]]);
-      }
+      const gid = gidArr[nbr[base + i]];
+      if (gid === -1 || gid === s0 || gid === s1 || gid === s2 || gid === s3) continue;
+      if (s0 === -1) s0 = gid; else if (s1 === -1) s1 = gid; else if (s2 === -1) s2 = gid; else s3 = gid;
+      this._groups.get(gid).liberties.delete(idx);
     }
 
-    // Compute liberties for the new stone position
-    const myLibs = new Set();
+    // Find same-color neighbor groups and compute liberties for new stone
+    const sameGids = [];
+    const myLibs = [];
     for (let i = 0; i < 4; i++) {
-      const [nx, ny] = nbors[i];
-      if (this.grid[ny][nx] === null) {
-        myLibs.add(nborIdxs[i]);
+      const ni = nbr[base + i];
+      const c = grid[(ni / N) | 0][ni % N];
+      if (c === color) {
+        const gid = gidArr[ni];
+        let dup = false;
+        for (let j = 0; j < sameGids.length; j++) {
+          if (sameGids[j] === gid) { dup = true; break; }
+        }
+        if (!dup) sameGids.push(gid);
+      } else if (c === null) {
+        myLibs.push(ni);
       }
     }
 
-    if (sameGids.size === 0) {
+    if (sameGids.length === 0) {
       // New solo group
       const gid = this._nextGid++;
-      this._gid[idx] = gid;
-      this._groups.set(gid, { color, stones: new Set([idx]), liberties: myLibs });
+      gidArr[idx] = gid;
+      this._groups.set(gid, { color, stones: new Set([idx]), liberties: new Set(myLibs) });
       return gid;
     }
 
     // Merge into the largest same-color neighbor group
-    const gidArr = [...sameGids];
-    let mainGid = gidArr[0];
+    let mainGid = sameGids[0];
     let mainGroup = this._groups.get(mainGid);
-    for (let i = 1; i < gidArr.length; i++) {
-      const g = this._groups.get(gidArr[i]);
+    for (let i = 1; i < sameGids.length; i++) {
+      const g = this._groups.get(sameGids[i]);
       if (g.stones.size > mainGroup.stones.size) {
-        mainGid = gidArr[i];
+        mainGid = sameGids[i];
         mainGroup = g;
       }
     }
 
     // Add new stone to main group
     mainGroup.stones.add(idx);
-    this._gid[idx] = mainGid;
-    for (const lib of myLibs) mainGroup.liberties.add(lib);
+    gidArr[idx] = mainGid;
+    for (let i = 0; i < myLibs.length; i++) mainGroup.liberties.add(myLibs[i]);
 
     // Merge other groups into main
-    for (const gid of gidArr) {
+    for (let i = 0; i < sameGids.length; i++) {
+      const gid = sameGids[i];
       if (gid === mainGid) continue;
       const other = this._groups.get(gid);
       for (const si of other.stones) {
         mainGroup.stones.add(si);
-        this._gid[si] = mainGid;
+        gidArr[si] = mainGid;
       }
       for (const li of other.liberties) {
         mainGroup.liberties.add(li);
@@ -170,19 +190,22 @@ class Board {
   _trackRemove(gid) {
     const group = this._groups.get(gid);
     const removed = [];
+    const N = this.size;
+    const nbr = this._nbr;
+    const gidArr = this._gid;
 
     // First pass: clear all stones in grid and groupId map
     for (const idx of group.stones) {
-      const [x, y] = this._xy(idx);
-      this.grid[y][x] = null;
-      this._gid[idx] = -1;
-      removed.push([x, y]);
+      this.grid[(idx / N) | 0][idx % N] = null;
+      gidArr[idx] = -1;
+      removed.push([idx % N, (idx / N) | 0]);
     }
 
     // Second pass: add removed positions as liberties to adjacent groups
     for (const idx of group.stones) {
-      for (const ni of this._neighborIndices(...this._xy(idx))) {
-        const nGid = this._gid[ni];
+      const base = idx * 4;
+      for (let i = 0; i < 4; i++) {
+        const nGid = gidArr[nbr[base + i]];
         if (nGid !== -1) {
           this._groups.get(nGid).liberties.add(idx);
         }
@@ -201,37 +224,39 @@ class Board {
     this._groups.clear();
     this._nextGid = 0;
 
+    const nbr = this._nbr;
+    const grid = this.grid;
+    const gidArr = this._gid;
     const visited = new Uint8Array(n);
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const idx = y * N + x;
-        if (visited[idx] || this.grid[y][x] === null) continue;
+    for (let idx = 0; idx < n; idx++) {
+      const y = (idx / N) | 0, x = idx % N;
+      if (visited[idx] || grid[y][x] === null) continue;
 
-        const color = this.grid[y][x];
-        const gid = this._nextGid++;
-        const stones = new Set();
-        const liberties = new Set();
-        const queue = [idx];
-        visited[idx] = 1;
+      const color = grid[y][x];
+      const gid = this._nextGid++;
+      const stones = new Set();
+      const liberties = new Set();
+      const queue = [idx];
+      visited[idx] = 1;
 
-        while (queue.length) {
-          const ci = queue.pop();
-          stones.add(ci);
-          this._gid[ci] = gid;
-          const cx = ci % N, cy = (ci / N) | 0;
-          for (const [nx, ny] of this.getNeighbors(cx, cy)) {
-            const ni = ny * N + nx;
-            if (this.grid[ny][nx] === null) {
-              liberties.add(ni);
-            } else if (!visited[ni] && this.grid[ny][nx] === color) {
-              visited[ni] = 1;
-              queue.push(ni);
-            }
+      while (queue.length) {
+        const ci = queue.pop();
+        stones.add(ci);
+        gidArr[ci] = gid;
+        const base = ci * 4;
+        for (let i = 0; i < 4; i++) {
+          const ni = nbr[base + i];
+          const ny = (ni / N) | 0, nx = ni % N;
+          if (grid[ny][nx] === null) {
+            liberties.add(ni);
+          } else if (!visited[ni] && grid[ny][nx] === color) {
+            visited[ni] = 1;
+            queue.push(ni);
           }
         }
-
-        this._groups.set(gid, { color, stones, liberties });
       }
+
+      this._groups.set(gid, { color, stones, liberties });
     }
   }
 
@@ -363,13 +388,18 @@ class Board {
   // all 4 neighbours are occupied by opponents, no opponent is in atari at (x,y).
   // Does not modify board state.
   isSingleSuicide(x, y, color) {
-    const placedIdx = this._idx(x, y);
-    for (const [nx, ny] of this.getNeighbors(x, y)) {
-      const cell = this.grid[ny][nx];
+    const N = this.size;
+    const placedIdx = y * N + x;
+    const nbr = this._nbr;
+    const base = placedIdx * 4;
+    const grid = this.grid;
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const cell = grid[(ni / N) | 0][ni % N];
       if (cell === null) return false;   // empty → immediate liberty
       if (cell === color) return false;  // friendly neighbour → not a lone stone
       // Opponent: would it be captured? (its only liberty is (x,y))
-      const group = this._groups.get(this._gid[this._idx(nx, ny)]);
+      const group = this._groups.get(this._gid[ni]);
       if (group.liberties.size === 1 && group.liberties.has(placedIdx)) return false;
     }
     return true;
@@ -380,17 +410,23 @@ class Board {
   // is (x,y), and no opponent capture would free a new liberty.
   // Does not modify board state.
   isMultiSuicide(x, y, color) {
-    const placedIdx = this._idx(x, y);
+    const N = this.size;
+    const placedIdx = y * N + x;
+    const nbr = this._nbr;
+    const base = placedIdx * 4;
+    const grid = this.grid;
+    const gidArr = this._gid;
     let hasFriendly = false;
-    const seenGids = new Set();
+    let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
 
-    for (const [nx, ny] of this.getNeighbors(x, y)) {
-      const cell = this.grid[ny][nx];
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const cell = grid[(ni / N) | 0][ni % N];
       if (cell === null) return false; // empty → immediate liberty
 
-      const gid = this._gid[this._idx(nx, ny)];
-      if (seenGids.has(gid)) continue;
-      seenGids.add(gid);
+      const gid = gidArr[ni];
+      if (gid === s0 || gid === s1 || gid === s2 || gid === s3) continue;
+      if (s0 === -1) s0 = gid; else if (s1 === -1) s1 = gid; else if (s2 === -1) s2 = gid; else s3 = gid;
 
       const group = this._groups.get(gid);
       if (cell === color) {
@@ -421,15 +457,21 @@ class Board {
   // Does not modify board state.
   isKo(x, y, color, koFlag) {
     if (!koFlag || x !== koFlag.x || y !== koFlag.y) return false;
-    const placedIdx = this._idx(x, y);
+    const N = this.size;
+    const placedIdx = y * N + x;
+    const nbr = this._nbr;
+    const base = placedIdx * 4;
+    const grid = this.grid;
+    const gidArr = this._gid;
     const opponentColor = color === 'black' ? 'white' : 'black';
-    const seenGids = new Set();
+    let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
     let capturedCount = 0;
-    for (const [nx, ny] of this.getNeighbors(x, y)) {
-      if (this.grid[ny][nx] !== opponentColor) continue;
-      const gid = this._gid[this._idx(nx, ny)];
-      if (seenGids.has(gid)) continue;
-      seenGids.add(gid);
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      if (grid[(ni / N) | 0][ni % N] !== opponentColor) continue;
+      const gid = gidArr[ni];
+      if (gid === s0 || gid === s1 || gid === s2 || gid === s3) continue;
+      if (s0 === -1) s0 = gid; else if (s1 === -1) s1 = gid; else if (s2 === -1) s2 = gid; else s3 = gid;
       const group = this._groups.get(gid);
       if (group.liberties.size === 1 && group.liberties.has(placedIdx)) {
         capturedCount += group.stones.size;
@@ -449,12 +491,18 @@ class Board {
     const placedGid = this._trackPlace(lastX, lastY);
 
     // Check opponent groups adjacent to the placed stone
-    const checked = new Set();
-    for (const [nx, ny] of this.getNeighbors(lastX, lastY)) {
-      if (this.grid[ny][nx] !== opponentColor) continue;
-      const gid = this._gid[this._idx(nx, ny)];
-      if (gid === -1 || checked.has(gid)) continue;
-      checked.add(gid);
+    const N = this.size;
+    const idx = lastY * N + lastX;
+    const nbr = this._nbr;
+    const base = idx * 4;
+    const gidArr = this._gid;
+    let c0 = -1, c1 = -1, c2 = -1, c3 = -1;
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      if (this.grid[(ni / N) | 0][ni % N] !== opponentColor) continue;
+      const gid = gidArr[ni];
+      if (gid === -1 || gid === c0 || gid === c1 || gid === c2 || gid === c3) continue;
+      if (c0 === -1) c0 = gid; else if (c1 === -1) c1 = gid; else if (c2 === -1) c2 = gid; else c3 = gid;
 
       const group = this._groups.get(gid);
       if (group.liberties.size === 0) {
@@ -486,18 +534,23 @@ class Board {
   //      eye), OR at least 3 of the 4 diagonal neighbours are `color`.
   isTrueEye(x, y, color) {
     const N = this.size;
-    const ortho = this.getNeighbors(x, y);
+    const idx = y * N + x;
+    const base = idx * 4;
+    const nbr = this._nbr;
+    const grid = this.grid;
+    const gidArr = this._gid;
 
     // Count friendly neighbors and track group IDs.
     let friendCount = 0;
     let emptyCount = 0;
     let sameGroupCount = 0;
     let firstGid = -2; // sentinel distinct from untracked (-1)
-    for (const [nx, ny] of ortho) {
-      const c = this.grid[ny][nx];
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const c = grid[(ni / N) | 0][ni % N];
       if (c === color) {
         friendCount++;
-        const gid = this._gid[this._idx(nx, ny)];
+        const gid = gidArr[ni];
         if (gid !== -1) { // only count tracked stones
           if (firstGid === -2) firstGid = gid;
           if (gid === firstGid) sameGroupCount++;
@@ -511,13 +564,12 @@ class Board {
     if (friendCount === 4) {
       if (sameGroupCount === 4) return true; // same group → unconditionally true
       // Different friendly groups: fall back to the diagonal heuristic.
-      const diags = [
-        [(x + 1) % N,       (y + 1) % N],
-        [(x - 1 + N) % N,   (y + 1) % N],
-        [(x + 1) % N,       (y - 1 + N) % N],
-        [(x - 1 + N) % N,   (y - 1 + N) % N],
-      ];
-      return diags.filter(([dx, dy]) => this.grid[dy][dx] === color).length >= 3;
+      let dc = 0;
+      if (grid[(y + 1) % N][(x + 1) % N] === color) dc++;
+      if (grid[(y + 1) % N][(x - 1 + N) % N] === color) dc++;
+      if (grid[(y - 1 + N) % N][(x + 1) % N] === color) dc++;
+      if (grid[(y - 1 + N) % N][(x - 1 + N) % N] === color) dc++;
+      return dc >= 3;
     }
 
     // 3 neighbors are the same friendly group + 1 empty → proto-eye, skip.
@@ -643,42 +695,43 @@ class Game {
   // BFS over empty cells; attribute to a color if all reachable boundary
   // stones are of one color (toroidal wrapping respected).
   calcTerritory() {
-    const N = this.board.size;
-    const visited = new Set();
+    const board = this.board;
+    const N = board.size;
+    const nbr = board._nbr;
+    const grid = board.grid;
+    const visited = new Uint8Array(N * N);
     const territory = { black: 0, white: 0, neutral: 0 };
 
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const key = `${x},${y}`;
-        if (this.board.get(x, y) !== null || visited.has(key)) continue;
+    for (let idx = 0; idx < N * N; idx++) {
+      if (grid[(idx / N) | 0][idx % N] !== null || visited[idx]) continue;
 
-        // BFS to find the empty region and its border colors
-        const region = [];
-        const borderColors = new Set();
-        const queue = [[x, y]];
-        visited.add(key);
+      // BFS to find the empty region and its border colors
+      let regionSize = 0;
+      let hasBlack = false;
+      let hasWhite = false;
+      const queue = [idx];
+      visited[idx] = 1;
 
-        while (queue.length) {
-          const [cx, cy] = queue.shift();
-          region.push([cx, cy]);
-          for (const [nx, ny] of this.board.getNeighbors(cx, cy)) {
-            const nkey = `${nx},${ny}`;
-            const cell = this.board.get(nx, ny);
-            if (cell !== null) {
-              borderColors.add(cell);
-            } else if (!visited.has(nkey)) {
-              visited.add(nkey);
-              queue.push([nx, ny]);
-            }
+      while (queue.length) {
+        const ci = queue.pop();
+        regionSize++;
+        const base = ci * 4;
+        for (let i = 0; i < 4; i++) {
+          const ni = nbr[base + i];
+          const cell = grid[(ni / N) | 0][ni % N];
+          if (cell !== null) {
+            if (cell === 'black') hasBlack = true; else hasWhite = true;
+          } else if (!visited[ni]) {
+            visited[ni] = 1;
+            queue.push(ni);
           }
         }
+      }
 
-        if (borderColors.size === 1) {
-          const [owner] = borderColors;
-          territory[owner] += region.length;
-        } else {
-          territory.neutral += region.length;
-        }
+      if (hasBlack !== hasWhite) {
+        territory[hasBlack ? 'black' : 'white'] += regionSize;
+      } else {
+        territory.neutral += regionSize;
       }
     }
 
