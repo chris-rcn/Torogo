@@ -787,9 +787,17 @@ class Game {
   endGame() {
     this.gameOver = true;
     const territory = this.calcTerritory();
+    const grid = this.board.grid;
+    const N = this.board.size;
+    let blackStones = 0, whiteStones = 0;
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) {
+        if (grid[y][x] === 'black') blackStones++;
+        else if (grid[y][x] === 'white') whiteStones++;
+      }
     this.scores = {
-      black: { territory: territory.black, total: territory.black },
-      white: { territory: territory.white, total: territory.white + this.komi },
+      black: { stones: blackStones, territory: territory.black, total: blackStones + territory.black },
+      white: { stones: whiteStones, territory: territory.white, total: whiteStones + territory.white + this.komi },
     };
   }
 
