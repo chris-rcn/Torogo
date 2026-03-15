@@ -426,7 +426,9 @@ function updateUI() {
 
   const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
-  canvas.classList.toggle('shielded', !isHumanTurn);
+  // Shield the canvas (pointer-events: none) only while the computer is
+  // thinking — not after game over, so the player can still pan the board.
+  canvas.classList.toggle('shielded', !g.gameOver && !isHumanTurn);
 
   document.getElementById('computer-passed-label').style.display =
     computerPassedLast ? '' : 'none';
