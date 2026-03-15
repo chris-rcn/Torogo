@@ -245,7 +245,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-module.exports = function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const N          = game.boardSize;
@@ -273,4 +273,6 @@ module.exports = function getMove(game, timeBudgetMs) {
 
   if (!bestChild || bestChild.wins === 0) return { type: 'pass', children };
   return { ...bestChild.move, children };
-};
+}
+
+if (typeof module !== 'undefined') module.exports = getMove;
