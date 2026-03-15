@@ -285,6 +285,7 @@ const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
 let computerBusy = false;
 let computerPassedLast = false;
+let moveNumber = 0;
 
 // Set of (y*N + x) indices that are legal moves for the human on their turn.
 // null when it is not the human's turn.
@@ -342,13 +343,14 @@ function scheduleComputerMove() {
       const move = getMove(game, UI_BUDGET_MS);
 
       const applyMove = () => {
+        moveNumber++;
         if (move.type === 'place') {
           computerPassedLast = false;
-          console.log(`[Computer] place (${move.x}, ${move.y})`  + (move.info != null ? ` — ${move.info}` : ''));
+          console.log(`[Move ${moveNumber}] [Computer] place (${move.x}, ${move.y})` + (move.info != null ? ` — ${move.info}` : ''));
           game.placeStone(move.x, move.y);
         } else {
           computerPassedLast = true;
-          console.log('[Computer] pass' + (move.info != null ? ` — ${move.info}` : ''));
+          console.log(`[Move ${moveNumber}] [Computer] pass` + (move.info != null ? ` — ${move.info}` : ''));
           game.pass();
         }
         renderer.draw();
@@ -426,6 +428,8 @@ function updateUI() {
 
 function startGame(boardSize) {
   computerPassedLast = false;
+  moveNumber = 0;
+  console.log(`[Game] new game started (${boardSize}×${boardSize})`);
   game = new Game(boardSize);
   renderer = new Renderer(canvas, game);
   renderer.draw();
@@ -497,7 +501,8 @@ canvas.addEventListener('pointerup', (e) => {
     if (isLegal) {
       // Place the stone immediately so it appears (with last-move dot) before
       // the pan animation starts.
-      console.log(`[Human] place (${pos.x}, ${pos.y})`);
+      moveNumber++;
+      console.log(`[Move ${moveNumber}] [Human] place (${pos.x}, ${pos.y})`);
       game.placeStone(pos.x, pos.y);
       renderer.draw();
       updateUI();
@@ -530,7 +535,8 @@ canvas.addEventListener('pointerup', (e) => {
 document.getElementById('pass-btn').addEventListener('click', () => {
   if (computerBusy || game.current !== 'white') return;
   computerPassedLast = false;
-  console.log('[Human] pass');
+  moveNumber++;
+  console.log(`[Move ${moveNumber}] [Human] pass`);
   game.pass();
   renderer.draw();
   updateUI();
