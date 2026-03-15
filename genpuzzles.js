@@ -53,8 +53,8 @@ console.log('');
 while (puzzleCount < maxPuzzles) {
   const game = new Game(boardSize, 0);
 
-  // One random move after the constructor's centre stone, to diversify openings.
-  if (!game.gameOver) {
+  // Two random moves after the constructor's centre stone, to diversify openings.
+  for (let r = 0; r < 2 && !game.gameOver; r++) {
     const move = randomAgent(game);
     if (move.type === 'place') game.placeStone(move.x, move.y);
     else game.pass();
@@ -88,6 +88,7 @@ while (puzzleCount < maxPuzzles) {
       console.log(indented);
       console.log(`    \`,`);
       console.log(`  },`);
+      break;
     }
 
     // Advance the game using the first call's move.
