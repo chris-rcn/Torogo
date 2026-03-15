@@ -640,9 +640,10 @@ class Board {
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
         const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-        const isMarked  = mark && x === mark.x     && y === mark.y;
+        const isMarked   = mark && x === mark.x     && y === mark.y;
         const prevMarked = mark && x - 1 === mark.x && y === mark.y;
-        if (x > 0) row += isMarked ? '(' : prevMarked ? ')' : ' ';
+        if (isMarked) row += '(';
+        else if (x > 0) row += prevMarked ? ')' : ' ';
         row += ch;
       }
       if (mark && mark.y === y && mark.x === this.size - 1) row += ')';
