@@ -188,13 +188,17 @@ function analyzeMCTS(game) {
 
 // ─── Self-play harvest ────────────────────────────────────────────────────────
 
-const puzzles = [];
 const seenHashes = new Set();
+let puzzleCount = 0;
+let gameIdx = 0;
+
+console.log('// Auto-generated puzzles — paste into PUZZLES array in testpuzzles.js');
+console.log(`// Generated: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}`);
+console.log('');
 
 process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}\n`);
 
-let gameIdx = 0;
-while (puzzles.length < maxPuzzles) {
+while (puzzleCount < maxPuzzles) {
   const game = new Game(boardSize, 0);
 
   // One random move after the constructor's centre stone, to diversify openings.
@@ -204,21 +208,25 @@ while (puzzles.length < maxPuzzles) {
     else game.pass();
   }
 
-  while (!game.gameOver && puzzles.length < maxPuzzles) {
+  while (!game.gameOver && puzzleCount < maxPuzzles) {
     const hashKey = game.hash.toString();
     const analysis = analyzeMCTS(game);
     if (!analysis) { game.pass(); continue; }
 
     if (!seenHashes.has(hashKey) && analysis.ratio >= threshold) {
       seenHashes.add(hashKey);
-      puzzles.push({
-        toPlay: game.current,
-        answer: [[analysis.best.x, analysis.best.y]],
-        boardStr: game.board.toAscii(),
-        ratio: analysis.ratio,
-        totalVisits: analysis.totalVisits,
-      });
-      process.stderr.write(`\n── Puzzle ${puzzles.length} (${game.current} to play, answer ${analysis.best.x},${analysis.best.y}, ratio=${analysis.ratio.toFixed(2)}) ──\n`);
+      puzzleCount++;
+      const boardStr = game.board.toAscii();
+      const indented = boardStr.split('\n').map(r => '      ' + r).join('\n');
+      console.log(`  {`);
+      console.log(`    name: 'Auto #${puzzleCount}',`);
+      console.log(`    toPlay: '${game.current}',`);
+      console.log(`    answer: [[${analysis.best.x}, ${analysis.best.y}]],`);
+      console.log(`    board: \``);
+      console.log(indented);
+      console.log(`    \`,`);
+      console.log(`  },`);
+      process.stderr.write(`\n── Puzzle ${puzzleCount} (${game.current} to play, answer ${analysis.best.x},${analysis.best.y}, ratio=${analysis.ratio.toFixed(2)}) ──\n`);
       process.stderr.write(game.board.toAscii(analysis.best) + '\n');
     }
 
@@ -226,26 +234,7 @@ while (puzzles.length < maxPuzzles) {
     game.placeStone(analysis.best.x, analysis.best.y);
   }
 
-  process.stderr.write(`  game ${++gameIdx} complete (${puzzles.length} puzzles so far)\n`);
+  process.stderr.write(`  game ${++gameIdx} complete (${puzzleCount} puzzles so far)\n`);
 }
 
-// ─── Output ───────────────────────────────────────────────────────────────────
-
-console.log('// Auto-generated puzzles — paste into PUZZLES array in testpuzzles.js');
-console.log(`// Generated: size=${boardSize} budget=${budgetMs}ms threshold=${threshold}`);
-console.log('');
-
-for (let i = 0; i < puzzles.length; i++) {
-  const p = puzzles[i];
-  const indented = p.boardStr.split('\n').map(r => '      ' + r).join('\n');
-  console.log(`  {`);
-  console.log(`    name: 'Auto #${i + 1}',`);
-  console.log(`    toPlay: '${p.toPlay}',`);
-  console.log(`    answer: [[${p.answer[0].join(', ')}]],`);
-  console.log(`    board: \``);
-  console.log(indented);
-  console.log(`    \`,`);
-  console.log(`  },`);
-}
-
-process.stderr.write(`\nDone: ${puzzles.length} puzzles emitted.\n`);
+process.stderr.write(`\nDone: ${puzzleCount} puzzles emitted.\n`);
