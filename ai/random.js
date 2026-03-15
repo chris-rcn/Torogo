@@ -7,12 +7,13 @@
  * single-point true eye for the current player.  Falls back to pass when no
  * such move exists.
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - ignored (always fast)
  *
  */
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, _timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const N = game.boardSize;

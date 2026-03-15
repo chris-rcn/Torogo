@@ -12,8 +12,9 @@
  *                 group into atari (reduces it to 1 liberty).
  *   4. Fallback — random legal non-eye move (same as random).
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - ignored (always fast)
  */
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ function findRandom(game, candidates) {
 
 // ── main ───────────────────────────────────────────────────────────────────
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, _timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const N = game.boardSize;

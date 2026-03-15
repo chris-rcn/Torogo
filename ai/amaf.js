@@ -14,13 +14,15 @@
  * candidates B, C, … that happen to appear later in the same playout, giving
  * all candidates far more data than mc.js provides.
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const { performance } = require('perf_hooks');
 const randomAgent = require('./random.js');
 
-const WORK_BUDGET = 1_000_000; // total playout moves per turn
+const DEFAULT_BUDGET_MS = 500;
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
@@ -50,8 +52,6 @@ function playTracked(game, trackColor) {
   const size = game.boardSize;
   const board = game.board;
   const grid = board.grid;
-  const nbr = board._nbr;
-  const gidArr = board._gid;
   const played = []; // ordered list of cell indices for trackColor's moves
   const oppPlayed = []; // ordered list of cell indices for opponent's moves
 
@@ -79,44 +79,10 @@ function playTracked(game, trackColor) {
       empty[end - 1] = cellIdx;
       end--;
 
-      // Fused isTrueEye + empty-neighbor check (single neighbor scan)
-      const base = cellIdx * 4;
-      let friendCount = 0;
-      let emptyCount = 0;
-      let sameGroupCount = 0;
-      let firstGid = -2;
-      let hasEmptyNbr = false;
+      const info = board.classifyEmpty(x, y, current);
+      if (info.isTrueEye) continue;
 
-      for (let j = 0; j < 4; j++) {
-        const ni = nbr[base + j];
-        const c = grid[(ni / size) | 0][ni % size];
-        if (c === null) {
-          hasEmptyNbr = true;
-          emptyCount++;
-        } else if (c === current) {
-          friendCount++;
-          const gid = gidArr[ni];
-          if (gid !== -1) {
-            if (firstGid === -2) firstGid = gid;
-            if (gid === firstGid) sameGroupCount++;
-          }
-        }
-      }
-
-      // True eye check (skip filling own eyes)
-      if (friendCount === 4) {
-        if (sameGroupCount === 4) continue;
-        let dc = 0;
-        if (grid[(y + 1) % size][(x + 1) % size] === current) dc++;
-        if (grid[(y + 1) % size][(x - 1 + size) % size] === current) dc++;
-        if (grid[(y - 1 + size) % size][(x + 1) % size] === current) dc++;
-        if (grid[(y - 1 + size) % size][(x - 1 + size) % size] === current) dc++;
-        if (dc >= 3) continue;
-      } else if (friendCount === 3 && emptyCount === 1 && sameGroupCount === 3) {
-        continue;
-      }
-
-      if (hasEmptyNbr) {
+      if (info.hasEmptyNeighbor) {
         // Fast path: at least one empty neighbour → no suicide/Ko possible
         if (current === trackColor) played.push(cellIdx);
         else oppPlayed.push(cellIdx);
@@ -170,7 +136,7 @@ function playTracked(game, trackColor) {
   return { winner, played, oppPlayed, moves };
 }
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const player = game.current;
@@ -196,11 +162,11 @@ module.exports = function getMove(game) {
   const plays = new Float64Array(N * N + 1);
   const PASS_IDX = N * N;
 
-  // Round-robin playouts across candidates until the work budget is spent.
-  // Work per playout = moves played + 10 (per-playout overhead).
-  let totalWork = 0;
+  // Round-robin playouts across candidates until the time budget is spent.
+  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
+  const deadline = performance.now() + budgetMs;
   let cidx = 0;
-  while (totalWork < WORK_BUDGET) {
+  while (performance.now() < deadline) {
     const move = candidates[cidx];
     const clone = game.clone();
     if (move.type === 'place') {
@@ -209,7 +175,6 @@ module.exports = function getMove(game) {
       clone.pass();
     }
     const { winner, played, oppPlayed, moves } = playTracked(clone, player);
-    totalWork += moves + 10; // +10 per playout for clone/setup/scoring overhead
     const won = winner === player ? 1 : 0;
 
     // Credit the opening move at full weight (it was played "first").

@@ -578,6 +578,55 @@ class Board {
 
     return false;
   }
+
+  // Combined eye + empty-neighbor check for playout loops.
+  // Returns { isTrueEye: bool, hasEmptyNeighbor: bool } from a single scan.
+  classifyEmpty(x, y, color) {
+    const N = this.size;
+    const idx = y * N + x;
+    const base = idx * 4;
+    const nbr = this._nbr;
+    const grid = this.grid;
+    const gidArr = this._gid;
+
+    let friendCount = 0;
+    let emptyCount = 0;
+    let sameGroupCount = 0;
+    let firstGid = -2;
+    let hasEmptyNeighbor = false;
+
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const c = grid[(ni / N) | 0][ni % N];
+      if (c === color) {
+        friendCount++;
+        const gid = gidArr[ni];
+        if (gid !== -1) {
+          if (firstGid === -2) firstGid = gid;
+          if (gid === firstGid) sameGroupCount++;
+        }
+      } else if (c === null) {
+        emptyCount++;
+        hasEmptyNeighbor = true;
+      }
+    }
+
+    // True eye checks (same logic as isTrueEye).
+    if (friendCount === 4) {
+      if (sameGroupCount === 4) return { isTrueEye: true, hasEmptyNeighbor };
+      let dc = 0;
+      if (grid[(y + 1) % N][(x + 1) % N] === color) dc++;
+      if (grid[(y + 1) % N][(x - 1 + N) % N] === color) dc++;
+      if (grid[(y - 1 + N) % N][(x + 1) % N] === color) dc++;
+      if (grid[(y - 1 + N) % N][(x - 1 + N) % N] === color) dc++;
+      if (dc >= 3) return { isTrueEye: true, hasEmptyNeighbor };
+    }
+    if (friendCount === 3 && emptyCount === 1 && sameGroupCount === 3) {
+      return { isTrueEye: true, hasEmptyNeighbor };
+    }
+
+    return { isTrueEye: false, hasEmptyNeighbor };
+  }
 }
 
 // Fraction of captureGroups calls that run BFS verification (0 = off)
@@ -674,9 +723,9 @@ class Game {
 
   _incrementMoveCount() {
     this.moveCount++;
-    const threshold = 5 * this.boardSize * this.boardSize;
-    if (this.moveCount === threshold + 1) {
-      console.warn(`Game moveCount (${this.moveCount}) exceeded 5× board area (${threshold})`);
+    const threshold = 4 * this.boardSize * this.boardSize;
+    if (this.moveCount > threshold) {
+      this.endGame();
     }
   }
 
