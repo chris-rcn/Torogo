@@ -211,7 +211,8 @@ class Renderer {
   drawGhostStone() {
     const h = this.hoverPos;
     if (!h || this.game.gameOver) return;
-    if (this.game.board.get(h.x, h.y) !== null) return;
+    const N = this.game.boardSize;
+    if (!legalMovesSet || !legalMovesSet.has(h.y * N + h.x)) return;
     const cs = this.cellSize;
     const ts = this.tileSize();
     const W = this.canvas.width;
@@ -284,6 +285,23 @@ const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
 let computerBusy = false;
 
+// Set of (y*N + x) indices that are legal moves for the human on their turn.
+// null when it is not the human's turn.
+let legalMovesSet = null;
+
+function buildLegalMoves() {
+  const N = game.boardSize;
+  legalMovesSet = new Set();
+  if (game.gameOver || game.current !== 'white') return;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (game.board.get(x, y) !== null) continue;
+      const probe = game.clone();
+      if (probe.placeStone(x, y)) legalMovesSet.add(y * N + x);
+    }
+  }
+}
+
 // Smoothly animate renderer.panX/panY to (targetX, targetY) over durationMs,
 // then call onComplete.  Uses an ease-in-out cubic curve.
 function animatePan(targetX, targetY, durationMs, onComplete) {
@@ -311,6 +329,7 @@ function animatePan(targetX, targetY, durationMs, onComplete) {
 function scheduleComputerMove() {
   if (game.gameOver || game.current !== 'black') return;
   computerBusy = true;
+  legalMovesSet = null;
   updateUI();
   renderer.draw();
   requestAnimationFrame(() => {
@@ -329,7 +348,7 @@ function scheduleComputerMove() {
         }
         renderer.draw();
         // Brief cooldown so queued pointer events don't sneak through
-        setTimeout(() => { computerBusy = false; updateUI(); }, 50);
+        setTimeout(() => { buildLegalMoves(); computerBusy = false; updateUI(); }, 50);
       };
 
       if (move.type === 'place') {
