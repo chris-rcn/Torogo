@@ -267,6 +267,9 @@ module.exports = function getMove(game) {
     }
   }
 
+  // If every playout is a loss, pass — no move can help.
+  if (bestRatio === 0) return { type: 'pass' };
+
   // Prefer pass when it ties for best ratio.
   if (plays[PASS_IDX] > 0 && wins[PASS_IDX] / plays[PASS_IDX] === bestRatio) {
     const passCandIdx = candidates.findIndex(c => c.type === 'pass');
