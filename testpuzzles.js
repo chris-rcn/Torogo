@@ -4,8 +4,25 @@ const { Board, Game, ZOBRIST } = require('./game.js');
 
 // ─── Board parser / serializer (thin wrappers around Board methods) ──────────
 
-function parseBoard(boardStr) { return Board.parse(boardStr); }
-function boardToString(board)  { return board.toAscii(); }
+// boardToString(board, toPlay?) — serialize board to ASCII; if toPlay ('●'/'○')
+// is given, prepend it as the first line so parseBoard can recover it.
+function boardToString(board, toPlay) {
+  const body = board.toAscii();
+  return toPlay ? toPlay + '\n' + body : body;
+}
+
+// parseBoard(str) — returns { size, stones, toPlay? }.
+// toPlay is '●' or '○' if the string was produced with boardToString(board, toPlay).
+function parseBoard(boardStr) {
+  const lines = boardStr.trim().split('\n').map(r => r.trim());
+  let toPlay;
+  if (lines[0] === '●' || lines[0] === '○') {
+    toPlay = lines.shift();
+  }
+  const result = Board.parse(lines.join('\n'));
+  if (toPlay !== undefined) result.toPlay = toPlay;
+  return result;
+}
 
 // ─── Position builder ─────────────────────────────────────────────────────────
 
@@ -16,7 +33,7 @@ function buildPosition(puzzle) {
   game.board.set(c, c, null);
   game.hash = 0n;
   game.moveCount = 0;
-  game.current = puzzle.toPlay;
+  game.current = puzzle.toPlay === '●' ? 'black' : puzzle.toPlay === '○' ? 'white' : puzzle.toPlay;
   game.consecutivePasses = 0;
   game.koFlag = null;
   for (const [x, y, color] of stones) {
@@ -37,9 +54,9 @@ const PUZZLES = [
 
   {
     // White at (2,1): neighbors B@(1,1),B@(3,1),B@(2,2) — only liberty (2,0).
-    name: 'Capture single stone',
-    toPlay: 'black',
-    answer: [[2, 0]],
+    id: 1,
+    toPlay: '●',
+    answers: [[2, 0]],
     board: `
       · · · · ·
       · ● ○ ● ·
@@ -50,9 +67,9 @@ const PUZZLES = [
   },
   {
     // White group {(1,2),(2,2)}: only liberty (2,1).
-    name: 'Capture two-stone group',
-    toPlay: 'black',
-    answer: [[2, 1]],
+    id: 2,
+    toPlay: '●',
+    answers: [[2, 1]],
     board: `
       · · · · ·
       · ● · · ·
@@ -64,9 +81,9 @@ const PUZZLES = [
   {
     // Black at (1,2): neighbors W@(0,2),W@(2,2),W@(1,3) — only liberty (1,1).
     // Extend to (1,1) to save.
-    name: 'Save own group from atari',
-    toPlay: 'black',
-    answer: [[1, 1]],
+    id: 3,
+    toPlay: '●',
+    answers: [[1, 1]],
     board: `
       · · · · ·
       · · · · ·
@@ -77,9 +94,9 @@ const PUZZLES = [
   },
   {
     // White group {(1,1),(2,1),(3,1)}: only liberty (2,2).
-    name: 'Capture three-stone group',
-    toPlay: 'black',
-    answer: [[2, 2]],
+    id: 4,
+    toPlay: '●',
+    answers: [[2, 2]],
     board: `
       · ● ● ● ·
       ● ○ ○ ○ ●
@@ -90,9 +107,9 @@ const PUZZLES = [
   },
   {
     // White group {(2,1),(2,2)}: only liberty (2,3).
-    name: 'Capture vertical pair',
-    toPlay: 'black',
-    answer: [[2, 3]],
+    id: 5,
+    toPlay: '●',
+    answers: [[2, 3]],
     board: `
       · · ● · ·
       · ● ○ ● ·
@@ -104,9 +121,9 @@ const PUZZLES = [
   {
     // B@(1,2) in atari at (2,2); B@(3,2) in atari at (2,2).
     // Connect both groups by playing (2,2).
-    name: 'Connect two groups',
-    toPlay: 'black',
-    answer: [[2, 2]],
+    id: 6,
+    toPlay: '●',
+    answers: [[2, 2]],
     board: `
       · · · · ·
       · ○ · ○ ·
@@ -118,9 +135,9 @@ const PUZZLES = [
   {
     // White group {(0,1),(0,2),(0,3)}: neighbors wrap to (4,2) on left.
     // Only liberty is (4,2) via toroidal wrap.
-    name: 'Toroidal wrap capture',
-    toPlay: 'black',
-    answer: [[4, 2]],
+    id: 7,
+    toPlay: '●',
+    answers: [[4, 2]],
     board: `
       ● · · · ·
       ○ ● · · ●
@@ -134,9 +151,9 @@ const PUZZLES = [
 
   {
     // White L-group {(2,2),(2,3),(2,4)}: only liberty (1,3).
-    name: 'Capture L-shaped group',
-    toPlay: 'black',
-    answer: [[1, 3]],
+    id: 8,
+    toPlay: '●',
+    answers: [[1, 3]],
     board: `
       · · · · · · ·
       · ● ● · · · ·
@@ -149,9 +166,9 @@ const PUZZLES = [
   },
   {
     // Black at (3,3): only liberty (3,4). Extend to save.
-    name: 'Save stone from atari',
-    toPlay: 'black',
-    answer: [[3, 4]],
+    id: 9,
+    toPlay: '●',
+    answers: [[3, 4]],
     board: `
       · · · · · · ·
       · · · · · · ·
@@ -164,9 +181,9 @@ const PUZZLES = [
   },
   {
     // W@(2,3) liberty=(3,3); W@(4,3) liberty=(3,3). Fork: one move captures both.
-    name: 'Double capture (fork)',
-    toPlay: 'black',
-    answer: [[3, 3]],
+    id: 10,
+    toPlay: '●',
+    answers: [[3, 3]],
     board: `
       · · · · · · ·
       · · · · · · ·
@@ -179,9 +196,9 @@ const PUZZLES = [
   },
   {
     // White column {(3,2),(3,3),(3,4),(3,5)}: only liberty (3,6).
-    name: 'Capture four-stone column',
-    toPlay: 'black',
-    answer: [[3, 6]],
+    id: 11,
+    toPlay: '●',
+    answers: [[3, 6]],
     board: `
       · · · · · · ·
       · · · ● · · ·
@@ -195,9 +212,9 @@ const PUZZLES = [
   {
     // White group {(0,3),(6,3)} connected via toroidal wrap.
     // Only liberty is (6,2).
-    name: 'Toroidal wrap — spanning group',
-    toPlay: 'black',
-    answer: [[6, 2]],
+    id: 12,
+    toPlay: '●',
+    answers: [[6, 2]],
     board: `
       · · · · · · ·
       · · · · · · ·
@@ -230,7 +247,7 @@ if (require.main === module) {
   const agent = require(`./ai/${agentName}.js`);
 
   console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) ──\n`);
-  console.log('  #  Size  Name                           Result');
+  console.log('  #  Size  ID                             Result');
 
   let correct = 0;
   for (let i = 0; i < PUZZLES.length; i++) {
@@ -239,17 +256,17 @@ if (require.main === module) {
     const move = agent(game, budgetMs);
 
     const passed = move.type === 'place' &&
-      puzzle.answer.some(([ax, ay]) => move.x === ax && move.y === ay);
+      puzzle.answers.some(([ax, ay]) => move.x === ax && move.y === ay);
 
     if (passed) correct++;
 
     const num = String(i + 1).padStart(3);
     const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
-    const name = puzzle.name.padEnd(30);
+    const name = String(puzzle.id).padEnd(30);
     let result = passed ? '+' : '-';
     if (!passed) {
       const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
-      const expected = puzzle.answer.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
+      const expected = puzzle.answers.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
       result += `  (played ${played}; expected ${expected})`;
     }
     console.log(`  ${num}  ${size}  ${name}  ${result}`);

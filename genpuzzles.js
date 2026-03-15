@@ -75,10 +75,12 @@ while (puzzleCount < maxPuzzles) {
         seenHashes.add(hashKey);
         puzzleCount++;
         const indented = game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n');
+        const id = Math.floor(Math.random() * 1e9);
+        const toPlayChar = game.current === 'black' ? '●' : '○';
         console.log(`  {`);
-        console.log(`    name: 'Auto #${puzzleCount}',`);
-        console.log(`    toPlay: '${game.current}',`);
-        console.log(`    answer: [[${result.x}, ${result.y}]],`);
+        console.log(`    id: ${id},`);
+        console.log(`    toPlay: '${toPlayChar}',`);
+        console.log(`    answers: [[${result.x}, ${result.y}]],`);
         console.log(`    board: \``);
         console.log(indented);
         console.log(`    \`,`);
