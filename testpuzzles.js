@@ -1901,20 +1901,22 @@ if (require.main === module) {
   let agentName = null;
   let budgetMs = 200;
 
+  let verbose = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent' && args[i + 1]) agentName = args[++i];
     else if (args[i] === '--budget' && args[i + 1]) budgetMs = Number(args[++i]);
+    else if (args[i] === '--verbose') verbose = true;
   }
 
   if (!agentName) {
-    console.error('Usage: node testpuzzles.js --agent <name> [--budget <ms>]');
+    console.error('Usage: node testpuzzles.js --agent <name> [--budget <ms>] [--verbose]');
     process.exit(1);
   }
 
   const agent = require(`./ai/${agentName}.js`);
 
   console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles ──\n`);
-  console.log('  #  Size  Comment                                                       Result');
+  if (verbose) console.log('  #  Size  Comment                                                       Result');
 
   let correct = 0;
   for (let i = 0; i < PUZZLES.length; i++) {
@@ -1927,16 +1929,18 @@ if (require.main === module) {
 
     if (passed) correct++;
 
-    const num = String(i + 1).padStart(3);
-    const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
-    const name = (puzzle.comment || '').slice(0, 60).padEnd(60);
-    let result = passed ? '+' : '-';
-    if (!passed) {
-      const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
-      const expected = puzzle.answers.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
-      result += `  (played ${played}; expected ${expected})`;
+    if (verbose) {
+      const num = String(i + 1).padStart(3);
+      const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
+      const name = (puzzle.comment || '').slice(0, 60).padEnd(60);
+      let result = passed ? '+' : '-';
+      if (!passed) {
+        const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
+        const expected = puzzle.answers.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
+        result += `  (played ${played}; expected ${expected})`;
+      }
+      console.log(`  ${num}  ${size}  ${name}  ${result}`);
     }
-    console.log(`  ${num}  ${size}  ${name}  ${result}`);
   }
 
   console.log('  ──────────────────────────────────────────────────────');
