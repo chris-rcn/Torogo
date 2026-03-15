@@ -1389,7 +1389,7 @@ if (require.main === module) {
 
   const agent = require(`./ai/${agentName}.js`);
 
-  console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) ──\n`);
+  console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles ──\n`);
   console.log('  #  Size  ID                             Result');
 
   let correct = 0;
