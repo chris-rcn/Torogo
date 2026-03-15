@@ -24,12 +24,13 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
-const { performance } = require('perf_hooks');
+const performance = (typeof window !== 'undefined') ? window.performance
+  : require('perf_hooks').performance;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = process.env.RAVE_EQUIV !== undefined
+const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !== undefined)
   ? parseFloat(process.env.RAVE_EQUIV)
   : 300;
 
