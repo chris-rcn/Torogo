@@ -213,5 +213,7 @@ module.exports = function getMove(game, timeBudgetMs) {
     }
   }
 
-  return bestChild ? bestChild.move : { type: 'pass' };
+  // If every playout from the best move was a loss, passing can't be worse.
+  if (!bestChild || bestChild.wins === 0) return { type: 'pass' };
+  return bestChild.move;
 };
