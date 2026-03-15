@@ -280,7 +280,7 @@ class Renderer {
 
 // ─── Monte Carlo AI (computer plays black) ────────────────────────────────────
 
-const MC_CANDIDATE_PLAYOUTS = 50;
+const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
 function aiIsTrueEye(board, x, y, color) {
   const N = board.size;
@@ -407,20 +407,21 @@ function aiGetMove(game) {
 
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
-  for (let idx = 0; idx < candidates.length; idx++) {
-    const move = candidates[idx];
-    for (let t = 0; t < MC_CANDIDATE_PLAYOUTS; t++) {
-      const clone = game.clone();
-      if (move.type === 'place') clone.placeStone(move.x, move.y);
-      else clone.pass();
-      aiPlayRandom(clone);
-      const s = clone.scores;
-      const winner = s.black.total > s.white.total ? 'black'
-                   : s.white.total > s.black.total ? 'white'
-                   : null;
-      stats[idx].plays++;
-      if (winner === player) stats[idx].wins++;
-    }
+  const deadline = performance.now() + UI_BUDGET_MS;
+  let cidx = 0;
+  while (performance.now() < deadline) {
+    const move = candidates[cidx];
+    const clone = game.clone();
+    if (move.type === 'place') clone.placeStone(move.x, move.y);
+    else clone.pass();
+    aiPlayRandom(clone);
+    const s = clone.scores;
+    const winner = s.black.total > s.white.total ? 'black'
+                 : s.white.total > s.black.total ? 'white'
+                 : null;
+    stats[cidx].plays++;
+    if (winner === player) stats[cidx].wins++;
+    cidx = (cidx + 1) % candidates.length;
   }
 
   let bestIdx = 0, bestRatio = -1;

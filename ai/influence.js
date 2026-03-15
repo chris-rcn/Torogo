@@ -18,8 +18,9 @@
  *   4. Threaten  — put the largest opponent group into atari
  *   5. Influence — maximise Voronoi territorial influence
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - ignored (always fast)
  */
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -201,7 +202,7 @@ function findInfluence(game, candidates) {
 
 // ── main ───────────────────────────────────────────────────────────────────
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, _timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const N = game.boardSize;

@@ -7,13 +7,15 @@
  * and tracks the win ratio.  After candidate_playouts per move the move with
  * the highest win ratio is returned.
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - milliseconds allowed for this decision (default: 5000)
  */
 
+const { performance } = require('perf_hooks');
 const randomAgent = require('./random.js');
 
-const candidate_playouts = 50; // number of playouts per candidate move
+const DEFAULT_BUDGET_MS = 5000;
 
 
 // Lightweight move application for use inside playouts.
@@ -112,7 +114,7 @@ function playRandom(game) {
   if (!game.gameOver) game.endGame();
 }
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const player = game.current;
@@ -132,26 +134,29 @@ module.exports = function getMove(game) {
   // Per-candidate playout statistics.
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
-  // candidate_playouts playouts per candidate move.
-  for (let idx = 0; idx < candidates.length; idx++) {
-    const move = candidates[idx];
-    for (let t = 0; t < candidate_playouts; t++) {
-      const clone = game.clone();
-      if (move.type === 'place') {
-        clone.placeStone(move.x, move.y);
-      } else {
-        clone.pass();
-      }
-      playRandom(clone);
-
-      const s = clone.scores;
-      const winner = s.black.total > s.white.total ? 'black'
-                   : s.white.total > s.black.total ? 'white'
-                   : null;
-
-      stats[idx].plays++;
-      if (winner === player) stats[idx].wins++;
+  // Round-robin playouts across candidates until the time budget is spent.
+  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
+  const deadline = performance.now() + budgetMs;
+  let cidx = 0;
+  while (performance.now() < deadline) {
+    const move = candidates[cidx];
+    const clone = game.clone();
+    if (move.type === 'place') {
+      clone.placeStone(move.x, move.y);
+    } else {
+      clone.pass();
     }
+    playRandom(clone);
+
+    const s = clone.scores;
+    const winner = s.black.total > s.white.total ? 'black'
+                 : s.white.total > s.black.total ? 'white'
+                 : null;
+
+    stats[cidx].plays++;
+    if (winner === player) stats[cidx].wins++;
+
+    cidx = (cidx + 1) % candidates.length;
   }
 
   // Select the candidate with the highest win ratio.

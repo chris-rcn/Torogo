@@ -14,13 +14,15 @@
  * candidates B, C, … that happen to appear later in the same playout, giving
  * all candidates far more data than mc.js provides.
  *
- * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
- *   game  - a live Game instance (read-only; do not mutate)
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - milliseconds allowed for this decision (default: 5000)
  */
 
+const { performance } = require('perf_hooks');
 const randomAgent = require('./random.js');
 
-const WORK_BUDGET = 1_000_000; // total playout moves per turn
+const DEFAULT_BUDGET_MS = 5000;
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
@@ -170,7 +172,7 @@ function playTracked(game, trackColor) {
   return { winner, played, oppPlayed, moves };
 }
 
-module.exports = function getMove(game) {
+module.exports = function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const player = game.current;
@@ -196,11 +198,11 @@ module.exports = function getMove(game) {
   const plays = new Float64Array(N * N + 1);
   const PASS_IDX = N * N;
 
-  // Round-robin playouts across candidates until the work budget is spent.
-  // Work per playout = moves played + 10 (per-playout overhead).
-  let totalWork = 0;
+  // Round-robin playouts across candidates until the time budget is spent.
+  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
+  const deadline = performance.now() + budgetMs;
   let cidx = 0;
-  while (totalWork < WORK_BUDGET) {
+  while (performance.now() < deadline) {
     const move = candidates[cidx];
     const clone = game.clone();
     if (move.type === 'place') {
@@ -209,7 +211,6 @@ module.exports = function getMove(game) {
       clone.pass();
     }
     const { winner, played, oppPlayed, moves } = playTracked(clone, player);
-    totalWork += moves + 10; // +10 per playout for clone/setup/scoring overhead
     const won = winner === player ? 1 : 0;
 
     // Credit the opening move at full weight (it was played "first").

@@ -11,11 +11,12 @@
  * exploration.
  *
  * Usage:
- *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>]
+ *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>] [--budget <ms>]
  *
  *   --size      Board size (default: 9)
  *   --discounts Comma-separated AMAF_DISCOUNT values to test
  *               (default: 0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)
+ *   --budget    Time budget per move in ms (default: 5000)
  */
 
 const { spawnSync } = require('child_process');
@@ -32,6 +33,7 @@ function argVal(name, def) {
 const boardSize       = parseInt(argVal('size', '9'), 10);
 const GAMES_PER_ROUND = 2; // 1 game as each colour per round
 const FIXED_OPP_WEIGHT = 0;
+const budgetMs        = argVal('budget', '5000');
 const discounts       = (argVal('discounts', '0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9'))
   .split(',').map(Number).sort((a, b) => a - b);
 
@@ -61,7 +63,7 @@ function runBatch(discount) {
 
     const result = spawnSync(
       process.execPath,
-      [selfplayScript, '--p1', p1, '--p2', p2, '--games', String(g), '--size', String(boardSize)],
+      [selfplayScript, '--p1', p1, '--p2', p2, '--games', String(g), '--size', String(boardSize), '--budget', budgetMs],
       {
         env: {
           ...process.env,
@@ -143,7 +145,7 @@ function printLeaderboard(round) {
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
-console.log(`AMAF discount tuning  size=${boardSize}  opp_weight=${FIXED_OPP_WEIGHT}  ${GAMES_PER_ROUND} games/value/round  control=mc`);
+console.log(`AMAF discount tuning  size=${boardSize}  opp_weight=${FIXED_OPP_WEIGHT}  budget=${budgetMs}ms  ${GAMES_PER_ROUND} games/value/round  control=mc`);
 console.log(`Discounts: ${discounts.join(', ')}`);
 console.log(`Adaptive: top third by Wilson CI upper bound get 3x batches, rest get 1x`);
 
