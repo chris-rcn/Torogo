@@ -199,8 +199,8 @@ process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms
 for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx++) {
   const game = new Game(boardSize, 0);
 
-  // Two random opening moves to diversify starting positions.
-  for (let i = 0; i < 2 && !game.gameOver; i++) {
+  // One random move after the constructor's centre stone, to diversify openings.
+  for (let i = 0; i < 1 && !game.gameOver; i++) {
     const move = randomAgent(game);
     if (move.type === 'place') game.placeStone(move.x, move.y);
     else game.pass();
