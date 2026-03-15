@@ -110,7 +110,7 @@ while (puzzleCount < maxPuzzles) {
 
   // No threshold position found this game — report the best ratio seen.
   if (!gamePuzzleFound) {
-    console.log(`// Game ended without threshold hit; max ratio seen: ${bestRatio.toFixed(3)}`);
+    console.log(`// Game ended without threshold hit; max preference seen: ${bestRatio.toFixed(3)}`);
   }
 
 }
