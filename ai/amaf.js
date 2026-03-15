@@ -288,7 +288,7 @@ module.exports = function getMove(game) {
                        : null;
     const allPlayoutsAgree = actualWinner === player
       ? wins[PASS_IDX] === plays[PASS_IDX]
-      : wins[PASS_IDX] === 0;
+      : true; // losing by territory — always allow passing
     if (!allPlayoutsAgree) {
       // Pick best non-pass candidate instead.
       let altRatio = -1;
