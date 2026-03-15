@@ -50,10 +50,10 @@ function playRandom(game) {
       empty[end - 1] = [x, y];
       end--;
 
-      if (game.board.isTrueEye(x, y, game.current)) continue;
+      const info = game.board.classifyEmpty(x, y, game.current);
+      if (info.isTrueEye) continue;
 
-      const neighbors = game.board.getNeighbors(x, y);
-      if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
+      if (info.hasEmptyNeighbor) {
         const captures = applyFast(game, x, y);
         empty[end] = empty[empty.length - 1];
         empty.pop();

@@ -52,8 +52,6 @@ function playTracked(game, trackColor) {
   const size = game.boardSize;
   const board = game.board;
   const grid = board.grid;
-  const nbr = board._nbr;
-  const gidArr = board._gid;
   const played = []; // ordered list of cell indices for trackColor's moves
   const oppPlayed = []; // ordered list of cell indices for opponent's moves
 
@@ -81,44 +79,10 @@ function playTracked(game, trackColor) {
       empty[end - 1] = cellIdx;
       end--;
 
-      // Fused isTrueEye + empty-neighbor check (single neighbor scan)
-      const base = cellIdx * 4;
-      let friendCount = 0;
-      let emptyCount = 0;
-      let sameGroupCount = 0;
-      let firstGid = -2;
-      let hasEmptyNbr = false;
+      const info = board.classifyEmpty(x, y, current);
+      if (info.isTrueEye) continue;
 
-      for (let j = 0; j < 4; j++) {
-        const ni = nbr[base + j];
-        const c = grid[(ni / size) | 0][ni % size];
-        if (c === null) {
-          hasEmptyNbr = true;
-          emptyCount++;
-        } else if (c === current) {
-          friendCount++;
-          const gid = gidArr[ni];
-          if (gid !== -1) {
-            if (firstGid === -2) firstGid = gid;
-            if (gid === firstGid) sameGroupCount++;
-          }
-        }
-      }
-
-      // True eye check (skip filling own eyes)
-      if (friendCount === 4) {
-        if (sameGroupCount === 4) continue;
-        let dc = 0;
-        if (grid[(y + 1) % size][(x + 1) % size] === current) dc++;
-        if (grid[(y + 1) % size][(x - 1 + size) % size] === current) dc++;
-        if (grid[(y - 1 + size) % size][(x + 1) % size] === current) dc++;
-        if (grid[(y - 1 + size) % size][(x - 1 + size) % size] === current) dc++;
-        if (dc >= 3) continue;
-      } else if (friendCount === 3 && emptyCount === 1 && sameGroupCount === 3) {
-        continue;
-      }
-
-      if (hasEmptyNbr) {
+      if (info.hasEmptyNeighbor) {
         // Fast path: at least one empty neighbour → no suicide/Ko possible
         if (current === trackColor) played.push(cellIdx);
         else oppPlayed.push(cellIdx);
