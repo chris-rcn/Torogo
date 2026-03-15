@@ -66,7 +66,8 @@ while (puzzleCount < maxPuzzles) {
     else game.pass();
   }
 
-  while (!game.gameOver && puzzleCount < maxPuzzles) {
+  const boardCells = boardSize * boardSize;
+  while (!game.gameOver && puzzleCount < maxPuzzles && game.moveCount < boardCells * 0.9) {
     const hashKey = game.hash.toString();
     const result = mcts(game, budgetMs);
 
