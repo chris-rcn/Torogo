@@ -90,17 +90,17 @@ function printBoard(game) {
   const cols = 'ABCDEFGHJKLMNOPQRST'.slice(0, size); // skip 'I' like real Go
   console.log('   ' + cols.split('').join(' '));
   const last = game.lastMove; // { x, y } or null
+  const rows = game.board.toAscii().split('\n');
   for (let y = 0; y < size; y++) {
     // Build line as: "NN  s s s s" — 2-char row number, then per cell
     // a separator char + stone char.  The separator is normally a space
     // but becomes '(' or ')' around the last move.
     let line = String(size - y).padStart(2);
+    const cells = rows[y].split(' ');
     for (let x = 0; x < size; x++) {
-      const v = game.board.get(x, y);
-      const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
       const isLast = last && x === last.x && y === last.y;
       const prev   = last && x === last.x + 1 && y === last.y;
-      line += (isLast ? '(' : prev ? ')' : ' ') + ch;
+      line += (isLast ? '(' : prev ? ')' : ' ') + cells[x];
     }
     if (last && last.y === y && last.x === size - 1) line += ')';
     console.log(line);
