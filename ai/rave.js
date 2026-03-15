@@ -274,7 +274,9 @@ function getMove(game, timeBudgetMs) {
 
   if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
   if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
-  return { ...bestChild.move, children };
+  const result = { ...bestChild.move, children };
+  if (result.type === 'pass') result.info = 'pass is highest-visited move';
+  return result;
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
