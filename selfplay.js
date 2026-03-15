@@ -86,28 +86,10 @@ const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
 const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
 function printBoard(game) {
-  const size = game.boardSize;
-  const cols = 'ABCDEFGHJKLMNOPQRST'.slice(0, size); // skip 'I' like real Go
-  console.log('   ' + cols.split('').join(' '));
-  const last = game.lastMove; // { x, y } or null
-  for (let y = 0; y < size; y++) {
-    // Build line as: "NN  s s s s" — 2-char row number, then per cell
-    // a separator char + stone char.  The separator is normally a space
-    // but becomes '(' or ')' around the last move.
-    let line = String(size - y).padStart(2);
-    for (let x = 0; x < size; x++) {
-      const v = game.board.get(x, y);
-      const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-      const isLast = last && x === last.x && y === last.y;
-      const prev   = last && x === last.x + 1 && y === last.y;
-      line += (isLast ? '(' : prev ? ')' : ' ') + ch;
-    }
-    if (last && last.y === y && last.x === size - 1) line += ')';
-    console.log(line);
-  }
-  if (!last) {
+  console.log(game.board.toAscii(game.lastMove));
+  if (!game.lastMove) {
     const passer = game.current === 'black' ? 'White' : 'Black';
-    console.log('   ' + passer + ' passed');
+    console.log(passer + ' passed');
   }
   console.log();
 }
