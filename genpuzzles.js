@@ -213,7 +213,7 @@ while (puzzleCount < maxPuzzles) {
     if (!seenHashes.has(hashKey) && analysis.ratio >= threshold) {
       seenHashes.add(hashKey);
       puzzleCount++;
-      const boardStr = game.board.toAscii();
+      const boardStr = game.board.toAscii(analysis.best);
       const indented = boardStr.split('\n').map(r => '      ' + r).join('\n');
       console.log(`  {`);
       console.log(`    name: 'Auto #${puzzleCount}',`);

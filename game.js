@@ -631,15 +631,15 @@ class Board {
   // ─── ASCII serialization ──────────────────────────────────────────────────
 
   // Render the board as a ● ○ · string (rows separated by '\n').
-  // Optional lastMove {x, y} wraps that cell as (●) or (○).
-  toAscii(lastMove) {
+  // Optional mark {x, y} wraps that cell as (●), (○), or (·) to highlight it.
+  toAscii(mark) {
     const rows = [];
     for (let y = 0; y < this.size; y++) {
       const cells = [];
       for (let x = 0; x < this.size; x++) {
         const v = this.grid[y][x];
         const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
-        cells.push(lastMove && x === lastMove.x && y === lastMove.y ? `(${ch})` : ch);
+        cells.push(mark && x === mark.x && y === mark.y ? `(${ch})` : ch);
       }
       rows.push(cells.join(' '));
     }
