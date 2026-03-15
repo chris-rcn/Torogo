@@ -30,7 +30,7 @@ const args = process.argv.slice(2);
 let agentName  = 'mcts';
 let boardSize  = 7;
 let budgetMs   = 500;
-let maxPuzzles = 20;
+let maxPuzzles = 1000;
 
 for (let i = 0; i < args.length; i++) {
   if      (args[i] === '--agent'  && args[i+1]) agentName  = args[++i];
