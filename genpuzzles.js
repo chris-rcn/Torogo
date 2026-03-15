@@ -87,11 +87,9 @@ while (puzzleCount < maxPuzzles) {
           puzzleCount++;
           gamePuzzleFound = true;
           const indented = game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n');
-          const id = Math.floor(Math.random() * 1e9);
           const toPlayChar = game.current === 'black' ? '●' : '○';
           const comment = `${new Date().toISOString()} budget=${budgetMs}ms preference=${ratio.toFixed(3)}`;
           console.log(`  {`);
-          console.log(`    id: ${id},`);
           console.log(`    toPlay: '${toPlayChar}',`);
           console.log(`    comment: '${comment}',`);
           console.log(`    answers: [[${result.x}, ${result.y}]],`);
