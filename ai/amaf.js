@@ -38,11 +38,9 @@ const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
 function applyFast(game, x, y) {
   game.board.set(x, y, game.current);
   const cap = game.board.captureGroups(x, y);
-  game.captured.black += cap.black.length;
-  game.captured.white += cap.white.length;
   game.consecutivePasses = 0;
   game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black + cap.white;
+  return cap.black.length + cap.white.length;
 }
 
 // Like playRandom in mc.js, but collects the cell indices (y*size+x) of
@@ -107,14 +105,14 @@ function playTracked(game, trackColor) {
       }
 
       // Slow path: all four neighbours are occupied — suicide or Ko possible.
-      const capBefore = game.captured.black + game.captured.white;
       const color = game.current;
-      if (game.placeStone(x, y)) {
+      const result = game.placeStone(x, y);
+      if (result) {
         if (color === trackColor) played.push(y * size + x);
         else oppPlayed.push(y * size + x);
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (game.captured.black + game.captured.white > capBefore) {
+        if (result > 1) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
@@ -252,8 +250,8 @@ module.exports = function getMove(game) {
   // any disagreement, fall back to the best non-pass candidate.
   if (candidates[bestIdx].type === 'pass' && plays[PASS_IDX] > 0) {
     const territory = game.calcTerritory();
-    const blackTotal = territory.black + game.captured.white;
-    const whiteTotal = territory.white + game.captured.black + game.komi;
+    const blackTotal = territory.black;
+    const whiteTotal = territory.white + game.komi;
     const actualWinner = blackTotal > whiteTotal ? 'black'
                        : whiteTotal > blackTotal ? 'white'
                        : null;
