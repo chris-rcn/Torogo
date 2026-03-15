@@ -184,8 +184,10 @@ const label  = (s) => s.padEnd(labelW);
 const wCol   = (n) => String(n).padStart(wW);
 const pct    = (n) => ((100 * n) / numGames).toFixed(1).padStart(6) + '%';
 const avgMs  = (s) => s.moves ? (s.ms / s.moves).toFixed(2).padStart(7) : '      —';
-console.log(`  ${label('')}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  policy`);
-console.log(`  ${label('P1:')}  ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${p1Name}`);
-console.log(`  ${label('P2:')}  ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${p2Name}`);
+const movesW = Math.max(5, String(Math.max(stats.p1.moves, stats.p2.moves)).length);
+const mCol   = (n) => String(n).padStart(movesW);
+console.log(`  ${label('')}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  ${'moves'.padStart(movesW)}  policy`);
+console.log(`  ${label('P1:')}  ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${mCol(stats.p1.moves)}  ${p1Name}`);
+console.log(`  ${label('P2:')}  ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${mCol(stats.p2.moves)}  ${p2Name}`);
 if (p1Name === p2Name)
   console.log(`  ${label('Black:')}  ${wCol(tally.black)}  ${pct(tally.black)}  ${''.padStart(7)}  (color win rate, komi=${komi})`);
