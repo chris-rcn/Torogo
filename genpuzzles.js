@@ -69,7 +69,6 @@ while (puzzleCount < maxPuzzles) {
   const boardCells = boardSize * boardSize;
   let gamePuzzleFound = false;
   let bestRatio = -1;
-  let bestCandidate = null; // { hashKey, toPlayChar, result, indented }
 
   while (!game.gameOver && puzzleCount < maxPuzzles && game.moveCount < boardCells * 0.9) {
     const hashKey = game.hash.toString();
@@ -96,12 +95,6 @@ while (puzzleCount < maxPuzzles) {
           console.log(`  },`);
         } else if (ratio > bestRatio) {
           bestRatio = ratio;
-          bestCandidate = {
-            hashKey,
-            toPlayChar: game.current === 'black' ? '●' : '○',
-            result,
-            indented: game.board.toAscii(result).split('\n').map(r => '      ' + r).join('\n'),
-          };
         }
       }
 
@@ -111,19 +104,9 @@ while (puzzleCount < maxPuzzles) {
     }
   }
 
-  // No threshold position found this game — emit the best candidate seen.
-  if (!gamePuzzleFound && bestCandidate !== null && !seenHashes.has(bestCandidate.hashKey)) {
-    seenHashes.add(bestCandidate.hashKey);
-    puzzleCount++;
-    const id = Math.floor(Math.random() * 1e9);
-    console.log(`  {`);
-    console.log(`    id: ${id},`);
-    console.log(`    toPlay: '${bestCandidate.toPlayChar}',`);
-    console.log(`    answers: [[${bestCandidate.result.x}, ${bestCandidate.result.y}]],`);
-    console.log(`    board: \``);
-    console.log(bestCandidate.indented);
-    console.log(`    \`,`);
-    console.log(`  },`);
+  // No threshold position found this game — report the best ratio seen.
+  if (!gamePuzzleFound) {
+    console.log(`// Game ended without threshold hit; max ratio seen: ${bestRatio.toFixed(3)}`);
   }
 
 }
