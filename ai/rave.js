@@ -247,7 +247,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass' };
+  if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
   const N          = game.boardSize;
   const rootPlayer = game.current;
@@ -272,7 +272,8 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (!bestChild || bestChild.wins === 0) return { type: 'pass', children };
+  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
+  if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
   return { ...bestChild.move, children };
 }
 
