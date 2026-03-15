@@ -12,7 +12,7 @@ const { performance } = require('perf_hooks');
  *   --games   <n>        Number of games to play     (default: 100)
  *   --size    <n>        Board size: 9, 13, or 19    (default: 9)
  *   --komi    <n>        Komi (white's bonus points) (default: 3.5)
- *   --budget  <ms>       Time budget per move in ms  (default: 5000)
+ *   --budget  <ms>       Time budget per move in ms  (default: 500)
  *   --verbose            Print the board after every move
  *   --help               Show this help message
  *
@@ -67,7 +67,7 @@ const p2Name    = opts.p2    || 'random';
 const numGames  = parseInt(opts.games || '100', 10);
 const boardSize = parseInt(opts.size  || '9',   10);
 const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : DEFAULT_KOMI;
-const budgetMs  = parseInt(opts.budget || '5000', 10);
+const budgetMs  = parseInt(opts.budget || '500', 10);
 
 if (isNaN(numGames) || numGames < 1) {
   console.error('--games must be a positive integer');

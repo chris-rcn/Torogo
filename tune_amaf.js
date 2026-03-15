@@ -16,7 +16,7 @@
  *   --size      Board size (default: 9)
  *   --discounts Comma-separated AMAF_DISCOUNT values to test
  *               (default: 0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)
- *   --budget    Time budget per move in ms (default: 5000)
+ *   --budget    Time budget per move in ms (default: 500)
  */
 
 const { spawnSync } = require('child_process');
@@ -33,7 +33,7 @@ function argVal(name, def) {
 const boardSize       = parseInt(argVal('size', '9'), 10);
 const GAMES_PER_ROUND = 2; // 1 game as each colour per round
 const FIXED_OPP_WEIGHT = 0;
-const budgetMs        = argVal('budget', '5000');
+const budgetMs        = argVal('budget', '500');
 const discounts       = (argVal('discounts', '0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9'))
   .split(',').map(Number).sort((a, b) => a - b);
 

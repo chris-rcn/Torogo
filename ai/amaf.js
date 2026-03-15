@@ -16,13 +16,13 @@
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 5000)
+ *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
 const { performance } = require('perf_hooks');
 const randomAgent = require('./random.js');
 
-const DEFAULT_BUDGET_MS = 5000;
+const DEFAULT_BUDGET_MS = 500;
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
