@@ -4,22 +4,19 @@
  * Auto-generate puzzle positions from MCTS self-play.
  *
  * Strategy:
- *   1. Play `--games` self-play games using a fast agent.
- *   2. At each ply (every `--sample` moves), evaluate the position with MCTS
- *      using `--budget` ms.
- *   3. If the top root-child visit count / total root-child visits >= `--threshold`,
- *      the position is "forced" — save it as a puzzle candidate.
- *   4. Deduplicate by Zobrist hash and emit puzzle objects to stdout.
+ *   1. Play `--games` self-play games using MCTS with `--budget` ms per move.
+ *   2. At each ply, check whether the top root-child visit fraction >= `--threshold`.
+ *      If so, the position is "forced" — save it as a puzzle candidate.
+ *   3. Deduplicate by Zobrist hash and emit puzzle objects to stdout.
  *
  * Usage:
  *   node genpuzzles.js [--size <n>] [--budget <ms>] [--games <n>]
- *                      [--threshold <ratio>] [--sample <n>] [--max <n>]
+ *                      [--threshold <ratio>] [--max <n>]
  *
  *   --size       board size (default: 7)
- *   --budget     MCTS analysis budget per position in ms (default: 500)
+ *   --budget     MCTS budget per move in ms (default: 500)
  *   --games      number of self-play games to run (default: 50)
  *   --threshold  min fraction of visits on the top move to qualify (default: 0.65)
- *   --sample     evaluate every Nth ply during self-play (default: 3)
  *   --max        max puzzles to emit (default: 20)
  */
 
@@ -33,24 +30,18 @@ let boardSize  = 7;
 let budgetMs   = 500;
 let numGames   = 50;
 let threshold  = 0.65;
-let sampleEvery = 3;
 let maxPuzzles = 20;
 
 for (let i = 0; i < args.length; i++) {
-  if      (args[i] === '--size'      && args[i+1]) boardSize   = Number(args[++i]);
-  else if (args[i] === '--budget'    && args[i+1]) budgetMs    = Number(args[++i]);
-  else if (args[i] === '--games'     && args[i+1]) numGames    = Number(args[++i]);
-  else if (args[i] === '--threshold' && args[i+1]) threshold   = Number(args[++i]);
-  else if (args[i] === '--sample'    && args[i+1]) sampleEvery = Number(args[++i]);
-  else if (args[i] === '--max'       && args[i+1]) maxPuzzles  = Number(args[++i]);
+  if      (args[i] === '--size'      && args[i+1]) boardSize  = Number(args[++i]);
+  else if (args[i] === '--budget'    && args[i+1]) budgetMs   = Number(args[++i]);
+  else if (args[i] === '--games'     && args[i+1]) numGames   = Number(args[++i]);
+  else if (args[i] === '--threshold' && args[i+1]) threshold  = Number(args[++i]);
+  else if (args[i] === '--max'       && args[i+1]) maxPuzzles = Number(args[++i]);
 }
 
 
-// ─── Random agent (fast self-play) ───────────────────────────────────────────
-
-const randomAgent = require('./ai/random.js');
-
-// ─── Inline MCTS analysis ─────────────────────────────────────────────────────
+// ─── Inline MCTS (used for both self-play moves and puzzle detection) ─────────
 // Returns { best, ratio, secondBest } where:
 //   best       — the move with the most root-child visits
 //   ratio      — best.visits / sum(child.visits)
@@ -206,34 +197,26 @@ process.stderr.write(`Generating puzzles: size=${boardSize} budget=${budgetMs}ms
 
 for (let gameIdx = 0; gameIdx < numGames && puzzles.length < maxPuzzles; gameIdx++) {
   const game = new Game(boardSize, 0);
-  let ply = 0;
 
   while (!game.gameOver && puzzles.length < maxPuzzles) {
-    // Periodically evaluate the position for puzzle-worthiness
-    if (ply % sampleEvery === 0 && ply > 0) {
-      const hashKey = game.hash.toString();
-      if (!seenHashes.has(hashKey)) {
-        const analysis = analyzeMCTS(game);
-        if (analysis && analysis.ratio >= threshold) {
-          seenHashes.add(hashKey);
-          puzzles.push({
-            toPlay: game.current,
-            answer: [[analysis.best.x, analysis.best.y]],
-            boardStr: game.board.toAscii(),
-            boardSize: game.boardSize,
-            ratio: analysis.ratio,
-            totalVisits: analysis.totalVisits,
-          });
-          process.stderr.write(`  puzzle ${puzzles.length}: ${game.current} plays (${analysis.best.x},${analysis.best.y}) ratio=${analysis.ratio.toFixed(2)} visits=${analysis.totalVisits}\n`);
-        }
-      }
+    const hashKey = game.hash.toString();
+    const analysis = analyzeMCTS(game);
+    if (!analysis) { game.pass(); continue; }
+
+    if (!seenHashes.has(hashKey) && analysis.ratio >= threshold) {
+      seenHashes.add(hashKey);
+      puzzles.push({
+        toPlay: game.current,
+        answer: [[analysis.best.x, analysis.best.y]],
+        boardStr: game.board.toAscii(),
+        ratio: analysis.ratio,
+        totalVisits: analysis.totalVisits,
+      });
+      process.stderr.write(`  puzzle ${puzzles.length}: ${game.current} plays (${analysis.best.x},${analysis.best.y}) ratio=${analysis.ratio.toFixed(2)} visits=${analysis.totalVisits}\n`);
     }
 
-    // Advance self-play with random moves for diversity
-    const move = randomAgent(game, 0);
-    if (move.type === 'place') game.placeStone(move.x, move.y);
-    else game.pass();
-    ply++;
+    // Advance game using the MCTS best move
+    game.placeStone(analysis.best.x, analysis.best.y);
   }
 
   process.stderr.write(`  game ${gameIdx + 1}/${numGames} complete (${puzzles.length} puzzles so far)\n`);
