@@ -537,7 +537,6 @@ class Game {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
-    this.captured = { black: 0, white: 0 }; // stones captured of each color
     this.hash     = 0n;       // Zobrist hash of current board position
     this.koFlag   = null;     // {x, y} of the single stone captured last move, or null
     this.consecutivePasses = 0;
@@ -557,7 +556,6 @@ class Game {
     const g = new Game(this.boardSize);
     g.board             = this.board.clone();
     g.current           = this.current;
-    g.captured          = { ...this.captured };
     g.hash              = this.hash;
     g.koFlag            = this.koFlag;
     g.consecutivePasses = this.consecutivePasses;
@@ -592,8 +590,6 @@ class Game {
     for (const [cx, cy] of caps.white) this.hash ^= ZOBRIST[cy][cx].white;
 
     this.illegalFlash = null;
-    this.captured.black += caps.black.length;
-    this.captured.white += caps.white.length;
 
     // Update koFlag: set to the captured position only when exactly one stone was taken
     const totalCaptured = caps.black.length + caps.white.length;
@@ -609,7 +605,7 @@ class Game {
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
     this._incrementMoveCount();
-    return true;
+    return totalCaptured || true;
   }
 
   _incrementMoveCount() {
@@ -639,11 +635,9 @@ class Game {
     this.gameOver = true;
     const territory = this.calcTerritory();
     this.scores = {
-      black: { territory: territory.black, captures: this.captured.white },
-      white: { territory: territory.white, captures: this.captured.black },
+      black: { territory: territory.black, total: territory.black },
+      white: { territory: territory.white, total: territory.white + this.komi },
     };
-    this.scores.black.total = this.scores.black.territory + this.scores.black.captures;
-    this.scores.white.total = this.scores.white.territory + this.scores.white.captures + this.komi;
   }
 
   // BFS over empty cells; attribute to a color if all reachable boundary

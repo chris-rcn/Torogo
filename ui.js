@@ -298,8 +298,6 @@ function aiIsTrueEye(board, x, y, color) {
 function aiApplyFast(game, x, y) {
   game.board.set(x, y, game.current);
   const cap = game.board.captureGroups(x, y);
-  game.captured.black += cap.black.length;
-  game.captured.white += cap.white.length;
   game.consecutivePasses = 0;
   game.current = game.current === 'black' ? 'white' : 'black';
   return cap.black.length + cap.white.length;
@@ -344,11 +342,11 @@ function aiPlayRandom(game) {
         break;
       }
 
-      const capBefore = game.captured.black + game.captured.white;
-      if (game.placeStone(x, y)) {
+      const result = game.placeStone(x, y);
+      if (result) {
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (game.captured.black + game.captured.white > capBefore) {
+        if (result > 1) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
@@ -483,7 +481,6 @@ function updateUI() {
     document.getElementById('score-table').innerHTML = `
       <tr><td></td><td>Black</td><td>White</td></tr>
       <tr><td>Territory</td><td>${bs.territory}</td><td>${ws.territory}</td></tr>
-      <tr><td>Captures</td><td>${bs.captures}</td><td>${ws.captures}</td></tr>
       <tr><td style="border-top:1px solid #4a4060;padding-top:6px">Total</td>
           <td style="border-top:1px solid #4a4060;padding-top:6px">${bs.total}</td>
           <td style="border-top:1px solid #4a4060;padding-top:6px">${ws.total}</td></tr>

@@ -118,7 +118,7 @@ const verboseBoard = !!opts.verbose;
 
 // Column widths for per-game score output, derived from board size.
 const scoreW = String(boardSize * boardSize * 2).length + 2; // +2 for '.5' from komi
-const statW  = String(boardSize * boardSize).length;         // territory / captures
+const statW  = String(boardSize * boardSize).length;         // territory
 
 for (let g = 0; g < numGames; g++) {
   // Alternate colors: even g → p1=black, odd g → p1=white
@@ -171,8 +171,8 @@ for (let g = 0; g < numGames; g++) {
     const fmtStat  = (n) => String(n).padStart(statW);
     console.log(
       `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}] ${String(game.moveCount).padStart(3)} moves:` +
-      `  B ${fmtScore(blackScore)} (${fmtStat(scores.black.territory)}t+${fmtStat(scores.black.captures)}c)` +
-      `  W ${fmtScore(whiteScore)} (${fmtStat(scores.white.territory)}t+${fmtStat(scores.white.captures)}c)` +
+      `  B ${fmtScore(blackScore)} (${fmtStat(scores.black.territory)}t)` +
+      `  W ${fmtScore(whiteScore)} (${fmtStat(scores.white.territory)}t)` +
       `  → ${winner}`
     );
   }

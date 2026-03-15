@@ -24,11 +24,9 @@ const candidate_playouts = 50; // number of playouts per candidate move
 function applyFast(game, x, y) {
   game.board.set(x, y, game.current);
   const cap = game.board.captureGroups(x, y);
-  game.captured.black += cap.black.length;
-  game.captured.white += cap.white.length;
   game.consecutivePasses = 0;
   game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black + cap.white;
+  return cap.black.length + cap.white.length;
 }
 
 
@@ -87,11 +85,11 @@ function playRandom(game) {
       }
 
       // Slow path: all four neighbours are occupied — suicide or Ko possible.
-      const capBefore = game.captured.black + game.captured.white;
-      if (game.placeStone(x, y)) {
+      const result = game.placeStone(x, y);
+      if (result) {
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (game.captured.black + game.captured.white > capBefore) {
+        if (result > 1) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
