@@ -218,7 +218,8 @@ while (puzzles.length < maxPuzzles) {
         ratio: analysis.ratio,
         totalVisits: analysis.totalVisits,
       });
-      process.stderr.write(`  puzzle ${puzzles.length}: ${game.current} plays (${analysis.best.x},${analysis.best.y}) ratio=${analysis.ratio.toFixed(2)} visits=${analysis.totalVisits}\n`);
+      process.stderr.write(`\n── Puzzle ${puzzles.length} (${game.current} to play, answer ${analysis.best.x},${analysis.best.y}, ratio=${analysis.ratio.toFixed(2)}) ──\n`);
+      process.stderr.write(game.board.toAscii(analysis.best) + '\n');
     }
 
     // Advance game using the MCTS best move
