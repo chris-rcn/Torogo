@@ -48,48 +48,78 @@ function applyFast(game, x, y) {
 // Returns { winner, played, oppPlayed } where winner is 'black'|'white'|null.
 function playTracked(game, trackColor) {
   const size = game.boardSize;
+  const board = game.board;
+  const grid = board.grid;
+  const nbr = board._nbr;
+  const gidArr = board._gid;
   const played = []; // ordered list of cell indices for trackColor's moves
   const oppPlayed = []; // ordered list of cell indices for opponent's moves
 
-  // Build the initial list of empty cells once.
+  // Build the initial list of empty cell indices (flat).
   const empty = [];
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++)
-      if (game.board.get(x, y) === null) empty.push([x, y]);
+      if (grid[y][x] === null) empty.push(y * size + x);
 
   const moveLimit = empty.length + 20;
   let moves = 0;
 
   while (!game.gameOver && moves < moveLimit) {
     let placed = false;
-
-    // Scan candidates in random order without replacement using a partition
-    // index `end`.  Elements in [0, end) are untried this turn; elements in
-    // [end, empty.length) were tried but were illegal (Ko/suicide) and stay
-    // in the list for future turns.
     let end = empty.length;
+    const current = game.current;
 
     while (end > 0) {
       const i = Math.floor(Math.random() * end);
-      const [x, y] = empty[i];
+      const cellIdx = empty[i];
+      const x = cellIdx % size;
+      const y = (cellIdx / size) | 0;
 
-      // Move candidate to the boundary so we can remove it cheaply if needed.
       empty[i] = empty[end - 1];
-      empty[end - 1] = [x, y];
+      empty[end - 1] = cellIdx;
       end--;
 
-      // Skip single-point true eyes for the current player — filling them is
-      // always suicide.  Leave the cell in the list so the opponent can use it
-      // and so captures can later dissolve the eye.
-      if (game.board.isTrueEye(x, y, game.current)) continue;
+      // Fused isTrueEye + empty-neighbor check (single neighbor scan)
+      const base = cellIdx * 4;
+      let friendCount = 0;
+      let emptyCount = 0;
+      let sameGroupCount = 0;
+      let firstGid = -2;
+      let hasEmptyNbr = false;
 
-      // Fast path: at least one empty neighbour means the move cannot be
-      // suicide and Ko is effectively impossible.  Use the lightweight helper
-      // to avoid the two O(n²) board-hash computations inside placeStone.
-      const neighbors = game.board.getNeighbors(x, y);
-      if (neighbors.some(([nx, ny]) => game.board.get(nx, ny) === null)) {
-        if (game.current === trackColor) played.push(y * size + x);
-        else oppPlayed.push(y * size + x);
+      for (let j = 0; j < 4; j++) {
+        const ni = nbr[base + j];
+        const c = grid[(ni / size) | 0][ni % size];
+        if (c === null) {
+          hasEmptyNbr = true;
+          emptyCount++;
+        } else if (c === current) {
+          friendCount++;
+          const gid = gidArr[ni];
+          if (gid !== -1) {
+            if (firstGid === -2) firstGid = gid;
+            if (gid === firstGid) sameGroupCount++;
+          }
+        }
+      }
+
+      // True eye check (skip filling own eyes)
+      if (friendCount === 4) {
+        if (sameGroupCount === 4) continue;
+        let dc = 0;
+        if (grid[(y + 1) % size][(x + 1) % size] === current) dc++;
+        if (grid[(y + 1) % size][(x - 1 + size) % size] === current) dc++;
+        if (grid[(y - 1 + size) % size][(x + 1) % size] === current) dc++;
+        if (grid[(y - 1 + size) % size][(x - 1 + size) % size] === current) dc++;
+        if (dc >= 3) continue;
+      } else if (friendCount === 3 && emptyCount === 1 && sameGroupCount === 3) {
+        continue;
+      }
+
+      if (hasEmptyNbr) {
+        // Fast path: at least one empty neighbour → no suicide/Ko possible
+        if (current === trackColor) played.push(cellIdx);
+        else oppPlayed.push(cellIdx);
         const captures = applyFast(game, x, y);
         empty[end] = empty[empty.length - 1];
         empty.pop();
@@ -97,7 +127,7 @@ function playTracked(game, trackColor) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
+              if (grid[ey][ex] === null) empty.push(ey * size + ex);
         }
         placed = true;
         moves++;
@@ -105,25 +135,23 @@ function playTracked(game, trackColor) {
       }
 
       // Slow path: all four neighbours are occupied — suicide or Ko possible.
-      const color = game.current;
+      const color = current;
       const result = game.placeStone(x, y);
       if (result) {
-        if (color === trackColor) played.push(y * size + x);
-        else oppPlayed.push(y * size + x);
+        if (color === trackColor) played.push(cellIdx);
+        else oppPlayed.push(cellIdx);
         empty[end] = empty[empty.length - 1];
         empty.pop();
         if (result > 1) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
+              if (grid[ey][ex] === null) empty.push(ey * size + ex);
         }
         placed = true;
         moves++;
         break;
       }
-      // Illegal move (Ko or suicide): element stays at index `end` and will
-      // be reconsidered in a future turn.
     }
 
     if (!placed) {
@@ -238,6 +266,9 @@ module.exports = function getMove(game) {
       if (Math.random() * bestCount < 1) bestIdx = i;
     }
   }
+
+  // If every playout is a loss, pass — no move can help.
+  if (bestRatio === 0) return { type: 'pass' };
 
   // Prefer pass when it ties for best ratio.
   if (plays[PASS_IDX] > 0 && wins[PASS_IDX] / plays[PASS_IDX] === bestRatio) {
