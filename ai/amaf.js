@@ -20,7 +20,7 @@
 
 const randomAgent = require('./random.js');
 
-const WORK_BUDGET = 500_000; // total playout moves per turn
+const WORK_BUDGET = 600_000; // total playout moves per turn
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
   ? parseFloat(process.env.AMAF_DISCOUNT)
@@ -288,7 +288,7 @@ module.exports = function getMove(game) {
                        : null;
     const allPlayoutsAgree = actualWinner === player
       ? wins[PASS_IDX] === plays[PASS_IDX]
-      : wins[PASS_IDX] === 0;
+      : true; // losing by territory — always allow passing
     if (!allPlayoutsAgree) {
       // Pick best non-pass candidate instead.
       let altRatio = -1;
