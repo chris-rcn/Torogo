@@ -279,7 +279,7 @@ class Renderer {
 
 // ─── App wiring ───────────────────────────────────────────────────────────────
 
-// ─── AI (calls into ai/mc.js loaded via <script> tag) ─────────────────────────
+// ─── AI (calls into ai/rave.js loaded via <script> tag) ────────────────────────
 
 const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
@@ -481,14 +481,33 @@ canvas.addEventListener('pointerup', (e) => {
     const py = e.clientY - rect.top;
     const pos = renderer.fromCanvas(px, py);
 
-    const legal = game.placeStone(pos.x, pos.y);
-    renderer.draw();
-    updateUI();
+    const N = game.boardSize;
+    const isLegal = legalMovesSet && legalMovesSet.has(pos.y * N + pos.x);
 
-    if (!legal && game.illegalFlash) {
-      setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
-    } else if (legal) {
-      scheduleComputerMove();
+    const applyPlayerMove = () => {
+      const legal = game.placeStone(pos.x, pos.y);
+      renderer.draw();
+      updateUI();
+      if (!legal && game.illegalFlash) {
+        setTimeout(() => { game.illegalFlash = null; renderer.draw(); }, 400);
+      } else if (legal) {
+        scheduleComputerMove();
+      }
+    };
+
+    if (isLegal) {
+      const W = canvas.width;
+      const H = canvas.height;
+      const ts = renderer.tileSize();
+      const rawTargetX = W / 2 - renderer.padding - pos.x * renderer.cellSize;
+      const rawTargetY = H / 2 - renderer.padding - pos.y * renderer.cellSize;
+      let dx = rawTargetX - renderer.panX;
+      let dy = rawTargetY - renderer.panY;
+      dx -= Math.round(dx / ts) * ts;
+      dy -= Math.round(dy / ts) * ts;
+      animatePan(renderer.panX + dx, renderer.panY + dy, 500, applyPlayerMove);
+    } else {
+      applyPlayerMove();
     }
   }
   isPanning = false;
