@@ -10,27 +10,7 @@
  * Interface: getMove(game) → { type: 'pass' } | { type: 'place', x, y }
  *   game  - a live Game instance (read-only; do not mutate)
  *
- * Single-point true eye (toroidal board — no corners/edges, every cell has
- * exactly 4 orthogonal and 4 diagonal neighbours):
- *   An empty cell (x, y) is a true eye for `color` when:
- *     1. All 4 orthogonal neighbours are occupied by `color`.
- *     2. At least 3 of the 4 diagonal neighbours are occupied by `color`.
  */
-
-function isTrueEye(board, x, y, color) {
-  const N = board.size;
-  const ortho = board.getNeighbors(x, y);
-  if (!ortho.every(([nx, ny]) => board.get(nx, ny) === color)) return false;
-  const diags = [
-    [(x + 1) % N,       (y + 1) % N],
-    [(x - 1 + N) % N,   (y + 1) % N],
-    [(x + 1) % N,       (y - 1 + N) % N],
-    [(x - 1 + N) % N,   (y - 1 + N) % N],
-  ];
-  const friendly = diags.filter(([dx, dy]) => board.get(dx, dy) === color).length;
-  return friendly >= 3;
-}
-
 
 module.exports = function getMove(game) {
   if (game.gameOver) return { type: 'pass' };
@@ -44,7 +24,7 @@ module.exports = function getMove(game) {
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (board.get(x, y) !== null) continue;
-      if (isTrueEye(board, x, y, color)) continue;
+      if (board.isTrueEye(x, y, color)) continue;
       candidates.push([x, y]);
     }
   }

@@ -18,19 +18,6 @@
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function isTrueEye(board, x, y, color) {
-  const N = board.size;
-  const ortho = board.getNeighbors(x, y);
-  if (!ortho.every(([nx, ny]) => board.get(nx, ny) === color)) return false;
-  const diags = [
-    [(x + 1) % N,     (y + 1) % N],
-    [(x - 1 + N) % N, (y + 1) % N],
-    [(x + 1) % N,     (y - 1 + N) % N],
-    [(x - 1 + N) % N, (y - 1 + N) % N],
-  ];
-  return diags.filter(([dx, dy]) => board.get(dx, dy) === color).length >= 3;
-}
-
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -146,7 +133,7 @@ module.exports = function getMove(game) {
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
-      if (isTrueEye(game.board, x, y, color)) continue;
+      if (game.board.isTrueEye(x, y, color)) continue;
       candidates.push([x, y]);
     }
   }

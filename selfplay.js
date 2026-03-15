@@ -87,14 +87,25 @@ function printBoard(game) {
   const size = game.boardSize;
   const cols = 'ABCDEFGHJKLMNOPQRST'.slice(0, size); // skip 'I' like real Go
   console.log('   ' + cols.split('').join(' '));
+  const last = game.lastMove; // { x, y } or null
   for (let y = 0; y < size; y++) {
-    const row = String(size - y).padStart(2) + ' ';
-    const cells = [];
+    // Build line as: "NN  s s s s" — 2-char row number, then per cell
+    // a separator char + stone char.  The separator is normally a space
+    // but becomes '(' or ')' around the last move.
+    let line = String(size - y).padStart(2);
     for (let x = 0; x < size; x++) {
       const v = game.board.get(x, y);
-      cells.push(v === 'black' ? '●' : v === 'white' ? '○' : '·');
+      const ch = v === 'black' ? '●' : v === 'white' ? '○' : '·';
+      const isLast = last && x === last.x && y === last.y;
+      const prev   = last && x === last.x + 1 && y === last.y;
+      line += (isLast ? '(' : prev ? ')' : ' ') + ch;
     }
-    console.log(row + cells.join(' '));
+    if (last && last.y === y && last.x === size - 1) line += ')';
+    console.log(line);
+  }
+  if (!last) {
+    const passer = game.current === 'black' ? 'White' : 'Black';
+    console.log('   ' + passer + ' passed');
   }
   console.log();
 }
@@ -159,7 +170,7 @@ for (let g = 0; g < numGames; g++) {
     const fmtScore = (n) => String(n).padStart(scoreW);
     const fmtStat  = (n) => String(n).padStart(statW);
     console.log(
-      `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}]:` +
+      `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}] ${String(game.moveCount).padStart(3)} moves:` +
       `  B ${fmtScore(blackScore)} (${fmtStat(scores.black.territory)}t+${fmtStat(scores.black.captures)}c)` +
       `  W ${fmtScore(whiteScore)} (${fmtStat(scores.white.territory)}t+${fmtStat(scores.white.captures)}c)` +
       `  → ${winner}`
