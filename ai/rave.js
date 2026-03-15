@@ -136,7 +136,7 @@ function legalMoves(game) {
       if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
   const area = game.boardSize * game.boardSize;
-  if (game.moveCount >= area / 2) moves.push({ type: 'pass' });
+  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
   return moves;
 }
 
@@ -213,6 +213,17 @@ function selectAndExpand(root, rootGame, N) {
       node.children.push(child);
       node = child;
       applyMove(game, move);
+
+      // After a pass, always force a second pass as a terminal tree node so the
+      // simulation scores the current board position rather than rolling out
+      // randomly.  Without this, rollouts from a "one pass" state play on for
+      // many more random moves, inflating the pass move's apparent win rate.
+      if (!game.gameOver && game.consecutivePasses > 0) {
+        const secondPass = makeNode({ type: 'pass' }, node, game.current, N);
+        node.children.push(secondPass);
+        node = secondPass;
+        applyMove(game, { type: 'pass' }); // game.gameOver becomes true
+      }
     }
   }
 
