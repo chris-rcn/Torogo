@@ -335,11 +335,18 @@ function scheduleComputerMove() {
       if (move.type === 'place') {
         // Pan so the computer's chosen intersection is centred on the canvas,
         // then drop the stone once the animation completes.
+        // Wrap the delta by tileSize so we always take the shortest path
+        // (the board is toroidal, so ±N cells is the same visual position).
         const W = canvas.width;
         const H = canvas.height;
-        const targetPanX = W / 2 - renderer.padding - move.x * renderer.cellSize;
-        const targetPanY = H / 2 - renderer.padding - move.y * renderer.cellSize;
-        animatePan(targetPanX, targetPanY, 500, applyMove);
+        const ts = renderer.tileSize();
+        const rawTargetX = W / 2 - renderer.padding - move.x * renderer.cellSize;
+        const rawTargetY = H / 2 - renderer.padding - move.y * renderer.cellSize;
+        let dx = rawTargetX - renderer.panX;
+        let dy = rawTargetY - renderer.panY;
+        dx -= Math.round(dx / ts) * ts;
+        dy -= Math.round(dy / ts) * ts;
+        animatePan(renderer.panX + dx, renderer.panY + dy, 500, applyMove);
       } else {
         applyMove();
       }
