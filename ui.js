@@ -553,8 +553,16 @@ document.getElementById('pass-btn').addEventListener('click', () => {
 
 const DEFAULT_BOARD_SIZE = 13;
 
+function sizeFromURL() {
+  const raw = new URLSearchParams(location.search).get('size');
+  const n = parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 5 && n <= 19 ? n : DEFAULT_BOARD_SIZE;
+}
+
+const initialBoardSize = sizeFromURL();
+
 document.getElementById('new-game-btn').addEventListener('click', () => {
-  startGame(DEFAULT_BOARD_SIZE);
+  startGame(initialBoardSize);
 });
 
 
@@ -565,4 +573,4 @@ window.addEventListener('resize', () => {
 });
 
 // Boot
-startGame(DEFAULT_BOARD_SIZE);
+startGame(initialBoardSize);
