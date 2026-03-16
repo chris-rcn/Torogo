@@ -394,7 +394,6 @@ const canvas = document.getElementById('board-canvas');
 
 function updateUI() {
   const g = game;
-  const statusEl = document.getElementById('status-msg');
   const thinking = !g.gameOver && g.current === 'black';
 
   // Score bar — always visible, computed every update
@@ -404,30 +403,45 @@ function updateUI() {
   document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
   document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${g.komi})`;
 
+  // Three-section controls row
+  const blackMsgEl = document.getElementById('black-msg');
+  const gameMsgEl  = document.getElementById('game-msg');
+  const whiteMsgEl = document.getElementById('white-msg');
+
+  // Left: black message
   if (g.gameOver) {
-    let winnerText;
-    if (blackTotal > whiteTotal) {
-      winnerText = 'Black wins!';
-    } else if (whiteTotal > blackTotal) {
-      winnerText = 'White wins!';
-    } else {
-      winnerText = 'Tie game!';
-    }
-    statusEl.textContent = winnerText;
-    statusEl.classList.remove('thinking');
+    blackMsgEl.textContent = '';
+    blackMsgEl.classList.remove('thinking');
+  } else if (thinking) {
+    blackMsgEl.textContent = 'Computer thinking…';
+    blackMsgEl.classList.add('thinking');
+  } else if (computerPassedLast) {
+    blackMsgEl.textContent = 'computer passed';
+    blackMsgEl.classList.remove('thinking');
   } else {
-    statusEl.textContent = thinking ? 'Computer thinking…' : 'Your turn (white)';
-    statusEl.classList.toggle('thinking', thinking);
+    blackMsgEl.textContent = '';
+    blackMsgEl.classList.remove('thinking');
   }
 
+  // Middle: game message (winner only)
+  if (g.gameOver) {
+    let winnerText;
+    if (blackTotal > whiteTotal)      winnerText = 'Black wins!';
+    else if (whiteTotal > blackTotal) winnerText = 'White wins!';
+    else                              winnerText = 'Tie game!';
+    gameMsgEl.textContent = winnerText;
+  } else {
+    gameMsgEl.textContent = '';
+  }
+
+  // Right: white message
   const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
+  whiteMsgEl.textContent = isHumanTurn ? 'Your turn' : '';
+
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
   // Shield the canvas (pointer-events: none) only while the computer is
   // thinking — not after game over, so the player can still pan the board.
   canvas.classList.toggle('shielded', !g.gameOver && !isHumanTurn);
-
-  document.getElementById('computer-passed-label').style.display =
-    computerPassedLast ? '' : 'none';
 }
 
 function startGame(boardSize) {
