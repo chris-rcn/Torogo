@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-// playgames.js — play an agent against itself and print a game record per line.
+// recordgames.js — play an agent against itself and print a game record per line.
 //
-// Usage: node playgames.js [agent] [size] [budget]
-//   agent   ai agent name (default: rave)
-//   size    board size    (default: 7)
-//   budget  ms per move   (default: 500)
+// Usage: node recordgames.js [--agent rave] [--size 7] [--budget 500]
+//   --agent   ai agent name (default: rave)
+//   --size    board size    (default: 7)
+//   --budget  ms per move   (default: 500)
 //
 // Output: one game per line, comma-separated.
 //   First field : board size.
@@ -18,9 +18,12 @@
 
 const { Game, DEFAULT_KOMI } = require('./game.js');
 
-const [,, agentName = 'rave', sizeArg = '7', budgetArg = '500'] = process.argv;
-const size   = parseInt(sizeArg,   10);
-const budget = parseInt(budgetArg, 10);
+const args = process.argv.slice(2);
+const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
+
+const agentName = get('--agent',  'rave');
+const size      = parseInt(get('--size',   '7'),   10);
+const budget    = parseInt(get('--budget', '500'), 10);
 
 const agent = require(`./ai/${agentName}.js`);
 
