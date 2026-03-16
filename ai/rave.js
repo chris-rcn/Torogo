@@ -40,7 +40,8 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 const EXPANSION_CANDIDATES = 2;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = 0;
+const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
+  ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
