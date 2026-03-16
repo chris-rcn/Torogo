@@ -116,10 +116,28 @@ function makeAgent(patternFile) {
   };
 }
 
+/**
+ * Create a weighting function (game, x, y) → number from a pattern file.
+ * Lighter than makeAgent: no candidate sampling, just the hash→ratio lookup.
+ * Intended for callers (e.g. ravepat) that manage candidate selection themselves.
+ *
+ * @param {string} patternFile
+ * @returns {function(game, x, y): number}
+ */
+function makeWeighter(patternFile) {
+  const table = loadPatterns(patternFile);
+  return function weight(game, x, y) {
+    const hash = patternHash(game, x, y);
+    return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+  };
+}
+
 // Default getMove for use with selfplay.js / recordgames.js:
 //   node selfplay.js --p1 pattern --p2 random
 // Looks for patterns.csv next to game.js (project root).
 const path = require('path');
-const _defaultGetMove = makeAgent(path.join(__dirname, '..', 'patterns.csv'));
+const _defaultFile    = path.join(__dirname, '..', 'patterns.csv');
+const _defaultGetMove = makeAgent(_defaultFile);
+const _defaultWeight  = makeWeighter(_defaultFile);
 
-module.exports = Object.assign(_defaultGetMove, { makeAgent });
+module.exports = Object.assign(_defaultGetMove, { makeAgent, makeWeighter, weight: _defaultWeight });

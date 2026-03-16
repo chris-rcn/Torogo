@@ -785,6 +785,7 @@ class Game {
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
     this._incrementMoveCount();
+    return totalCaptured;
   }
 
   _incrementMoveCount() {
