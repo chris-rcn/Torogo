@@ -48,70 +48,30 @@ function runMatch(p1Name, p2Name, games, size, budget) {
   return { p1Wins, p2Wins };
 }
 
-// ─── Random vs random is roughly even ────────────────────────────────────────
+// ─── Hash uniqueness under play ──────────────────────────────────────────────
 
-section('Random vs random roughly even (5x5, 20 games)', () => {
-  const result = runMatch('random', 'random', 20, 5, 0);
-  console.log(`  p1: ${result.p1Wins}  p2: ${result.p2Wins}`);
-  // Neither side should dominate (both are random); allow wide margin
-  assert(result.p1Wins >= 3 && result.p2Wins >= 3,
-    `random vs random should be roughly balanced: ${result.p1Wins}-${result.p2Wins}`);
-});
-
-// ─── AI moves are always legal ───────────────────────────────────────────────
-
-section('AI legality stress test (all agents, 5 full games each)', () => {
-  const agents = ['random', 'mc', 'mcts', 'amaf'];
-  let allLegal = true;
-
-  for (const name of agents) {
-    const agent = require(`./ai/${name}.js`);
-    for (let i = 0; i < 3; i++) {
-      const g = new Game(5, 3.5);
-      let moveNum = 0;
-      while (!g.gameOver && moveNum < 200) {
-        const move = agent(g, 20);
-        if (move.type === 'place') {
-          const result = g.placeStone(move.x, move.y);
-          if (result === false) {
-            allLegal = false;
-            console.error(`  ${name} returned illegal move (${move.x},${move.y}) on move ${moveNum}`);
-            break;
-          }
-        } else {
-          g.pass();
-        }
-        moveNum++;
-      }
-    }
-  }
-  assert(allLegal, 'all AI moves are legal across all agents');
-});
-
-// ─── Group tracker integrity under heavy play ────────────────────────────────
-
-section('Group tracker verification under stress (5 games)', () => {
-  const oldRatio = Board.verifyGroupRatio;
-  Board.verifyGroupRatio = 1; // verify every single captureGroups call
-
+section('Zobrist hash uniqueness (no collisions in random games)', () => {
   const random = require('./ai/random.js');
-  let ok = true;
+  let collisions = 0;
 
-  for (let i = 0; i < 5; i++) {
+  for (let trial = 0; trial < 5; trial++) {
     const g = new Game(7, 3.5);
-    try {
-      while (!g.gameOver) {
-        const move = random(g);
-        if (move.type === 'place') g.placeStone(move.x, move.y);
-        else g.pass();
+    const seen = new Set();
+    seen.add(g.hash);
+
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+      if (!g.gameOver && g.lastMove !== null) {
+        // Only check on stone placements (passes don't change hash)
+        if (seen.has(g.hash)) collisions++;
+        seen.add(g.hash);
       }
-    } catch (e) {
-      ok = false;
-      console.error(`  Game ${i + 1}:`, e.message);
     }
   }
-  assert(ok, 'group tracker verified through 5 full games');
-  Board.verifyGroupRatio = oldRatio;
+  console.log(`  Hash collisions: ${collisions} across 5 games`);
+  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
 });
 
 // ─── Clone divergence ────────────────────────────────────────────────────────
@@ -216,30 +176,40 @@ section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
   assert(mismatches === 0, `classifyEmpty should always match: got ${mismatches} mismatches`);
 });
 
-// ─── Hash uniqueness under play ──────────────────────────────────────────────
+// ─── Random vs random is roughly even ────────────────────────────────────────
 
-section('Zobrist hash uniqueness (no collisions in random games)', () => {
+section('Random vs random roughly even (5x5, 20 games)', () => {
+  const result = runMatch('random', 'random', 20, 5, 0);
+  console.log(`  p1: ${result.p1Wins}  p2: ${result.p2Wins}`);
+  // Neither side should dominate (both are random); allow wide margin
+  assert(result.p1Wins >= 3 && result.p2Wins >= 3,
+    `random vs random should be roughly balanced: ${result.p1Wins}-${result.p2Wins}`);
+});
+
+// ─── Group tracker integrity under heavy play ────────────────────────────────
+
+section('Group tracker verification under stress (5 games)', () => {
+  const oldRatio = Board.verifyGroupRatio;
+  Board.verifyGroupRatio = 1; // verify every single captureGroups call
+
   const random = require('./ai/random.js');
-  let collisions = 0;
+  let ok = true;
 
-  for (let trial = 0; trial < 5; trial++) {
+  for (let i = 0; i < 5; i++) {
     const g = new Game(7, 3.5);
-    const seen = new Set();
-    seen.add(g.hash);
-
-    while (!g.gameOver) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-      if (!g.gameOver && g.lastMove !== null) {
-        // Only check on stone placements (passes don't change hash)
-        if (seen.has(g.hash)) collisions++;
-        seen.add(g.hash);
+    try {
+      while (!g.gameOver) {
+        const move = random(g);
+        if (move.type === 'place') g.placeStone(move.x, move.y);
+        else g.pass();
       }
+    } catch (e) {
+      ok = false;
+      console.error(`  Game ${i + 1}:`, e.message);
     }
   }
-  console.log(`  Hash collisions: ${collisions} across 5 games`);
-  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
+  assert(ok, 'group tracker verified through 5 full games');
+  Board.verifyGroupRatio = oldRatio;
 });
 
 // ─── Playout performance ─────────────────────────────────────────────────────
@@ -268,12 +238,43 @@ section('MCTS playout throughput (7x7)', () => {
   assert(elapsed > budgetMs * 0.5, `MCTS should use most of the budget: only ${elapsed.toFixed(0)}ms`);
 });
 
+// ─── AI moves are always legal ───────────────────────────────────────────────
+
+section('AI legality stress test (all agents, 5 full games each)', () => {
+  const agents = ['random', 'mc', 'mcts', 'amaf'];
+  let allLegal = true;
+
+  for (const name of agents) {
+    const agent = require(`./ai/${name}.js`);
+    for (let i = 0; i < 3; i++) {
+      const g = new Game(5, 3.5);
+      let moveNum = 0;
+      while (!g.gameOver && moveNum < 200) {
+        const move = agent(g, 20);
+        if (move.type === 'place') {
+          const result = g.placeStone(move.x, move.y);
+          if (result === false) {
+            allLegal = false;
+            console.error(`  ${name} returned illegal move (${move.x},${move.y}) on move ${moveNum}`);
+            break;
+          }
+        } else {
+          g.pass();
+        }
+        moveNum++;
+      }
+    }
+  }
+  assert(allLegal, 'all AI moves are legal across all agents');
+});
+
 // ─── Full game smoke tests ────────────────────────────────────────────────────
 
-section('7x7 full game (mc vs random, 2 games)', () => {
-  const result = runMatch('mc', 'random', 2, 7, 100);
-  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}`);
-  assert(result.p1Wins >= 1, `mc should beat random on 7x7: got ${result.p1Wins}`);
+section('MCTS beats random (5x5, 4 games)', () => {
+  const result = runMatch('mcts', 'random', 4, 5, 100);
+  console.log(`  mcts: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins > result.p2Wins, `mcts should beat random: ${result.p1Wins}-${result.p2Wins}`);
+  assert(result.p1Wins >= 3, `mcts should win ≥3/4 vs random: got ${result.p1Wins}`);
 });
 
 section('MC beats random (5x5, 4 games)', () => {
@@ -283,11 +284,10 @@ section('MC beats random (5x5, 4 games)', () => {
   assert(result.p1Wins >= 3, `mc should win ≥3/4 vs random: got ${result.p1Wins}`);
 });
 
-section('MCTS beats random (5x5, 4 games)', () => {
-  const result = runMatch('mcts', 'random', 4, 5, 100);
-  console.log(`  mcts: ${result.p1Wins}  random: ${result.p2Wins}`);
-  assert(result.p1Wins > result.p2Wins, `mcts should beat random: ${result.p1Wins}-${result.p2Wins}`);
-  assert(result.p1Wins >= 3, `mcts should win ≥3/4 vs random: got ${result.p1Wins}`);
+section('7x7 full game (mc vs random, 2 games)', () => {
+  const result = runMatch('mc', 'random', 2, 7, 100);
+  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins >= 1, `mc should beat random on 7x7: got ${result.p1Wins}`);
 });
 
 section('AMAF beats random (5x5, 4 games)', () => {
