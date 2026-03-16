@@ -3112,49 +3112,56 @@ if (require.main === module) {
   let budgetMs = 200;
 
   let verbose = false;
+  let oversample = 2;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--agent' && args[i + 1]) agentName = args[++i];
     else if (args[i] === '--budget' && args[i + 1]) budgetMs = Number(args[++i]);
     else if (args[i] === '--verbose') verbose = true;
+    else if (args[i] === '--oversample' && args[i + 1]) oversample = Number(args[++i]);
   }
 
   if (!agentName) {
-    console.error('Usage: node testpuzzles.js --agent <name> [--budget <ms>] [--verbose]');
+    console.error('Usage: node testpuzzles.js --agent <name> [--budget <ms>] [--verbose] [--oversample <n>]');
     process.exit(1);
   }
 
   const agent = require(`./ai/${agentName}.js`);
 
-  console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles ──\n`);
-  if (verbose) console.log('  #  Size  Comment                                                       Result');
+  const totalRuns = PUZZLES.length * oversample;
+  console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles × ${oversample} = ${totalRuns} runs ──\n`);
+  if (verbose) console.log('  #  Run  Size  Comment                                                    Result');
 
   let correct = 0;
   for (let i = 0; i < PUZZLES.length; i++) {
     const puzzle = PUZZLES[i];
-    const game = buildPosition(puzzle);
-    const move = agent(game, budgetMs);
+    for (let run = 0; run < oversample; run++) {
+      const game = buildPosition(puzzle);
+      const move = agent(game, budgetMs);
 
-    const passed = move.type === 'place' &&
-      puzzle.answers.some(([ax, ay]) => move.x === ax && move.y === ay);
+      const passed = move.type === 'place' &&
+        puzzle.answers.some(([ax, ay]) => move.x === ax && move.y === ay);
 
-    if (passed) correct++;
+      if (passed) correct++;
 
-    if (verbose) {
-      const num = String(i + 1).padStart(3);
-      const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
-      const name = (puzzle.comment || '').slice(0, 60).padEnd(60);
-      let result = passed ? '+' : '-';
-      if (!passed) {
-        const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
-        const expected = puzzle.answers.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
-        result += `  (played ${played}; expected ${expected})`;
+      if (verbose) {
+        const num = String(i + 1).padStart(3);
+        const runLabel = oversample > 1 ? String(run + 1).padStart(3) : '   ';
+        const size = `${game.boardSize}x${game.boardSize}`.padEnd(4);
+        const name = (puzzle.comment || '').slice(0, 57).padEnd(57);
+        let result = passed ? '+' : '-';
+        if (!passed) {
+          const played = move.type === 'place' ? `${move.x},${move.y}` : 'pass';
+          const expected = puzzle.answers.map(([ax, ay]) => `${ax},${ay}`).join(' or ');
+          result += `  (played ${played}; expected ${expected})`;
+        }
+        console.log(`  ${num}  ${runLabel}  ${size}  ${name}  ${result}`);
       }
-      console.log(`  ${num}  ${size}  ${name}  ${result}`);
     }
   }
 
+  const pct = (correct / totalRuns * 100).toFixed(1);
   console.log('  ──────────────────────────────────────────────────────');
-  console.log(`     Total: ${correct}/${PUZZLES.length}`);
+  console.log(`     Total: ${correct}/${totalRuns} (${pct}%)`);
   process.exit(0);
 }
 
