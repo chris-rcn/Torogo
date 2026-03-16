@@ -25,7 +25,7 @@ const { patternHash } = require('../patterns.JS');
 const DEFAULT_WEIGHT = 0.01;
 
 // Number of randomly sampled candidates to score per move.
-const CANDIDATES = 2;
+const CANDIDATES = 8;
 
 /**
  * Load a pattern-statistics file and return a Map<hash, ratio>.
