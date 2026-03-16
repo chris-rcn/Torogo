@@ -34,6 +34,11 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
   ? parseFloat(process.env.RAVE_EQUIV)
   : 300;
 
+// Number of untried moves to sample when expanding a node.  The candidate
+// with the best parent RAVE win rate is expanded first.  Set to 1 to revert
+// to uniform-random expansion.
+const EXPANSION_CANDIDATES = 2;
+
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
 function applyFast(game, x, y) {
@@ -205,10 +210,25 @@ function selectAndExpand(root, rootGame, N) {
   if (!game.gameOver) {
     if (node.untried === null) node.untried = legalMoves(game);
     if (node.untried.length > 0) {
-      const idx  = Math.floor(Math.random() * node.untried.length);
-      const move = node.untried[idx];
-      node.untried[idx] = node.untried[node.untried.length - 1];
-      node.untried.pop();
+      // Sample up to EXPANSION_CANDIDATES distinct moves and pick the one
+      // with the best parent RAVE win rate (default 0.5 when unvisited).
+      const k = Math.min(EXPANSION_CANDIDATES, node.untried.length);
+      let bestIdx = 0;
+      let bestScore = -1;
+      for (let s = 0; s < k; s++) {
+        const pick = s + Math.floor(Math.random() * (node.untried.length - s));
+        // Swap candidate into slot s so we don't re-sample it.
+        const tmp = node.untried[s]; node.untried[s] = node.untried[pick]; node.untried[pick] = tmp;
+        const midx = moveIndex(node.untried[s], N);
+        const rv   = node.raveVisits[midx];
+        const score = rv > 0 ? node.raveWins[midx] / rv : 0.5;
+        if (score > bestScore) { bestScore = score; bestIdx = s; }
+      }
+      // Move winner to the last position for pop().
+      const winnerMove = node.untried[bestIdx];
+      node.untried[bestIdx] = node.untried[node.untried.length - 1];
+      node.untried[node.untried.length - 1] = winnerMove;
+      const move = node.untried.pop();
       const child = makeNode(move, node, game.current, N);
       node.children.push(child);
       node = child;
