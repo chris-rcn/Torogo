@@ -808,7 +808,7 @@ class Game {
       for (let x = 0; x < N; x++) {
         const cell = grid[y][x];
         if (cell !== null) {
-          // Stones count as territory for their color
+          // Stones count as territory for their color (Chinese scoring)
           if (cell === 'black') territory.black++;
           else territory.white++;
           continue;

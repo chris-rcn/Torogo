@@ -10,7 +10,13 @@ function assert(cond, msg) {
   else { fail++; console.error('  FAIL:', msg); }
 }
 
-function section(name) { console.log(`\n── ${name} ──`); }
+function section(name, fn) {
+  console.log(`\n── ${name} ──`);
+  const t0 = performance.now();
+  fn();
+  const elapsed = performance.now() - t0;
+  console.log(`  (${elapsed < 1000 ? elapsed.toFixed(0) + 'ms' : (elapsed / 1000).toFixed(1) + 's'})`);
+}
 
 // ─── AI agents beat random ───────────────────────────────────────────────────
 
@@ -42,53 +48,19 @@ function runMatch(p1Name, p2Name, games, size, budget) {
   return { p1Wins, p2Wins };
 }
 
-section('MC beats random (5x5, 4 games)');
-{
-  const t0 = performance.now();
-  const result = runMatch('mc', 'random', 4, 5, 100);
-  const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}  (${elapsed}s)`);
-  assert(result.p1Wins > result.p2Wins, `mc should beat random: ${result.p1Wins}-${result.p2Wins}`);
-  assert(result.p1Wins >= 3, `mc should win ≥3/4 vs random: got ${result.p1Wins}`);
-}
-
-section('MCTS beats random (5x5, 4 games)');
-{
-  const t0 = performance.now();
-  const result = runMatch('mcts', 'random', 4, 5, 100);
-  const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  console.log(`  mcts: ${result.p1Wins}  random: ${result.p2Wins}  (${elapsed}s)`);
-  assert(result.p1Wins > result.p2Wins, `mcts should beat random: ${result.p1Wins}-${result.p2Wins}`);
-  assert(result.p1Wins >= 3, `mcts should win ≥3/4 vs random: got ${result.p1Wins}`);
-}
-
-section('AMAF beats random (5x5, 4 games)');
-{
-  const t0 = performance.now();
-  const result = runMatch('amaf', 'random', 4, 5, 100);
-  const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  console.log(`  amaf: ${result.p1Wins}  random: ${result.p2Wins}  (${elapsed}s)`);
-  assert(result.p1Wins > result.p2Wins, `amaf should beat random: ${result.p1Wins}-${result.p2Wins}`);
-  assert(result.p1Wins >= 3, `amaf should win ≥3/4 vs random: got ${result.p1Wins}`);
-}
-
 // ─── Random vs random is roughly even ────────────────────────────────────────
 
-section('Random vs random roughly even (5x5, 20 games)');
-{
-  const t0 = performance.now();
+section('Random vs random roughly even (5x5, 20 games)', () => {
   const result = runMatch('random', 'random', 20, 5, 0);
-  const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  console.log(`  p1: ${result.p1Wins}  p2: ${result.p2Wins}  (${elapsed}s)`);
+  console.log(`  p1: ${result.p1Wins}  p2: ${result.p2Wins}`);
   // Neither side should dominate (both are random); allow wide margin
   assert(result.p1Wins >= 3 && result.p2Wins >= 3,
     `random vs random should be roughly balanced: ${result.p1Wins}-${result.p2Wins}`);
-}
+});
 
 // ─── AI moves are always legal ───────────────────────────────────────────────
 
-section('AI legality stress test (all agents, 5 full games each)');
-{
+section('AI legality stress test (all agents, 5 full games each)', () => {
   const agents = ['random', 'mc', 'mcts', 'amaf'];
   let allLegal = true;
 
@@ -114,12 +86,11 @@ section('AI legality stress test (all agents, 5 full games each)');
     }
   }
   assert(allLegal, 'all AI moves are legal across all agents');
-}
+});
 
 // ─── Group tracker integrity under heavy play ────────────────────────────────
 
-section('Group tracker verification under stress (5 games)');
-{
+section('Group tracker verification under stress (5 games)', () => {
   const oldRatio = Board.verifyGroupRatio;
   Board.verifyGroupRatio = 1; // verify every single captureGroups call
 
@@ -141,12 +112,11 @@ section('Group tracker verification under stress (5 games)');
   }
   assert(ok, 'group tracker verified through 5 full games');
   Board.verifyGroupRatio = oldRatio;
-}
+});
 
 // ─── Clone divergence ────────────────────────────────────────────────────────
 
-section('Clone divergence (independent futures)');
-{
+section('Clone divergence (independent futures)', () => {
   const random = require('./ai/random.js');
   let ok = true;
 
@@ -168,14 +138,6 @@ section('Clone divergence (independent futures)');
       else g.pass();
     }
 
-    // Verify clone is untouched at the divergence point
-    for (let y = 0; y < 7; y++) {
-      for (let x = 0; x < 7; x++) {
-        // Clone shouldn't have changed
-        // (can't easily check exact state, but at least verify
-        //  the clone hasn't crashed and is still playable)
-      }
-    }
     // Clone should still be playable
     try {
       const move = random(c);
@@ -187,12 +149,11 @@ section('Clone divergence (independent futures)');
     }
   }
   assert(ok, 'clones remain playable after original diverges');
-}
+});
 
 // ─── Territory scoring sanity ────────────────────────────────────────────────
 
-section('Territory scoring makes sense');
-{
+section('Territory scoring makes sense', () => {
   const random = require('./ai/random.js');
   let ok = true;
 
@@ -209,94 +170,20 @@ section('Territory scoring makes sense');
       ok = false;
       console.error(`  Negative territory in game ${i}`);
     }
-    // Total territory + stones + neutral should account for all cells
+    // Total territory (includes stones in Chinese scoring) + neutral should account for all cells
     const territory = g.calcTerritory();
-    const stones = { black: 0, white: 0 };
-    for (let y = 0; y < 7; y++)
-      for (let x = 0; x < 7; x++) {
-        const c = g.board.get(x, y);
-        if (c) stones[c]++;
-      }
-    const accounted = territory.black + territory.white + territory.neutral
-                    + stones.black + stones.white;
+    const accounted = territory.black + territory.white + territory.neutral;
     if (accounted !== 49) {
       ok = false;
       console.error(`  Territory doesn't sum to 49: got ${accounted}`);
     }
   }
   assert(ok, 'territory scores are valid across 10 games');
-}
-
-// ─── Playout performance ─────────────────────────────────────────────────────
-
-section('MC playout throughput (7x7)');
-{
-  const mc = require('./ai/mc.js');
-  const g = new Game(7, 3.5);
-  const budgetMs = 200;
-  const t0 = performance.now();
-  const move = mc(g, budgetMs);
-  const elapsed = performance.now() - t0;
-  console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
-  assert(elapsed < budgetMs * 1.5, `MC should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
-  assert(elapsed > budgetMs * 0.5, `MC should use most of the budget: only ${elapsed.toFixed(0)}ms`);
-}
-
-section('MCTS playout throughput (7x7)');
-{
-  const mcts = require('./ai/mcts.js');
-  const g = new Game(7, 3.5);
-  const budgetMs = 200;
-  const t0 = performance.now();
-  const move = mcts(g, budgetMs);
-  const elapsed = performance.now() - t0;
-  console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
-  assert(elapsed < budgetMs * 1.5, `MCTS should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
-  assert(elapsed > budgetMs * 0.5, `MCTS should use most of the budget: only ${elapsed.toFixed(0)}ms`);
-}
-
-// ─── Hash uniqueness under play ──────────────────────────────────────────────
-
-section('Zobrist hash uniqueness (no collisions in random games)');
-{
-  const random = require('./ai/random.js');
-  let collisions = 0;
-
-  for (let trial = 0; trial < 5; trial++) {
-    const g = new Game(7, 3.5);
-    const seen = new Set();
-    seen.add(g.hash);
-
-    while (!g.gameOver) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-      if (!g.gameOver && g.lastMove !== null) {
-        // Only check on stone placements (passes don't change hash)
-        if (seen.has(g.hash)) collisions++;
-        seen.add(g.hash);
-      }
-    }
-  }
-  console.log(`  Hash collisions: ${collisions} across 5 games`);
-  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
-}
-
-// ─── 9x9 smoke test ──────────────────────────────────────────────────────────
-
-section('7x7 full game (mc vs random, 2 games)');
-{
-  const t0 = performance.now();
-  const result = runMatch('mc', 'random', 2, 7, 100);
-  const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}  (${elapsed}s)`);
-  assert(result.p1Wins >= 1, `mc should beat random on 7x7: got ${result.p1Wins}`);
-}
+});
 
 // ─── classifyEmpty consistency across many board states ──────────────────────
 
-section('classifyEmpty vs isTrueEye consistency (100 random positions)');
-{
+section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
   const random = require('./ai/random.js');
   let mismatches = 0;
 
@@ -327,7 +214,88 @@ section('classifyEmpty vs isTrueEye consistency (100 random positions)');
   }
   console.log(`  Mismatches: ${mismatches}`);
   assert(mismatches === 0, `classifyEmpty should always match: got ${mismatches} mismatches`);
-}
+});
+
+// ─── Hash uniqueness under play ──────────────────────────────────────────────
+
+section('Zobrist hash uniqueness (no collisions in random games)', () => {
+  const random = require('./ai/random.js');
+  let collisions = 0;
+
+  for (let trial = 0; trial < 5; trial++) {
+    const g = new Game(7, 3.5);
+    const seen = new Set();
+    seen.add(g.hash);
+
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+      if (!g.gameOver && g.lastMove !== null) {
+        // Only check on stone placements (passes don't change hash)
+        if (seen.has(g.hash)) collisions++;
+        seen.add(g.hash);
+      }
+    }
+  }
+  console.log(`  Hash collisions: ${collisions} across 5 games`);
+  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
+});
+
+// ─── Playout performance ─────────────────────────────────────────────────────
+
+section('MC playout throughput (7x7)', () => {
+  const mc = require('./ai/mc.js');
+  const g = new Game(7, 3.5);
+  const budgetMs = 200;
+  const t0 = performance.now();
+  const move = mc(g, budgetMs);
+  const elapsed = performance.now() - t0;
+  console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
+  assert(elapsed < budgetMs * 1.5, `MC should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
+  assert(elapsed > budgetMs * 0.5, `MC should use most of the budget: only ${elapsed.toFixed(0)}ms`);
+});
+
+section('MCTS playout throughput (7x7)', () => {
+  const mcts = require('./ai/mcts.js');
+  const g = new Game(7, 3.5);
+  const budgetMs = 200;
+  const t0 = performance.now();
+  const move = mcts(g, budgetMs);
+  const elapsed = performance.now() - t0;
+  console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
+  assert(elapsed < budgetMs * 1.5, `MCTS should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
+  assert(elapsed > budgetMs * 0.5, `MCTS should use most of the budget: only ${elapsed.toFixed(0)}ms`);
+});
+
+// ─── Full game smoke tests ────────────────────────────────────────────────────
+
+section('7x7 full game (mc vs random, 2 games)', () => {
+  const result = runMatch('mc', 'random', 2, 7, 100);
+  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins >= 1, `mc should beat random on 7x7: got ${result.p1Wins}`);
+});
+
+section('MC beats random (5x5, 4 games)', () => {
+  const result = runMatch('mc', 'random', 4, 5, 100);
+  console.log(`  mc: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins > result.p2Wins, `mc should beat random: ${result.p1Wins}-${result.p2Wins}`);
+  assert(result.p1Wins >= 3, `mc should win ≥3/4 vs random: got ${result.p1Wins}`);
+});
+
+section('MCTS beats random (5x5, 4 games)', () => {
+  const result = runMatch('mcts', 'random', 4, 5, 100);
+  console.log(`  mcts: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins > result.p2Wins, `mcts should beat random: ${result.p1Wins}-${result.p2Wins}`);
+  assert(result.p1Wins >= 3, `mcts should win ≥3/4 vs random: got ${result.p1Wins}`);
+});
+
+section('AMAF beats random (5x5, 4 games)', () => {
+  const result = runMatch('amaf', 'random', 4, 5, 100);
+  console.log(`  amaf: ${result.p1Wins}  random: ${result.p2Wins}`);
+  assert(result.p1Wins > result.p2Wins, `amaf should beat random: ${result.p1Wins}-${result.p2Wins}`);
+  assert(result.p1Wins >= 3, `amaf should win ≥3/4 vs random: got ${result.p1Wins}`);
+});
 
 // ─── Results ─────────────────────────────────────────────────────────────────
 
