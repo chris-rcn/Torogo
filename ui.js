@@ -397,17 +397,18 @@ function updateUI() {
   const statusEl = document.getElementById('status-msg');
   const thinking = !g.gameOver && g.current === 'black';
 
-  // Score bar — always visible
-  if (g.gameOver && g.scores) {
-    const bs = g.scores.black;
-    const ws = g.scores.white;
-    document.getElementById('black-score-display').textContent = `Black: ${bs.total}`;
-    document.getElementById('white-score-display').textContent = `White: ${ws.total} (komi ${g.komi})`;
+  // Score bar — always visible, computed every update
+  const t = g.calcTerritory();
+  const blackTotal = t.black;
+  const whiteTotal = t.white + g.komi;
+  document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
+  document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${g.komi})`;
 
+  if (g.gameOver) {
     let winnerText;
-    if (bs.total > ws.total) {
+    if (blackTotal > whiteTotal) {
       winnerText = 'Black wins!';
-    } else if (ws.total > bs.total) {
+    } else if (whiteTotal > blackTotal) {
       winnerText = 'White wins!';
     } else {
       winnerText = 'Tie game!';
@@ -415,8 +416,6 @@ function updateUI() {
     statusEl.textContent = winnerText;
     statusEl.classList.remove('thinking');
   } else {
-    document.getElementById('black-score-display').textContent = 'Black: —';
-    document.getElementById('white-score-display').textContent = `White: — (komi ${g.komi})`;
     statusEl.textContent = thinking ? 'Computer thinking…' : 'Your turn (white)';
     statusEl.classList.toggle('thinking', thinking);
   }
