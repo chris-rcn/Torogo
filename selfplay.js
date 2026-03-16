@@ -177,4 +177,4 @@ console.log(`  ${label('P2:')}  ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(sta
 if (p1Name === p2Name)
   console.log(`  ${label('Black:')}  ${wCol(tally.black)}  ${pct(tally.black)}  ${''.padStart(7)}  (color win rate, komi=${komi})`);
 const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
-console.log(`\n  Total time: ${elapsedSec}s`);
+console.log(`  Total time: ${elapsedSec}s`);
