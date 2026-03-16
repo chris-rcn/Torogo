@@ -463,6 +463,16 @@ let isPanning = false;
 let pointerDownX = 0, pointerDownY = 0;
 let panOriginX = 0, panOriginY = 0;
 
+// RAF gate: state is updated immediately on every event but the canvas is
+// only repainted once per animation frame, keeping drag smooth on mobile.
+let rafPending = false;
+function scheduleDraw() {
+  if (!rafPending) {
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; renderer.draw(); });
+  }
+}
+
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   isPanning = false;
@@ -487,7 +497,7 @@ canvas.addEventListener('pointermove', (e) => {
       renderer.hoverPos = null;
       renderer.panX = panOriginX + dx;
       renderer.panY = panOriginY + dy;
-      renderer.draw();
+      scheduleDraw();
     }
   } else {
     // Hover — update ghost stone (only when it's the human's turn)
@@ -495,13 +505,13 @@ canvas.addEventListener('pointermove', (e) => {
     renderer.hoverPos = !game.gameOver && game.current === 'white'
       ? renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top)
       : null;
-    renderer.draw();
+    scheduleDraw();
   }
 });
 
 canvas.addEventListener('pointerleave', () => {
   renderer.hoverPos = null;
-  renderer.draw();
+  scheduleDraw();
 });
 
 canvas.addEventListener('pointerup', (e) => {
