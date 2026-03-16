@@ -3131,6 +3131,7 @@ if (require.main === module) {
   console.log(`\n── Puzzle Benchmark: ${agentName} (${budgetMs}ms/move) — ${PUZZLES.length} puzzles × ${oversample} = ${totalRuns} runs ──\n`);
   if (verbose) console.log('  #  Run  Size  Comment                                                    Result');
 
+  const startTime = Date.now();
   let correct = 0;
   for (let i = 0; i < PUZZLES.length; i++) {
     const puzzle = PUZZLES[i];
@@ -3159,9 +3160,10 @@ if (require.main === module) {
     }
   }
 
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   const pct = (correct / totalRuns * 100).toFixed(1);
   console.log('  ──────────────────────────────────────────────────────');
-  console.log(`     Total: ${correct}/${totalRuns} (${pct}%)`);
+  console.log(`     Total: ${correct}/${totalRuns} (${pct}%)  elapsed: ${elapsed}s`);
   process.exit(0);
 }
 
