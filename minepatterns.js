@@ -59,17 +59,20 @@ for (const line of lines) {
     const mx = token.charCodeAt(0) - 97;
     const my = token.charCodeAt(1) - 97;
 
-    // Enumerate all legal non-true-eye candidates.
+    // Enumerate all legal non-true-eye candidates (excluding the selected move).
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
+        if (x === mx && y === my) continue;
         if (board.get(x, y) !== null) continue;
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        const hash = patternHash(g, x, y);
-        bump(hash, x === mx && y === my);
+        bump(patternHash(g, x, y), false);
       }
     }
+
+    // Always record the selected move (seen + selected), even if it is a true eye.
+    bump(patternHash(g, mx, my), true);
 
     g.placeStone(mx, my);
   }
