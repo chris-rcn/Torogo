@@ -97,6 +97,7 @@ function printBoard(game) {
 
 const tally = { p1: 0, p2: 0, draw: 0, black: 0, white: 0 };
 const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
+const startTime = performance.now();
 const verbose = numGames <= 20;
 const verboseBoard = !!opts.verbose;
 
@@ -175,3 +176,5 @@ console.log(`  ${label('P1:')}  ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(sta
 console.log(`  ${label('P2:')}  ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${mCol(stats.p2.moves)}  ${p2Name}`);
 if (p1Name === p2Name)
   console.log(`  ${label('Black:')}  ${wCol(tally.black)}  ${pct(tally.black)}  ${''.padStart(7)}  (color win rate, komi=${komi})`);
+const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
+console.log(`\n  Total time: ${elapsedSec}s`);
