@@ -10,7 +10,7 @@ class Renderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.game = game;
-    this.padding = 32;
+    this.padding = 18;
     this.panX = 0;
     this.panY = 0;
     this.hoverPos = null;
