@@ -339,7 +339,7 @@ section('Komi in scoring');
 
 section('DEFAULT_KOMI');
 {
-  assert(DEFAULT_KOMI === 3.5, 'default komi is 3.5');
+  assert(DEFAULT_KOMI === 4.5, 'default komi is 4.5');
 }
 
 // ─── statusText ──────────────────────────────────────────────────────────────

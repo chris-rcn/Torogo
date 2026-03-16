@@ -675,7 +675,7 @@ Board.verifyGroupRatio = 0;
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
-  constructor(boardSize = 9, komi = 3.5) {
+  constructor(boardSize = 9, komi = 4.5) {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
