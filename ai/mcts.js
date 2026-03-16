@@ -101,6 +101,7 @@ function legalMoves(game) {
   for (let y = 0; y < game.boardSize; y++)
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
+      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
       const probe = game.clone();
       if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
