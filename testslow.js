@@ -135,6 +135,118 @@ section('MCTS playout throughput (7x7)', () => {
   assert(elapsed > budgetMs * 0.5, `MCTS should use most of the budget: only ${elapsed.toFixed(0)}ms`);
 });
 
+// ─── Winning agent passes after opponent passes ───────────────────────────────
+
+section('Winning agent passes after opponent passes (7x7)', () => {
+  const rave = require('./ai/rave.js');
+  const mcts = require('./ai/mcts.js');
+
+  // Hardcoded 7x7 position (found by playing area/2 random alternating moves
+  // then 4 rave moves for white with random black responses).
+  //
+  // white territory 22, black 17, neutral 10, komi 3.5
+  // → white total 25.5 vs black 17 (white leads by 8.5)
+  //
+  // The neutral (10) exceeds the lead (8.5), so if random rollouts assign all
+  // neutral cells to black, black wins — giving place-moves a win-rate <100%.
+  // Passing ends the game immediately at the current score (white wins 100%).
+  // This gap in win-rates is what causes both agents to prefer pass.
+  const layout = [
+    '. . . W . W W',  // y=0
+    'B . B . . B .',  // y=1
+    '. B . W . B .',  // y=2
+    'W B . B W W .',  // y=3
+    'W . B W . . W',  // y=4
+    'B W B W . W B',  // y=5
+    'W W B . W . B',  // y=6
+  ];
+
+  const g = new Game(7, 3.5);
+  const board = g.board;
+  const SZ = 7;
+  const nbr = board._nbr;
+
+  // Set every cell directly.
+  for (let y = 0; y < SZ; y++) {
+    const cells = layout[y].split(' ');
+    for (let x = 0; x < SZ; x++)
+      board.grid[y][x] = cells[x] === 'B' ? 'black' : cells[x] === 'W' ? 'white' : null;
+  }
+
+  // Rebuild the incremental group tracker from scratch.
+  // captureGroups() can't be used here because it expects neighbours to be
+  // tracked already (order-dependent on a toroidal board).  Instead we do it
+  // in two passes: first give every stone its own isolated group with correct
+  // liberties, then merge adjacent same-colour groups.
+  board._gid.fill(-1);
+  board._groups.clear();
+  board._nextGid = 0;
+
+  // Pass 1 – isolated groups.
+  for (let y = 0; y < SZ; y++) {
+    for (let x = 0; x < SZ; x++) {
+      const c = board.grid[y][x];
+      if (c === null) continue;
+      const idx = y * SZ + x;
+      const gid = board._nextGid++;
+      const libs = new Set();
+      const base = idx * 4;
+      for (let i = 0; i < 4; i++) {
+        const ni = nbr[base + i];
+        if (board.grid[(ni / SZ) | 0][ni % SZ] === null) libs.add(ni);
+      }
+      board._gid[idx] = gid;
+      board._groups.set(gid, { color: c, stones: new Set([idx]), liberties: libs });
+    }
+  }
+
+  // Pass 2 – merge connected same-colour groups.
+  for (let y = 0; y < SZ; y++) {
+    for (let x = 0; x < SZ; x++) {
+      const c = board.grid[y][x];
+      if (c === null) continue;
+      const idx = y * SZ + x;
+      const base = idx * 4;
+      for (let i = 0; i < 4; i++) {
+        const ni = nbr[base + i];
+        if (board.grid[(ni / SZ) | 0][ni % SZ] !== c) continue;
+        const gidA = board._gid[idx];
+        const gidB = board._gid[ni];
+        if (gidA === gidB) continue;
+        const groupA = board._groups.get(gidA);
+        const groupB = board._groups.get(gidB);
+        // Merge smaller into larger.
+        const [keepGid, keepGrp, mergeGrp] = groupA.stones.size >= groupB.stones.size
+          ? [gidA, groupA, groupB] : [gidB, groupB, groupA];
+        const mergeGid = keepGid === gidA ? gidB : gidA;
+        for (const si of mergeGrp.stones) { keepGrp.stones.add(si); board._gid[si] = keepGid; }
+        for (const li of mergeGrp.liberties) keepGrp.liberties.add(li);
+        board._groups.delete(mergeGid);
+      }
+    }
+  }
+
+  g.current = 'black';  // black (loser) moves next
+  g.moveCount = 32;
+  g.consecutivePasses = 0;
+  g.koFlag = null;
+
+  const territory = g.calcTerritory();
+  console.log(`  white territory: ${territory.white} vs black: ${territory.black} (komi ${g.komi})`);
+  assert(territory.white + g.komi > territory.black,
+    `position should favour white: ${territory.white + g.komi} vs ${territory.black}`);
+
+  // black (loser) passes once; white (winner) should then also pass to end game.
+  for (const [agentName, agent] of [['mcts', mcts], ['rave', rave]]) {
+    const clone = g.clone();
+    clone.pass(); // black passes (consecutivePasses = 1)
+    const result = agent(clone, 1000);
+    console.log(`  ${agentName}: ${result.type}${result.info ? ' — ' + result.info : ''}`);
+    assert(result.type === 'pass',
+      `${agentName}: white should pass to end the winning game (got ${result.type})`);
+  }
+});
+
 // ─── AI moves are always legal ───────────────────────────────────────────────
 
 section('AI legality stress test (all agents, 5 full games each)', () => {
