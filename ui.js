@@ -402,7 +402,7 @@ function updateUI() {
   const blackTotal = t.black;
   const whiteTotal = t.white + g.komi;
   document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
-  document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi ${g.komi})`;
+  document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${g.komi})`;
 
   if (g.gameOver) {
     let winnerText;
