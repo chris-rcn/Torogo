@@ -331,7 +331,7 @@ function getMove(game, timeBudgetMs) {
     .sort((a, b) => b.visits - a.visits);
 
   if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
-  if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
+  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
   result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
   return result;
