@@ -68,7 +68,7 @@ for (let gi = 0; gi < lines.length; gi++) {
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        bump(patternHash(g, x, y), false);
+        bump(patternHash(g, x, y, color), false);
       }
     }
 
@@ -83,7 +83,7 @@ for (let gi = 0; gi < lines.length; gi++) {
       process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
     // Always record the selected move (seen + selected), even if it is a true eye.
-    bump(patternHash(g, mx, my), true);
+    bump(patternHash(g, mx, my, color), true);
 
     g.placeStone(mx, my);
   }

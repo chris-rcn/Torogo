@@ -89,7 +89,7 @@ function makeAgent(patternFile) {
       if (board.isSuicide(x, y, color)) continue;
       if (board.isKo(x, y, color, game.koFlag)) continue;
 
-      const hash   = patternHash(game, x, y);
+      const hash   = patternHash(game, x, y, color);
       const weight = table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
       candidates.push([x, y]);
       weights.push(weight);
@@ -127,7 +127,7 @@ function makeAgent(patternFile) {
 function makeWeighter(patternFile) {
   const table = loadPatterns(patternFile);
   return function weight(game, x, y) {
-    const hash = patternHash(game, x, y);
+    const hash = patternHash(game, x, y, game.current);
     return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
   };
 }
