@@ -59,7 +59,7 @@ function playTracked(game) {
     if (move.type === 'place') {
       if (current === 'black') blackPlayed.push(move.y * size + move.x);
       else                     whitePlayed.push(move.y * size + move.x);
-      game.placeStone(move.x, move.y);
+      game.applyLegal(move.x, move.y);
     } else {
       game.pass();
     }
