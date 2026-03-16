@@ -27,6 +27,8 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
+const patternGetMove = require('./pattern.js');
+
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
@@ -39,87 +41,29 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 // to uniform-random expansion.
 const EXPANSION_CANDIDATES = 2;
 
-// ── Fast playout helpers ──────────────────────────────────────────────────────
+// ── Pattern-guided playout ────────────────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
-// Random playout that records the cell indices (y*N+x) of every move made by
-// each player.  Pass moves carry no cell index and are not recorded.
+// Playout using the pattern agent for move selection, tracking cell indices
+// (y*N+x) of every move made by each player for RAVE backpropagation.
 // Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game) {
   const size = game.boardSize;
-  const board = game.board;
-  const grid  = board.grid;
   const blackPlayed = [];
   const whitePlayed = [];
-
-  const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (grid[y][x] === null) empty.push(y * size + x);
-
-  const moveLimit = empty.length + 20;
+  const moveLimit = size * size + 20;
   let moves = 0;
 
   while (!game.gameOver && moves < moveLimit) {
-    let placed = false;
-    let end = empty.length;
     const current = game.current;
-
-    while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const cellIdx = empty[i];
-      const x = cellIdx % size;
-      const y = (cellIdx / size) | 0;
-      empty[i] = empty[end - 1];
-      empty[end - 1] = cellIdx;
-      end--;
-
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-
-      const result = game.placeStone(x, y);
-      if (result) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result > 1) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+    const move = patternGetMove(game, 0);
+    if (move.type === 'place') {
+      if (current === 'black') blackPlayed.push(move.y * size + move.x);
+      else                     whitePlayed.push(move.y * size + move.x);
+      game.placeStone(move.x, move.y);
+    } else {
+      game.pass();
     }
-
-    if (!placed) { game.pass(); moves++; }
+    moves++;
   }
 
   if (!game.gameOver) game.endGame();
