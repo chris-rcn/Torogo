@@ -14,7 +14,8 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
-const { performance } = require('perf_hooks');
+const performance = (typeof window !== 'undefined') ? window.performance
+  : require('perf_hooks').performance;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4; // UCT exploration constant
@@ -103,7 +104,8 @@ function legalMoves(game) {
       const probe = game.clone();
       if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
-  moves.push({ type: 'pass' });
+  const area = game.boardSize * game.boardSize;
+  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
   return moves;
 }
 
@@ -141,7 +143,7 @@ function selectAndExpand(root, rootGame) {
   const game = rootGame.clone();
 
   // Select: walk down fully-expanded nodes using UCT.
-  while (node.untried !== null && node.untried.length === 0 && node.children.length > 0) {
+  while (node.untried !== null && node.untried.length === 0 && node.children.length > 0 && !game.gameOver) {
     let best = null;
     let bestScore = -1;
     for (const child of node.children) {
@@ -165,6 +167,13 @@ function selectAndExpand(root, rootGame) {
       node.children.push(child);
       node = child;
       applyMove(game, move);
+
+      if (!game.gameOver && game.consecutivePasses > 0) {
+        const secondPass = makeNode({ type: 'pass' }, node, game.current);
+        node.children.push(secondPass);
+        node = secondPass;
+        applyMove(game, { type: 'pass' });
+      }
     }
   }
 
@@ -189,8 +198,8 @@ function backpropagate(node, winner) {
 
 // ── Public interface ─────────────────────────────────────────────────────────
 
-module.exports = function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass' };
+function getMove(game, timeBudgetMs) {
+  if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
   const root = makeNode(null, null, null);
 
@@ -218,7 +227,11 @@ module.exports = function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  // If every playout from the best move was a loss, passing can't be worse.
-  if (!bestChild || bestChild.wins === 0) return { type: 'pass', children };
-  return { ...bestChild.move, children };
-};
+  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
+  if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
+  const result = { ...bestChild.move, children };
+  result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
+  return result;
+}
+
+if (typeof module !== 'undefined') module.exports = getMove;
