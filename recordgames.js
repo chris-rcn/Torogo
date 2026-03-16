@@ -3,10 +3,11 @@
 
 // recordgames.js — play an agent against itself and print a game record per line.
 //
-// Usage: node recordgames.js [--agent rave] [--size 7] [--budget 500]
-//   --agent   ai agent name (default: rave)
-//   --size    board size    (default: 7)
-//   --budget  ms per move   (default: 500)
+// Usage: node recordgames.js [--agent rave] [--size 7] [--budget 500] [--max 0]
+//   --agent   ai agent name  (default: rave)
+//   --size    board size     (default: 7)
+//   --budget  ms per move    (default: 500)
+//   --max     games to generate, 0 = unlimited (default: 0)
 //
 // Output: one game per line, comma-separated.
 //   First field : board size.
@@ -24,13 +25,16 @@ const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? arg
 const agentName = get('--agent',  'rave');
 const size      = parseInt(get('--size',   '7'),   10);
 const budget    = parseInt(get('--budget', '500'), 10);
+const max       = parseInt(get('--max',    '0'),   10);
 
 const agent = require(`./ai/${agentName}.js`);
 
 const col = x => String.fromCharCode(97 + x);
 const row = y => String.fromCharCode(97 + y);
 
-while (true) {
+let count = 0;
+while (max === 0 || count < max) {
+  count++;
   const g = new Game(size, DEFAULT_KOMI);
   const parts = [size];
 
