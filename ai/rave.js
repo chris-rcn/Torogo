@@ -294,12 +294,12 @@ function getMove(game, timeBudgetMs) {
   const deadline = performance.now() + budgetMs;
   let playouts = 0;
 
-  while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline) {
+  do {
     playouts++;
     const { node, game: simGame } = selectAndExpand(root, game, N);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
-  }
+  } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
   // Pick the root child with the most visits (most robust criterion).
   let bestChild = null, bestVisits = -1;
@@ -311,7 +311,6 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
   if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
   result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
