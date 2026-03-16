@@ -48,99 +48,6 @@ function runMatch(p1Name, p2Name, games, size, budget) {
   return { p1Wins, p2Wins };
 }
 
-// ─── Hash uniqueness under play ──────────────────────────────────────────────
-
-section('Zobrist hash uniqueness (no collisions in random games)', () => {
-  const random = require('./ai/random.js');
-  let collisions = 0;
-
-  for (let trial = 0; trial < 5; trial++) {
-    const g = new Game(7, 3.5);
-    const seen = new Set();
-    seen.add(g.hash);
-
-    while (!g.gameOver) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-      if (!g.gameOver && g.lastMove !== null) {
-        // Only check on stone placements (passes don't change hash)
-        if (seen.has(g.hash)) collisions++;
-        seen.add(g.hash);
-      }
-    }
-  }
-  console.log(`  Hash collisions: ${collisions} across 5 games`);
-  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
-});
-
-// ─── Clone divergence ────────────────────────────────────────────────────────
-
-section('Clone divergence (independent futures)', () => {
-  const random = require('./ai/random.js');
-  let ok = true;
-
-  for (let trial = 0; trial < 10; trial++) {
-    const g = new Game(7, 3.5);
-    // Play a few moves
-    for (let i = 0; i < 5 && !g.gameOver; i++) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-    if (g.gameOver) continue;
-
-    const c = g.clone();
-    // Play different continuations
-    for (let i = 0; i < 10 && !g.gameOver; i++) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-
-    // Clone should still be playable
-    try {
-      const move = random(c);
-      if (move.type === 'place') c.placeStone(move.x, move.y);
-      else c.pass();
-    } catch (e) {
-      ok = false;
-      console.error(`  Clone became corrupt after original diverged:`, e.message);
-    }
-  }
-  assert(ok, 'clones remain playable after original diverges');
-});
-
-// ─── Territory scoring sanity ────────────────────────────────────────────────
-
-section('Territory scoring makes sense', () => {
-  const random = require('./ai/random.js');
-  let ok = true;
-
-  for (let i = 0; i < 10; i++) {
-    const g = new Game(7, 3.5);
-    while (!g.gameOver) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-    const s = g.scores;
-    // Territory should be non-negative
-    if (s.black.territory < 0 || s.white.territory < 0) {
-      ok = false;
-      console.error(`  Negative territory in game ${i}`);
-    }
-    // Total territory (includes stones in Chinese scoring) + neutral should account for all cells
-    const territory = g.calcTerritory();
-    const accounted = territory.black + territory.white + territory.neutral;
-    if (accounted !== 49) {
-      ok = false;
-      console.error(`  Territory doesn't sum to 49: got ${accounted}`);
-    }
-  }
-  assert(ok, 'territory scores are valid across 10 games');
-});
-
 // ─── classifyEmpty consistency across many board states ──────────────────────
 
 section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
@@ -174,16 +81,6 @@ section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
   }
   console.log(`  Mismatches: ${mismatches}`);
   assert(mismatches === 0, `classifyEmpty should always match: got ${mismatches} mismatches`);
-});
-
-// ─── Random vs random is roughly even ────────────────────────────────────────
-
-section('Random vs random roughly even (5x5, 20 games)', () => {
-  const result = runMatch('random', 'random', 20, 5, 0);
-  console.log(`  p1: ${result.p1Wins}  p2: ${result.p2Wins}`);
-  // Neither side should dominate (both are random); allow wide margin
-  assert(result.p1Wins >= 3 && result.p2Wins >= 3,
-    `random vs random should be roughly balanced: ${result.p1Wins}-${result.p2Wins}`);
 });
 
 // ─── Group tracker integrity under heavy play ────────────────────────────────

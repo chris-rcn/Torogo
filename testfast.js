@@ -286,6 +286,39 @@ section('Game clone');
   assert(c.board.get(1, 1) !== null, 'clone has the stone');
 }
 
+section('Clone divergence (independent futures)');
+{
+  const random = require('./ai/random.js');
+  let ok = true;
+
+  for (let trial = 0; trial < 10; trial++) {
+    const g = new Game(7, 3.5);
+    for (let i = 0; i < 5 && !g.gameOver; i++) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+    if (g.gameOver) continue;
+
+    const c = g.clone();
+    for (let i = 0; i < 10 && !g.gameOver; i++) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+
+    try {
+      const move = random(c);
+      if (move.type === 'place') c.placeStone(move.x, move.y);
+      else c.pass();
+    } catch (e) {
+      ok = false;
+      console.error(`  Clone became corrupt after original diverged:`, e.message);
+    }
+  }
+  assert(ok, 'clones remain playable after original diverges');
+}
+
 section('Board clone');
 {
   const b = new Board(9);
@@ -324,6 +357,33 @@ section('Territory calculation');
   // All territory should be black (one stone on board, all connected empty is black territory)
   // On a toroidal board, the single stone's territory = all empty cells
   assert(g.scores.black.total > 0, 'black has territory');
+}
+
+section('Territory scoring makes sense');
+{
+  const random = require('./ai/random.js');
+  let ok = true;
+
+  for (let i = 0; i < 10; i++) {
+    const g = new Game(7, 3.5);
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+    const s = g.scores;
+    if (s.black.territory < 0 || s.white.territory < 0) {
+      ok = false;
+      console.error(`  Negative territory in game ${i}`);
+    }
+    const territory = g.calcTerritory();
+    const accounted = territory.black + territory.white + territory.neutral;
+    if (accounted !== 49) {
+      ok = false;
+      console.error(`  Territory doesn't sum to 49: got ${accounted}`);
+    }
+  }
+  assert(ok, 'territory scores are valid across 10 games');
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
@@ -370,6 +430,35 @@ section('Move count auto-end');
 }
 
 // ─── Random agent ────────────────────────────────────────────────────────────
+
+section('Random vs random roughly even (5x5, 20 games)');
+{
+  const p1 = require('./ai/random.js');
+  const p2 = require('./ai/random.js');
+  let p1Wins = 0, p2Wins = 0;
+
+  for (let i = 0; i < 20; i++) {
+    const g = new Game(5, 3.5);
+    const blackAgent = i % 2 === 0 ? p1 : p2;
+    const whiteAgent = i % 2 === 0 ? p2 : p1;
+    const p1IsBlack = i % 2 === 0;
+
+    while (!g.gameOver) {
+      const agent = g.current === 'black' ? blackAgent : whiteAgent;
+      const move = agent(g, 0);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+
+    const s = g.scores;
+    const blackWins = s.black.total > s.white.total;
+    if (p1IsBlack ? blackWins : !blackWins) p1Wins++;
+    else p2Wins++;
+  }
+  console.log(`  p1: ${p1Wins}  p2: ${p2Wins}`);
+  assert(p1Wins >= 3 && p2Wins >= 3,
+    `random vs random should be roughly balanced: ${p1Wins}-${p2Wins}`);
+}
 
 section('Random agent');
 {
@@ -506,6 +595,31 @@ section('Hash consistency across clones');
   g.placeStone(2, 0);
   c.placeStone(2, 0);
   assert(c.hash === g.hash, 'hash matches after same move on clone');
+}
+
+section('Zobrist hash uniqueness (no collisions in random games)');
+{
+  const random = require('./ai/random.js');
+  let collisions = 0;
+
+  for (let trial = 0; trial < 5; trial++) {
+    const g = new Game(7, 3.5);
+    const seen = new Set();
+    seen.add(g.hash);
+
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+      if (!g.gameOver && g.lastMove !== null) {
+        // Only check on stone placements (passes don't change hash)
+        if (seen.has(g.hash)) collisions++;
+        seen.add(g.hash);
+      }
+    }
+  }
+  console.log(`  Hash collisions: ${collisions} across 5 games`);
+  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
 }
 
 // ─── placeStone return value ─────────────────────────────────────────────────
