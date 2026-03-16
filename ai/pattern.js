@@ -102,4 +102,10 @@ function makeAgent(patternFile) {
   };
 }
 
-module.exports = { makeAgent };
+// Default getMove for use with selfplay.js / recordgames.js:
+//   node selfplay.js --p1 pattern --p2 random
+// Looks for patterns.csv next to game.js (project root).
+const path = require('path');
+const _defaultGetMove = makeAgent(path.join(__dirname, '..', 'patterns.csv'));
+
+module.exports = Object.assign(_defaultGetMove, { makeAgent });
