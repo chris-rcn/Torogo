@@ -52,6 +52,9 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 // to uniform-random expansion.
 const EXPANSION_CANDIDATES = 2;
 
+// Fixed playout count per decision.  When non-zero, overrides the time budget.
+const PLAYOUTS = 0;
+
 // ── Pattern-guided playout ────────────────────────────────────────────────────
 
 // Playout using pattern weights for move selection, with the same incremental
@@ -302,8 +305,10 @@ function getMove(game, timeBudgetMs) {
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
+  let playouts = 0;
 
-  while (performance.now() < deadline) {
+  while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline) {
+    playouts++;
     const { node, game: simGame } = selectAndExpand(root, game, N);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
