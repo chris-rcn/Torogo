@@ -54,21 +54,12 @@
     cursor: default;
   }
 
-  .status-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    margin-top: 14px;
-    margin-bottom: 6px;
-  }
-
   #status-msg {
-    font-size: 1.3rem;
+    font-size: 1rem;
     font-weight: bold;
     color: #c8a84a;
     letter-spacing: 0.05em;
-    min-height: 1.2em;
+    flex: 1;
     text-align: center;
   }
 
@@ -215,12 +206,9 @@
   </div>
   <div id="board-controls">
     <div id="computer-passed-label">computer passed</div>
+    <div id="status-msg">Black to play</div>
     <button id="pass-btn" style="display:none">Pass</button>
   </div>
-</div>
-
-<div class="status-row">
-  <div id="status-msg">Black to play</div>
 </div>
 
 
