@@ -24,6 +24,9 @@ const { patternHash } = require('../patterns.JS');
 // Weight given to patterns that were never observed in the training data.
 const DEFAULT_WEIGHT = 0.01;
 
+// Number of randomly sampled candidates to score per move.
+const CANDIDATES = 2;
+
 /**
  * Load a pattern-statistics file and return a Map<hash, ratio>.
  *
@@ -61,29 +64,40 @@ function makeAgent(patternFile) {
     const color = game.current;
     const board = game.board;
 
-    // Collect legal non-true-eye candidates with their pattern weights.
-    const candidates = [];  // [x, y]
-    const weights    = [];  // parallel array of selection-ratio weights
-
+    // Collect all legal non-true-eye cells into a pool.
+    const pool = [];
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
-        if (board.get(x, y) !== null)          continue;
-        if (board.isTrueEye(x, y, color))      continue;
-        if (board.isSuicide(x, y, color))      continue;
-        if (board.isKo(x, y, color, game.koFlag)) continue;
-
-        const hash   = patternHash(game, x, y);
-        const weight = table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
-
-        candidates.push([x, y]);
-        weights.push(weight);
+        if (board.get(x, y) === null && !board.isTrueEye(x, y, color))
+          pool.push([x, y]);
       }
+    }
+
+    if (pool.length === 0) return { type: 'pass' };
+
+    // Draw up to CANDIDATES cells from the pool using reservoir-style random
+    // selection (swap-with-last), then check full legality and score each.
+    const candidates = [];  // [x, y]
+    const weights    = [];  // parallel selection-ratio weights
+    let remaining = pool.length;
+
+    while (candidates.length < CANDIDATES && remaining > 0) {
+      const i = Math.floor(Math.random() * remaining);
+      const [x, y] = pool[i];
+      pool[i] = pool[--remaining];   // swap-with-last (no splice)
+
+      if (board.isSuicide(x, y, color)) continue;
+      if (board.isKo(x, y, color, game.koFlag)) continue;
+
+      const hash   = patternHash(game, x, y);
+      const weight = table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+      candidates.push([x, y]);
+      weights.push(weight);
     }
 
     if (candidates.length === 0) return { type: 'pass' };
 
-    // Weighted random sample: pick one candidate with probability proportional
-    // to its weight.
+    // Weighted random sample among the chosen candidates.
     let total = 0;
     for (const w of weights) total += w;
 
