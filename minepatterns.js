@@ -39,7 +39,8 @@ function bump(hash, selected) {
   if (selected) s.selected++;
 }
 
-for (const line of lines) {
+for (let gi = 0; gi < lines.length; gi++) {
+  const line = lines[gi];
   const fields = line.split(',');
   const size   = parseInt(fields[0], 10);
   const moves  = fields.slice(1);
@@ -70,6 +71,16 @@ for (const line of lines) {
         bump(patternHash(g, x, y), false);
       }
     }
+
+    // Warn if the selected move is questionable.
+    if (board.get(mx, my) !== null)
+      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is occupied\n`);
+    else if (board.isTrueEye(mx, my, color))
+      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is a true eye\n`);
+    else if (board.isSuicide(mx, my, color))
+      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is suicide\n`);
+    else if (board.isKo(mx, my, color, g.koFlag))
+      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
     // Always record the selected move (seen + selected), even if it is a true eye.
     bump(patternHash(g, mx, my), true);
