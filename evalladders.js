@@ -1,24 +1,28 @@
 #!/usr/bin/env node
 'use strict';
 
-// evalladders.js — count ladder mistakes in game records.
+// evalladders.js — evaluate ladder decisions across all atari groups in each position.
 //
 // Usage: node evalladders.js --file <path>
 //   --file  path to game records produced by recordgames.js (required)
 //
-// For every non-pass move played, the script checks the groups in atari
-// that are adjacent to the played cell and classifies the move:
+// For every non-pass move in every game, the script examines ALL groups
+// currently in atari on the board and classifies the current player's
+// decision for each group:
 //
-//   "saves lost ladder"      — the player plays the escape liberty of one of
-//                              their own groups that is already caught in a
-//                              losing ladder (the escape will fail).
+//   Defender perspective (own groups in atari)
+//     CORRECT  — abandoned a doomed ladder (captured group, did not play escape)
+//     MISTAKE  — played escape for a captured group (escape will fail)
+//     CORRECT  — played escape when group can genuinely escape
+//     MISSED   — did not play escape when group could have escaped
 //
-//   "attacks escapable"      — the player plays the single liberty of an
-//                              opponent group that is in atari but can escape
-//                              (the attack will be fruitless).
+//   Attacker perspective (opponent groups in atari)
+//     CORRECT  — attacked a ladder-caught group (played its liberty)
+//     MISSED   — did not attack a ladder-caught group
+//     CORRECT  — ignored a group that can escape (did not play its liberty)
+//     MISTAKE  — attacked a group that can escape (futile attack)
 //
-// A single move may satisfy either, both, or neither condition.
-// Output: counts and percentages over all moves analysed.
+// Output: counts and percentages for all eight categories.
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
@@ -35,10 +39,23 @@ if (!file) {
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
 
-let totalMoves        = 0;
-let savesLost         = 0;  // move escapes a ladder-captured own group
-let attacksEscapable  = 0;  // move attacks an opponent group that can escape
+// ── Counters ──────────────────────────────────────────────────────────────────
+// def_ = own group in atari,  att_ = opponent group in atari
+// captured  = ladder-caught,  free = can escape
+// played    = current move is on the group's single liberty
+const counts = {
+  def_captured_ignored:  0,  // CORRECT: abandoned a doomed ladder
+  def_captured_escaped:  0,  // MISTAKE: played escape for a captured group
+  def_free_escaped:      0,  // CORRECT: played escape when group can escape
+  def_free_ignored:      0,  // MISSED:  did not escape when group could
 
+  att_captured_attacked: 0,  // CORRECT: attacked a captured group
+  att_captured_ignored:  0,  // MISSED:  did not attack a captured group
+  att_free_ignored:      0,  // CORRECT: ignored a group that can escape
+  att_free_attacked:     0,  // MISTAKE: attacked a group that can escape
+};
+
+// ── Game replay ───────────────────────────────────────────────────────────────
 for (const line of lines) {
   const fields = line.split(',');
   const size   = parseInt(fields[0], 10);
@@ -54,56 +71,79 @@ for (const line of lines) {
     const x      = token.charCodeAt(0) - 97;
     const y      = token.charCodeAt(1) - 97;
     const player = g.current;
-    const opp    = player === 'black' ? 'white' : 'black';
 
-    // Examine unique groups adjacent to (x, y) that are in atari with their
-    // single liberty exactly at (x, y).
-    let moveSavesLost        = false;
-    let moveAttacksEscapable = false;
-    const visited = new Set();
+    // Enumerate every unique group currently in atari across the whole board.
+    const visitedGroups = new Set();
+    for (let gy = 0; gy < size; gy++) {
+      for (let gx = 0; gx < size; gx++) {
+        const color = g.board.get(gx, gy);
+        if (color === null) continue;
 
-    for (const [nx, ny] of g.board.getNeighbors(x, y)) {
-      const color = g.board.get(nx, ny);
-      if (color === null) continue;
+        const cellKey = `${gx},${gy}`;
+        if (visitedGroups.has(cellKey)) continue;
+        const group = g.board.getGroup(gx, gy);
+        for (const [sx, sy] of group) visitedGroups.add(`${sx},${sy}`);
 
-      // Deduplicate: skip if we already processed this group.
-      const key = `${nx},${ny}`;
-      if (visited.has(key)) continue;
-      const group = g.board.getGroup(nx, ny);
-      for (const [gx, gy] of group) visited.add(`${gx},${gy}`);
+        const libs = g.board.getLiberties(group);
+        if (libs.size !== 1) continue;  // only atari groups
 
-      // Only care about groups in atari whose single liberty is (x, y).
-      const libs = g.board.getLiberties(group);
-      if (libs.size !== 1) continue;
-      const [libStr] = libs;
-      const [lx, ly] = libStr.split(',').map(Number);
-      if (lx !== x || ly !== y) continue;
+        const [libStr] = libs;
+        const [lx, ly] = libStr.split(',').map(Number);
+        // Did the current move land on this group's single liberty?
+        const played = (lx === x && ly === y);
 
-      // Group is in atari with liberty at (x, y) — the player is interacting
-      // with this group by playing here.
-      const { captured } = isLadderCaptured(g, nx, ny);
+        const { captured } = isLadderCaptured(g, gx, gy);
 
-      if (color === player && captured) {
-        // Player escapes their own group that is already caught in a ladder.
-        moveSavesLost = true;
-      } else if (color === opp && !captured) {
-        // Player attacks an opponent group that can still escape.
-        moveAttacksEscapable = true;
+        if (color === player) {
+          // ── Defender: own group in atari ─────────────────────────────────
+          if (captured) {
+            if (played) counts.def_captured_escaped++;
+            else        counts.def_captured_ignored++;
+          } else {
+            if (played) counts.def_free_escaped++;
+            else        counts.def_free_ignored++;
+          }
+        } else {
+          // ── Attacker: opponent group in atari ────────────────────────────
+          if (captured) {
+            if (played) counts.att_captured_attacked++;
+            else        counts.att_captured_ignored++;
+          } else {
+            if (played) counts.att_free_attacked++;
+            else        counts.att_free_ignored++;
+          }
+        }
       }
     }
-
-    if (moveSavesLost)        savesLost++;
-    if (moveAttacksEscapable) attacksEscapable++;
-    totalMoves++;
 
     g.placeStone(x, y);
   }
 }
 
+// ── Report ────────────────────────────────────────────────────────────────────
 function pct(n, d) {
-  return d === 0 ? '0.00' : (100 * n / d).toFixed(2);
+  return d === 0 ? ' n/a ' : (100 * n / d).toFixed(1) + '%';
 }
 
-console.log(`Total moves analysed  : ${totalMoves}`);
-console.log(`Saves a lost ladder   : ${savesLost.toString().padStart(6)} (${pct(savesLost, totalMoves)}%)`);
-console.log(`Attacks escapable     : ${attacksEscapable.toString().padStart(6)} (${pct(attacksEscapable, totalMoves)}%)`);
+function row(label, n, d, tag) {
+  const nd = `${n}/${d}`;
+  console.log(`  ${label.padEnd(44)} ${nd.padStart(12)}  ${pct(n, d).padStart(6)}  [${tag}]`);
+}
+
+const defCap = counts.def_captured_escaped  + counts.def_captured_ignored;
+const defFre = counts.def_free_escaped      + counts.def_free_ignored;
+const attCap = counts.att_captured_attacked + counts.att_captured_ignored;
+const attFre = counts.att_free_attacked     + counts.att_free_ignored;
+
+console.log('\n── Defender (own groups in atari) ─────────────────────────────────────────');
+row('Abandoned a doomed ladder',           counts.def_captured_ignored,  defCap, 'CORRECT');
+row('Escaped a captured group',            counts.def_captured_escaped,  defCap, 'MISTAKE');
+row('Escaped when group can escape',       counts.def_free_escaped,      defFre, 'CORRECT');
+row('Did not escape an escapable group',   counts.def_free_ignored,      defFre, 'MISSED ');
+
+console.log('\n── Attacker (opponent groups in atari) ─────────────────────────────────────');
+row('Attacked a doomed ladder',            counts.att_captured_attacked, attCap, 'CORRECT');
+row('Ignored a doomed ladder',             counts.att_captured_ignored,  attCap, 'MISSED ');
+row('Ignored an escapable ladder',         counts.att_free_ignored,      attFre, 'CORRECT');
+row('Attacked an escapable ladder',        counts.att_free_attacked,     attFre, 'MISTAKE');
+console.log('');
