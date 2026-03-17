@@ -285,7 +285,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 }
 
 // Virtual visit weight for each ladder-derived prior seeded into root RAVE stats.
-const LADDER_PRIOR = 20;
+const LADDER_PRIOR = 10;
 
 
 // Returns true if the current player playing (lx, ly) puts the group at
@@ -342,10 +342,20 @@ function getMove(game, timeBudgetMs) {
           const { captured: defFirst } = isLadderCaptured(game, px, py);
           const [lx, ly] = [...libs][0].split(',').map(Number);
           if (defFirst) {
-            root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // wasted move
+            if (groupColor == rootPlayer) {
+              // Type 1 
+              root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // Type 1:  Futile escape attempt.
+            }
           } else {
-//            root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-//            root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
+            if (groupColor == rootPlayer) {
+              // Type 2a
+              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+              root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
+            } else { 
+              // Type 2b 
+              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+              root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
+            }
           }
 
         } else if (libs.size === 2) {
@@ -360,8 +370,12 @@ function getMove(game, timeBudgetMs) {
             const atkFirst   = afterGroup.length === 0
                              || isLadderCaptured(g2, px, py).captured;
             if (atkFirst) {                    // critical: outcomes differ
-//              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-//              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
+              // Type 3 
+              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
+            } else {
+              // Type 4 
+              //root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // non-urgent.  Seems to hurt.
             }
           }
           game.current = rootPlayer;             // restore
