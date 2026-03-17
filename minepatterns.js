@@ -30,8 +30,7 @@ const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? 
 
 const file   = get('--file', null);
 const passes = parseInt(get('--passes', '20'), 10);
-const LADDER_SAVE = process.env.LADDER_SAVE === 'true';
-const LADDER_KILL = process.env.LADDER_KILL === 'true';
+const LADDER_BAD_EXTEND = process.env.LADDER_BAD_EXTEND === 'true';
 
 if (!file) {
   console.error('Usage: node minepatterns.js --file <path> [--passes <n>]');
@@ -42,63 +41,43 @@ const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.tri
 
 // ── Ladder-aware hash ─────────────────────────────────────────────────────────
 //
-// LADDER_SAVE and LADDER_KILL are independent binary dimensions appended to
-// the base pattern hash, enabling their effectiveness to be measured separately.
+// When LADDER_BAD_EXTEND=true, appends a binary dimension to the base pattern
+// hash encoding whether the move is a futile ladder escape:
 //
-// LADDER_SAVE: placing at (x,y) is the escape point of a friendly group that
-//   is currently in a losing ladder (isLadderCaptured returns true).
+//   1 = "bad extend" — (x,y) is the sole liberty of a friendly group that is
+//       already in a losing ladder, AND after placing there the extended group
+//       is still in a losing ladder (the escape failed).
+//   0 = all other moves.
 //
-// LADDER_KILL: placing at (x,y) puts an adjacent enemy group in atari and
-//   that group cannot escape the resulting ladder.
-//
-// Each enabled flag adds one bit to the hash beyond the base hash space.
-// The two flags are packed as independent binary digits:
-//   offset = saveBit * HASH_SPACE  +  killBit * HASH_SPACE * saveDim
-// where saveDim = 2 when LADDER_SAVE is on (1 otherwise), so the encodings
-// for the two flags never collide regardless of which combination is active.
-//
-// Both properties are invariant under D4 symmetry (they depend only on the
-// centre point), so the minimum-hash canonicalisation remains consistent.
+// This property depends only on the centre point and is invariant under D4
+// symmetry, so the minimum-hash canonicalisation in patternHash stays valid.
 
 // Total number of distinct base-hash values = 3^9 × (MAX_LIBS+1)^4
 const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
 
-function isLadderSave(game, x, y, color) {
+function isLadderBadExtend(game, x, y, color) {
   const board = game.board;
   for (const [nx, ny] of board.getNeighbors(x, y)) {
     if (board.get(nx, ny) !== color) continue;
     const grp  = board.getGroup(nx, ny);
     const libs = board.getLiberties(grp);
-    if (libs.size === 1 && libs.has(`${x},${y}`)) {
-      if (isLadderCaptured(game, nx, ny).captured) return true;
+    if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
+    if (!isLadderCaptured(game, nx, ny).captured) continue;
+    // (x,y) is an escape attempt from a losing ladder — check if it still fails.
+    const g2 = game.clone();
+    g2.current = color;
+    if (g2.placeStone(x, y) !== false) {
+      return isLadderCaptured(g2, x, y).captured;
     }
-  }
-  return false;
-}
-
-function isLadderKill(game, x, y, color) {
-  const g2 = game.clone();
-  g2.current = color;
-  if (g2.placeStone(x, y) === false) return false;
-  for (const [nx, ny] of game.board.getNeighbors(x, y)) {
-    const cell = g2.board.get(nx, ny);
-    if (cell === null || cell === color) continue;
-    const grp = g2.board.getGroup(nx, ny);
-    if (grp.length === 0) continue;
-    if (g2.board.getLiberties(grp).size === 1) {
-      if (isLadderCaptured(g2, nx, ny).captured) return true;
-    }
+    return false;
   }
   return false;
 }
 
 function computeHash(game, x, y, color) {
   const base = patternHash(game, x, y, color);
-  if (!LADDER_SAVE && !LADDER_KILL) return base;
-  const saveDim  = LADDER_SAVE ? 2 : 1;
-  const saveBit  = LADDER_SAVE && isLadderSave(game, x, y, color) ? 1 : 0;
-  const killBit  = LADDER_KILL && isLadderKill(game, x, y, color) ? 1 : 0;
-  return base + HASH_SPACE * (saveBit + saveDim * killBit);
+  if (!LADDER_BAD_EXTEND) return base;
+  return base + (isLadderBadExtend(game, x, y, color) ? HASH_SPACE : 0);
 }
 
 // Map from patternHash → { seen: number, selected: number }
