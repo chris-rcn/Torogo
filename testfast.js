@@ -657,6 +657,137 @@ section('Board serialize/parse round-trip');
   assert(match, 'round-trip preserves all cells');
 }
 
+// ─── Pattern symmetry ────────────────────────────────────────────────────────
+
+// Helpers shared by all pattern-symmetry sections.
+const { patternHash, MAX_LIBS } = require('./patterns.JS');
+
+// D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
+const _D4_PERMS = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8], // identity
+  [6, 3, 0, 7, 4, 1, 8, 5, 2], // rotate 90° CW
+  [8, 7, 6, 5, 4, 3, 2, 1, 0], // rotate 180°
+  [2, 5, 8, 1, 4, 7, 0, 3, 6], // rotate 270° CW
+  [2, 1, 0, 5, 4, 3, 8, 7, 6], // reflect horizontal
+  [6, 7, 8, 3, 4, 5, 0, 1, 2], // reflect vertical
+  [0, 3, 6, 1, 4, 7, 2, 5, 8], // reflect main diagonal
+  [8, 5, 2, 7, 4, 1, 6, 3, 0], // reflect anti-diagonal
+];
+
+// Apply D4 symmetry `sym` to a 3×3-grid offset (dx, dy) in {-1,0,1}^2.
+// Returns the [dx, dy] that destination position maps to in the transformed grid.
+function applyD4(sym, dx, dy) {
+  const perm = _D4_PERMS[sym];
+  const src  = (dy + 1) * 3 + (dx + 1);
+  const dest = perm.indexOf(src);
+  return [dest % 3 - 1, Math.floor(dest / 3) - 1];
+}
+
+// Build a 9×9 game, place stones relative to (cx, cy), return patternHash.
+// Center (1,1) is used so it stays clear of Game's initial stone at (4,4).
+function buildAndHash(stones, cx, cy, mover) {
+  const g = new Game(9, 3.5);
+  for (const { dx, dy, color } of stones) {
+    g.board.set(cx + dx, cy + dy, color);
+    g.board.captureGroups(cx + dx, cy + dy);
+  }
+  return patternHash(g, cx, cy, mover);
+}
+
+section('patternHash symmetry – diagonal stones');
+{
+  // Two diagonal stones. LIB_WEIGHT is 0 for diagonal positions so this
+  // exercises the cellHash component in isolation.
+  const base = [
+    { dx: -1, dy: -1, color: 'black' },
+    { dx:  1, dy: -1, color: 'white' },
+  ];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (diagonal): [${hashes}]`);
+}
+
+section('patternHash symmetry – orthogonal stone');
+{
+  // Single orthogonal stone exercises the liberty-count (libHash) component.
+  const base = [{ dx: 0, dy: -1, color: 'black' }];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (orthogonal): [${hashes}]`);
+}
+
+section('patternHash symmetry – mixed pattern');
+{
+  // One orthogonal stone + one diagonal stone: exercises both hash components.
+  const base = [
+    { dx:  0, dy: -1, color: 'black' }, // orthogonal (contributes to libHash)
+    { dx: -1, dy: -1, color: 'white' }, // diagonal   (cellHash only)
+  ];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (mixed): [${hashes}]`);
+}
+
+section('patternHash distinguishes non-equivalent patterns');
+{
+  // Diagonal vs orthogonal position are not D4-equivalent — must hash differently.
+  const hDiag = buildAndHash([{ dx: -1, dy: -1, color: 'black' }], 1, 1, 'black');
+  const hOrth = buildAndHash([{ dx:  0, dy: -1, color: 'black' }], 1, 1, 'black');
+  assert(hDiag !== hOrth, 'diagonal stone ≠ orthogonal stone');
+
+  // Friend vs enemy at the same position must hash differently.
+  const hFriend = buildAndHash([{ dx: -1, dy: -1, color: 'black' }], 1, 1, 'black');
+  const hEnemy  = buildAndHash([{ dx: -1, dy: -1, color: 'white' }], 1, 1, 'black');
+  assert(hFriend !== hEnemy, 'friend stone ≠ enemy stone at same position');
+}
+
+section('patternHash mover-relative encoding');
+{
+  // Same physical board should hash differently for different movers because
+  // cell codes are relative to the mover (friend vs enemy swap).
+  const g = new Game(9, 3.5);
+  g.board.set(0, 0, 'black');
+  g.board.captureGroups(0, 0);
+  const hBlack = patternHash(g, 1, 1, 'black');
+  const hWhite = patternHash(g, 1, 1, 'white');
+  assert(hBlack !== hWhite, 'different mover ⇒ different hash for same board');
+}
+
+section('patternHash return value is non-negative and bounded');
+{
+  const g = new Game(9, 3.5);
+  g.board.set(0, 1, 'black'); g.board.captureGroups(0, 1);
+  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
+  const h = patternHash(g, 1, 1, 'black');
+  const maxHash = (3 ** 9 - 1) + 19683 * ((MAX_LIBS + 1) ** 4 - 1);
+  assert(h >= 0,       `hash is non-negative (got ${h})`);
+  assert(h <= maxHash, `hash is within bounds (got ${h}, max ${maxHash})`);
+}
+
+section('patternHash determinism');
+{
+  const g = new Game(9, 3.5);
+  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
+  const h1 = patternHash(g, 1, 1, 'black');
+  const h2 = patternHash(g, 1, 1, 'black');
+  assert(h1 === h2, 'patternHash returns the same value on repeated calls');
+}
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 
 console.log(`\n═══════════════════════`);
