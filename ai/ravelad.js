@@ -45,12 +45,6 @@ const EXPANSION_CANDIDATES = 2;
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
-// Minimum group size for dead-ladder suppression.  A root child move is
-// excluded from best-child selection if it is a futile ladder escape
-// (extends a dead group of the mover's color) whose group has at least this
-// many stones.  Default 99 effectively disables suppression; set via env.
-const SUPPRESS_DEAD_LADDER_SIZE = (typeof process !== 'undefined' && process.env.SUPPRESS_DEAD_LADDER_SIZE)
-  ? parseInt(process.env.SUPPRESS_DEAD_LADDER_SIZE, 10) : 99;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -293,31 +287,6 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 // Virtual visit weight for each ladder-derived prior seeded into root RAVE stats.
 const LADDER_PRIOR = 20;
 
-// ── Dead-ladder suppression ───────────────────────────────────────────────────
-
-// Returns true if `move` by game.current extends a dead group of that player —
-// i.e. the move is adjacent to a friendly group that has exactly 1 liberty,
-// cannot escape (captured === true), and has at least SUPPRESS_DEAD_LADDER_SIZE
-// stones.  Such a move is a futile ladder escape and is suppressed at the root.
-function isFutileLadderEscape(game, move) {
-  if (move.type !== 'place') return false;
-  const { x, y } = move;
-  const player = game.current;
-  const board  = game.board;
-  const visitedGids = new Set();
-  for (const [nx, ny] of board.getNeighbors(x, y)) {
-    if (board.get(nx, ny) !== player) continue;
-    const gid = board._gid[board._idx(nx, ny)];
-    if (visitedGids.has(gid)) continue;
-    visitedGids.add(gid);
-    const group = board.getGroup(nx, ny);
-    if (group.length < SUPPRESS_DEAD_LADDER_SIZE) continue;
-    const libs = board.getLiberties(group);
-    if (libs.size !== 1) continue;
-    if (isLadderCaptured(game, nx, ny).captured) return true;
-  }
-  return false;
-}
 
 // Returns true if the current player playing (lx, ly) puts the group at
 // (gx, gy) into a losing ladder — either capturing it immediately or via
@@ -413,19 +382,10 @@ function getMove(game, timeBudgetMs) {
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
-  // Pick the root child with the most visits, excluding futile ladder escapes
-  // (moves that extend a dead group of >= SUPPRESS_DEAD_LADDER_SIZE stones).
-  // Falls back to the unrestricted most-visited child if all are suppressed.
+  // Pick the root child with the most visits.
   let bestChild = null, bestVisits = -1;
   for (const child of root.children) {
-    if (isFutileLadderEscape(game, child.move)) continue;
     if (child.visits > bestVisits) { bestVisits = child.visits; bestChild = child; }
-  }
-  if (!bestChild) {
-    bestVisits = -1;
-    for (const child of root.children) {
-      if (child.visits > bestVisits) { bestVisits = child.visits; bestChild = child; }
-    }
   }
 
   const children = root.children
