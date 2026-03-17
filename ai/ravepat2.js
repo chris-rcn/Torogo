@@ -30,17 +30,20 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-// When true, move priors are computed via head-to-head ELO expected scores
-// against all other candidates in the position, rather than independent ratio
-// or ELO weights.  This makes each prior relative to the actual competition.
-const USE_H2H = false;
-
-const path = require('path');
-const { patternHash } = require('../patterns.js');
 const { weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js');
-const eloTable = USE_H2H
-  ? makeEloTable(path.join(__dirname, '..', 'patterns.csv'))
-  : null;
+
+// Head-to-head ELO prior.  Only works in Node.js (requires path + fs).
+// Set to true to enable; the browser always falls back to ratio weights.
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const USE_H2H = false && _isNode;
+
+let patternHash = null;
+let eloTable = null;
+if (USE_H2H) {
+  const path = require('path');
+  patternHash = require('../patterns.js').patternHash;
+  eloTable = makeEloTable(path.join(__dirname, '..', 'patterns.csv'));
+}
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
