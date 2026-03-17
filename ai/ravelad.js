@@ -290,6 +290,9 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   }
 }
 
+// Virtual visit weight for each ladder-derived prior seeded into root RAVE stats.
+const LADDER_PRIOR = 10;
+
 // ── Dead-ladder suppression ───────────────────────────────────────────────────
 
 // Returns true if `move` by game.current extends a dead group of that player —
@@ -316,6 +319,17 @@ function isFutileLadderEscape(game, move) {
   return false;
 }
 
+// Returns true if the current player playing (lx, ly) puts the group at
+// (gx, gy) into a losing ladder — either capturing it immediately or via
+// isLadderCaptured after it is put in atari.
+function attackStartsCapture(game, gx, gy, lx, ly) {
+  const g2 = game.clone();
+  if (g2.placeStone(lx, ly) === false) return false;
+  const afterGroup = g2.board.getGroup(gx, gy);
+  if (afterGroup.length === 0) return true;
+  return isLadderCaptured(g2, gx, gy).captured;
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
@@ -324,6 +338,73 @@ function getMove(game, timeBudgetMs) {
   const N          = game.boardSize;
   const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
+
+  // ── Ladder priors ────────────────────────────────────────────────────────
+  // Scan all groups once as defender and once as attacker to seed root RAVE
+  // priors before any playouts run.
+  //
+  // Pass 1 — Defender: own groups in atari.
+  //   !captured → escape liberty is a good move (prior win = 1)
+  //    captured → escape liberty is futile       (prior win = 0)
+  //
+  // Pass 2 — Attacker: opponent groups with 1 or 2 liberties.
+  //   1-lib, captured  → playing that liberty is a good attack (prior win = 1)
+  //   1-lib, !captured → group escapes; attack is wasteful    (prior win = 0)
+  //   2-lib            → each liberty that starts a winning ladder gets win=1;
+  //                       liberties that let the group escape get win=0.
+  const oppPlayer = rootPlayer === 'black' ? 'white' : 'black';
+
+  // Pass 1: defender (own groups)
+  {
+    const visited = new Set();
+    for (let py = 0; py < N; py++) {
+      for (let px = 0; px < N; px++) {
+        if (game.board.get(px, py) !== rootPlayer) continue;
+        const gid = game.board._gid[game.board._idx(px, py)];
+        if (visited.has(gid)) continue;
+        visited.add(gid);
+        const group = game.board.getGroup(px, py);
+        const libs  = game.board.getLiberties(group);
+        if (libs.size !== 1) continue;
+        const [lx, ly] = [...libs][0].split(',').map(Number);
+        const idx = ly * N + lx;
+        const { captured } = isLadderCaptured(game, px, py);
+        root.raveVisits[idx] += LADDER_PRIOR;
+        root.raveWins[idx]   += captured ? 0 : LADDER_PRIOR;
+      }
+    }
+  }
+
+  // Pass 2: attacker (opponent groups)
+  {
+    const visited = new Set();
+    for (let py = 0; py < N; py++) {
+      for (let px = 0; px < N; px++) {
+        if (game.board.get(px, py) !== oppPlayer) continue;
+        const gid = game.board._gid[game.board._idx(px, py)];
+        if (visited.has(gid)) continue;
+        visited.add(gid);
+        const group = game.board.getGroup(px, py);
+        const libs  = game.board.getLiberties(group);
+        if (libs.size === 1) {
+          const [lx, ly] = [...libs][0].split(',').map(Number);
+          const idx = ly * N + lx;
+          const { captured } = isLadderCaptured(game, px, py);
+          root.raveVisits[idx] += LADDER_PRIOR;
+          root.raveWins[idx]   += captured ? LADDER_PRIOR : 0;
+        } else if (libs.size === 2) {
+          for (const lstr of libs) {
+            const [lx, ly] = lstr.split(',').map(Number);
+            const idx = ly * N + lx;
+            const wins = attackStartsCapture(game, px, py, lx, ly);
+            root.raveVisits[idx] += LADDER_PRIOR;
+            root.raveWins[idx]   += wins ? LADDER_PRIOR : 0;
+          }
+        }
+      }
+    }
+  }
+  // ── End ladder priors ────────────────────────────────────────────────────
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
