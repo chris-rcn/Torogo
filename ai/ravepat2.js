@@ -42,20 +42,20 @@ const DEFAULT_WEIGHT = 0.01;
 let ratioWeight;
 let makeEloTable;
 let DEFAULT_ELO;
-let patternHash;
+let _patternHash;
 let eloTable = null;
 
 if (_isNode) {
   ({ weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js'));
   if (USE_H2H) {
     const path = require('path');
-    patternHash = require('../patterns.js').patternHash;
+    _patternHash = require('../patterns.js').patternHash;
     eloTable = makeEloTable(path.join(__dirname, '..', 'patterns.csv'));
   }
 } else {
   // Browser: patternHash is a global from patterns.js loaded as a <script>.
   // Load patterns.csv via fetch and build the ratio table.
-  patternHash = window.patternHash;
+  _patternHash = window.patternHash;
   const _table = new Map();
   fetch('patterns.csv')
     .then(r => r.text())
@@ -69,7 +69,7 @@ if (_isNode) {
       }
     });
   ratioWeight = function(game, x, y) {
-    const hash = patternHash(game, x, y, game.current);
+    const hash = _patternHash(game, x, y, game.current);
     return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
   };
 }
@@ -214,7 +214,7 @@ function legalMovesWithPriors(game) {
     // Resolve ELO for every candidate (pass treated as a weak DEFAULT_ELO move).
     for (const m of moves) {
       if (m.type === 'place') {
-        const hash = patternHash(game, m.x, m.y, game.current);
+        const hash = _patternHash(game, m.x, m.y, game.current);
         m.elo = eloTable.has(hash) ? eloTable.get(hash) : DEFAULT_ELO;
       } else {
         m.elo = DEFAULT_ELO;
