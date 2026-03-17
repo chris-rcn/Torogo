@@ -3,10 +3,12 @@
 
 // deadladders.js — flag moves that attempt to extend a group known to be dead.
 //
-// Usage: node deadladders.js --file <path>
+// Usage: node deadladders.js --file <path> [--min-stones N]
+//   --min-stones  only flag dead groups with at least N stones (default: 1)
 //
 // Reads game records produced by recordgames.js.  For each non-pass move,
 // checks whether the stone being played is adjacent to any friendly group that:
+//   • has at least --min-stones stones,
 //   • has exactly 1 liberty (already in atari), and
 //   • cannot escape (isLadderCaptured returns captured = true).
 //
@@ -19,9 +21,10 @@ const { isLadderCaptured }   = require('./ladder.js');
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const file = get('--file', null);
+const file      = get('--file', null);
+const minStones = parseInt(get('--min-stones', '1'), 10);
 if (!file) {
-  console.error('Usage: node deadladders.js --file <path>');
+  console.error('Usage: node deadladders.js --file <path> [--min-stones N]');
   process.exit(1);
 }
 
@@ -70,6 +73,8 @@ for (const line of lines) {
         visitedGids.add(gid);
 
         const group = g.board.getGroup(gx, gy);
+        if (group.length < minStones) continue;
+
         const libs  = g.board.getLiberties(group);
         if (libs.size !== 1) continue;
 
