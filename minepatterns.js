@@ -45,8 +45,7 @@ const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.tri
 // hash encoding whether the move is a futile ladder escape:
 //
 //   1 = "bad extend" — (x,y) is the sole liberty of a friendly group that is
-//       already in a losing ladder, AND after placing there the extended group
-//       is still in a losing ladder (the escape failed).
+//       already in a losing ladder (the escape is doomed regardless).
 //   0 = all other moves.
 //
 // This property depends only on the centre point and is invariant under D4
@@ -63,12 +62,7 @@ function isLadderBadExtend(game, x, y, color) {
     const libs = board.getLiberties(grp);
     if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
     if (!isLadderCaptured(game, nx, ny).captured) continue;
-    // (x,y) is an escape attempt from a losing ladder.  After placing there
-    // the extended group's liberties are exactly the empty neighbours of (x,y).
-    // If that count is 1 the group is still in atari — a bad extend.
-    const newLibs = board.getNeighbors(x, y)
-      .filter(([ax, ay]) => board.get(ax, ay) === null).length;
-    return newLibs === 1;
+    return true; // escape attempt from an already-doomed group
   }
   return false;
 }
