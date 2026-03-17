@@ -58,6 +58,9 @@ for (let gi = 0; gi < lines.length; gi++) {
 
   const g = new Game(size, DEFAULT_KOMI);
 
+  // Collect per-move data; we defer bumping until the winner is known.
+  const gameMoves = [];
+
   // moves[0] is already placed by the constructor; process from moves[1] onward.
   for (let mi = 1; mi < moves.length; mi++) {
     const token = moves[mi];
@@ -80,9 +83,7 @@ for (let gi = 0; gi < lines.length; gi++) {
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        const h = patternHash(g, x, y, color);
-        bump(h, false);
-        others.push(h);
+        others.push(patternHash(g, x, y, color));
       }
     }
 
@@ -96,14 +97,22 @@ for (let gi = 0; gi < lines.length; gi++) {
     else if (board.isKo(mx, my, color, g.koFlag))
       process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
-    // Always record the selected move (seen + selected), even if it is a true eye.
     const selHash = patternHash(g, mx, my, color);
-    bump(selHash, true);
-
-    // Record this decision for ELO computation.
-    if (others.length > 0) decisions.push({ selected: selHash, others });
+    gameMoves.push({ color, selHash, others });
 
     g.placeStone(mx, my);
+  }
+
+  // Determine the winner (force scoring if the game did not end naturally).
+  if (!g.gameOver) g.endGame();
+  const winner = g.scores.black.total > g.scores.white.total ? 'black' : 'white';
+
+  // Only record patterns for moves made by the winning player.
+  for (const { color, selHash, others } of gameMoves) {
+    if (color !== winner) continue;
+    for (const h of others) bump(h, false);
+    bump(selHash, true);
+    if (others.length > 0) decisions.push({ selected: selHash, others });
   }
 }
 
