@@ -279,7 +279,7 @@ class Renderer {
 
 // ─── App wiring ───────────────────────────────────────────────────────────────
 
-// ─── AI (calls into ai/rave.js loaded via <script> tag) ────────────────────────
+// ─── AI (calls into ai/ravepat2.js loaded via <script> tag) ───────────────────
 
 const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 
