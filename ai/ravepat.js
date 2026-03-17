@@ -27,6 +27,19 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
+const { weight: patternWeight } = require('./pattern.js');
+
+// Number of randomly sampled candidates to score per playout move.
+const PLAYOUT_CANDIDATES = 8;
+
+function applyFast(game, x, y) {
+  game.board.set(x, y, game.current);
+  const cap = game.board.captureGroups(x, y);
+  game.consecutivePasses = 0;
+  game.current = game.current === 'black' ? 'white' : 'black';
+  return cap.black.length + cap.white.length;
+}
+
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
@@ -43,18 +56,11 @@ const EXPANSION_CANDIDATES = 2;
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
-// ── Fast playout helpers ──────────────────────────────────────────────────────
+// ── Pattern-guided playout ────────────────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
-// Random playout that records the cell indices (y*N+x) of every move made by
-// each player.  Pass moves carry no cell index and are not recorded.
+// Playout using pattern weights for move selection, with the same incremental
+// empty-list and classifyEmpty fast-path as the original rave playout.
+// Tracks cell indices (y*N+x) for RAVE backpropagation.
 // Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game) {
   const size = game.boardSize;
@@ -63,6 +69,7 @@ function playTracked(game) {
   const blackPlayed = [];
   const whitePlayed = [];
 
+  // Build the initial empty-cell list once.
   const empty = [];
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++)
@@ -72,58 +79,65 @@ function playTracked(game) {
   let moves = 0;
 
   while (!game.gameOver && moves < moveLimit) {
-    let placed = false;
-    let end = empty.length;
     const current = game.current;
 
-    while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const cellIdx = empty[i];
+    // Reservoir-sample up to PLAYOUT_CANDIDATES cells, scoring each with the
+    // pattern weight.  Swap sampled cells to the front of `empty` so their
+    // positions are known for efficient removal after selection.
+    let sampleEnd = 0;
+    const cands = [];   // { pos, fast, w }
+
+    while (sampleEnd < empty.length && cands.length < PLAYOUT_CANDIDATES) {
+      const i = sampleEnd + Math.floor(Math.random() * (empty.length - sampleEnd));
+      const tmp = empty[sampleEnd]; empty[sampleEnd] = empty[i]; empty[i] = tmp;
+      const cellIdx = empty[sampleEnd];
       const x = cellIdx % size;
       const y = (cellIdx / size) | 0;
-      empty[i] = empty[end - 1];
-      empty[end - 1] = cellIdx;
-      end--;
+      sampleEnd++;
 
       const info = board.classifyEmpty(x, y, current);
       if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
+      // hasEmptyNeighbor ⇒ can't be suicide or ko; skip the expensive checks.
+      if (!info.hasEmptyNeighbor) {
+        if (board.isSuicide(x, y, current)) continue;
+        if (board.isKo(x, y, current, game.koFlag)) continue;
       }
 
-      const result = game.placeStone(x, y);
-      if (result) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result > 1) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      cands.push({ pos: sampleEnd - 1, fast: info.hasEmptyNeighbor,
+                   w: patternWeight(game, x, y) });
     }
 
-    if (!placed) { game.pass(); moves++; }
+    if (cands.length === 0) { game.pass(); moves++; continue; }
+
+    // Weighted selection among sampled candidates.
+    let total = 0;
+    for (const c of cands) total += c.w;
+    let r = Math.random() * total;
+    let chosen = cands[cands.length - 1];
+    for (const c of cands) { r -= c.w; if (r <= 0) { chosen = c; break; } }
+
+    const cellIdx = empty[chosen.pos];
+    const x = cellIdx % size;
+    const y = (cellIdx / size) | 0;
+
+    if (current === 'black') blackPlayed.push(cellIdx);
+    else                     whitePlayed.push(cellIdx);
+
+    // Remove chosen cell from empty (swap with last).
+    empty[chosen.pos] = empty[empty.length - 1];
+    empty.pop();
+
+    // Apply: fast path when we know there's an empty neighbour (no ko update
+    // needed); full applyLegal otherwise (updates koFlag for next move's check).
+    const captures = chosen.fast ? applyFast(game, x, y)
+                                 : game.applyLegal(x, y);
+    if (captures > 0) {
+      empty.length = 0;
+      for (let ey = 0; ey < size; ey++)
+        for (let ex = 0; ex < size; ex++)
+          if (grid[ey][ex] === null) empty.push(ey * size + ex);
+    }
+    moves++;
   }
 
   if (!game.gameOver) game.endGame();

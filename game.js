@@ -761,6 +761,33 @@ class Game {
     return totalCaptured || true;
   }
 
+  // Like placeStone() but skips all legality checks.  Only call this when the
+  // move is already known to be legal (not occupied, not suicide, not ko).
+  applyLegal(x, y) {
+    const N = this.boardSize;
+    this.board.set(x, y, this.current);
+    this.hash ^= ZOBRIST[y][x][this.current];
+    const caps = this.board.captureGroups(x, y);
+    for (let i = 0; i < caps.black.length; i++) {
+      const ci = caps.black[i];
+      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
+    }
+    for (let i = 0; i < caps.white.length; i++) {
+      const ci = caps.white[i];
+      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
+    }
+    const totalCaptured = caps.black.length + caps.white.length;
+    this.koFlag = totalCaptured === 1
+      ? { x: (caps.black.length === 1 ? caps.black[0] : caps.white[0]) % N,
+          y: ((caps.black.length === 1 ? caps.black[0] : caps.white[0]) / N) | 0 }
+      : null;
+    this.lastMove = { x, y };
+    this.consecutivePasses = 0;
+    this.current = this.current === 'black' ? 'white' : 'black';
+    this._incrementMoveCount();
+    return totalCaptured;
+  }
+
   _incrementMoveCount() {
     this.moveCount++;
     const threshold = 4 * this.boardSize * this.boardSize;
@@ -808,7 +835,7 @@ class Game {
       for (let x = 0; x < N; x++) {
         const cell = grid[y][x];
         if (cell !== null) {
-          // Stones count as territory for their color
+          // Stones count as territory for their color (Chinese scoring)
           if (cell === 'black') territory.black++;
           else territory.white++;
           continue;

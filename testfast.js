@@ -286,6 +286,39 @@ section('Game clone');
   assert(c.board.get(1, 1) !== null, 'clone has the stone');
 }
 
+section('Clone divergence (independent futures)');
+{
+  const random = require('./ai/random.js');
+  let ok = true;
+
+  for (let trial = 0; trial < 10; trial++) {
+    const g = new Game(7, 3.5);
+    for (let i = 0; i < 5 && !g.gameOver; i++) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+    if (g.gameOver) continue;
+
+    const c = g.clone();
+    for (let i = 0; i < 10 && !g.gameOver; i++) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+
+    try {
+      const move = random(c);
+      if (move.type === 'place') c.placeStone(move.x, move.y);
+      else c.pass();
+    } catch (e) {
+      ok = false;
+      console.error(`  Clone became corrupt after original diverged:`, e.message);
+    }
+  }
+  assert(ok, 'clones remain playable after original diverges');
+}
+
 section('Board clone');
 {
   const b = new Board(9);
@@ -324,6 +357,33 @@ section('Territory calculation');
   // All territory should be black (one stone on board, all connected empty is black territory)
   // On a toroidal board, the single stone's territory = all empty cells
   assert(g.scores.black.total > 0, 'black has territory');
+}
+
+section('Territory scoring makes sense');
+{
+  const random = require('./ai/random.js');
+  let ok = true;
+
+  for (let i = 0; i < 10; i++) {
+    const g = new Game(7, 3.5);
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+    const s = g.scores;
+    if (s.black.territory < 0 || s.white.territory < 0) {
+      ok = false;
+      console.error(`  Negative territory in game ${i}`);
+    }
+    const territory = g.calcTerritory();
+    const accounted = territory.black + territory.white + territory.neutral;
+    if (accounted !== 49) {
+      ok = false;
+      console.error(`  Territory doesn't sum to 49: got ${accounted}`);
+    }
+  }
+  assert(ok, 'territory scores are valid across 10 games');
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
@@ -370,6 +430,35 @@ section('Move count auto-end');
 }
 
 // ─── Random agent ────────────────────────────────────────────────────────────
+
+section('Random vs random roughly even (5x5, 20 games)');
+{
+  const p1 = require('./ai/random.js');
+  const p2 = require('./ai/random.js');
+  let p1Wins = 0, p2Wins = 0;
+
+  for (let i = 0; i < 20; i++) {
+    const g = new Game(5, 3.5);
+    const blackAgent = i % 2 === 0 ? p1 : p2;
+    const whiteAgent = i % 2 === 0 ? p2 : p1;
+    const p1IsBlack = i % 2 === 0;
+
+    while (!g.gameOver) {
+      const agent = g.current === 'black' ? blackAgent : whiteAgent;
+      const move = agent(g, 0);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+    }
+
+    const s = g.scores;
+    const blackWins = s.black.total > s.white.total;
+    if (p1IsBlack ? blackWins : !blackWins) p1Wins++;
+    else p2Wins++;
+  }
+  console.log(`  p1: ${p1Wins}  p2: ${p2Wins}`);
+  assert(p1Wins >= 3 && p2Wins >= 3,
+    `random vs random should be roughly balanced: ${p1Wins}-${p2Wins}`);
+}
 
 section('Random agent');
 {
@@ -508,6 +597,31 @@ section('Hash consistency across clones');
   assert(c.hash === g.hash, 'hash matches after same move on clone');
 }
 
+section('Zobrist hash uniqueness (no collisions in random games)');
+{
+  const random = require('./ai/random.js');
+  let collisions = 0;
+
+  for (let trial = 0; trial < 5; trial++) {
+    const g = new Game(7, 3.5);
+    const seen = new Set();
+    seen.add(g.hash);
+
+    while (!g.gameOver) {
+      const move = random(g);
+      if (move.type === 'place') g.placeStone(move.x, move.y);
+      else g.pass();
+      if (!g.gameOver && g.lastMove !== null) {
+        // Only check on stone placements (passes don't change hash)
+        if (seen.has(g.hash)) collisions++;
+        seen.add(g.hash);
+      }
+    }
+  }
+  console.log(`  Hash collisions: ${collisions} across 5 games`);
+  assert(collisions <= 2, `should have very few hash collisions: got ${collisions}`);
+}
+
 // ─── placeStone return value ─────────────────────────────────────────────────
 
 section('placeStone return values');
@@ -541,6 +655,137 @@ section('Board serialize/parse round-trip');
     for (let x = 0; x < size; x++)
       if (g.board.get(x, y) !== b2.get(x, y)) match = false;
   assert(match, 'round-trip preserves all cells');
+}
+
+// ─── Pattern symmetry ────────────────────────────────────────────────────────
+
+// Helpers shared by all pattern-symmetry sections.
+const { patternHash, MAX_LIBS } = require('./patterns.js');
+
+// D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
+const _D4_PERMS = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8], // identity
+  [6, 3, 0, 7, 4, 1, 8, 5, 2], // rotate 90° CW
+  [8, 7, 6, 5, 4, 3, 2, 1, 0], // rotate 180°
+  [2, 5, 8, 1, 4, 7, 0, 3, 6], // rotate 270° CW
+  [2, 1, 0, 5, 4, 3, 8, 7, 6], // reflect horizontal
+  [6, 7, 8, 3, 4, 5, 0, 1, 2], // reflect vertical
+  [0, 3, 6, 1, 4, 7, 2, 5, 8], // reflect main diagonal
+  [8, 5, 2, 7, 4, 1, 6, 3, 0], // reflect anti-diagonal
+];
+
+// Apply D4 symmetry `sym` to a 3×3-grid offset (dx, dy) in {-1,0,1}^2.
+// Returns the [dx, dy] that destination position maps to in the transformed grid.
+function applyD4(sym, dx, dy) {
+  const perm = _D4_PERMS[sym];
+  const src  = (dy + 1) * 3 + (dx + 1);
+  const dest = perm.indexOf(src);
+  return [dest % 3 - 1, Math.floor(dest / 3) - 1];
+}
+
+// Build a 9×9 game, place stones relative to (cx, cy), return patternHash.
+// Center (1,1) is used so it stays clear of Game's initial stone at (4,4).
+function buildAndHash(stones, cx, cy, mover) {
+  const g = new Game(9, 3.5);
+  for (const { dx, dy, color } of stones) {
+    g.board.set(cx + dx, cy + dy, color);
+    g.board.captureGroups(cx + dx, cy + dy);
+  }
+  return patternHash(g, cx, cy, mover);
+}
+
+section('patternHash symmetry – diagonal stones');
+{
+  // Two diagonal stones. LIB_WEIGHT is 0 for diagonal positions so this
+  // exercises the cellHash component in isolation.
+  const base = [
+    { dx: -1, dy: -1, color: 'black' },
+    { dx:  1, dy: -1, color: 'white' },
+  ];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (diagonal): [${hashes}]`);
+}
+
+section('patternHash symmetry – orthogonal stone');
+{
+  // Single orthogonal stone exercises the liberty-count (libHash) component.
+  const base = [{ dx: 0, dy: -1, color: 'black' }];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (orthogonal): [${hashes}]`);
+}
+
+section('patternHash symmetry – mixed pattern');
+{
+  // One orthogonal stone + one diagonal stone: exercises both hash components.
+  const base = [
+    { dx:  0, dy: -1, color: 'black' }, // orthogonal (contributes to libHash)
+    { dx: -1, dy: -1, color: 'white' }, // diagonal   (cellHash only)
+  ];
+  const hashes = _D4_PERMS.map((_, sym) =>
+    buildAndHash(
+      base.map(s => { const [dx, dy] = applyD4(sym, s.dx, s.dy); return { dx, dy, color: s.color }; }),
+      1, 1, 'black'
+    )
+  );
+  assert(hashes.every(h => h === hashes[0]),
+    `all 8 D4 transforms yield the same hash (mixed): [${hashes}]`);
+}
+
+section('patternHash distinguishes non-equivalent patterns');
+{
+  // Diagonal vs orthogonal position are not D4-equivalent — must hash differently.
+  const hDiag = buildAndHash([{ dx: -1, dy: -1, color: 'black' }], 1, 1, 'black');
+  const hOrth = buildAndHash([{ dx:  0, dy: -1, color: 'black' }], 1, 1, 'black');
+  assert(hDiag !== hOrth, 'diagonal stone ≠ orthogonal stone');
+
+  // Friend vs enemy at the same position must hash differently.
+  const hFriend = buildAndHash([{ dx: -1, dy: -1, color: 'black' }], 1, 1, 'black');
+  const hEnemy  = buildAndHash([{ dx: -1, dy: -1, color: 'white' }], 1, 1, 'black');
+  assert(hFriend !== hEnemy, 'friend stone ≠ enemy stone at same position');
+}
+
+section('patternHash mover-relative encoding');
+{
+  // Same physical board should hash differently for different movers because
+  // cell codes are relative to the mover (friend vs enemy swap).
+  const g = new Game(9, 3.5);
+  g.board.set(0, 0, 'black');
+  g.board.captureGroups(0, 0);
+  const hBlack = patternHash(g, 1, 1, 'black');
+  const hWhite = patternHash(g, 1, 1, 'white');
+  assert(hBlack !== hWhite, 'different mover ⇒ different hash for same board');
+}
+
+section('patternHash return value is non-negative and bounded');
+{
+  const g = new Game(9, 3.5);
+  g.board.set(0, 1, 'black'); g.board.captureGroups(0, 1);
+  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
+  const h = patternHash(g, 1, 1, 'black');
+  const maxHash = (3 ** 9 - 1) + 19683 * ((MAX_LIBS + 1) ** 4 - 1);
+  assert(h >= 0,       `hash is non-negative (got ${h})`);
+  assert(h <= maxHash, `hash is within bounds (got ${h}, max ${maxHash})`);
+}
+
+section('patternHash determinism');
+{
+  const g = new Game(9, 3.5);
+  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
+  const h1 = patternHash(g, 1, 1, 'black');
+  const h2 = patternHash(g, 1, 1, 'black');
+  assert(h1 === h2, 'patternHash returns the same value on repeated calls');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

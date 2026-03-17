@@ -1,0 +1,197 @@
+'use strict';
+
+/**
+ * Pattern-based policy agent.
+ *
+ * Loads a pattern-statistics file produced by minepatterns.js, then selects
+ * moves by sampling from a distribution proportional to each candidate's
+ * selection ratio.  Patterns not present in the file receive a small uniform
+ * prior weight (DEFAULT_WEIGHT) so that novel positions still produce legal
+ * moves.  Falls back to pass when no legal non-eye move exists.
+ *
+ * Interface: makeAgent(patternFile) → getMove(game, timeBudgetMs)
+ *   patternFile  - path to the file emitted by minepatterns.js
+ *                  format per line: <hash>,<ratio>,<seen_count>
+ *   getMove      - standard agent interface (timeBudgetMs is ignored)
+ *
+ * Usage (selfplay / recordgames):
+ *   const getMove = require('./ai/pattern.js').makeAgent('patterns.csv');
+ */
+
+const fs = require('fs');
+const { patternHash } = require('../patterns.js');
+
+// Weight given to patterns that were never observed in the training data.
+const DEFAULT_WEIGHT = 0.01;
+
+// Number of randomly sampled candidates to score per move.
+const CANDIDATES = 8;
+
+// Convert an ELO rating to a relative weight using the standard ELO strength
+// formula: 10^((elo − baseline) / 400).  Returns 1.0 at the baseline of 1500.
+const ELO_BASELINE = 1500;
+function eloToWeight(elo) {
+  return Math.pow(10, (elo - ELO_BASELINE) / 400);
+}
+
+// ELO assigned to patterns absent from the training data.  Derived from
+// DEFAULT_WEIGHT so that novel patterns are treated as weak opponents.
+const DEFAULT_ELO = ELO_BASELINE + 400 * Math.log10(DEFAULT_WEIGHT); // ≈ 700
+
+/**
+ * Load a pattern-statistics file and return a Map<hash, weight>.
+ *
+ * @param {string}  filePath
+ * @param {boolean} useElo   When true, read column 3 (ELO) and convert via
+ *                           eloToWeight(); otherwise read column 1 (ratio).
+ * @returns {Map<number, number>}
+ */
+function loadPatterns(filePath, useElo = false) {
+  const table = new Map();
+  const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const parts = line.split(',');
+    const hash  = parseInt(parts[0], 10);
+    const value = useElo ? eloToWeight(parseFloat(parts[3]))
+                         : parseFloat(parts[1]);
+    if (!Number.isNaN(hash) && !Number.isNaN(value)) {
+      table.set(hash, value);
+    }
+  }
+  return table;
+}
+
+/**
+ * Create an agent function that uses the supplied pattern table.
+ *
+ * @param {string} patternFile
+ * @returns {function(game, timeBudgetMs): {type: string, x?: number, y?: number}}
+ */
+function makeAgent(patternFile) {
+  const table = loadPatterns(patternFile);
+
+  return function getMove(game, _timeBudgetMs) {
+    if (game.gameOver) return { type: 'pass' };
+
+    const N     = game.boardSize;
+    const color = game.current;
+    const board = game.board;
+
+    // Collect all legal non-true-eye cells into a pool.
+    const pool = [];
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        if (board.get(x, y) === null && !board.isTrueEye(x, y, color))
+          pool.push([x, y]);
+      }
+    }
+
+    if (pool.length === 0) return { type: 'pass' };
+
+    // Draw up to CANDIDATES cells from the pool using reservoir-style random
+    // selection (swap-with-last), then check full legality and score each.
+    const candidates = [];  // [x, y]
+    const weights    = [];  // parallel selection-ratio weights
+    let remaining = pool.length;
+
+    while (candidates.length < CANDIDATES && remaining > 0) {
+      const i = Math.floor(Math.random() * remaining);
+      const [x, y] = pool[i];
+      pool[i] = pool[--remaining];   // swap-with-last (no splice)
+
+      if (board.isSuicide(x, y, color)) continue;
+      if (board.isKo(x, y, color, game.koFlag)) continue;
+
+      const hash   = patternHash(game, x, y, color);
+      const weight = table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+      candidates.push([x, y]);
+      weights.push(weight);
+    }
+
+    if (candidates.length === 0) return { type: 'pass' };
+
+    // Weighted random sample among the chosen candidates.
+    let total = 0;
+    for (const w of weights) total += w;
+
+    let r = Math.random() * total;
+    for (let i = 0; i < candidates.length; i++) {
+      r -= weights[i];
+      if (r <= 0) {
+        const [x, y] = candidates[i];
+        return { type: 'place', x, y };
+      }
+    }
+
+    // Floating-point rounding safety: return the last candidate.
+    const [x, y] = candidates[candidates.length - 1];
+    return { type: 'place', x, y };
+  };
+}
+
+/**
+ * Create a weighting function (game, x, y) → number from a pattern file.
+ * Lighter than makeAgent: no candidate sampling, just the hash→ratio lookup.
+ * Intended for callers (e.g. ravepat) that manage candidate selection themselves.
+ *
+ * @param {string} patternFile
+ * @returns {function(game, x, y): number}
+ */
+function makeWeighter(patternFile) {
+  const table = loadPatterns(patternFile);
+  return function weight(game, x, y) {
+    const hash = patternHash(game, x, y, game.current);
+    return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+  };
+}
+
+/**
+ * Like makeWeighter but reads the ELO column (column 3) and converts via
+ * eloToWeight() so the returned values are on a relative-strength scale.
+ *
+ * @param {string} patternFile
+ * @returns {function(game, x, y): number}
+ */
+function makeEloWeighter(patternFile) {
+  const table = loadPatterns(patternFile, true);
+  return function eloWeight(game, x, y) {
+    const hash = patternHash(game, x, y, game.current);
+    return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+  };
+}
+
+/**
+ * Load a pattern file and return a Map<hash, elo> of raw ELO values (column 3).
+ * Intended for callers that compute context-aware weights (e.g. head-to-head).
+ *
+ * @param {string} patternFile
+ * @returns {Map<number, number>}
+ */
+function makeEloTable(patternFile) {
+  const table = new Map();
+  const lines = fs.readFileSync(patternFile, 'utf8').trim().split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const parts = line.split(',');
+    const hash = parseInt(parts[0], 10);
+    const elo  = parseFloat(parts[3]);
+    if (!Number.isNaN(hash) && !Number.isNaN(elo)) table.set(hash, elo);
+  }
+  return table;
+}
+
+// Default getMove for use with selfplay.js / recordgames.js:
+//   node selfplay.js --p1 pattern --p2 random
+// Looks for patterns.csv next to game.js (project root).
+const path = require('path');
+const _defaultFile    = path.join(__dirname, '..', 'patterns.csv');
+const _defaultGetMove  = makeAgent(_defaultFile);
+const _defaultWeight   = makeWeighter(_defaultFile);
+const _defaultEloWeight = makeEloWeighter(_defaultFile);
+
+module.exports = Object.assign(_defaultGetMove, {
+  makeAgent, makeWeighter, makeEloWeighter, makeEloTable,
+  weight: _defaultWeight, eloWeight: _defaultEloWeight,
+  DEFAULT_ELO,
+});

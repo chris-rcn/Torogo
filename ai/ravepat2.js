@@ -1,23 +1,26 @@
 'use strict';
 
 /**
- * RAVE (Rapid Action Value Estimation) MCTS policy.
+ * RAVE with pattern priors (ravepat2).
  *
- * Like MCTS, but each tree node also maintains AMAF (All-Moves-As-First)
- * statistics for every possible child move.  The UCT selection criterion
- * blends the ordinary MC win rate with the AMAF win rate using a β that
- * decays from 1 (pure RAVE) toward 0 (pure MCTS) as visit count grows:
+ * Identical to rave.js except that each newly expanded tree node is seeded
+ * with virtual wins/visits derived from pattern weights rather than starting
+ * at zero.  Playouts are the same fast, unbiased random rollouts as rave.js.
  *
- *   β = sqrt(EQUIV / (3·n + EQUIV))
+ * Prior initialisation:
+ *   When a node's untried-move list is first built, the pattern weight is
+ *   looked up for every legal move.  The weights are normalised to a
+ *   probability distribution p_i over the k moves at that position.  When
+ *   child i is later expanded, its node is initialised with
  *
- * where n = child.visits and EQUIV is the equivalence parameter — the visit
- * count at which MCTS and RAVE estimates are weighted equally.  A larger
- * EQUIV trusts RAVE longer; a smaller one switches to MCTS sooner.
+ *     priorVisits = PRIOR_VISITS
+ *     priorWins   = PRIOR_VISITS * p_i
  *
- * RAVE stats at a node answer: "across all simulations that passed through
- * this node, whenever move X was played by the player to move here (at any
- * point during the playout), did they win?"  This gives every candidate far
- * more data than MCTS alone, especially early in the search.
+ *   The UCT/RAVE score uses (wins + priorWins) / (visits + priorVisits) so
+ *   the prior decays naturally as real simulation data accumulates.
+ *
+ *   The expansion-candidate selection also uses p_i as a fallback when no
+ *   RAVE data is available yet, replacing the uniform 0.5 default in rave.js.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
@@ -27,6 +30,18 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
+// When true, move priors are computed via head-to-head ELO expected scores
+// against all other candidates in the position, rather than independent ratio
+// or ELO weights.  This makes each prior relative to the actual competition.
+const USE_H2H = false;
+
+const path = require('path');
+const { patternHash } = require('../patterns.js');
+const { weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js');
+const eloTable = USE_H2H
+  ? makeEloTable(path.join(__dirname, '..', 'patterns.csv'))
+  : null;
+
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
@@ -34,14 +49,16 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
   ? parseFloat(process.env.RAVE_EQUIV)
   : 300;
 
-// Number of untried moves to sample when expanding a node.  The candidate
-// with the best parent RAVE win rate is expanded first.  Set to 1 to revert
-// to uniform-random expansion.
+// Number of untried moves to sample when expanding a node.
 const EXPANSION_CANDIDATES = 2;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
+
+// Virtual visits injected into each new child node.  Larger values trust the
+// pattern prior longer before deferring to simulation results.
+const PRIOR_VISITS = 30;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -53,8 +70,8 @@ function applyFast(game, x, y) {
   return cap.black.length + cap.white.length;
 }
 
-// Random playout that records the cell indices (y*N+x) of every move made by
-// each player.  Pass moves carry no cell index and are not recorded.
+// Unbiased random playout (identical to rave.js).
+// Records cell indices (y*N+x) of every move for RAVE backpropagation.
 // Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game) {
   const size = game.boardSize;
@@ -136,36 +153,89 @@ function playTracked(game) {
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
-function legalMoves(game) {
+// Returns legal moves annotated with a normalised pattern prior (.prior field).
+// With USE_H2H: prior(i) ∝ Σ_{j≠i} E(i beats j) where E is the ELO expected
+// score formula, summed over all other legal candidates in this position.
+// Patterns absent from the table are assigned DEFAULT_ELO.
+// Without USE_H2H: falls back to normalised raw selection ratios.
+function legalMovesWithPriors(game) {
   const moves = [];
-  for (let y = 0; y < game.boardSize; y++)
-    for (let x = 0; x < game.boardSize; x++) {
+  const N = game.boardSize;
+
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
       const probe = game.clone();
       if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
-  const area = game.boardSize * game.boardSize;
-  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
+  }
+
+  const area = N * N;
+  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) {
+    moves.push({ type: 'pass' });
+  }
+
+  let totalWeight = 0;
+
+  if (USE_H2H) {
+    // Resolve ELO for every candidate (pass treated as a weak DEFAULT_ELO move).
+    for (const m of moves) {
+      if (m.type === 'place') {
+        const hash = patternHash(game, m.x, m.y, game.current);
+        m.elo = eloTable.has(hash) ? eloTable.get(hash) : DEFAULT_ELO;
+      } else {
+        m.elo = DEFAULT_ELO;
+      }
+    }
+
+    const n = moves.length;
+    if (n <= 1) {
+      // Trivial: only one legal move, prior = 1.
+      for (const m of moves) { m.w = 1; m.prior = 1; }
+      return moves;
+    }
+
+    // weight(i) = Σ_{j≠i} 1 / (1 + 10^((elo_j − elo_i) / 400))
+    for (let i = 0; i < n; i++) {
+      let score = 0;
+      for (let j = 0; j < n; j++) {
+        if (i !== j) score += 1 / (1 + Math.pow(10, (moves[j].elo - moves[i].elo) / 400));
+      }
+      moves[i].w = score;
+      totalWeight += score;
+    }
+  } else {
+    for (const m of moves) {
+      m.w = m.type === 'place' ? ratioWeight(game, m.x, m.y) : 1;
+      totalWeight += m.w;
+    }
+  }
+
+  // Normalise to probabilities so priorWins = PRIOR_VISITS * p is a valid
+  // expected win count under the pattern distribution.
+  const inv = totalWeight > 0 ? 1 / totalWeight : 0;
+  for (const m of moves) m.prior = m.w * inv;
+
   return moves;
 }
 
-// Each node owns two Float64Arrays of length N*N+1 that store AMAF statistics
-// for child moves indexed by cell (y*N+x), with pass at index N*N.
-// These answer: "for the player whose turn it is at this node, what is the
-// AMAF win rate of playing cell idx from here?"
-function makeNode(move, parent, mover, N) {
+// priorWins / priorVisits: virtual wins/visits seeded from the pattern prior.
+// Root and sentinel pass nodes are created with 0 priors.
+function makeNode(move, parent, mover, N, priorWins, priorVisits) {
   const len = N * N + 1;
   return {
     move,
     parent,
-    mover,        // player who made `move` to reach this node (null at root)
-    children:  [],
-    untried:   null,
-    wins:      0,
-    visits:    0,
-    raveWins:   new Float64Array(len),
-    raveVisits: new Float64Array(len),
+    mover,
+    children:     [],
+    untried:      null,
+    wins:         0,
+    visits:       0,
+    priorWins:    priorWins    || 0,
+    priorVisits:  priorVisits  || 0,
+    raveWins:     new Float64Array(len),
+    raveVisits:   new Float64Array(len),
   };
 }
 
@@ -178,17 +248,16 @@ function applyMove(game, move) {
   else game.pass();
 }
 
-// RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
-// arrays because those accumulate stats over all simulations through the parent
-// that happened to play this child's move.
+// RAVE-blended UCT score using (wins + priorWins) / (visits + priorVisits).
 function raveScore(child, parentVisits, parentRaveWins, parentRaveVisits, midx) {
-  if (child.visits === 0) return Infinity;
-  const mcWR   = child.wins / child.visits;
+  const ev = child.visits + child.priorVisits;   // effective visits
+  if (ev === 0) return Infinity;
+  const mcWR   = (child.wins + child.priorWins) / ev;
   const rv     = parentRaveVisits[midx];
   const raveWR = rv > 0 ? parentRaveWins[midx] / rv : mcWR;
-  const beta   = Math.sqrt(RAVE_EQUIV / (3 * child.visits + RAVE_EQUIV));
+  const beta   = Math.sqrt(RAVE_EQUIV / (3 * ev + RAVE_EQUIV));
   return (1 - beta) * mcWR + beta * raveWR
-       + EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / child.visits);
+       + EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / ev);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
@@ -213,20 +282,20 @@ function selectAndExpand(root, rootGame, N) {
 
   // Expand: attach one untried child.
   if (!game.gameOver) {
-    if (node.untried === null) node.untried = legalMoves(game);
+    if (node.untried === null) node.untried = legalMovesWithPriors(game);
     if (node.untried.length > 0) {
       // Sample up to EXPANSION_CANDIDATES distinct moves and pick the one
-      // with the best parent RAVE win rate (default 0.5 when unvisited).
+      // with the best parent RAVE win rate, falling back to the pattern prior
+      // when no RAVE data is available.
       const k = Math.min(EXPANSION_CANDIDATES, node.untried.length);
       let bestIdx = 0;
       let bestScore = -1;
       for (let s = 0; s < k; s++) {
         const pick = s + Math.floor(Math.random() * (node.untried.length - s));
-        // Swap candidate into slot s so we don't re-sample it.
         const tmp = node.untried[s]; node.untried[s] = node.untried[pick]; node.untried[pick] = tmp;
         const midx = moveIndex(node.untried[s], N);
         const rv   = node.raveVisits[midx];
-        const score = rv > 0 ? node.raveWins[midx] / rv : 0.5;
+        const score = rv > 0 ? node.raveWins[midx] / rv : (node.untried[s].prior || 0.5);
         if (score > bestScore) { bestScore = score; bestIdx = s; }
       }
       // Move winner to the last position for pop().
@@ -234,20 +303,20 @@ function selectAndExpand(root, rootGame, N) {
       node.untried[bestIdx] = node.untried[node.untried.length - 1];
       node.untried[node.untried.length - 1] = winnerMove;
       const move = node.untried.pop();
-      const child = makeNode(move, node, game.current, N);
+      // Seed the child with pattern-derived virtual wins/visits.
+      const p = move.prior || 0;
+      const child = makeNode(move, node, game.current, N,
+                             PRIOR_VISITS * p, PRIOR_VISITS);
       node.children.push(child);
       node = child;
       applyMove(game, move);
 
-      // After a pass, always force a second pass as a terminal tree node so the
-      // simulation scores the current board position rather than rolling out
-      // randomly.  Without this, rollouts from a "one pass" state play on for
-      // many more random moves, inflating the pass move's apparent win rate.
+      // After a pass, force a second pass as a terminal tree node.
       if (!game.gameOver && game.consecutivePasses > 0) {
         const secondPass = makeNode({ type: 'pass' }, node, game.current, N);
         node.children.push(secondPass);
         node = secondPass;
-        applyMove(game, { type: 'pass' }); // game.gameOver becomes true
+        applyMove(game, { type: 'pass' });
       }
     }
   }
@@ -256,13 +325,6 @@ function selectAndExpand(root, rootGame, N) {
 }
 
 // Backpropagate MCTS wins/visits and update each ancestor's RAVE arrays.
-//
-// RAVE update at node P: the player choosing the *next* move from P is
-//   - rootPlayer         if P is the root (mover === null)
-//   - opponent(P.mover)  otherwise
-// We credit that player's playout moves to P's RAVE arrays so that when
-// the same player selects among P's children, both sources of information
-// are available.
 function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   while (node !== null) {
     node.visits++;
