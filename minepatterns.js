@@ -22,13 +22,15 @@
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
-const { patternHash } = require('./patterns.js');
+const { patternHash, MAX_LIBS } = require('./patterns.js');
+const { isLadderCaptured } = require('./ladder.js');
 
 const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 const file   = get('--file', null);
 const passes = parseInt(get('--passes', '20'), 10);
+const LADDER = process.env.LADDER === 'true';
 
 if (!file) {
   console.error('Usage: node minepatterns.js --file <path> [--passes <n>]');
@@ -36,6 +38,60 @@ if (!file) {
 }
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
+
+// ── Ladder-aware hash ─────────────────────────────────────────────────────────
+//
+// When LADDER=true, appends a ladder-status dimension to the base pattern hash:
+//   0 = neither kills nor escapes a ladder
+//   1 = placing at (x,y) escapes a ladder  (a friendly group in atari at (x,y)
+//       would be captured by a ladder; this move is its escape point)
+//   2 = placing at (x,y) kills a ladder   (puts an adjacent enemy group in
+//       atari and that group cannot escape the resulting ladder)
+//
+// Escape is checked before kill so that a move that does both is encoded as 1.
+// The status is a property of the centre point only, so it is the same across
+// all D4 symmetry transforms — the minimum-hash canonicalisation in patternHash
+// remains consistent.
+
+// Total number of distinct base-hash values = 3^9 × (MAX_LIBS+1)^4
+const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
+
+function getLadderStatus(game, x, y, color) {
+  const board = game.board;
+
+  // Escape check: a friendly group whose only liberty is (x, y) and is losing.
+  for (const [nx, ny] of board.getNeighbors(x, y)) {
+    if (board.get(nx, ny) !== color) continue;
+    const grp  = board.getGroup(nx, ny);
+    const libs = board.getLiberties(grp);
+    if (libs.size === 1 && libs.has(`${x},${y}`)) {
+      if (isLadderCaptured(game, nx, ny).captured) return 1;
+    }
+  }
+
+  // Kill check: simulate the placement and test newly-atari'd enemy groups.
+  const g2 = game.clone();
+  g2.current = color;
+  if (g2.placeStone(x, y) !== false) {
+    for (const [nx, ny] of board.getNeighbors(x, y)) {
+      const cell = g2.board.get(nx, ny);
+      if (cell === null || cell === color) continue;
+      const grp  = g2.board.getGroup(nx, ny);
+      if (grp.length === 0) continue;
+      if (g2.board.getLiberties(grp).size === 1) {
+        if (isLadderCaptured(g2, nx, ny).captured) return 2;
+      }
+    }
+  }
+
+  return 0;
+}
+
+function computeHash(game, x, y, color) {
+  const base = patternHash(game, x, y, color);
+  if (!LADDER) return base;
+  return base + HASH_SPACE * getLadderStatus(game, x, y, color);
+}
 
 // Map from patternHash → { seen: number, selected: number }
 const stats = new Map();
@@ -83,7 +139,7 @@ for (let gi = 0; gi < lines.length; gi++) {
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        others.push(patternHash(g, x, y, color));
+        others.push(computeHash(g, x, y, color));
       }
     }
 
@@ -97,7 +153,7 @@ for (let gi = 0; gi < lines.length; gi++) {
     else if (board.isKo(mx, my, color, g.koFlag))
       process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
-    const selHash = patternHash(g, mx, my, color);
+    const selHash = computeHash(g, mx, my, color);
     gameMoves.push({ color, selHash, others });
 
     g.placeStone(mx, my);
