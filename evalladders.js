@@ -175,9 +175,9 @@ function pct(n, d) {
   return d === 0 ? ' n/a ' : (100 * n / d).toFixed(1) + '%';
 }
 
-function row(label, n, d, tag) {
+function row(label, n, d) {
   const nd = `${n}/${d}`;
-  console.log(`  ${label.padEnd(46)} ${nd.padStart(12)}  ${pct(n, d).padStart(6)}  [${tag}]`);
+  console.log(`  ${label.padEnd(46)} ${nd.padStart(12)}  ${pct(n, d).padStart(6)}`);
 }
 
 const defCap  = counts.def_captured_escaped   + counts.def_captured_ignored;
@@ -188,20 +188,14 @@ const att2Win = counts.att2_winning_attacked  + counts.att2_winning_ignored;
 const att2Saf = counts.att2_safe_attacked     + counts.att2_safe_ignored;
 
 console.log('\n── Defender · 1-liberty groups (own groups in atari) ──────────────────────');
-row('Abandoned a doomed ladder',             counts.def_captured_ignored,   defCap,  'CORRECT');
-row('Escaped a captured group',              counts.def_captured_escaped,   defCap,  'MISTAKE');
-row('Escaped when group can escape',         counts.def_free_escaped,       defFre,  'CORRECT');
-row('Did not escape an escapable group',     counts.def_free_ignored,       defFre,  'MISSED ');
+row('Abandoned a doomed ladder',              counts.def_captured_ignored,   defCap);
+row('Escaped when group can escape',          counts.def_free_escaped,       defFre);
 
 console.log('\n── Attacker · 1-liberty groups (opponent already in atari) ────────────────');
-row('Attacked a doomed ladder',              counts.att1_captured_attacked, att1Cap, 'CORRECT');
-row('Ignored a doomed ladder',               counts.att1_captured_ignored,  att1Cap, 'MISSED ');
-row('Ignored an escapable ladder',           counts.att1_free_ignored,      att1Fre, 'CORRECT');
-row('Attacked an escapable ladder',          counts.att1_free_attacked,     att1Fre, 'MISTAKE');
+row('Attacked a doomed ladder',               counts.att1_captured_attacked, att1Cap);
+row('Ignored an escapable ladder',            counts.att1_free_ignored,      att1Fre);
 
 console.log('\n── Attacker · 2-liberty groups (initiating a ladder) ──────────────────────');
-row('Played liberty that starts winning ladder', counts.att2_winning_attacked, att2Win, 'CORRECT');
-row('Missed a winning ladder start',             counts.att2_winning_ignored,  att2Win, 'MISSED ');
-row('Avoided a futile atari',                    counts.att2_safe_ignored,     att2Saf, 'CORRECT');
-row('Played atari opponent can escape from',     counts.att2_safe_attacked,    att2Saf, 'MISTAKE');
+row('Played liberty that starts winning ladder', counts.att2_winning_attacked, att2Win);
+row('Avoided a futile atari',                    counts.att2_safe_ignored,     att2Saf);
 console.log('');
