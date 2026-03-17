@@ -33,7 +33,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 // When true, move priors are computed via head-to-head ELO expected scores
 // against all other candidates in the position, rather than independent ratio
 // or ELO weights.  This makes each prior relative to the actual competition.
-const USE_H2H = true;
+const USE_H2H = false;
 
 const path = require('path');
 const { patternHash } = require('../patterns.js');
