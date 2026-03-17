@@ -313,7 +313,7 @@ function getMove(game, timeBudgetMs) {
   // group's owner (defender) moving first, and once with the opponent
   // (attacker) moving first.  This is independent of whose turn it is in the
   // game.  Groups whose outcome differs between the two checks are critical
-  // ladders; their relevant liberties are seeded into root.raveWins/raveVisits.
+  // ladders; their relevant liberties are seeded into child wins/visits.
   //
   // 1-liberty group — critical when defFirst=false (attacker first always wins):
   //   The liberty is correct for whoever plays it first, so it gets win=1
@@ -323,11 +323,30 @@ function getMove(game, timeBudgetMs) {
   //   rootPlayer is the attacker → L gets win=1 (initiate the winning ladder)
   //   rootPlayer is the defender → L gets win=0 (avoid self-atari)
   {
+    root.untried = legalMoves(game);
+
+    // Promote a legal move to a pre-created child seeded with virtual wins/visits.
+    // If the child already exists (two groups share a liberty), accumulate into it.
+    // root.visits is kept in sync so the UCB exploration term is well-defined.
+    function seedChild(lx, ly, wins, visits) {
+      let child = root.children.find(c => c.move.type === 'place' && c.move.x === lx && c.move.y === ly);
+      if (!child) {
+        const idx = root.untried.findIndex(m => m.type === 'place' && m.x === lx && m.y === ly);
+        if (idx === -1) return;
+        const [move] = root.untried.splice(idx, 1);
+        child = makeNode(move, root, rootPlayer, N);
+        root.children.push(child);
+      }
+      child.wins   += wins;
+      child.visits += visits;
+      root.visits  += visits;
+    }
+
     const visited = new Set();
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
         const group    = game.board.getGroup(px, py);
-        if (group.length < 2) continue; 
+        if (group.length < 2) continue;
         const groupColor = game.board.get(px, py);
         const gid = game.board._gid[game.board._idx(px, py)];
         if (visited.has(gid)) continue;
@@ -343,19 +362,12 @@ function getMove(game, timeBudgetMs) {
           const [lx, ly] = [...libs][0].split(',').map(Number);
           if (defFirst) {
             if (groupColor == rootPlayer) {
-              // Type 1 
-              root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // Type 1:  Futile escape attempt.
+              // Type 1: Futile escape attempt.
+              seedChild(lx, ly, 0, LADDER_PRIOR);
             }
           } else {
-            if (groupColor == rootPlayer) {
-              // Type 2a
-              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-              root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
-            } else { 
-              // Type 2b 
-              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-              root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
-            }
+            // Type 2a/2b: win=1 for either side.
+            seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
           }
 
         } else if (libs.size === 2) {
@@ -370,12 +382,10 @@ function getMove(game, timeBudgetMs) {
             const atkFirst   = afterGroup.length === 0
                              || isLadderCaptured(g2, px, py).captured;
             if (atkFirst) {                    // critical: outcomes differ
-              // Type 3 
-              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
+              // Type 3
+              seedChild(lx, ly, rootPlayer === atkColor ? LADDER_PRIOR : 0, LADDER_PRIOR);
             } else {
-              // Type 4 
-              //root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // non-urgent.  Seems to hurt.
+              // Type 4: non-urgent.  Seems to hurt.
             }
           }
           game.current = rootPlayer;             // restore
