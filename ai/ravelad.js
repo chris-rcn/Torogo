@@ -382,10 +382,10 @@ function getMove(game, timeBudgetMs) {
         } else if (libs.size === 2) {
           // Defender-first: 2 liberties → not in atari → always safe.
           // Attacker-first: simulate the attacker (atkColor) playing each liberty.
+          game.current = atkColor;               // attacker of this group moves first
           for (const lstr of libs) {
             const [lx, ly] = lstr.split(',').map(Number);
             const g2 = game.clone();
-            g2.current = atkColor;             // attacker of this group moves first
             if (g2.placeStone(lx, ly) === false) continue;
             const afterGroup = g2.board.getGroup(px, py);
             const atkFirst   = afterGroup.length === 0
@@ -395,6 +395,7 @@ function getMove(game, timeBudgetMs) {
               root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
             }
           }
+          game.current = rootPlayer;             // restore
         }
       }
     }
