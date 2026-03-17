@@ -165,10 +165,11 @@ function makeNode(move, parent, mover, N) {
     mover,        // player who made `move` to reach this node (null at root)
     children:  [],
     untried:   null,
-    wins:      0,
-    visits:    0,
-    raveWins:   new Float64Array(len),
-    raveVisits: new Float64Array(len),
+    wins:         0,
+    visits:       0,
+    ladderSeeded: false,
+    raveWins:     new Float64Array(len),
+    raveVisits:   new Float64Array(len),
   };
 }
 
@@ -200,6 +201,11 @@ function selectAndExpand(root, rootGame, N) {
   let node = root;
   const game = rootGame.clone();
 
+  if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
+    applyLadderPriors(node, game, N);
+    node.ladderSeeded = true;
+  }
+
   // Select: descend through fully-expanded nodes using the RAVE-blended score.
   while (node.untried !== null && node.untried.length === 0
          && node.children.length > 0 && !game.gameOver) {
@@ -212,6 +218,10 @@ function selectAndExpand(root, rootGame, N) {
     }
     node = best;
     applyMove(game, node.move);
+    if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
+      applyLadderPriors(node, game, N);
+      node.ladderSeeded = true;
+    }
   }
 
   // Expand: attach one untried child.
@@ -284,8 +294,11 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   }
 }
 
-// Virtual visit weight for each ladder-derived prior seeded into root RAVE stats.
+// Virtual visit weight for each ladder-derived prior seeded into child nodes.
 const LADDER_PRIOR = 10;
+// A node must reach this many visits before its ladder priors are applied.
+const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
+  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
 
 
 // Returns true if the current player playing (lx, ly) puts the group at
@@ -299,6 +312,92 @@ function attackStartsCapture(game, gx, gy, lx, ly) {
   return isLadderCaptured(g2, gx, gy).captured;
 }
 
+// ── Ladder priors ────────────────────────────────────────────────────────────
+// For every group on the board, run the ladder check twice: once with the
+// group's owner (defender) moving first, and once with the opponent
+// (attacker) moving first.  Groups whose outcome differs are critical ladders;
+// their relevant liberties are seeded into the node's child wins/visits.
+//
+// 1-liberty group — critical when defFirst=false (attacker first always wins):
+//   The liberty is correct for whoever plays it first, so it gets win=1
+//   regardless of which side the mover is.
+//
+// 2-liberty group — critical when atkFirst=true for a liberty L:
+//   mover is the attacker → L gets win=1 (initiate the winning ladder)
+//   mover is the defender → L gets win=0 (avoid self-atari)
+function applyLadderPriors(node, game, N) {
+  const mover = game.current;
+
+  // Promote a legal move to a pre-created child seeded with virtual wins/visits.
+  // If the child already exists (two groups share a liberty), accumulate into it.
+  // node.visits is kept in sync so the UCB exploration term is well-defined.
+  function seedChild(lx, ly, wins, visits) {
+    let child = node.children.find(c => c.move.type === 'place' && c.move.x === lx && c.move.y === ly);
+    if (!child) {
+      if (node.untried === null) node.untried = legalMoves(game);
+      const idx = node.untried.findIndex(m => m.type === 'place' && m.x === lx && m.y === ly);
+      if (idx === -1) return;
+      const [move] = node.untried.splice(idx, 1);
+      child = makeNode(move, node, mover, N);
+      node.children.push(child);
+    }
+    child.wins   += wins;
+    child.visits += visits;
+    node.visits  += visits;
+  }
+
+  const visited = new Set();
+  for (let py = 0; py < N; py++) {
+    for (let px = 0; px < N; px++) {
+      const group    = game.board.getGroup(px, py);
+      if (group.length < 2) continue;
+      const groupColor = game.board.get(px, py);
+      const gid = game.board._gid[game.board._idx(px, py)];
+      if (visited.has(gid)) continue;
+      visited.add(gid);
+      const libs     = game.board.getLiberties(group);
+      const atkColor = groupColor === 'black' ? 'white' : 'black';
+
+      if (libs.size === 1) {
+        // Defender-first: isLadderCaptured internally runs the escape sequence.
+        // Attacker-first: play the only liberty → immediate capture → always true.
+        // Critical iff defFirst = false.
+        const { captured: defFirst } = isLadderCaptured(game, px, py);
+        const [lx, ly] = [...libs][0].split(',').map(Number);
+        if (defFirst) {
+          if (groupColor == mover) {
+            // Type 1: Futile escape attempt.
+            seedChild(lx, ly, 0, LADDER_PRIOR);
+          }
+        } else {
+          // Type 2a/2b: win=1 for either side.
+          seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
+        }
+
+      } else if (libs.size === 2) {
+        // Defender-first: 2 liberties → not in atari → always safe.
+        // Attacker-first: simulate the attacker (atkColor) playing each liberty.
+        game.current = atkColor;               // attacker of this group moves first
+        for (const lstr of libs) {
+          const [lx, ly] = lstr.split(',').map(Number);
+          const g2 = game.clone();
+          if (g2.placeStone(lx, ly) === false) continue;
+          const afterGroup = g2.board.getGroup(px, py);
+          const atkFirst   = afterGroup.length === 0
+                           || isLadderCaptured(g2, px, py).captured;
+          if (atkFirst) {                    // critical: outcomes differ
+            // Type 3
+            seedChild(lx, ly, mover === atkColor ? LADDER_PRIOR : 0, LADDER_PRIOR);
+          } else {
+            // Type 4: non-urgent.  Seems to hurt.
+          }
+        }
+        game.current = mover;                  // restore
+      }
+    }
+  }
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
@@ -307,93 +406,6 @@ function getMove(game, timeBudgetMs) {
   const N          = game.boardSize;
   const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
-
-  // ── Ladder priors ────────────────────────────────────────────────────────
-  // For every group on the board, run the ladder check twice: once with the
-  // group's owner (defender) moving first, and once with the opponent
-  // (attacker) moving first.  This is independent of whose turn it is in the
-  // game.  Groups whose outcome differs between the two checks are critical
-  // ladders; their relevant liberties are seeded into child wins/visits.
-  //
-  // 1-liberty group — critical when defFirst=false (attacker first always wins):
-  //   The liberty is correct for whoever plays it first, so it gets win=1
-  //   regardless of which side rootPlayer is.
-  //
-  // 2-liberty group — critical when atkFirst=true for a liberty L:
-  //   rootPlayer is the attacker → L gets win=1 (initiate the winning ladder)
-  //   rootPlayer is the defender → L gets win=0 (avoid self-atari)
-  {
-    root.untried = legalMoves(game);
-
-    // Promote a legal move to a pre-created child seeded with virtual wins/visits.
-    // If the child already exists (two groups share a liberty), accumulate into it.
-    // root.visits is kept in sync so the UCB exploration term is well-defined.
-    function seedChild(lx, ly, wins, visits) {
-      let child = root.children.find(c => c.move.type === 'place' && c.move.x === lx && c.move.y === ly);
-      if (!child) {
-        const idx = root.untried.findIndex(m => m.type === 'place' && m.x === lx && m.y === ly);
-        if (idx === -1) return;
-        const [move] = root.untried.splice(idx, 1);
-        child = makeNode(move, root, rootPlayer, N);
-        root.children.push(child);
-      }
-      child.wins   += wins;
-      child.visits += visits;
-      root.visits  += visits;
-    }
-
-    const visited = new Set();
-    for (let py = 0; py < N; py++) {
-      for (let px = 0; px < N; px++) {
-        const group    = game.board.getGroup(px, py);
-        if (group.length < 2) continue;
-        const groupColor = game.board.get(px, py);
-        const gid = game.board._gid[game.board._idx(px, py)];
-        if (visited.has(gid)) continue;
-        visited.add(gid);
-        const libs     = game.board.getLiberties(group);
-        const atkColor = groupColor === 'black' ? 'white' : 'black';
-
-        if (libs.size === 1) {
-          // Defender-first: isLadderCaptured internally runs the escape sequence.
-          // Attacker-first: play the only liberty → immediate capture → always true.
-          // Critical iff defFirst = false.
-          const { captured: defFirst } = isLadderCaptured(game, px, py);
-          const [lx, ly] = [...libs][0].split(',').map(Number);
-          if (defFirst) {
-            if (groupColor == rootPlayer) {
-              // Type 1: Futile escape attempt.
-              seedChild(lx, ly, 0, LADDER_PRIOR);
-            }
-          } else {
-            // Type 2a/2b: win=1 for either side.
-            seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
-          }
-
-        } else if (libs.size === 2) {
-          // Defender-first: 2 liberties → not in atari → always safe.
-          // Attacker-first: simulate the attacker (atkColor) playing each liberty.
-          game.current = atkColor;               // attacker of this group moves first
-          for (const lstr of libs) {
-            const [lx, ly] = lstr.split(',').map(Number);
-            const g2 = game.clone();
-            if (g2.placeStone(lx, ly) === false) continue;
-            const afterGroup = g2.board.getGroup(px, py);
-            const atkFirst   = afterGroup.length === 0
-                             || isLadderCaptured(g2, px, py).captured;
-            if (atkFirst) {                    // critical: outcomes differ
-              // Type 3
-              seedChild(lx, ly, rootPlayer === atkColor ? LADDER_PRIOR : 0, LADDER_PRIOR);
-            } else {
-              // Type 4: non-urgent.  Seems to hurt.
-            }
-          }
-          game.current = rootPlayer;             // restore
-        }
-      }
-    }
-  }
-  // ── End ladder priors ────────────────────────────────────────────────────
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
