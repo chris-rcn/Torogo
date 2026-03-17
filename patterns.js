@@ -2,6 +2,10 @@
 
 // patterns.js — pattern recognition helpers for Go board positions.
 
+const { isLadderCaptured } = require('./ladder.js');
+
+const LADDER_BAD_EXTEND = process.env.LADDER_BAD_EXTEND === 'true';
+
 // Liberty counts above this threshold are treated as equivalent.
 const MAX_LIBS = 1;
 
@@ -98,6 +102,21 @@ function patternHash(game, x, y, mover) {
     const combined = cellHash + 19683 * libHash;
     if (combined < minHash) minHash = combined;
   }
+  // When LADDER_BAD_EXTEND=true, append a binary dimension: +HASH_SPACE if
+  // (x,y) is a futile escape from an already-doomed ladder group.
+  if (LADDER_BAD_EXTEND) {
+    const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
+    const board = game.board;
+    for (const [nx, ny] of board.getNeighbors(x, y)) {
+      if (board.get(nx, ny) !== mover) continue;
+      const grp  = board.getGroup(nx, ny);
+      const libs = board.getLiberties(grp);
+      if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
+      if (!isLadderCaptured(game, nx, ny).captured) continue;
+      return minHash + HASH_SPACE;
+    }
+  }
+
   return minHash;
 }
 
