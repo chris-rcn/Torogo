@@ -637,7 +637,7 @@ section('placeStone return values');
 
 section('Board serialize/parse round-trip');
 {
-  const { parseBoard, boardToString } = require('./testpuzzles.js');
+  const { parseBoard, boardToString } = require('./predictmoves.js');
   const g = new Game(7, 3.5);
   const random = require('./ai/random.js');
   for (let i = 0; i < 10 && !g.gameOver; i++) {
@@ -797,14 +797,14 @@ section('Ladder reader – not in atari');
   // Empty cell → false
   {
     const g = new Game(9, 3.5);
-    assert(!isLadderCaptured(g, 4, 4), 'empty cell: false');
+    assert(!isLadderCaptured(g, 4, 4).captured, 'empty cell: false');
   }
 
   // Group with 4 liberties → false
   {
     const g = new Game(9, 3.5);
     g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
-    assert(!isLadderCaptured(g, 4, 4), '4-liberty group: false');
+    assert(!isLadderCaptured(g, 4, 4).captured, '4-liberty group: false');
   }
 
   // Group with 2 liberties → false
@@ -814,7 +814,7 @@ section('Ladder reader – not in atari');
     g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
     g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
     // Black at (4,4): liberties (4,3) and (4,5)
-    assert(!isLadderCaptured(g, 4, 4), '2-liberty group: false');
+    assert(!isLadderCaptured(g, 4, 4).captured, '2-liberty group: false');
   }
 }
 
@@ -827,7 +827,7 @@ section('Ladder reader – atari with immediate escape to 3+ liberties');
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
   g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
-  assert(!isLadderCaptured(g, 4, 4), 'immediate escape to 3+ libs: false');
+  assert(!isLadderCaptured(g, 4, 4).captured, 'immediate escape to 3+ libs: false');
 }
 
 section('Ladder reader – escape is suicide (all exits blocked)');
@@ -844,7 +844,7 @@ section('Ladder reader – escape is suicide (all exits blocked)');
   g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
   g.board.set(4, 6, 'white'); g.board.captureGroups(4, 6);
   // Liberty is (4,5); playing there is suicide
-  assert(isLadderCaptured(g, 4, 4), 'escape is suicide: caught');
+  assert(isLadderCaptured(g, 4, 4).captured, 'escape is suicide: caught');
 }
 
 section('Ladder reader – ladder with breaker stone');
@@ -860,7 +860,7 @@ section('Ladder reader – ladder with breaker stone');
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
   g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
   g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
-  assert(!isLadderCaptured(g, 4, 4), 'ladder breaker present: not caught');
+  assert(!isLadderCaptured(g, 4, 4).captured, 'ladder breaker present: not caught');
 }
 
 section('Ladder reader – same position without breaker is caught');
@@ -890,7 +890,7 @@ section('Ladder reader – same position without breaker is caught');
   g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
   g.board.set(3, 5, 'white'); g.board.captureGroups(3, 5);
   g.board.set(4, 6, 'white'); g.board.captureGroups(4, 6);
-  assert(isLadderCaptured(g, 4, 4), 'no breaker, all exits blocked: caught');
+  assert(isLadderCaptured(g, 4, 4).captured, 'no breaker, all exits blocked: caught');
 }
 
 section('Ladder reader – two-step ladder terminates in capture');
@@ -920,7 +920,80 @@ section('Ladder reader – two-step ladder terminates in capture');
   // After step 1 (black plays 4,5): libs = {(3,5),(4,6)} — attacker re-ataris via (3,5).
   // After step 2 (white plays 3,5): lib = {(4,6)}.
   // After step 3 (black plays 4,6): libs from (4,6) = {(5,6)=W,(4,7)=W} → 0 → caught.
-  assert(isLadderCaptured(g, 4, 4), 'two-step ladder with blocked exits: caught');
+  assert(isLadderCaptured(g, 4, 4).captured, 'two-step ladder with blocked exits: caught');
+}
+
+section('Ladder reader – moves: attacker turn, immediate capture');
+{
+  // Same board as "escape is suicide": black at (4,4), all exits blocked.
+  // With game.current = 'white' (attacker), moves should be the single liberty.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(3, 5, 'white'); g.board.captureGroups(3, 5);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.board.set(4, 6, 'white'); g.board.captureGroups(4, 6);
+  g.current = 'white';
+  const r = isLadderCaptured(g, 4, 4);
+  assert(r.captured, 'attacker turn immediate: captured');
+  assert(r.moves.length === 1, 'attacker turn immediate: one attack move');
+  assert(r.moves[0].x === 4 && r.moves[0].y === 5, 'attacker turn immediate: attack move is (4,5)');
+}
+
+section('Ladder reader – moves: attacker turn, two-step ladder');
+{
+  // Same board as "two-step ladder".  With game.current = 'white' (attacker),
+  // the one valid re-atari after black escapes to (4,5) is (3,5).
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.board.set(5, 6, 'white'); g.board.captureGroups(5, 6);
+  g.board.set(4, 7, 'white'); g.board.captureGroups(4, 7);
+  g.current = 'white';
+  const r = isLadderCaptured(g, 4, 4);
+  assert(r.captured, 'attacker turn two-step: captured');
+  // Both liberties of the escaped group are valid re-atari points on this toroidal board.
+  assert(r.moves.length >= 1, 'attacker turn two-step: at least one re-atari');
+  assert(r.moves.some(m => m.x === 3 && m.y === 5), 'attacker turn two-step: (3,5) is a valid re-atari');
+}
+
+section('Ladder reader – moves: defender turn, can escape');
+{
+  // Black at (4,4) with one liberty (4,5); escape leads to 3+ libs.
+  // With game.current = 'black' (defender), moves should be the escape point.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.current = 'black';  // set defender as the active player
+  const r = isLadderCaptured(g, 4, 4);
+  assert(!r.captured, 'defender turn escape: not captured');
+  assert(r.moves.length === 1, 'defender turn escape: one escape move');
+  assert(r.moves[0].x === 4 && r.moves[0].y === 5, 'defender turn escape: escape move is (4,5)');
+}
+
+section('Ladder reader – moves: defender turn, captured (no moves for defender)');
+{
+  // Black caught in two-step ladder; game.current = 'black' (defender's turn).
+  // Captured groups have no useful moves to return.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.board.set(5, 6, 'white'); g.board.captureGroups(5, 6);
+  g.board.set(4, 7, 'white'); g.board.captureGroups(4, 7);
+  g.current = 'black';  // defender's turn — no attack moves should be returned
+  const r = isLadderCaptured(g, 4, 4);
+  assert(r.captured, 'defender turn captured: captured');
+  assert(r.moves.length === 0, 'defender turn captured: no moves returned');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────
