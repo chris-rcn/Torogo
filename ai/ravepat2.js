@@ -32,11 +32,10 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js');
 
-// Head-to-head is only available in Node.js where we can load the patterns file
-// and use Node built-ins (path, fs).  In the browser context we fall back to
-// normalised ratio weights, which is equivalent to the old ravepat2 behaviour.
+// Head-to-head ELO prior.  Only works in Node.js (requires path + fs).
+// Set to true to enable; the browser always falls back to ratio weights.
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const USE_H2H = _isNode;
+const USE_H2H = false && _isNode;
 
 let patternHash = null;
 let eloTable = null;
