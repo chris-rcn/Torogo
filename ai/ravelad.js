@@ -364,6 +364,7 @@ function getMove(game, timeBudgetMs) {
         if (visited.has(gid)) continue;
         visited.add(gid);
         const group = game.board.getGroup(px, py);
+        if (group.length < 2) continue;
         const libs  = game.board.getLiberties(group);
         if (libs.size !== 1) continue;
         const [lx, ly] = [...libs][0].split(',').map(Number);
@@ -385,6 +386,7 @@ function getMove(game, timeBudgetMs) {
         if (visited.has(gid)) continue;
         visited.add(gid);
         const group = game.board.getGroup(px, py);
+        if (group.length < 2) continue;
         const libs  = game.board.getLiberties(group);
         if (libs.size === 1) {
           const [lx, ly] = [...libs][0].split(',').map(Number);
