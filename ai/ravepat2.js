@@ -30,7 +30,12 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { weight: patternWeight } = require('./pattern.js');
+// When true, moves are weighted by their ELO (converted to a relative strength
+// via 10^((elo−1500)/400)) instead of the raw selection ratio.
+const USE_ELO = false;
+
+const { weight: ratioWeight, eloWeight } = require('./pattern.js');
+const patternWeight = USE_ELO ? eloWeight : ratioWeight;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
