@@ -291,7 +291,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 }
 
 // Virtual visit weight for each ladder-derived prior seeded into root RAVE stats.
-const LADDER_PRIOR = 10;
+const LADDER_PRIOR = 20;
 
 // ── Dead-ladder suppression ───────────────────────────────────────────────────
 
@@ -357,13 +357,11 @@ function getMove(game, timeBudgetMs) {
     const visited = new Set();
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
+        const group    = game.board.getGroup(px, py);
+        if (group.length < 2) continue; 
         const groupColor = game.board.get(px, py);
-        if (groupColor === null) continue;
         const gid = game.board._gid[game.board._idx(px, py)];
         if (visited.has(gid)) continue;
-
-        const group    = game.board.getGroup(px, py);
-        if (group.length < 2) continue;
         visited.add(gid);
         const libs     = game.board.getLiberties(group);
         const atkColor = groupColor === 'black' ? 'white' : 'black';
@@ -373,10 +371,12 @@ function getMove(game, timeBudgetMs) {
           // Attacker-first: play the only liberty → immediate capture → always true.
           // Critical iff defFirst = false.
           const { captured: defFirst } = isLadderCaptured(game, px, py);
-          if (!defFirst) {
-            const [lx, ly] = [...libs][0].split(',').map(Number);
-            root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-            root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
+          const [lx, ly] = [...libs][0].split(',').map(Number);
+          if (defFirst) {
+            root.raveVisits[ly * N + lx] += LADDER_PRIOR;  // wasted move
+          } else {
+//            root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+//            root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
           }
 
         } else if (libs.size === 2) {
@@ -391,8 +391,8 @@ function getMove(game, timeBudgetMs) {
             const atkFirst   = afterGroup.length === 0
                              || isLadderCaptured(g2, px, py).captured;
             if (atkFirst) {                    // critical: outcomes differ
-              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
-              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
+//              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+//              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
             }
           }
           game.current = rootPlayer;             // restore
