@@ -393,7 +393,7 @@ function getMove(game, timeBudgetMs) {
           const idx = ly * N + lx;
           const { captured } = isLadderCaptured(game, px, py);
           root.raveVisits[idx] += LADDER_PRIOR;
-          root.raveWins[idx]   += captured ? LADDER_PRIOR : 0;
+          root.raveWins[idx]   += captured ? 0 : LADDER_PRIOR;
         } else if (libs.size === 2) {
           for (const lstr of libs) {
             const [lx, ly] = lstr.split(',').map(Number);
