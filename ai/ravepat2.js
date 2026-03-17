@@ -48,7 +48,7 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 
 // Virtual visits injected into each new child node.  Larger values trust the
 // pattern prior longer before deferring to simulation results.
-const PRIOR_VISITS = 20;
+const PRIOR_VISITS = 30;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
