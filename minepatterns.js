@@ -22,15 +22,13 @@
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
-const { patternHash, MAX_LIBS } = require('./patterns.js');
-const { isLadderCaptured } = require('./ladder.js');
+const { patternHash } = require('./patterns.js');
 
 const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 const file   = get('--file', null);
 const passes = parseInt(get('--passes', '20'), 10);
-const LADDER_BAD_EXTEND = process.env.LADDER_BAD_EXTEND === 'true';
 
 if (!file) {
   console.error('Usage: node minepatterns.js --file <path> [--passes <n>]');
@@ -38,40 +36,6 @@ if (!file) {
 }
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
-
-// ── Ladder-aware hash ─────────────────────────────────────────────────────────
-//
-// When LADDER_BAD_EXTEND=true, appends a binary dimension to the base pattern
-// hash encoding whether the move is a futile ladder escape:
-//
-//   1 = "bad extend" — (x,y) is the sole liberty of a friendly group that is
-//       already in a losing ladder (the escape is doomed regardless).
-//   0 = all other moves.
-//
-// This property depends only on the centre point and is invariant under D4
-// symmetry, so the minimum-hash canonicalisation in patternHash stays valid.
-
-// Total number of distinct base-hash values = 3^9 × (MAX_LIBS+1)^4
-const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
-
-function isLadderBadExtend(game, x, y, color) {
-  const board = game.board;
-  for (const [nx, ny] of board.getNeighbors(x, y)) {
-    if (board.get(nx, ny) !== color) continue;
-    const grp  = board.getGroup(nx, ny);
-    const libs = board.getLiberties(grp);
-    if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
-    if (!isLadderCaptured(game, nx, ny).captured) continue;
-    return true; // escape attempt from an already-doomed group
-  }
-  return false;
-}
-
-function computeHash(game, x, y, color) {
-  const base = patternHash(game, x, y, color);
-  if (!LADDER_BAD_EXTEND) return base;
-  return base + (isLadderBadExtend(game, x, y, color) ? HASH_SPACE : 0);
-}
 
 // Map from patternHash → { seen: number, selected: number }
 const stats = new Map();
@@ -119,7 +83,7 @@ for (let gi = 0; gi < lines.length; gi++) {
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        others.push(computeHash(g, x, y, color));
+        others.push(patternHash(g, x, y, color));
       }
     }
 
@@ -133,7 +97,7 @@ for (let gi = 0; gi < lines.length; gi++) {
     else if (board.isKo(mx, my, color, g.koFlag))
       process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
-    const selHash = computeHash(g, mx, my, color);
+    const selHash = patternHash(g, mx, my, color);
     gameMoves.push({ color, selHash, others });
 
     g.placeStone(mx, my);
