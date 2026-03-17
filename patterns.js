@@ -1,9 +1,9 @@
 'use strict';
 
-// patterns.JS — pattern recognition helpers for Go board positions.
+// patterns.js — pattern recognition helpers for Go board positions.
 
 // Liberty counts above this threshold are treated as equivalent.
-const MAX_LIBS = 2;
+const MAX_LIBS = 1;
 
 // Encode a cell value as a base-3 digit relative to the moving player.
 //   null         → 0  (empty)

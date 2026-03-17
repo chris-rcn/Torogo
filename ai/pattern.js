@@ -19,7 +19,7 @@
  */
 
 const fs = require('fs');
-const { patternHash } = require('../patterns.JS');
+const { patternHash } = require('../patterns.js');
 
 // Weight given to patterns that were never observed in the training data.
 const DEFAULT_WEIGHT = 0.01;

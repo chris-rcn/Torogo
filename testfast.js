@@ -660,7 +660,7 @@ section('Board serialize/parse round-trip');
 // ─── Pattern symmetry ────────────────────────────────────────────────────────
 
 // Helpers shared by all pattern-symmetry sections.
-const { patternHash, MAX_LIBS } = require('./patterns.JS');
+const { patternHash, MAX_LIBS } = require('./patterns.js');
 
 // D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
 const _D4_PERMS = [

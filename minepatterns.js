@@ -22,7 +22,7 @@
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
-const { patternHash } = require('./patterns.JS');
+const { patternHash } = require('./patterns.js');
 
 const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
