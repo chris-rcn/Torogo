@@ -63,13 +63,12 @@ function isLadderBadExtend(game, x, y, color) {
     const libs = board.getLiberties(grp);
     if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
     if (!isLadderCaptured(game, nx, ny).captured) continue;
-    // (x,y) is an escape attempt from a losing ladder — check if it still fails.
-    const g2 = game.clone();
-    g2.current = color;
-    if (g2.placeStone(x, y) !== false) {
-      return isLadderCaptured(g2, x, y).captured;
-    }
-    return false;
+    // (x,y) is an escape attempt from a losing ladder.  After placing there
+    // the extended group's liberties are exactly the empty neighbours of (x,y).
+    // If that count is 1 the group is still in atari — a bad extend.
+    const newLibs = board.getNeighbors(x, y)
+      .filter(([ax, ay]) => board.get(ax, ay) === null).length;
+    return newLibs === 1;
   }
   return false;
 }
