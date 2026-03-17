@@ -30,12 +30,17 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-// When true, moves are weighted by their ELO (converted to a relative strength
-// via 10^((elo−1500)/400)) instead of the raw selection ratio.
-const USE_ELO = false;
+// When true, move priors are computed via head-to-head ELO expected scores
+// against all other candidates in the position, rather than independent ratio
+// or ELO weights.  This makes each prior relative to the actual competition.
+const USE_H2H = true;
 
-const { weight: ratioWeight, eloWeight } = require('./pattern.js');
-const patternWeight = USE_ELO ? eloWeight : ratioWeight;
+const path = require('path');
+const { patternHash } = require('../patterns.js');
+const { weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js');
+const eloTable = USE_H2H
+  ? makeEloTable(path.join(__dirname, '..', 'patterns.csv'))
+  : null;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -149,29 +154,62 @@ function playTracked(game) {
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
 // Returns legal moves annotated with a normalised pattern prior (.prior field).
-// Moves not yet seen in training data get DEFAULT_WEIGHT via patternWeight.
+// With USE_H2H: prior(i) ∝ Σ_{j≠i} E(i beats j) where E is the ELO expected
+// score formula, summed over all other legal candidates in this position.
+// Patterns absent from the table are assigned DEFAULT_ELO.
+// Without USE_H2H: falls back to normalised raw selection ratios.
 function legalMovesWithPriors(game) {
   const moves = [];
   const N = game.boardSize;
-  let totalWeight = 0;
 
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
       const probe = game.clone();
-      if (probe.placeStone(x, y)) {
-        const w = patternWeight(game, x, y);
-        moves.push({ type: 'place', x, y, w });
-        totalWeight += w;
-      }
+      if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
     }
   }
 
   const area = N * N;
   if (game.moveCount >= area / 2 || game.consecutivePasses > 0) {
-    moves.push({ type: 'pass', w: 1 });
-    totalWeight += 1;
+    moves.push({ type: 'pass' });
+  }
+
+  let totalWeight = 0;
+
+  if (USE_H2H) {
+    // Resolve ELO for every candidate (pass treated as a weak DEFAULT_ELO move).
+    for (const m of moves) {
+      if (m.type === 'place') {
+        const hash = patternHash(game, m.x, m.y, game.current);
+        m.elo = eloTable.has(hash) ? eloTable.get(hash) : DEFAULT_ELO;
+      } else {
+        m.elo = DEFAULT_ELO;
+      }
+    }
+
+    const n = moves.length;
+    if (n <= 1) {
+      // Trivial: only one legal move, prior = 1.
+      for (const m of moves) { m.w = 1; m.prior = 1; }
+      return moves;
+    }
+
+    // weight(i) = Σ_{j≠i} 1 / (1 + 10^((elo_j − elo_i) / 400))
+    for (let i = 0; i < n; i++) {
+      let score = 0;
+      for (let j = 0; j < n; j++) {
+        if (i !== j) score += 1 / (1 + Math.pow(10, (moves[j].elo - moves[i].elo) / 400));
+      }
+      moves[i].w = score;
+      totalWeight += score;
+    }
+  } else {
+    for (const m of moves) {
+      m.w = m.type === 'place' ? ratioWeight(game, m.x, m.y) : 1;
+      totalWeight += m.w;
+    }
   }
 
   // Normalise to probabilities so priorWins = PRIOR_VISITS * p is a valid

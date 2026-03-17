@@ -34,6 +34,10 @@ function eloToWeight(elo) {
   return Math.pow(10, (elo - ELO_BASELINE) / 400);
 }
 
+// ELO assigned to patterns absent from the training data.  Derived from
+// DEFAULT_WEIGHT so that novel patterns are treated as weak opponents.
+const DEFAULT_ELO = ELO_BASELINE + 400 * Math.log10(DEFAULT_WEIGHT); // ≈ 700
+
 /**
  * Load a pattern-statistics file and return a Map<hash, weight>.
  *
@@ -157,6 +161,26 @@ function makeEloWeighter(patternFile) {
   };
 }
 
+/**
+ * Load a pattern file and return a Map<hash, elo> of raw ELO values (column 3).
+ * Intended for callers that compute context-aware weights (e.g. head-to-head).
+ *
+ * @param {string} patternFile
+ * @returns {Map<number, number>}
+ */
+function makeEloTable(patternFile) {
+  const table = new Map();
+  const lines = fs.readFileSync(patternFile, 'utf8').trim().split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const parts = line.split(',');
+    const hash = parseInt(parts[0], 10);
+    const elo  = parseFloat(parts[3]);
+    if (!Number.isNaN(hash) && !Number.isNaN(elo)) table.set(hash, elo);
+  }
+  return table;
+}
+
 // Default getMove for use with selfplay.js / recordgames.js:
 //   node selfplay.js --p1 pattern --p2 random
 // Looks for patterns.csv next to game.js (project root).
@@ -167,6 +191,7 @@ const _defaultWeight   = makeWeighter(_defaultFile);
 const _defaultEloWeight = makeEloWeighter(_defaultFile);
 
 module.exports = Object.assign(_defaultGetMove, {
-  makeAgent, makeWeighter, makeEloWeighter,
+  makeAgent, makeWeighter, makeEloWeighter, makeEloTable,
   weight: _defaultWeight, eloWeight: _defaultEloWeight,
+  DEFAULT_ELO,
 });
