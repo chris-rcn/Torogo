@@ -361,10 +361,10 @@ function getMove(game, timeBudgetMs) {
         if (groupColor === null) continue;
         const gid = game.board._gid[game.board._idx(px, py)];
         if (visited.has(gid)) continue;
-        visited.add(gid);
 
         const group    = game.board.getGroup(px, py);
         if (group.length < 2) continue;
+        visited.add(gid);
         const libs     = game.board.getLiberties(group);
         const atkColor = groupColor === 'black' ? 'white' : 'black';
 
