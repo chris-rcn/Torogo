@@ -340,67 +340,60 @@ function getMove(game, timeBudgetMs) {
   const root       = makeNode(null, null, null, N);
 
   // ── Ladder priors ────────────────────────────────────────────────────────
-  // Scan all groups once as defender and once as attacker to seed root RAVE
-  // priors before any playouts run.
+  // For every group on the board, run the ladder check twice: once with the
+  // group's owner (defender) moving first, and once with the opponent
+  // (attacker) moving first.  This is independent of whose turn it is in the
+  // game.  Groups whose outcome differs between the two checks are critical
+  // ladders; their relevant liberties are seeded into root.raveWins/raveVisits.
   //
-  // Pass 1 — Defender: own groups in atari.
-  //   !captured → escape liberty is a good move (prior win = 1)
-  //    captured → escape liberty is futile       (prior win = 0)
+  // 1-liberty group — critical when defFirst=false (attacker first always wins):
+  //   The liberty is correct for whoever plays it first, so it gets win=1
+  //   regardless of which side rootPlayer is.
   //
-  // Pass 2 — Attacker: opponent groups with 1 or 2 liberties.
-  //   1-lib, captured  → playing that liberty is a good attack (prior win = 1)
-  //   1-lib, !captured → group escapes; attack is wasteful    (prior win = 0)
-  //   2-lib            → each liberty that starts a winning ladder gets win=1;
-  //                       liberties that let the group escape get win=0.
-  const oppPlayer = rootPlayer === 'black' ? 'white' : 'black';
-
-  // Pass 1: defender (own groups)
+  // 2-liberty group — critical when atkFirst=true for a liberty L:
+  //   rootPlayer is the attacker → L gets win=1 (initiate the winning ladder)
+  //   rootPlayer is the defender → L gets win=0 (avoid self-atari)
   {
     const visited = new Set();
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
-        if (game.board.get(px, py) !== rootPlayer) continue;
+        const groupColor = game.board.get(px, py);
+        if (groupColor === null) continue;
         const gid = game.board._gid[game.board._idx(px, py)];
         if (visited.has(gid)) continue;
         visited.add(gid);
-        const group = game.board.getGroup(px, py);
-        if (group.length < 2) continue;
-        const libs  = game.board.getLiberties(group);
-        if (libs.size !== 1) continue;
-        const [lx, ly] = [...libs][0].split(',').map(Number);
-        const idx = ly * N + lx;
-        const { captured } = isLadderCaptured(game, px, py);
-        root.raveVisits[idx] += LADDER_PRIOR;
-        root.raveWins[idx]   += captured ? 0 : LADDER_PRIOR;
-      }
-    }
-  }
 
-  // Pass 2: attacker (opponent groups)
-  {
-    const visited = new Set();
-    for (let py = 0; py < N; py++) {
-      for (let px = 0; px < N; px++) {
-        if (game.board.get(px, py) !== oppPlayer) continue;
-        const gid = game.board._gid[game.board._idx(px, py)];
-        if (visited.has(gid)) continue;
-        visited.add(gid);
-        const group = game.board.getGroup(px, py);
+        const group    = game.board.getGroup(px, py);
         if (group.length < 2) continue;
-        const libs  = game.board.getLiberties(group);
+        const libs     = game.board.getLiberties(group);
+        const atkColor = groupColor === 'black' ? 'white' : 'black';
+
         if (libs.size === 1) {
-          const [lx, ly] = [...libs][0].split(',').map(Number);
-          const idx = ly * N + lx;
-          const { captured } = isLadderCaptured(game, px, py);
-          root.raveVisits[idx] += LADDER_PRIOR;
-          root.raveWins[idx]   += captured ? 0 : LADDER_PRIOR;
+          // Defender-first: isLadderCaptured internally runs the escape sequence.
+          // Attacker-first: play the only liberty → immediate capture → always true.
+          // Critical iff defFirst = false.
+          const { captured: defFirst } = isLadderCaptured(game, px, py);
+          if (!defFirst) {
+            const [lx, ly] = [...libs][0].split(',').map(Number);
+            root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+            root.raveWins  [ly * N + lx] += LADDER_PRIOR;  // win=1 for either side
+          }
+
         } else if (libs.size === 2) {
+          // Defender-first: 2 liberties → not in atari → always safe.
+          // Attacker-first: simulate the attacker (atkColor) playing each liberty.
           for (const lstr of libs) {
             const [lx, ly] = lstr.split(',').map(Number);
-            const idx = ly * N + lx;
-            const wins = attackStartsCapture(game, px, py, lx, ly);
-            root.raveVisits[idx] += LADDER_PRIOR;
-            root.raveWins[idx]   += wins ? LADDER_PRIOR : 0;
+            const g2 = game.clone();
+            g2.current = atkColor;             // attacker of this group moves first
+            if (g2.placeStone(lx, ly) === false) continue;
+            const afterGroup = g2.board.getGroup(px, py);
+            const atkFirst   = afterGroup.length === 0
+                             || isLadderCaptured(g2, px, py).captured;
+            if (atkFirst) {                    // critical: outcomes differ
+              root.raveVisits[ly * N + lx] += LADDER_PRIOR;
+              root.raveWins  [ly * N + lx] += rootPlayer === atkColor ? LADDER_PRIOR : 0;
+            }
           }
         }
       }
