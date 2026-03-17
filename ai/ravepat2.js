@@ -27,22 +27,51 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js');
-
 // Head-to-head ELO prior.  Only works in Node.js (requires path + fs).
 // Set to true to enable; the browser always falls back to ratio weights.
-const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const USE_H2H = false && _isNode;
+const USE_H2H = false;
 
-let patternHash = null;
+// Default weight for patterns absent from the training data.
+const DEFAULT_WEIGHT = 0.01;
+
+let ratioWeight;
+let makeEloTable;
+let DEFAULT_ELO;
+let patternHash;
 let eloTable = null;
-if (USE_H2H) {
-  const path = require('path');
-  patternHash = require('../patterns.js').patternHash;
-  eloTable = makeEloTable(path.join(__dirname, '..', 'patterns.csv'));
+
+if (_isNode) {
+  ({ weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js'));
+  if (USE_H2H) {
+    const path = require('path');
+    patternHash = require('../patterns.js').patternHash;
+    eloTable = makeEloTable(path.join(__dirname, '..', 'patterns.csv'));
+  }
+} else {
+  // Browser: patternHash is a global from patterns.js loaded as a <script>.
+  // Load patterns.csv via fetch and build the ratio table.
+  patternHash = window.patternHash;
+  const _table = new Map();
+  fetch('patterns.csv')
+    .then(r => r.text())
+    .then(text => {
+      for (const line of text.trim().split('\n')) {
+        if (!line.trim()) continue;
+        const parts = line.split(',');
+        const hash  = parseInt(parts[0], 10);
+        const ratio = parseFloat(parts[1]);
+        if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
+      }
+    });
+  ratioWeight = function(game, x, y) {
+    const hash = patternHash(game, x, y, game.current);
+    return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
+  };
 }
 
 const DEFAULT_BUDGET_MS = 500;
