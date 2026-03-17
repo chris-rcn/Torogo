@@ -22,7 +22,7 @@
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
-const { computeHash } = require('./patterns.js');
+const { patternHash } = require('./patterns.js');
 
 const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -83,7 +83,7 @@ for (let gi = 0; gi < lines.length; gi++) {
         if (board.isTrueEye(x, y, color)) continue;
         if (board.isSuicide(x, y, color)) continue;
         if (board.isKo(x, y, color, g.koFlag)) continue;
-        others.push(computeHash(g, x, y, color));
+        others.push(patternHash(g, x, y, color));
       }
     }
 
@@ -97,7 +97,7 @@ for (let gi = 0; gi < lines.length; gi++) {
     else if (board.isKo(mx, my, color, g.koFlag))
       process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is ko-illegal\n`);
 
-    const selHash = computeHash(g, mx, my, color);
+    const selHash = patternHash(g, mx, my, color);
     gameMoves.push({ color, selHash, others });
 
     g.placeStone(mx, my);

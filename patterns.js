@@ -102,41 +102,22 @@ function patternHash(game, x, y, mover) {
     const combined = cellHash + 19683 * libHash;
     if (combined < minHash) minHash = combined;
   }
+  // When LADDER_BAD_EXTEND=true, append a binary dimension: +HASH_SPACE if
+  // (x,y) is a futile escape from an already-doomed ladder group.
+  if (LADDER_BAD_EXTEND) {
+    const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
+    const board = game.board;
+    for (const [nx, ny] of board.getNeighbors(x, y)) {
+      if (board.get(nx, ny) !== mover) continue;
+      const grp  = board.getGroup(nx, ny);
+      const libs = board.getLiberties(grp);
+      if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
+      if (!isLadderCaptured(game, nx, ny).captured) continue;
+      return minHash + HASH_SPACE;
+    }
+  }
+
   return minHash;
 }
 
-// ── Ladder-aware hash ─────────────────────────────────────────────────────────
-//
-// When LADDER_BAD_EXTEND=true, appends a binary dimension to the base pattern
-// hash encoding whether the move is a futile ladder escape:
-//
-//   1 = "bad extend" — (x,y) is the sole liberty of a friendly group that is
-//       already in a losing ladder (the escape is doomed regardless).
-//   0 = all other moves.
-//
-// This property depends only on the centre point and is invariant under D4
-// symmetry, so the minimum-hash canonicalisation in patternHash stays valid.
-
-// Total number of distinct base-hash values = 3^9 × (MAX_LIBS+1)^4
-const HASH_SPACE = 19683 * Math.pow(MAX_LIBS + 1, 4);
-
-function isLadderBadExtend(game, x, y, color) {
-  const board = game.board;
-  for (const [nx, ny] of board.getNeighbors(x, y)) {
-    if (board.get(nx, ny) !== color) continue;
-    const grp  = board.getGroup(nx, ny);
-    const libs = board.getLiberties(grp);
-    if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
-    if (!isLadderCaptured(game, nx, ny).captured) continue;
-    return true; // escape attempt from an already-doomed group
-  }
-  return false;
-}
-
-function computeHash(game, x, y, color) {
-  const base = patternHash(game, x, y, color);
-  if (!LADDER_BAD_EXTEND) return base;
-  return base + (isLadderBadExtend(game, x, y, color) ? HASH_SPACE : 0);
-}
-
-if (typeof module !== 'undefined') module.exports = { patternHash, computeHash, MAX_LIBS };
+if (typeof module !== 'undefined') module.exports = { patternHash, MAX_LIBS };
