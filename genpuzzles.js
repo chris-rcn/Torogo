@@ -46,7 +46,7 @@ const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 const seenHashes = new Set();
 let puzzleCount = 0;
 
-console.log('// Auto-generated puzzles — paste into PUZZLES array in testpuzzles.js');
+console.log('// Auto-generated puzzles — paste into PUZZLES array in predictmoves.js');
 console.log(`// Generated: agent=${agentName} size=${boardSize} budget=${budgetMs}ms`);
 console.log('');
 
