@@ -2,27 +2,7 @@
 
 const { Board, Game, ZOBRIST } = require('./game.js');
 
-// ─── Board parser / serializer (thin wrappers around Board methods) ──────────
-
-// boardToString(board, toPlay?) — serialize board to ASCII; if toPlay ('●'/'○')
-// is given, prepend it as the first line so parseBoard can recover it.
-function boardToString(board, toPlay) {
-  const body = board.toAscii();
-  return toPlay ? toPlay + '\n' + body : body;
-}
-
-// parseBoard(str) — returns { size, stones, toPlay? }.
-// toPlay is '●' or '○' if the string was produced with boardToString(board, toPlay).
-function parseBoard(boardStr) {
-  const lines = boardStr.trim().split('\n').map(r => r.trim());
-  let toPlay;
-  if (lines[0] === '●' || lines[0] === '○') {
-    toPlay = lines.shift();
-  }
-  const result = Board.parse(lines.join('\n'));
-  if (toPlay !== undefined) result.toPlay = toPlay;
-  return result;
-}
+const { parseBoard, boardTurnToString } = require('./game.js');
 
 // ─── Position builder ─────────────────────────────────────────────────────────
 
@@ -13249,4 +13229,4 @@ if (require.main === module) {
 
 // ─── Exports (for testfast.js round-trip test) ───────────────────────────────
 
-if (typeof module !== 'undefined') module.exports = { parseBoard, boardToString };
+if (typeof module !== 'undefined') module.exports = { parseBoard, boardTurnToString };

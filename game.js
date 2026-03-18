@@ -883,4 +883,25 @@ class Game {
 }
 
 const DEFAULT_KOMI = new Game().komi;
-if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, ZOBRIST };
+
+// boardTurnToString(board, toPlay?) — serialize board to ASCII; if toPlay ('●'/'○')
+// is given, prepend it as the first line so parseBoard can recover it.
+function boardTurnToString(board, toPlay) {
+  const body = board.toAscii();
+  return toPlay ? toPlay + '\n' + body : body;
+}
+
+// parseBoard(str) — returns { size, stones, toPlay? }.
+// toPlay is '●' or '○' if the string was produced with boardTurnToString(board, toPlay).
+function parseBoard(boardStr) {
+  const lines = boardStr.trim().split('\n').map(r => r.trim());
+  let toPlay;
+  if (lines[0] === '●' || lines[0] === '○') {
+    toPlay = lines.shift();
+  }
+  const result = Board.parse(lines.join('\n'));
+  if (toPlay !== undefined) result.toPlay = toPlay;
+  return result;
+}
+
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, ZOBRIST, parseBoard, boardTurnToString };

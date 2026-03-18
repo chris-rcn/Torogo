@@ -301,28 +301,16 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 }
 
 // Virtual visit weight for each ladder-derived prior seeded into child nodes.
-const LADDER_PRIOR = (typeof process !== 'undefined' && process.env.LADDER_PRIOR)
-  ? parseInt(process.env.LADDER_PRIOR, 10) : 10;
+const LADDER_PRIORS = (typeof process !== 'undefined' && process.env.LADDER_PRIORS)
+  ? parseInt(process.env.LADDER_PRIORS, 10) : 10;
 
 
 // A node must reach this many visits before its ladder priors are applied.
 const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
-  ? parseInt(process.env.LADDER_VISITS, 10) : 3;
+  ? parseInt(process.env.LADDER_VISITS, 10) : 1;
 
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
-// For every group on the board, run the ladder check twice: once with the
-// group's owner (defender) moving first, and once with the opponent
-// (attacker) moving first.  Groups whose outcome differs are critical ladders;
-// their relevant liberties are seeded into the node's child wins/visits.
-//
-// 1-liberty group — critical when defFirst=false (attacker first always wins):
-//   The liberty is correct for whoever plays it first, so it gets win=1
-//   regardless of which side the mover is.
-//
-// 2-liberty group — critical when atkFirst=true for a liberty L:
-//   mover is the attacker → L gets win=1 (initiate the winning ladder)
-//   mover is the defender → L gets win=0 (avoid self-atari)
 function applyLadderPriors(node, game, N) {
   const mover = game.current;
 
@@ -359,21 +347,16 @@ function applyLadderPriors(node, game, N) {
       const statusEntries = getLadderStatus(game, px, py);
       if (!statusEntries) continue;
 
-      const isDefender = mover === groupColor;
       for (const entry of statusEntries) {
         const { liberty: { x: lx, y: ly } } = entry;
-        if (libs.size === 1) {
-          // Critical when even the defender playing first can't escape.
-          const defFirst = isDefender ? entry.current : entry.opponent;
-          if (!defFirst) seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
-        } else {
-          // 2-liberty: critical when attacker playing first captures the group.
-          const atkCaptures = isDefender ? !entry.opponent : !entry.current;
-          if (atkCaptures) {
-            if (!isDefender) seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
-            else             seedChild(lx, ly, 0, LADDER_PRIOR);
-          }
+        console.log(entry);
+        if (lx === 3 && ly === 5) {
+        if (groupColor === mover && !entry.canEscape && group.length >= 11) {  // If the move is an extension of a dead group, discourage the move.
+          console.log('Found extension of a dead group');
+          seedChild(lx, ly, 0, LADDER_PRIORS);
         }
+        }
+        // There are many other cases, but we are not setting priors for them yet.
       }
     }
   }

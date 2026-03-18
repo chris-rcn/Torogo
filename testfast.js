@@ -637,7 +637,7 @@ section('placeStone return values');
 
 section('Board serialize/parse round-trip');
 {
-  const { parseBoard, boardToString } = require('./predictmoves.js');
+  const { parseBoard, boardTurnToString } = require('./game.js');
   const g = new Game(7, 3.5);
   const random = require('./ai/random.js');
   for (let i = 0; i < 10 && !g.gameOver; i++) {
@@ -645,7 +645,7 @@ section('Board serialize/parse round-trip');
     if (move.type === 'place') g.placeStone(move.x, move.y);
     else g.pass();
   }
-  const str = boardToString(g.board);
+  const str = boardTurnToString(g.board);
   const { size, stones } = parseBoard(str);
   assert(size === 7, 'parsed size matches');
   const b2 = new Board(size);
