@@ -1,5 +1,9 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+// ladder.js must be loaded before this file.
+
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy.
  *
@@ -24,10 +28,12 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getStatus } = require('../ladder.js');
+const { getStatus } = _isNode ? require('../ladder.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
