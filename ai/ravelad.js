@@ -295,10 +295,13 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 }
 
 // Virtual visit weight for each ladder-derived prior seeded into child nodes.
-const LADDER_PRIOR = 10;
+const LADDER_PRIOR = (typeof process !== 'undefined' && process.env.LADDER_PRIOR)
+  ? parseInt(process.env.LADDER_PRIOR, 10) : 10;
+
+
 // A node must reach this many visits before its ladder priors are applied.
 const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
-  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
+  ? parseInt(process.env.LADDER_VISITS, 10) : 3;
 
 
 // Returns true if the current player playing (lx, ly) puts the group at
@@ -356,43 +359,27 @@ function applyLadderPriors(node, game, N) {
       if (visited.has(gid)) continue;
       visited.add(gid);
       const libs     = game.board.getLiberties(group);
-      const atkColor = groupColor === 'black' ? 'white' : 'black';
-
-      if (libs.size === 1) {
-        // Defender-first: isLadderCaptured internally runs the escape sequence.
-        // Attacker-first: play the only liberty → immediate capture → always true.
-        // Critical iff defFirst = false.
-        const { captured: defFirst } = isLadderCaptured(game, px, py);
-        const [lx, ly] = [...libs][0].split(',').map(Number);
-        if (defFirst) {
-          if (groupColor == mover) {
-            // Type 1: Futile escape attempt.
-            seedChild(lx, ly, 0, LADDER_PRIOR);
+      const opponent = mover === 'black' ? 'white' : 'black';
+      
+      if (libs.size <= 2) {
+        const ladderResult = isLadderCaptured(game, px, py);
+        game.current = opponent;
+        const ladderResultOpp = isLadderCaptured(game, px, py);
+        game.current = mover;  // restore
+        if (ladderResult.captured != ladderResultOpp.captured) {
+          // Urgent ladder
+          for (const lstr of libs) {
+            const [lx, ly] = lstr.split(',').map(Number);
+            const wins = ladderResult.moves.includes(lstr) ? LADDER_PRIOR : 0
+            seedChild(lx, ly, wins, LADDER_PRIOR);
           }
         } else {
-          // Type 2a/2b: win=1 for either side.
-          seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
-        }
-
-      } else if (libs.size === 2) {
-        // Defender-first: 2 liberties → not in atari → always safe.
-        // Attacker-first: simulate the attacker (atkColor) playing each liberty.
-        game.current = atkColor;               // attacker of this group moves first
-        for (const lstr of libs) {
-          const [lx, ly] = lstr.split(',').map(Number);
-          const g2 = game.clone();
-          if (g2.placeStone(lx, ly) === false) continue;
-          const afterGroup = g2.board.getGroup(px, py);
-          const atkFirst   = afterGroup.length === 0
-                           || isLadderCaptured(g2, px, py).captured;
-          if (atkFirst) {                    // critical: outcomes differ
-            // Type 3
-            seedChild(lx, ly, mover === atkColor ? LADDER_PRIOR : 0, LADDER_PRIOR);
-          } else {
-            // Type 4: non-urgent.  Seems to hurt.
+          // Non-urgent ladder 
+          for (const lstr of libs) {
+            const [lx, ly] = lstr.split(',').map(Number);
+            seedChild(lx, ly, 0, LADDER_PRIOR);
           }
         }
-        game.current = mover;                  // restore
       }
     }
   }
