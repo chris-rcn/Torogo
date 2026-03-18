@@ -349,8 +349,11 @@ function applyLadderPriors(node, game, N) {
 
       for (const entry of statusEntries) {
         const { liberty: { x: lx, y: ly } } = entry;
-        console.log(entry);
         if (lx === 3 && ly === 5) {
+        console.log(entry);
+        console.log('groupColor:', groupColor);
+        console.log('entry.canEscape:', entry.canEscape);
+        console.log('group.length:', group.length);
         if (groupColor === mover && !entry.canEscape && group.length >= 11) {  // If the move is an extension of a dead group, discourage the move.
           console.log('Found extension of a dead group');
           seedChild(lx, ly, 0, LADDER_PRIORS);
