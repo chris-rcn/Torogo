@@ -10,13 +10,13 @@
 // checks whether the stone being played is adjacent to any friendly group that:
 //   • has at least --min-stones stones,
 //   • has exactly 1 liberty (already in atari), and
-//   • cannot escape (isLadderCaptured returns captured = true).
+//   • cannot escape (getLadderStatus reports canEscape = false).
 //
 // When such a move is found the board position is printed with the move marked.
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
-const { isLadderCaptured }   = require('./ladder.js');
+const { getLadderStatus }    = require('./ladder.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -78,8 +78,7 @@ for (const line of lines) {
         const libs  = g.board.getLiberties(group);
         if (libs.size !== 1) continue;
 
-        const { captured } = isLadderCaptured(g, gx, gy);
-        if (!captured) continue;
+        if (getLadderStatus(g, gx, gy)[0].canEscape) continue;
 
         // Dead group confirmed.  Does the planned move touch it?
         const touches = group.some(([sx, sy]) => moveNeighborKeys.has(`${sx},${sy}`));

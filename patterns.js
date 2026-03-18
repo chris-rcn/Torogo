@@ -4,7 +4,7 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
-const { isLadderCaptured } = typeof require === 'function' ? require('./ladder.js') : {};
+const { getLadderStatus } = typeof require === 'function' ? require('./ladder.js') : {};
 
 const LADDER_BAD_EXTEND = typeof process !== 'undefined' && process.env.LADDER_BAD_EXTEND === 'true';
 
@@ -114,7 +114,7 @@ function patternHash(game, x, y, mover) {
       const grp  = board.getGroup(nx, ny);
       const libs = board.getLiberties(grp);
       if (libs.size !== 1 || !libs.has(`${x},${y}`)) continue;
-      if (!isLadderCaptured(game, nx, ny).captured) continue;
+      if (getLadderStatus(game, nx, ny)[0].canEscape) continue;
       return minHash + HASH_SPACE;
     }
   }
