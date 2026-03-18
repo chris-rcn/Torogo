@@ -97,9 +97,9 @@ function _canEscape(game, x, y) {
   if (newLibs.size >= 3) return null;   // immediately escaped
   if (newLibs.size === 0) return [];    // captured after escape
   if (newLibs.size === 1) {
-    // Still in atari after escape (ran into adjacent opponent stones).
-    // Continue the escape sequence from the new position.
-    return _canEscape(g1, ex, ey);
+    // Still in atari after escape.  Give the attacker a chance to play
+    // the remaining liberty before allowing the defender to escape there.
+    return _canReach3Libs(g1, ex, ey) ? null : [];
   }
 
   // 2 liberties after escape: collect all attacker re-atari moves that lead
@@ -138,7 +138,8 @@ function _canEscape(game, x, y) {
 // Returns true when the group at (x, y) can reach 3+ liberties despite best
 // attacker play.  Handles all liberty counts:
 //   0 libs  → false (already captured)
-//   1 lib   → delegates to _canEscape (standard atari/ladder check)
+//   1 lib, defender's turn → delegates to _canEscape (defender escapes from atari)
+//   1 lib, attacker's turn → attacker plays the liberty; captured → false
 //   2 libs  → simulates each possible attacker re-atari; if any leads to
 //             eventual capture the group cannot reach 3+ libs → false
 //   3+ libs → true (already escaped)
@@ -150,12 +151,17 @@ function _canReach3Libs(game, x, y) {
   const libs = board.getLiberties(group);
   if (libs.size >= 3) return true;
   if (libs.size === 0) return false;
-  if (libs.size === 1) return _canEscape(game, x, y) === null;
 
-  // 2 liberties: attacker tries each lib as a re-atari.
-  // If any re-atari leads to eventual capture, the group cannot reach 3+ libs.
   const defenderColor = board.get(x, y);
   const attackerColor = defenderColor === 'black' ? 'white' : 'black';
+
+  if (libs.size === 1 && game.current === defenderColor) {
+    // Defender's turn in atari: can the group escape to 3+ libs?
+    return _canEscape(game, x, y) === null;
+  }
+
+  // 1 lib (attacker's turn) or 2 libs: attacker tries each lib as a re-atari.
+  // If any re-atari leads to eventual capture, the group cannot reach 3+ libs.
 
   for (const lStr of libs) {
     const [lx, ly] = lStr.split(',').map(Number);
@@ -169,7 +175,7 @@ function _canReach3Libs(game, x, y) {
 
     const afterLibs = g2.board.getLiberties(afterGroup);
     if (afterLibs.size === 0) return false;
-    if (afterLibs.size === 1 && _canEscape(g2, x, y) !== null) return false;
+    if (afterLibs.size === 1 && !_canReach3Libs(g2, x, y)) return false;
     // afterLibs.size >= 2: attacker failed to re-atari — try next liberty
   }
 
