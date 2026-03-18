@@ -790,7 +790,7 @@ section('patternHash determinism');
 
 // ─── Ladder reader ───────────────────────────────────────────────────────────
 
-const { isLadderCaptured } = require('./ladder.js');
+const { isLadderCaptured, getLadderStatus } = require('./ladder.js');
 
 section('Ladder reader – not in atari');
 {
@@ -994,6 +994,127 @@ section('Ladder reader – moves: defender turn, captured (no moves for defender
   const r = isLadderCaptured(g, 4, 4);
   assert(r.captured, 'defender turn captured: captured');
   assert(r.moves.length === 0, 'defender turn captured: no moves returned');
+}
+
+// ─── getLadderStatus ─────────────────────────────────────────────────────────
+
+section('getLadderStatus – no stone / too many liberties');
+{
+  // No stone at (0,0) → empty array (constructor places stone at center (4,4))
+  {
+    const g = new Game(9, 3.5);
+    const r = getLadderStatus(g, 0, 0);
+    assert(Array.isArray(r) && r.length === 0, 'no stone: empty array');
+  }
+
+  // Group with 4 liberties → null (warns)
+  // new Game places black at center (4,4) with 4 liberties; current flips to white.
+  {
+    const g = new Game(9, 3.5);
+    const r = getLadderStatus(g, 4, 4);
+    assert(r === null, '4-liberty group: null');
+  }
+}
+
+section('getLadderStatus – 1-liberty group: immediate escape to 3+ libs');
+{
+  // Black at (4,4), white at (3,4),(5,4),(4,3): liberty (4,5).
+  // After black plays (4,5): group gains (3,5),(4,6),(5,5) → 3 libs → canEscape=true.
+  // After white plays (4,5): black captured → canEscapeAfterPass=false.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.current = 'black';
+  const r = getLadderStatus(g, 4, 4);
+  assert(Array.isArray(r) && r.length === 1, 'immediate escape: one entry');
+  assert(r[0].liberty.x === 4 && r[0].liberty.y === 5, 'liberty is (4,5)');
+  assert(r[0].canEscape === true, 'canEscape: black plays → 3+ libs → true');
+  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus – 1-liberty group: escape is suicide');
+{
+  // Same board as isLadderCaptured "escape is suicide".
+  // Playing the liberty is suicide → canEscape=false.
+  // White playing the liberty captures black → canEscapeAfterPass=false.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(3, 5, 'white'); g.board.captureGroups(3, 5);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.board.set(4, 6, 'white'); g.board.captureGroups(4, 6);
+  g.current = 'black';
+  const r = getLadderStatus(g, 4, 4);
+  assert(Array.isArray(r) && r.length === 1, 'suicide: one entry');
+  assert(r[0].canEscape === false, 'canEscape: suicide → false');
+  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus – 1-liberty group: ladder with breaker (can escape)');
+{
+  // Same board as isLadderCaptured "ladder with breaker": black can escape.
+  // canEscape should be true.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 6, 'black'); g.board.captureGroups(3, 6);  // breaker
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.current = 'black';
+  assert(!isLadderCaptured(g, 4, 4).captured, 'sanity: isLadderCaptured agrees group can escape');
+  const r = getLadderStatus(g, 4, 4);
+  assert(Array.isArray(r) && r.length === 1, 'breaker: one entry');
+  assert(r[0].canEscape === true, 'canEscape: breaker present → true');
+}
+
+section('getLadderStatus – 1-liberty group: two-step ladder (bug: canEscape wrongly true)');
+{
+  // Same board as isLadderCaptured "two-step ladder terminates in capture".
+  // isLadderCaptured correctly returns captured=true for this position.
+  //
+  // Bug: after black plays (4,5) the group reaches 2 libs {(3,5),(4,6)}.
+  // _canEscape returns null immediately for 2-lib groups ("not a ladder threat")
+  // without recursing to check whether the attacker can re-atari and complete
+  // the capture.  getLadderStatus therefore sets canEscape=true — wrong.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.board.set(4, 3, 'white'); g.board.captureGroups(4, 3);
+  g.board.set(5, 5, 'white'); g.board.captureGroups(5, 5);
+  g.board.set(5, 6, 'white'); g.board.captureGroups(5, 6);
+  g.board.set(4, 7, 'white'); g.board.captureGroups(4, 7);
+  g.current = 'black';
+  assert(isLadderCaptured(g, 4, 4).captured, 'sanity: isLadderCaptured sees capture');
+  const r = getLadderStatus(g, 4, 4);
+  assert(Array.isArray(r) && r.length === 1, 'two-step ladder: one entry');
+  // canEscape must be false: the ladder catches black despite the escape move.
+  // This assertion FAILS due to the bug in getLadderStatus.
+  assert(r[0].canEscape === false, 'canEscape: two-step ladder → false');
+  // canEscapeAfterPass: white plays (4,5) captures black immediately → false.
+  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus – 2-liberty group');
+{
+  // Black at (4,4), white at (3,4) and (5,4): libs (4,3) and (4,5).
+  // Mover = black (group owner).
+  // For each liberty: black plays → 4+ libs → canEscape=true.
+  // For each liberty: white plays → group has 1 lib, open board → canEscapeAfterPass=true.
+  const g = new Game(9, 3.5);
+  g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
+  g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
+  g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
+  g.current = 'black';
+  const r = getLadderStatus(g, 4, 4);
+  assert(Array.isArray(r) && r.length === 2, '2-lib group: two entries');
+  assert(r.every(e => e.canEscape === true), 'both liberties: canEscape=true (open board)');
+  assert(r.every(e => e.canEscapeAfterPass === true), 'both liberties: canEscapeAfterPass=true (open board)');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────
