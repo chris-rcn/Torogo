@@ -27,7 +27,7 @@
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { isLadderCaptured } = require('../ladder.js');
+const { getStatus } = require('../ladder.js');
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -304,17 +304,6 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
   ? parseInt(process.env.LADDER_VISITS, 10) : 3;
 
 
-// Returns true if the current player playing (lx, ly) puts the group at
-// (gx, gy) into a losing ladder — either capturing it immediately or via
-// isLadderCaptured after it is put in atari.
-function attackStartsCapture(game, gx, gy, lx, ly) {
-  const g2 = game.clone();
-  if (g2.placeStone(lx, ly) === false) return false;
-  const afterGroup = g2.board.getGroup(gx, gy);
-  if (afterGroup.length === 0) return true;
-  return isLadderCaptured(g2, gx, gy).captured;
-}
-
 // ── Ladder priors ────────────────────────────────────────────────────────────
 // For every group on the board, run the ladder check twice: once with the
 // group's owner (defender) moving first, and once with the opponent
@@ -358,10 +347,28 @@ function applyLadderPriors(node, game, N) {
       const gid = game.board._gid[game.board._idx(px, py)];
       if (visited.has(gid)) continue;
       visited.add(gid);
-      const libs     = game.board.getLiberties(group);
-      const opponent = mover === 'black' ? 'white' : 'black';
-      
-      // TODO: Call getLadderStatus and add priors via seedChild based on the results.
+      const libs = game.board.getLiberties(group);
+      if (libs.size < 1 || libs.size > 2) continue;
+
+      const statusEntries = getStatus(game, px, py);
+      if (!statusEntries) continue;
+
+      const isDefender = mover === groupColor;
+      for (const entry of statusEntries) {
+        const { liberty: { x: lx, y: ly } } = entry;
+        if (libs.size === 1) {
+          // Critical when even the defender playing first can't escape.
+          const defFirst = isDefender ? entry.current : entry.opponent;
+          if (!defFirst) seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
+        } else {
+          // 2-liberty: critical when attacker playing first captures the group.
+          const atkCaptures = isDefender ? !entry.opponent : !entry.current;
+          if (atkCaptures) {
+            if (!isDefender) seedChild(lx, ly, LADDER_PRIOR, LADDER_PRIOR);
+            else             seedChild(lx, ly, 0, LADDER_PRIOR);
+          }
+        }
+      }
     }
   }
 }
