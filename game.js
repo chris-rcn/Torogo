@@ -1,3 +1,6 @@
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not use require/module/process at top level.
+
 // ─── Zobrist hash table ───────────────────────────────────────────────────────
 // One deterministic 64-bit random value per (row, col, color) triple,
 // sized for the largest supported board (19×19).  Used for O(1) Ko detection.
