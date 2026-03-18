@@ -142,4 +142,46 @@ function _canEscape(game, x, y, depth) {
   return validReataris.length > 0 ? validReataris : null;
 }
 
-if (typeof module !== 'undefined') module.exports = { isLadderCaptured };
+// Examines the group containing the stone at (gx, gy), which must have 1 or 2
+// liberties.  For each liberty, simulates both colours playing it first and
+// searches whether the group can reach 3+ liberties.
+//
+// Returns an array — one entry per liberty — of:
+//   { liberty: {x, y}, blackFirst: boolean, whiteFirst: boolean }
+//
+// blackFirst / whiteFirst — true when the group can escape to 3+ liberties
+//   after that colour plays the liberty.
+//
+// Logs a warning and returns null when the group has more than 2 liberties.
+function getStatus(game, gx, gy) {
+  const board = game.board;
+  const group = board.getGroup(gx, gy);
+  if (group.length === 0) return [];
+  const libs = board.getLiberties(group);
+  if (libs.size > 2) {
+    console.warn(`getStatus: group at (${gx},${gy}) has ${libs.size} liberties (expected ≤ 2)`);
+    return null;
+  }
+
+  const results = [];
+  for (const lstr of libs) {
+    const [lx, ly] = lstr.split(',').map(Number);
+    const entry = { liberty: { x: lx, y: ly } };
+    for (const color of ['black', 'white']) {
+      const g = game.clone();
+      g.current = color;
+      let escaped;
+      if (g.placeStone(lx, ly) === false) {
+        escaped = false;  // illegal move — liberty is unreachable for this colour
+      } else {
+        const grp = g.board.getGroup(gx, gy);
+        escaped = grp.length > 0 && _canEscape(g, gx, gy, 0) === null;
+      }
+      entry[color === 'black' ? 'blackFirst' : 'whiteFirst'] = escaped;
+    }
+    results.push(entry);
+  }
+  return results;
+}
+
+if (typeof module !== 'undefined') module.exports = { isLadderCaptured, getStatus };
