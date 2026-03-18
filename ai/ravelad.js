@@ -377,14 +377,14 @@ function applyLadderPriors(node, game, N) {
             // Urgent ladder
             for (const lstr of libs) {
               const [lx, ly] = lstr.split(',').map(Number);
-              const wins = ladderResult.moves.includes(lstr) ? LADDER_PRIOR : 0
-              //seedChild(lx, ly, wins, LADDER_PRIOR);
+              const wins = ladderResult.moves.some(m => `${m.x},${m.y}` === lstr) ? LADDER_PRIOR : 0;
+              seedChild(lx, ly, wins, LADDER_PRIOR);
             }
           } else {
             // Non-urgent ladder
             for (const lstr of libs) {
               const [lx, ly] = lstr.split(',').map(Number);
-              //seedChild(lx, ly, 0, LADDER_PRIOR);
+              seedChild(lx, ly, 0, LADDER_PRIOR);
             }
           }
         }
