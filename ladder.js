@@ -147,10 +147,10 @@ function _canEscape(game, x, y, depth) {
 // searches whether the group can reach 3+ liberties.
 //
 // Returns an array — one entry per liberty — of:
-//   { liberty: {x, y}, blackFirst: boolean, whiteFirst: boolean }
+//   { liberty: {x, y}, current: boolean, opponent: boolean }
 //
-// blackFirst / whiteFirst — true when the group can escape to 3+ liberties
-//   after that colour plays the liberty.
+// current / opponent — true when the group can escape to 3+ liberties
+//   after that colour plays the liberty (current = game.current moves first).
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
 function getStatus(game, gx, gy) {
@@ -163,11 +163,13 @@ function getStatus(game, gx, gy) {
     return null;
   }
 
-  const results = [];
+  const mover    = game.current;
+  const opp      = mover === 'black' ? 'white' : 'black';
+  const results  = [];
   for (const lstr of libs) {
     const [lx, ly] = lstr.split(',').map(Number);
     const entry = { liberty: { x: lx, y: ly } };
-    for (const color of ['black', 'white']) {
+    for (const color of [mover, opp]) {
       const g = game.clone();
       g.current = color;
       let escaped;
@@ -177,7 +179,7 @@ function getStatus(game, gx, gy) {
         const grp = g.board.getGroup(gx, gy);
         escaped = grp.length > 0 && _canEscape(g, gx, gy, 0) === null;
       }
-      entry[color === 'black' ? 'blackFirst' : 'whiteFirst'] = escaped;
+      entry[color === mover ? 'current' : 'opponent'] = escaped;
     }
     results.push(entry);
   }
