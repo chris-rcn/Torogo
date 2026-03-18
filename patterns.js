@@ -1,10 +1,12 @@
 'use strict';
 
 // patterns.js — pattern recognition helpers for Go board positions.
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not use require/module/process at top level.
 
-const { isLadderCaptured } = require('./ladder.js');
+const { isLadderCaptured } = typeof require === 'function' ? require('./ladder.js') : {};
 
-const LADDER_BAD_EXTEND = process.env.LADDER_BAD_EXTEND === 'true';
+const LADDER_BAD_EXTEND = typeof process !== 'undefined' && process.env.LADDER_BAD_EXTEND === 'true';
 
 // Liberty counts above this threshold are treated as equivalent.
 const MAX_LIBS = 1;

@@ -1,3 +1,6 @@
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not use require/module/process at top level.
+
 // How many extra intersections to render beyond each tile edge.
 // 0 = exact tile boundaries; increase to show wrapping rows/cols and make
 // the toroidal topology more intuitive.
