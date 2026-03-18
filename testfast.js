@@ -1,6 +1,6 @@
 'use strict';
 
-const { Board, Game, DEFAULT_KOMI, ZOBRIST } = require('./game.js');
+const { Board, Game, DEFAULT_KOMI, ZOBRIST, parseBoard } = require('./game.js');
 
 let pass = 0, fail = 0;
 
@@ -1115,6 +1115,126 @@ section('getLadderStatus – 2-liberty group');
   assert(Array.isArray(r) && r.length === 2, '2-lib group: two entries');
   assert(r.every(e => e.canEscape === true), 'both liberties: canEscape=true (open board)');
   assert(r.every(e => e.canEscapeAfterPass === true), 'both liberties: canEscapeAfterPass=true (open board)');
+}
+
+// ─── getLadderStatus: real-game ladder positions (ladder-test-cases.txt) ─────
+//
+// A 13×13 game where a white group (11 stones) tries to escape a ladder over 3
+// moves (positions 1, 3, 5) before black captures it in position 6.
+// The positions expose a bug where _canEscape gives white a free extra move
+// when the escape results in exactly 1 remaining liberty (newLibs.size === 1).
+// Because that last liberty connects to a large white group, the code
+// mistakenly declares the group can escape even though black plays there first.
+//
+// Shared helper — mirrors evalladders.js buildPosition.
+function _buildPos(boardStr, toPlay) {
+  const { size, stones } = parseBoard(boardStr);
+  const g = new Game(size, 0);
+  const c = size >> 1;
+  g.board.set(c, c, null);
+  g.hash = 0n; g.moveCount = 0;
+  g.current = toPlay === '●' ? 'black' : 'white';
+  g.consecutivePasses = 0; g.koFlag = null;
+  for (const [x, y, color] of stones) {
+    g.board.set(x, y, color);
+    g.hash ^= ZOBRIST[y][x][color];
+  }
+  g.board._rebuildGroups();
+  return g;
+}
+
+section('getLadderStatus – real-game ladder pos1: white 11-stone doomed group');
+{
+  // White group (11 stones) has 1 liberty at (3,5).
+  // The ladder catches white: after white escapes to (3,5), black re-ataris at
+  // (2,5); white escapes to (3,4); black re-ataris at (3,3); white escapes to
+  // (2,4); white is left with 1 lib at (2,3) and black captures there.
+  //
+  // Bug: _canEscape sees "white plays (2,4) → 1 lib at (2,3)" and recurses,
+  // giving white another free move.  White plays (2,3) and merges with a large
+  // group, appearing to escape.  Correct answer: black plays (2,3) first.
+  const g = _buildPos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · · · · · · · ● · · ●
+    · ● · · ● ● · · ● · · · ·
+    · ○ · · ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '○');
+  const lc = isLadderCaptured(g, 4, 5);
+  assert(lc.captured, 'pos1 isLadderCaptured: white group is captured');
+  const r = getLadderStatus(g, 4, 5);
+  assert(Array.isArray(r) && r.length === 1, 'pos1 getLadderStatus: one liberty entry');
+  assert(r[0].liberty.x === 3 && r[0].liberty.y === 5, 'pos1: liberty is (3,5)');
+  // canEscape must be false: even after white plays (3,5), the ladder catches it.
+  assert(r[0].canEscape === false, 'pos1 canEscape: white plays (3,5) → still doomed → false');
+  // canEscapeAfterPass: black plays (3,5) captures white immediately → false.
+  assert(r[0].canEscapeAfterPass === false, 'pos1 canEscapeAfterPass: black captures → false');
+}
+
+section('getLadderStatus – real-game ladder pos3: white 12-stone doomed group');
+{
+  // Same ladder, 2 moves in: black has played (2,5); white group (12 stones)
+  // has 1 liberty at (3,4).  The ladder continues to catch white.
+  const g = _buildPos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · · · · · · · ● · · ●
+    · ● · · ● ● · · ● · · · ·
+    · ○ ● ○ ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '○');
+  const lc = isLadderCaptured(g, 3, 5);
+  assert(lc.captured, 'pos3 isLadderCaptured: white group is captured');
+  const r = getLadderStatus(g, 3, 5);
+  assert(Array.isArray(r) && r.length === 1, 'pos3 getLadderStatus: one liberty entry');
+  assert(r[0].liberty.x === 3 && r[0].liberty.y === 4, 'pos3: liberty is (3,4)');
+  assert(r[0].canEscape === false, 'pos3 canEscape: white plays (3,4) → still doomed → false');
+  assert(r[0].canEscapeAfterPass === false, 'pos3 canEscapeAfterPass: black captures → false');
+}
+
+section('getLadderStatus – real-game ladder pos6: black to move, captures white 14-stone group');
+{
+  // End of the ladder: white group (14 stones) has 1 liberty at (2,3).
+  // It is black's turn.  Black plays (2,3) → white captured (canEscape=false).
+  // If white were to play (2,3) first it would merge with a large group
+  // (canEscapeAfterPass=true) — but that never happens since black moves first.
+  const g = _buildPos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · ● · · · · · ● · · ●
+    · ● ○ ○ ● ● · · ● · · · ·
+    · ○ ● ○ ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '●');
+  const r = getLadderStatus(g, 2, 4);
+  assert(Array.isArray(r) && r.length === 1, 'pos6 getLadderStatus: one liberty entry');
+  assert(r[0].liberty.x === 2 && r[0].liberty.y === 3, 'pos6: liberty is (2,3)');
+  // Black plays (2,3): captures white immediately.
+  assert(r[0].canEscape === false, 'pos6 canEscape: black plays (2,3) captures white → false');
+  // White plays (2,3): merges with large group → can escape.
+  assert(r[0].canEscapeAfterPass === true, 'pos6 canEscapeAfterPass: white merges with large group → true');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────
