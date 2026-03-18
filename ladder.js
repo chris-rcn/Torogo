@@ -146,13 +146,13 @@ function _canEscape(game, x, y) {
 //   after that colour plays the liberty (current = game.current moves first).
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
-function getStatus(game, gx, gy) {
+function getLadderStatus(game, gx, gy) {
   const board = game.board;
   const group = board.getGroup(gx, gy);
   if (group.length === 0) return [];
   const libs = board.getLiberties(group);
   if (libs.size > 2) {
-    console.warn(`getStatus: group at (${gx},${gy}) has ${libs.size} liberties (expected ≤ 2)`);
+    console.warn(`getLadderStatus: group at (${gx},${gy}) has ${libs.size} liberties (expected ≤ 2)`);
     return null;
   }
 
@@ -179,4 +179,4 @@ function getStatus(game, gx, gy) {
   return results;
 }
 
-if (typeof module !== 'undefined') module.exports = { isLadderCaptured, getStatus };
+if (typeof module !== 'undefined') module.exports = { isLadderCaptured, getLadderStatus };

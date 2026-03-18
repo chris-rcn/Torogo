@@ -33,7 +33,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getStatus } = _isNode ? require('../ladder.js') : window;
+const { getLadderStatus } = _isNode ? require('../ladder.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -356,7 +356,7 @@ function applyLadderPriors(node, game, N) {
       const libs = game.board.getLiberties(group);
       if (libs.size < 1 || libs.size > 2) continue;
 
-      const statusEntries = getStatus(game, px, py);
+      const statusEntries = getLadderStatus(game, px, py);
       if (!statusEntries) continue;
 
       const isDefender = mover === groupColor;
