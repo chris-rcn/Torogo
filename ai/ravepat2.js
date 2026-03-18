@@ -1,5 +1,8 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not use require/module/process at top level.
+
 /**
  * RAVE with pattern priors (ravepat2).
  *
