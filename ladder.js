@@ -1,10 +1,5 @@
 'use strict';
 
-// Maximum recursion depth for ladder reading.  On a toroidal board there are
-// no edges, so a ladder that meets no obstacles would run forever; the depth
-// limit cuts it off and assumes the group can escape (conservative).
-const MAX_LADDER_DEPTH = 200;
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 // Examines the group containing the stone at (x, y) and returns:
@@ -43,7 +38,7 @@ function isLadderCaptured(game, x, y) {
   const stoneColor    = board.get(x, y);
   const attackerColor = stoneColor === 'black' ? 'white' : 'black';
 
-  const result = _canEscape(game, x, y, 0);
+  const result = _canEscape(game, x, y);
 
   if (result === null) {
     // Group can escape.  Only relevant for the defender.
@@ -74,9 +69,7 @@ function isLadderCaptured(game, x, y) {
 //   • []          — group captured immediately (suicide / 0 libs after escape)
 //   • [{x,y}, …]  — 1 or 2 attacker re-atari points that lead to eventual
 //                   capture after the defender reaches 2 liberties
-function _canEscape(game, x, y, depth) {
-  if (depth > MAX_LADDER_DEPTH) return null;  // assume escape at depth limit
-
+function _canEscape(game, x, y) {
   const board = game.board;
   const group = board.getGroup(x, y);
   if (group.length === 0) return [];  // already captured
@@ -106,7 +99,7 @@ function _canEscape(game, x, y, depth) {
   if (newLibs.size === 1) {
     // Still in atari after escape (ran into adjacent opponent stones).
     // Continue the escape sequence from the new position.
-    return _canEscape(g1, ex, ey, depth + 1);
+    return _canEscape(g1, ex, ey);
   }
 
   // 2 liberties after escape: collect all attacker re-atari moves that lead
@@ -131,7 +124,7 @@ function _canEscape(game, x, y, depth) {
     } else if (afterLibs.size === 1) {
       // Re-atarized — recurse with escaping side to move.
       // _canEscape returning non-null means captured → this re-atari is valid.
-      if (_canEscape(g2, ex, ey, depth + 1) !== null) {
+      if (_canEscape(g2, ex, ey) !== null) {
         validReataris.push({ x: lx, y: ly });
       }
     }
@@ -177,7 +170,7 @@ function getStatus(game, gx, gy) {
         escaped = false;  // illegal move — liberty is unreachable for this colour
       } else {
         const grp = g.board.getGroup(gx, gy);
-        escaped = grp.length > 0 && _canEscape(g, gx, gy, 0) === null;
+        escaped = grp.length > 0 && _canEscape(g, gx, gy) === null;
       }
       entry[color === mover ? 'current' : 'opponent'] = escaped;
     }
