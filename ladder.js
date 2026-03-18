@@ -136,13 +136,11 @@ function _canEscape(game, x, y) {
 }
 
 // Returns true when the group at (x, y) can reach 3+ liberties despite best
-// attacker play.  Handles all liberty counts:
-//   0 libs  → false (already captured)
-//   1 lib, defender's turn → delegates to _canEscape (defender escapes from atari)
-//   1 lib, attacker's turn → attacker plays the liberty; captured → false
-//   2 libs  → simulates each possible attacker re-atari; if any leads to
-//             eventual capture the group cannot reach 3+ libs → false
-//   3+ libs → true (already escaped)
+// attacker play.  Simple two-player DFS: whose turn it is determines the move.
+//   0 libs            → false (captured)
+//   3+ libs           → true (escaped)
+//   1 lib, defender   → defender plays it, then recurse (now attacker's turn)
+//   1–2 libs, attacker → attacker tries each lib; any successful capture → false
 function _canReach3Libs(game, x, y) {
   const board = game.board;
   const group = board.getGroup(x, y);
@@ -156,13 +154,18 @@ function _canReach3Libs(game, x, y) {
   const attackerColor = defenderColor === 'black' ? 'white' : 'black';
 
   if (libs.size === 1 && game.current === defenderColor) {
-    // Defender's turn in atari: can the group escape to 3+ libs?
-    return _canEscape(game, x, y) === null;
+    // Defender's turn in atari: play the only liberty and see if we escape.
+    const [libStr] = libs;
+    const [lx, ly] = libStr.split(',').map(Number);
+    const g1 = game.clone();
+    if (g1.placeStone(lx, ly) === false) return false;  // suicide
+    const newGroup = g1.board.getGroup(x, y);
+    if (newGroup.length === 0) return false;
+    return _canReach3Libs(g1, x, y);  // now attacker's turn
   }
 
   // 1 lib (attacker's turn) or 2 libs: attacker tries each lib as a re-atari.
   // If any re-atari leads to eventual capture, the group cannot reach 3+ libs.
-
   for (const lStr of libs) {
     const [lx, ly] = lStr.split(',').map(Number);
 
