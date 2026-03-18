@@ -361,34 +361,7 @@ function applyLadderPriors(node, game, N) {
       const libs     = game.board.getLiberties(group);
       const opponent = mover === 'black' ? 'white' : 'black';
       
-      if (libs.size <= 2) {
-        const ladderResult = isLadderCaptured(game, px, py);
-        if (ladderResult.captured && mover == groupColor) {
-          // Adding stones to a dead group.
-          for (const lstr of libs) {
-            const [lx, ly] = lstr.split(',').map(Number);
-            seedChild(lx, ly, 0, LADDER_PRIOR);
-          }
-        } else {
-          game.current = opponent;
-          const ladderResultOpp = isLadderCaptured(game, px, py);
-          game.current = mover;  // restore
-          if (ladderResult.captured != ladderResultOpp.captured) {
-            // Urgent ladder
-            for (const lstr of libs) {
-              const [lx, ly] = lstr.split(',').map(Number);
-              const wins = ladderResult.moves.some(m => `${m.x},${m.y}` === lstr) ? LADDER_PRIOR : 0;
-              seedChild(lx, ly, wins, LADDER_PRIOR);
-            }
-          } else {
-            // Non-urgent ladder
-            for (const lstr of libs) {
-              const [lx, ly] = lstr.split(',').map(Number);
-              seedChild(lx, ly, 0, LADDER_PRIOR);
-            }
-          }
-        }
-      }
+      // TODO: Call getLadderStatus and add priors via seedChild based on the results.
     }
   }
 }
