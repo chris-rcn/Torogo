@@ -135,6 +135,48 @@ function _canEscape(game, x, y) {
   return validReataris.length > 0 ? validReataris : null;
 }
 
+// Returns true when the group at (x, y) can reach 3+ liberties despite best
+// attacker play.  Handles all liberty counts:
+//   0 libs  → false (already captured)
+//   1 lib   → delegates to _canEscape (standard atari/ladder check)
+//   2 libs  → simulates each possible attacker re-atari; if any leads to
+//             eventual capture the group cannot reach 3+ libs → false
+//   3+ libs → true (already escaped)
+function _canReach3Libs(game, x, y) {
+  const board = game.board;
+  const group = board.getGroup(x, y);
+  if (group.length === 0) return false;
+
+  const libs = board.getLiberties(group);
+  if (libs.size >= 3) return true;
+  if (libs.size === 0) return false;
+  if (libs.size === 1) return _canEscape(game, x, y) === null;
+
+  // 2 liberties: attacker tries each lib as a re-atari.
+  // If any re-atari leads to eventual capture, the group cannot reach 3+ libs.
+  const defenderColor = board.get(x, y);
+  const attackerColor = defenderColor === 'black' ? 'white' : 'black';
+
+  for (const lStr of libs) {
+    const [lx, ly] = lStr.split(',').map(Number);
+
+    const g2 = game.clone();
+    g2.current = attackerColor;
+    if (g2.placeStone(lx, ly) === false) continue;  // illegal for attacker — skip
+
+    const afterGroup = g2.board.getGroup(x, y);
+    if (afterGroup.length === 0) return false;  // group captured immediately
+
+    const afterLibs = g2.board.getLiberties(afterGroup);
+    if (afterLibs.size === 0) return false;
+    if (afterLibs.size === 1 && _canEscape(g2, x, y) !== null) return false;
+    // afterLibs.size >= 2: attacker failed to re-atari — try next liberty
+  }
+
+  // No attacker move leads to capture → group can reach 3+ libs.
+  return true;
+}
+
 // Examines the group containing the stone at (gx, gy), which must have 1 or 2
 // liberties.  For each liberty, simulates both colours playing it first and
 // searches whether the group can reach 3+ liberties.
@@ -170,7 +212,7 @@ function getLadderStatus(game, gx, gy) {
         escaped = false;  // illegal move — liberty is unreachable for this colour
       } else {
         const grp = g.board.getGroup(gx, gy);
-        escaped = grp.length > 0 && _canEscape(g, gx, gy) === null;
+        escaped = grp.length > 0 && _canReach3Libs(g, gx, gy);
       }
       entry[color === mover ? 'canEscape' : 'canEscapeAfterPass'] = escaped;
     }
