@@ -9,9 +9,9 @@
 //   --longbudget   long-budget ms           (default: 4× --budget)
 //   --size         board size               (default: 11)
 //
-// For each position in a self-play game, two short-budget and two long-budget
-// genMove calls are made.  If both short-budget calls agree on the same move
-// but that move disagrees with both long-budget calls, the position is
+// For each position in a self-play game, three short-budget and two long-budget
+// genMove calls are made.  If all three short-budget calls agree on the same
+// move, and both long-budget calls agree on a different move, the position is
 // emitted as a blunder: the short-budget move is added to "prohibited".
 // Once a blunder is found the current game is abandoned and a new one starts.
 // Positions already emitted are tracked by Zobrist hash and skipped if
@@ -80,22 +80,23 @@ while (true) {
   while (!game.gameOver) {
     const posKey = `${game.hash}|${game.current}`;
 
-    // Two short-budget calls on the current position.
+    // Three short-budget calls on the current position.
     const s1 = agent(game.clone(), shortBudget);
     const s2 = agent(game.clone(), shortBudget);
+    const s3 = agent(game.clone(), shortBudget);
 
     // Skip positions already emitted to avoid duplicates across games.
-    if (sameMove(s1, s2) && !seen.has(posKey)) {
+    if (sameMove(s1, s2) && sameMove(s1, s3) && !seen.has(posKey)) {
       const l1 = agent(game.clone(), longBudget);
       const l2 = agent(game.clone(), longBudget);
 
-      if (!sameMove(s1, l1) && !sameMove(s1, l2)) {
+      if (sameMove(l1, l2) && !sameMove(s1, l1)) {
         seen.add(posKey);
         blunderCount++;
         const toPlayChar = game.current === 'black' ? '●' : '○';
         const comment    = `game ${gameCount} blunder ${blunderCount}: ` +
                            `short-budget plays ${coordStr(s1)}, ` +
-                           `long-budget plays ${coordStr(l1)} / ${coordStr(l2)}`;
+                           `long-budget plays ${coordStr(l1)}`;
         const indented   = game.board.toAscii(s1).split('\n').map(r => '      ' + r).join('\n');
         console.log(`  {`);
         console.log(`    toPlay: '${toPlayChar}',`);
