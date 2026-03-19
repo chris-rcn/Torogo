@@ -3,11 +3,10 @@
 
 // gengamedata.js — generate per-position move-value data by self-play.
 //
-// Usage: node gengamedata.js [--agent <name>] [--budget <ms>] [--size <n>] [--games <n>]
+// Usage: node gengamedata.js [--agent <name>] [--budget <ms>] [--size <n>]
 //   --agent    AI policy name   (default: rave)
 //   --budget   budget per move  (default: 100)
 //   --size     board size       (default: 11)
-//   --games    number of games  (default: run forever)
 //
 // At each position every legal move is enumerated.  For each candidate move the
 // game is cloned, the move is made, then agent.genMove is called with the full
@@ -21,14 +20,13 @@ const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.error('Usage: node gengamedata.js [--agent <name>] [--budget <ms>] [--size <n>] [--games <n>]');
+  console.error('Usage: node gengamedata.js [--agent <name>] [--budget <ms>] [--size <n>]');
   process.exit(0);
 }
 
 const agentName  = get('--agent',  'rave');
 const budget     = parseInt(get('--budget', '100'), 10);
 const boardSize  = parseInt(get('--size',    '11'), 10);
-const maxGames   = parseInt(get('--games',    '0'), 10);  // 0 = run forever
 
 if (isNaN(budget) || budget < 1)     { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
@@ -65,7 +63,7 @@ function coordStr(move) {
 
 let gameCount = 0;
 
-while (maxGames === 0 || gameCount < maxGames) {
+while (true) {
   gameCount++;
   const game = new Game(boardSize, DEFAULT_KOMI);
   let moveIndex = 0;
