@@ -351,7 +351,7 @@ function applyLadderPriors(node, game, N) {
         } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
           seedChild(lx, ly, 3 * group.length, 3 * group.length);
         } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
-          seedChild(lx, ly, 2 * group.length, 2 * group.length);
+          seedChild(lx, ly, 3 * group.length, 3 * group.length);
         }
       }
     }

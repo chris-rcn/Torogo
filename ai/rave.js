@@ -311,10 +311,15 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
-  result.winRatio = bestChild.wins / bestChild.visits;
-  result.info = `win ratio: ${result.winRatio.toFixed(3)}`;
+  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) {
+    result.type = 'pass';
+    result.winRatio = 0;
+    result.info = 'no winning line found';
+  } else {
+    result.winRatio = bestChild.wins / bestChild.visits;
+    result.info = `win ratio: ${result.winRatio.toFixed(3)}`;
+  }
   return result;
 }
 

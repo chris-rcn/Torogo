@@ -62,49 +62,49 @@ function coordStr(move) {
   return String.fromCharCode(97 + move.x) + (move.y + 1);
 }
 
-let gameCount = 0;
-
 while (true) {
-  gameCount++;
   const game = new Game(boardSize, DEFAULT_KOMI);
-  let moveIndex = 0;
+
+  const position = [];
 
   while (!game.gameOver) {
-    const candidates = legalMoves(game);
-    const moveData = [];
+    if (Math.random() < 0.1) {
+      const moves = legalMoves(game);
+      const moveInfos = [];
 
-    for (const move of candidates) {
-      const clone = game.clone();
-      applyMove(clone, move);
+      for (const move of moves) {
+        const clone = game.clone();
+        applyMove(clone, move);
 
-      let result;
-      if (clone.gameOver) {
-        // Game ended immediately (double-pass); no genMove needed.
-        moveData.push({ move: coordStr(move), winRatio: null });
-        continue;
+        let oppResponseMove;
+        if (clone.gameOver) {
+          // Game ended immediately (double-pass); no genMove needed.
+          moveInfos.push({ move: coordStr(move), winRatio: null });
+          continue;
+        }
+
+        oppResponseMove = agent(clone, budget);
+        if (oppResponseMove.winRatio === undefined) {
+          console.error('agent did not return winRatio');
+          process.exit(1);
+        }
+        const wr = 1 - oppResponseMove.winRatio;
+        moveInfos.push({ m: coordStr(move), kwr: Math.round(1000 * wr) });
       }
 
-      result = agent(clone, budget);
-      if (result.winRatio === undefined) {
-        console.error('agent did not return winRatio');
-        process.exit(1);
-      }
-      // winRatio is flipped to reflect the original player's perspective.
-      moveData.push({ move: coordStr(move), winRatio: 1 - result.winRatio });
+      moveInfos.sort((a, b) => (b.kwr ?? -Infinity) - (a.kwr ?? -Infinity));
+
+      process.stdout.write(JSON.stringify({
+        position: position,
+        candidates: moveInfos,
+      }) + '\n');
     }
-
-    moveData.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
-
-    process.stdout.write(JSON.stringify({
-      game: gameCount,
-      moveIndex,
-      toPlay: game.current,
-      moves: moveData,
-    }) + '\n');
-
-    // Advance by playing the candidate move with the highest winRatio.
-    const bestMove = candidates.find(m => coordStr(m) === moveData[0].move);
-    applyMove(game, bestMove);
-    moveIndex++;
+  
+    const advancingMove = agent(game, budget);
+    if (Math.abs(advancingMove.winRatio - 0.5) > 0.4) {  // Game is not balanced.
+      break;
+    }
+    applyMove(game, advancingMove);
+    position.push(coordStr(advancingMove));
   }
 }

@@ -6,7 +6,7 @@
 // Usage: node findblunders.js [--agent <name>] [--budget <ms>] [--longbudget <ms>] [--size <n>]
 //   --agent        AI policy name           (default: rave)
 //   --budget       short-budget ms          (default: 100)
-//   --longbudget   long-budget ms           (default: 4× --budget)
+//   --longbudget   long-budget ms           (default: 2× --budget)
 //   --size         board size               (default: 11)
 //
 // For each position in a self-play game, three short-budget and two long-budget
@@ -44,14 +44,14 @@ if (isNaN(boardSize) || boardSize < 2) {
   console.error('--size must be >= 2'); process.exit(1);
 }
 
-const longBudget = parseInt(get('--longbudget', String(shortBudget * 4)), 10);
+const longBudget = parseInt(get('--longbudget', String(2 * shortBudget)), 10);
 if (isNaN(longBudget) || longBudget <= shortBudget) {
   console.error('--longbudget must be an integer greater than --budget'); process.exit(1);
 }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 
-const WIN_RATIO_DIFF_THRESH = 0.2;
+const WIN_RATIO_DIFF_THRESH = 0.05;
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 

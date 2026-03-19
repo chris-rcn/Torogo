@@ -400,7 +400,7 @@ function applyLadderPriors(node, game, N) {
         } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
           seedChild(lx, ly, 0, 40);  // The importance of this prior does not depend on the group size.
         } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
-          seedChild(lx, ly, 3 * group.length + 1, 3 * group.length + 1);
+          seedChild(lx, ly, 3 * group.length, 3 * group.length);
         } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
           seedChild(lx, ly, 3 * group.length, 3 * group.length);
         }
