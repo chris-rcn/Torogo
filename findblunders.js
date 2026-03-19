@@ -11,8 +11,10 @@
 //
 // For each position in a self-play game, three short-budget and two long-budget
 // genMove calls are made.  If all three short-budget calls agree on the same
-// move, and both long-budget calls agree on a different move, the position is
-// emitted as a blunder: the short-budget move is added to "prohibited".
+// move, both long-budget calls agree on a different move, AND the average
+// long-budget winRatio exceeds the average short-budget winRatio by at least
+// WIN_RATIO_DIFF_THRESH, the position is emitted as a blunder: the
+// short-budget move is added to "prohibited".
 // Once a blunder is found the current game is abandoned and a new one starts.
 // Positions already emitted are tracked by Zobrist hash and skipped if
 // encountered again in a later game.
@@ -48,6 +50,8 @@ if (isNaN(longBudget) || longBudget <= shortBudget) {
 }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
+
+const WIN_RATIO_DIFF_THRESH = 0.2;
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -85,18 +89,29 @@ while (true) {
     const s2 = agent(game.clone(), shortBudget);
     const s3 = agent(game.clone(), shortBudget);
 
+    for (const r of [s1, s2, s3]) {
+      if (r.winRatio === undefined) { console.error('agent did not return winRatio'); process.exit(1); }
+    }
+
     // Skip positions already emitted to avoid duplicates across games.
     if (sameMove(s1, s2) && sameMove(s1, s3) && !seen.has(posKey)) {
       const l1 = agent(game.clone(), longBudget);
       const l2 = agent(game.clone(), longBudget);
 
-      if (sameMove(l1, l2) && !sameMove(s1, l1)) {
+      for (const r of [l1, l2]) {
+        if (r.winRatio === undefined) { console.error('agent did not return winRatio'); process.exit(1); }
+      }
+
+      const shortAvg = (s1.winRatio + s2.winRatio + s3.winRatio) / 3;
+      const longAvg  = (l1.winRatio + l2.winRatio) / 2;
+
+      if (sameMove(l1, l2) && !sameMove(s1, l1) && (longAvg - shortAvg) > WIN_RATIO_DIFF_THRESH) {
         seen.add(posKey);
         blunderCount++;
         const toPlayChar = game.current === 'black' ? '●' : '○';
         const comment    = `game ${gameCount} blunder ${blunderCount}: ` +
-                           `short-budget plays ${coordStr(s1)}, ` +
-                           `long-budget plays ${coordStr(l1)}`;
+                           `short-budget plays ${coordStr(s1)} (winRatio ${shortAvg.toFixed(3)}), ` +
+                           `long-budget plays ${coordStr(l1)} (winRatio ${longAvg.toFixed(3)})`;
         const indented   = game.board.toAscii(s1).split('\n').map(r => '      ' + r).join('\n');
         console.log(`  {`);
         console.log(`    toPlay: '${toPlayChar}',`);
