@@ -11,7 +11,8 @@
 // At each position every legal move is enumerated.  For each candidate move the
 // game is cloned, the move is made, then agent.genMove is called with the full
 // budget.  The winRatio is flipped to the original player's perspective and
-// recorded.  Output is newline-delimited JSON, one object per position.
+// recorded.  The game advances by playing the highest-rated move.
+// Output is newline-delimited JSON, one object per position.
 
 const path = require('path');
 const { Game, DEFAULT_KOMI } = require('./game.js');
@@ -99,9 +100,10 @@ while (true) {
       moves: moveData,
     }) + '\n');
 
-    // Advance the game using the agent on the current position.
-    const advance = agent(game.clone(), budget);
-    applyMove(game, advance);
+    // Advance by playing the candidate move with the highest winRatio.
+    const best = moveData.reduce((a, b) => (b.winRatio ?? -Infinity) > (a.winRatio ?? -Infinity) ? b : a);
+    const bestMove = candidates[moveData.indexOf(best)];
+    applyMove(game, bestMove);
     moveIndex++;
   }
 }
