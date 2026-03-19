@@ -2,6 +2,8 @@
 
 // patterns.js — pattern recognition helpers for Go board positions.
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Node.js import; browser loads ladder.js via <script> and exposes getLadderStatus globally.
+if (typeof require === 'function') { var { getLadderStatus } = require('./ladder.js'); }
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
 // Liberty counts above this threshold are treated as equivalent.
@@ -56,6 +58,42 @@ function cellLiberties(board, idx) {
   return group ? Math.min(group.liberties.size, MAX_LIBS) : 0;
 }
 
+function patternHashes(game, coords) {
+  const bSize = game.board.size;
+  const ladderFlag = new Int32Array(bSize * bSize).fill(1);
+  const visited = new Set();
+  const mover = game.current;
+  for (let py = 0; py < bSize; py++) {
+    for (let px = 0; px < bSize; px++) {
+      const group = game.board.getGroup(px, py);
+      if (group.length < 2) continue;
+      const groupColor = game.board.get(px, py);
+      const gid = game.board._gid[game.board._idx(px, py)];
+      if (visited.has(gid)) continue;
+      visited.add(gid);
+      const libs = game.board.getLiberties(group);
+      if (libs.size > 2) continue;
+      const statusEntries = getLadderStatus(game, px, py);
+      if (!statusEntries) continue;
+      for (const entry of statusEntries) {
+        const { liberty: { x: lx, y: ly } } = entry;
+        if (groupColor === mover && !entry.canEscape) {  // Extend a doomed group.
+          ladderFlag[ly * bSize + lx]++;
+        } else if (groupColor !== mover && entry.canEscape) {  // Chase an escaping group.
+          ladderFlag[ly * bSize + lx]++;
+        }
+      }
+    }
+  }
+  const result = [];
+  for (const coord of coords) {
+    const stoneLibHash = patternHash(game, coord.x, coord.y, game.current);
+    const pHash = stoneLibHash * 14836251 + ladderFlag[coord.y * bSize + coord.x] * 49576351;
+    result.push({coord: coord, pHash: pHash});
+  }
+  return result;
+}
+
 // patternHash(game, x, y, mover) → canonical integer in [0, 3^9 · (MAX_LIBS+1)^4)
 //
 // Returns a rotation- and reflection-invariant hash of the 3×3 neighbourhood
@@ -103,4 +141,4 @@ function patternHash(game, x, y, mover) {
   return minHash;
 }
 
-if (typeof module !== 'undefined') module.exports = { patternHash, MAX_LIBS };
+if (typeof module !== 'undefined') module.exports = { patternHash, patternHashes, MAX_LIBS };
