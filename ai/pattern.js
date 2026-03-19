@@ -27,34 +27,20 @@ const DEFAULT_WEIGHT = 0.01;
 // Number of randomly sampled candidates to score per move.
 const CANDIDATES = 8;
 
-// Convert an ELO rating to a relative weight using the standard ELO strength
-// formula: 10^((elo − baseline) / 400).  Returns 1.0 at the baseline of 1500.
-const ELO_BASELINE = 1500;
-function eloToWeight(elo) {
-  return Math.pow(10, (elo - ELO_BASELINE) / 400);
-}
-
-// ELO assigned to patterns absent from the training data.  Derived from
-// DEFAULT_WEIGHT so that novel patterns are treated as weak opponents.
-const DEFAULT_ELO = ELO_BASELINE + 400 * Math.log10(DEFAULT_WEIGHT); // ≈ 700
-
 /**
  * Load a pattern-statistics file and return a Map<hash, weight>.
  *
- * @param {string}  filePath
- * @param {boolean} useElo   When true, read column 3 (ELO) and convert via
- *                           eloToWeight(); otherwise read column 1 (ratio).
+ * @param {string} filePath
  * @returns {Map<number, number>}
  */
-function loadPatterns(filePath, useElo = false) {
+function loadPatterns(filePath) {
   const table = new Map();
   const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
   for (const line of lines) {
     if (!line.trim()) continue;
     const parts = line.split(',');
     const hash  = parseInt(parts[0], 10);
-    const value = useElo ? eloToWeight(parseFloat(parts[3]))
-                         : parseFloat(parts[1]);
+    const value = parseFloat(parts[1]);
     if (!Number.isNaN(hash) && !Number.isNaN(value)) {
       table.set(hash, value);
     }
@@ -146,52 +132,15 @@ function makeWeighter(patternFile) {
   };
 }
 
-/**
- * Like makeWeighter but reads the ELO column (column 3) and converts via
- * eloToWeight() so the returned values are on a relative-strength scale.
- *
- * @param {string} patternFile
- * @returns {function(game, x, y): number}
- */
-function makeEloWeighter(patternFile) {
-  const table = loadPatterns(patternFile, true);
-  return function eloWeight(game, x, y) {
-    const hash = patternHash(game, x, y, game.current);
-    return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
-  };
-}
-
-/**
- * Load a pattern file and return a Map<hash, elo> of raw ELO values (column 3).
- * Intended for callers that compute context-aware weights (e.g. head-to-head).
- *
- * @param {string} patternFile
- * @returns {Map<number, number>}
- */
-function makeEloTable(patternFile) {
-  const table = new Map();
-  const lines = fs.readFileSync(patternFile, 'utf8').trim().split('\n');
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const parts = line.split(',');
-    const hash = parseInt(parts[0], 10);
-    const elo  = parseFloat(parts[3]);
-    if (!Number.isNaN(hash) && !Number.isNaN(elo)) table.set(hash, elo);
-  }
-  return table;
-}
-
 // Default getMove for use with selfplay.js / recordgames.js:
 //   node selfplay.js --p1 pattern --p2 random
 // Looks for patterns.csv next to game.js (project root).
 const path = require('path');
-const _defaultFile    = path.join(__dirname, '..', 'patterns.csv');
-const _defaultGetMove  = makeAgent(_defaultFile);
-const _defaultWeight   = makeWeighter(_defaultFile);
-const _defaultEloWeight = makeEloWeighter(_defaultFile);
+const _defaultFile   = path.join(__dirname, '..', 'patterns.csv');
+const _defaultGetMove = makeAgent(_defaultFile);
+const _defaultWeight  = makeWeighter(_defaultFile);
 
 module.exports = Object.assign(_defaultGetMove, {
-  makeAgent, makeWeighter, makeEloWeighter, makeEloTable,
-  weight: _defaultWeight, eloWeight: _defaultEloWeight,
-  DEFAULT_ELO,
+  makeAgent, makeWeighter,
+  weight: _defaultWeight,
 });
