@@ -313,7 +313,8 @@ function getMove(game, timeBudgetMs) {
 
   if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
-  result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
+  result.winRatio = bestChild.wins / bestChild.visits;
+  result.info = `win ratio: ${result.winRatio.toFixed(3)}`;
   return result;
 }
 

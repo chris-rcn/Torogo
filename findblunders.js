@@ -51,8 +51,8 @@ const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-console.log('// Auto-generated blunder positions — paste into POSITIONS array in evalladders.js');
-console.log(`// Generated: agent=${agentName} size=${boardSize} short=${shortBudget}ms long=${longBudget}ms`);
+console.log('// Auto-generated blunder positions');
+console.log(`// Generated using: agent=${agentName} size=${boardSize} short=${shortBudget}ms long=${longBudget}ms`);
 console.log('');
 
 function coordStr(move) {
