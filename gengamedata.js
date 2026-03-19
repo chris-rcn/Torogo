@@ -10,7 +10,7 @@
 //
 // At each position every legal move is enumerated.  For each candidate move the
 // game is cloned, the move is made, then agent.genMove is called with the full
-// budget.  The returned winRatio (opponent's perspective after the move) is
+// budget.  The winRatio is flipped to the original player's perspective and
 // recorded.  Output is newline-delimited JSON, one object per position.
 
 const path = require('path');
@@ -88,8 +88,8 @@ while (true) {
         console.error('agent did not return winRatio');
         process.exit(1);
       }
-      // winRatio is from the opponent's perspective after the move.
-      moveData.push({ move: coordStr(move), winRatio: result.winRatio });
+      // winRatio is flipped to reflect the original player's perspective.
+      moveData.push({ move: coordStr(move), winRatio: 1 - result.winRatio });
     }
 
     process.stdout.write(JSON.stringify({
