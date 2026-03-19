@@ -93,6 +93,8 @@ while (true) {
       moveData.push({ move: coordStr(move), winRatio: 1 - result.winRatio });
     }
 
+    moveData.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
+
     process.stdout.write(JSON.stringify({
       game: gameCount,
       moveIndex,
@@ -101,8 +103,7 @@ while (true) {
     }) + '\n');
 
     // Advance by playing the candidate move with the highest winRatio.
-    const best = moveData.reduce((a, b) => (b.winRatio ?? -Infinity) > (a.winRatio ?? -Infinity) ? b : a);
-    const bestMove = candidates[moveData.indexOf(best)];
+    const bestMove = candidates.find(m => coordStr(m) === moveData[0].move);
     applyMove(game, bestMove);
     moveIndex++;
   }
