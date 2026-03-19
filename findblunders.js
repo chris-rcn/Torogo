@@ -10,8 +10,8 @@
 //   --size         board size               (default: 9)
 //
 // For each position in a self-play game, two short-budget and two long-budget
-// genMove calls are made.  If both short-budget calls agree on the same place
-// move but that move disagrees with both long-budget calls, the position is
+// genMove calls are made.  If both short-budget calls agree on the same move
+// but that move disagrees with both long-budget calls, the position is
 // emitted as a blunder: the short-budget move is added to "prohibited".
 // Once a blunder is found the current game is abandoned and a new one starts.
 // Positions already emitted are tracked by Zobrist hash and skipped if
@@ -50,6 +50,7 @@ if (isNaN(longBudget) || longBudget <= shortBudget) {
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 function coordStr(move) {
+  if (move.type === 'pass') return 'pass';
   return String.fromCharCode(97 + move.x) + (move.y + 1);
 }
 
@@ -77,9 +78,8 @@ while (true) {
     const s1 = agent(game.clone(), shortBudget);
     const s2 = agent(game.clone(), shortBudget);
 
-    // Only flag place moves; passes are not useful blunder entries.
     // Skip positions already emitted to avoid duplicates across games.
-    if (s1.type === 'place' && sameMove(s1, s2) && !seen.has(posKey)) {
+    if (sameMove(s1, s2) && !seen.has(posKey)) {
       const l1 = agent(game.clone(), longBudget);
       const l2 = agent(game.clone(), longBudget);
 

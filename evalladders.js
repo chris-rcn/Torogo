@@ -67,6 +67,13 @@ function parseCoord(str) {
   return { x: str.charCodeAt(0) - 97, y: parseInt(str.slice(1), 10) - 1 };
 }
 
+// Returns true when the agent move matches the spec string ('pass' or 'j8'-style coord).
+function matchesMove(s, move) {
+  if (s === 'pass') return move.type === 'pass';
+  const c = parseCoord(s);
+  return move.type === 'place' && c.x === move.x && c.y === move.y;
+}
+
 // ── Position builder (mirrors predictmoves.js) ─────────────────────────────
 
 function buildPosition(pos) {
@@ -450,13 +457,11 @@ for (const pos of POSITIONS) {
 
     let ok = true;
 
-    if (pos.require && pos.require.length > 0) {
-      ok &&= move.type === 'place' &&
-             pos.require.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; });
+    if (pos.require  && pos.require.length  > 0) {
+      ok &&= pos.require.some(s => matchesMove(s, move));
     }
     if (pos.prohibit && pos.prohibit.length > 0) {
-      ok &&= !(move.type === 'place' &&
-               pos.prohibit.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; }));
+      ok &&= !pos.prohibit.some(s => matchesMove(s, move));
     }
 
     if (ok) passed++;
