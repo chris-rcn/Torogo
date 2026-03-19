@@ -300,14 +300,9 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   }
 }
 
-// Virtual visit weight for each ladder-derived prior seeded into child nodes.
-const LADDER_PRIORS = (typeof process !== 'undefined' && process.env.LADDER_PRIORS)
-  ? parseInt(process.env.LADDER_PRIORS, 10) : 10;
-
-
 // A node must reach this many visits before its ladder priors are applied.
 const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
-  ? parseInt(process.env.LADDER_VISITS, 10) : 1;
+  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
 
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
@@ -335,31 +330,29 @@ function applyLadderPriors(node, game, N) {
   const visited = new Set();
   for (let py = 0; py < N; py++) {
     for (let px = 0; px < N; px++) {
-      const group    = game.board.getGroup(px, py);
+      const group = game.board.getGroup(px, py);
       if (group.length < 2) continue;
       const groupColor = game.board.get(px, py);
       const gid = game.board._gid[game.board._idx(px, py)];
       if (visited.has(gid)) continue;
       visited.add(gid);
       const libs = game.board.getLiberties(group);
-      if (libs.size < 1 || libs.size > 2) continue;
+      if (libs.size > 2) continue;
 
       const statusEntries = getLadderStatus(game, px, py);
       if (!statusEntries) continue;
 
       for (const entry of statusEntries) {
         const { liberty: { x: lx, y: ly } } = entry;
-        if (lx === 3 && ly === 5) {
-        console.log(entry);
-        console.log('groupColor:', groupColor);
-        console.log('entry.canEscape:', entry.canEscape);
-        console.log('group.length:', group.length);
-        if (groupColor === mover && !entry.canEscape && group.length >= 11) {  // If the move is an extension of a dead group, discourage the move.
-          console.log('Found extension of a dead group');
-          seedChild(lx, ly, 0, LADDER_PRIORS);
+        if (groupColor === mover && !entry.canEscape) {  // Don't extend doomed group.
+          seedChild(lx, ly, 0, 2 * group.length);
+        } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
+          seedChild(lx, ly, 0, 40);
+        } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
+          seedChild(lx, ly, 3 * group.length, 3 * group.length);
+        } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
+          seedChild(lx, ly, 2 * group.length, 2 * group.length);
         }
-        }
-        // There are many other cases, but we are not setting priors for them yet.
       }
     }
   }
