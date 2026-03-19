@@ -15,12 +15,6 @@ const { Game, ZOBRIST, parseBoard } = require('./game.js');
  *   --trials  <n>      Trials per position (default: 10)
  *   --help             Show this help message
  *
- * Each position uses the same format as predictmoves.js:
- *   toPlay     '●' or '○'
- *   board      ASCII board string (· empty, ● black, ○ white; (x) marks answer)
- *   answers    [[x, y], ...]   agent must play one of these  (optional)
- *   prohibited [[x, y], ...]   agent must not play any of these (optional)
- *   comment    free-form string (optional)
  */
 
 // Boolean flags that take no value.
@@ -100,43 +94,336 @@ const POSITIONS = [
   {
     toPlay:     '●',
     comment:    'Attack 2 stones',
-    answers: ['j8'],
+    require: ['f4'],
     board: `
-         a b c d e f g h i j k
-       1 · · · · · · · · · ○ · 
-       2 · ● · · · · · · ○ · ○ 
-       3 · · · · · · · · · ○ · 
-       4 · · · · · · · · · · · 
-       5 · · · · · · · · · · · 
-       6 · · · · · · · · · · · 
-       7 · · · · · · · · · · · 
-       8 · · · · · · · · ·(·)· 
-       9 · ○ · · · · · · · ○ ● 
-      10 ○ · ○ · · · · · ● ○ ● 
-      11 · ○ · · · · · · ● ● ● 
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ● · · · · · 
+       3 · · · · · · · 
+       4 · · · · ·(·)· 
+       5 · · · · · ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · ● ● ● 
     `,
   },
 
   {
     toPlay:     '●',
     comment:    'Attack 2 stones (fail)',
-    prohibited: ['j8','i9'],
+    prohibit: ['f4','e5'],
     board: `
-         a b c d e f g h i j k
-       1 · · · · · · · · · ○ · 
-       2 · ● · · · · · · ○ · ○ 
-       3 · · · · · · · · · ○ · 
-       4 · · · · · · · · · · · 
-       5 · · · · · · · · · · · 
-       6 · · · · · · · · · · · 
-       7 · · · · · · · · · · · 
-       8 · · · · · · · · ·(·)· 
-       9 · ○ · · · · · ·(·)○ ● 
-      10 ○ · ○ · · · · · ● ○ ● 
-      11 · ○ · · · · · · ● ● ● 
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · · · · · 
+       4 · · · · ·(·)· 
+       5 · · · ·(·)○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · ● ● ● 
     `,
   },
 
+  {
+    toPlay:     '○',
+    comment:    'Extend 2 stones',
+    require: ['e5'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · · · · · 
+       4 · · · · · ● · 
+       5 · · · ·(·)○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 2 stones (fail)',
+    prohibit: ['e5'],
+    board: `
+         a b c d e f g 
+       1 · · · · ○ · · 
+       2 · ● · · · ○ · 
+       3 · · · · · · ○ 
+       4 · · · · · ● · 
+       5 ○ · · ·(·)○ ● 
+       6 · ○ · · ● ○ ● 
+       7 · · ○ · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 3 stones',
+    require: ['d5'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ● · · · · · 
+       3 · · · · · · · 
+       4 · · · · · ● · 
+       5 · · ·(·)○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 3 stones (fail)',
+    prohibit: ['d5','e4'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · · · · · 
+       4 · · · ·(·)● · 
+       5 · · ·(·)○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 3 stones',
+    require: ['e4'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · · · · · 
+       4 · · · ·(·)● · 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 3 stones (fail)',
+    prohibit: ['e4'],
+    board: `
+         a b c d e f g 
+       1 · · · · ○ · ○ 
+       2 · ● · · · ○ · 
+       3 · · · · · · ○ 
+       4 · · · ·(·)● · 
+       5 ○ · · ● ○ ○ ● 
+       6 · ○ · · ● ○ ● 
+       7 ○ · ○ · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 4 stones',
+    require: ['e3'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ● · · · · · 
+       3 · · · ·(·)· · 
+       4 · · · · ○ ● · 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 4 stones (fail)',
+    prohibit: ['e3','d4'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · ·(·)· · 
+       4 · · ·(·)○ ● · 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 4 stones',
+    require: ['d4'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · · · ● · · 
+       4 · · ·(·)○ ● · 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 4 stones (fail)',
+    pohibit: ['f6'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · ○ · · 
+       2 · ● · · · · · ○ · 
+       3 · · · · · · · · ○ 
+       4 · · · · · · · · · 
+       5 · · · · · · ● · · 
+       6 · · · · ·(·)○ ● ● 
+       7 ○ · · · · ● ○ ○ ● 
+       8 · ○ · · · · ● ○ ● 
+       9 · · ○ · · · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 5 stones',
+    require: ['c4'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ● · · · · · 
+       3 · · · · ● · · 
+       4 · ·(·)○ ○ ● · 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 5 stones (fail)',
+    prohibit: ['c4','d3'],
+    board: `
+         a b c d e f g 
+       1 · · · · · · · 
+       2 · ○ · · · · · 
+       3 · · ·(·)● · · 
+       4 · ·(·)○ ○ ● ● 
+       5 · · · ● ○ ○ ● 
+       6 · · · · ● ○ ● 
+       7 · · · · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 5 stones',
+    require: ['f5'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · · · · 
+       2 · ○ · · · · · · · 
+       3 · · · · · · · · · 
+       4 · · · · · · · · · 
+       5 · · · · ·(·)● · · 
+       6 · · · · ● ○ ○ ● · 
+       7 · · · · · ● ○ ○ ● 
+       8 · · · · · · ● ○ ● 
+       9 · · · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 5 stones (fail)',
+    prohibit: ['f5'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · · · ○ 
+       2 · ● · · · · · ○ · 
+       3 · · · · · · · · · 
+       4 · · · · · · · · · 
+       5 · · · · ·(·)● · · 
+       6 · · · · ● ○ ○ ● · 
+       7 · · · · · ● ○ ○ ● 
+       8 · ○ · · · · ● ○ ● 
+       9 ○ · · · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 6 stones',
+    require: ['f4'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · ○ · ○ 
+       2 · ● · · · · · ○ · 
+       3 · · · · · · · · ○ 
+       4 · · · · ·(·)· · · 
+       5 · · · · · ○ ● · · 
+       6 · · · · ● ○ ○ ● · 
+       7 ○ · · · · ● ○ ○ ● 
+       8 · ○ · · · · ● ○ ● 
+       9 ○ · ○ · · · · ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '●',
+    comment:    'Attack 6 stones (fail)',
+    prohibit: ['f4','e5'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · ○ · · 
+       2 · ○ · · · · · ○ · 
+       3 · · · · · · · · ○ 
+       4 · · · · ·(·)· · · 
+       5 · · · ·(·)○ ● · · 
+       6 · · · · ● ○ ○ ● ● 
+       7 ○ · · · · ● ○ ○ ● 
+       8 · ○ · · · · ● ○ ● 
+       9 · · ○ · · · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 6 stones',
+    require: ['e5'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · · · · 
+       2 · ○ · · · · · · · 
+       3 · · · · · · · · · 
+       4 · · · · · ● · · · 
+       5 · · · ·(·)○ ● · · 
+       6 · · · · ● ○ ○ ● ● 
+       7 · · · · · ● ○ ○ ● 
+       8 · · · · · · ● ○ ● 
+       9 · · · · · · ● ● ● 
+    `,
+  },
+
+  {
+    toPlay:     '○',
+    comment:    'Extend 6 stones (fail)',
+    prohibit: ['e5'],
+    board: `
+         a b c d e f g h i
+       1 · · · · · · ○ · ○ 
+       2 · ● · · · · ○ ○ · 
+       3 · · · · · · · ○ ○ 
+       4 · · · · · ● · · · 
+       5 · · · ·(·)○ ● · · 
+       6 · · · · ● ○ ○ ● ● 
+       7 ○ ○ · · · ● ○ ○ ● 
+       8 · ○ ○ · · · ● ○ ● 
+       9 ○ · ○ · · · ● ● ● 
+    `,
+  },
 
 ];
 
@@ -163,13 +450,13 @@ for (const pos of POSITIONS) {
 
     let ok = true;
 
-    if (pos.answers && pos.answers.length > 0) {
+    if (pos.require && pos.require.length > 0) {
       ok &&= move.type === 'place' &&
-             pos.answers.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; });
+             pos.require.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; });
     }
-    if (pos.prohibited && pos.prohibited.length > 0) {
+    if (pos.prohibit && pos.prohibit.length > 0) {
       ok &&= !(move.type === 'place' &&
-               pos.prohibited.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; }));
+               pos.prohibit.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; }));
     }
 
     if (ok) passed++;
