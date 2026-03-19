@@ -12,7 +12,7 @@
 // For each position in a self-play game, three short-budget and two long-budget
 // genMove calls are made.  If all three short-budget calls agree on the same
 // move, both long-budget calls agree on a different move, AND the average
-// long-budget winRatio exceeds the average short-budget winRatio by at least
+// long-budget winRatio differs from the average short-budget winRatio by at least
 // WIN_RATIO_DIFF_THRESH, the position is emitted as a blunder: the
 // short-budget move is added to "prohibited".
 // Once a blunder is found the current game is abandoned and a new one starts.
@@ -105,7 +105,7 @@ while (true) {
       const shortAvg = (s1.winRatio + s2.winRatio + s3.winRatio) / 3;
       const longAvg  = (l1.winRatio + l2.winRatio) / 2;
 
-      if (sameMove(l1, l2) && !sameMove(s1, l1) && (longAvg - shortAvg) > WIN_RATIO_DIFF_THRESH) {
+      if (sameMove(l1, l2) && !sameMove(s1, l1) && Math.abs(longAvg - shortAvg) > WIN_RATIO_DIFF_THRESH) {
         seen.add(posKey);
         blunderCount++;
         const toPlayChar = game.current === 'black' ? '●' : '○';
