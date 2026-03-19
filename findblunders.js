@@ -17,8 +17,8 @@
 // Positions already emitted are tracked by Zobrist hash and skipped if
 // encountered again in a later game.
 //
-// Output: one JSON object per line (NDJSON), shaped like an evalladders position:
-//   { "toPlay": "●", "board": "...", "prohibited": ["j8"], "comment": "..." }
+// Output: JS object literals formatted like evalladders positions, one per blunder.
+//   Paste the output into the POSITIONS array in evalladders.js.
 
 const path = require('path');
 const { Game, DEFAULT_KOMI } = require('./game.js');
@@ -48,6 +48,12 @@ if (isNaN(longBudget) || longBudget <= shortBudget) {
 }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
+
+// ─── Header ───────────────────────────────────────────────────────────────────
+
+console.log('// Auto-generated blunder positions — paste into POSITIONS array in evalladders.js');
+console.log(`// Generated: agent=${agentName} size=${boardSize} short=${shortBudget}ms long=${longBudget}ms`);
+console.log('');
 
 function coordStr(move) {
   if (move.type === 'pass') return 'pass';
@@ -86,13 +92,19 @@ while (true) {
       if (!sameMove(s1, l1) && !sameMove(s1, l2)) {
         seen.add(posKey);
         blunderCount++;
-        const toPlay     = game.current === 'black' ? '●' : '○';
-        const board      = game.board.toAscii();
-        const prohibited = [coordStr(s1)];
+        const toPlayChar = game.current === 'black' ? '●' : '○';
         const comment    = `game ${gameCount} blunder ${blunderCount}: ` +
                            `short-budget plays ${coordStr(s1)}, ` +
                            `long-budget plays ${coordStr(l1)} / ${coordStr(l2)}`;
-        process.stdout.write(JSON.stringify({ toPlay, board, prohibited, comment }) + '\n');
+        const indented   = game.board.toAscii().split('\n').map(r => '      ' + r).join('\n');
+        console.log(`  {`);
+        console.log(`    toPlay: '${toPlayChar}',`);
+        console.log(`    comment: '${comment}',`);
+        console.log(`    prohibit: ['${coordStr(s1)}'],`);
+        console.log(`    board: \``);
+        console.log(indented);
+        console.log(`    \`,`);
+        console.log(`  },`);
         break;  // abandon this game; outer loop starts a new one
       }
     }
