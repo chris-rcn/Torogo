@@ -96,7 +96,7 @@ while (true) {
         const comment    = `game ${gameCount} blunder ${blunderCount}: ` +
                            `short-budget plays ${coordStr(s1)}, ` +
                            `long-budget plays ${coordStr(l1)} / ${coordStr(l2)}`;
-        const indented   = game.board.toAscii().split('\n').map(r => '      ' + r).join('\n');
+        const indented   = game.board.toAscii(s1).split('\n').map(r => '      ' + r).join('\n');
         console.log(`  {`);
         console.log(`    toPlay: '${toPlayChar}',`);
         console.log(`    comment: '${comment}',`);
