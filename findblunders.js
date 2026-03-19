@@ -3,11 +3,11 @@
 
 // findblunders.js — generate a blunder dataset by self-play.
 //
-// Usage: node findblunders.js [--agent <name>] [--budget <ms>] [--long-budget <ms>] [--size <n>]
-//   --agent        AI policy name           (default: ravepat)
-//   --budget       short-budget ms          (default: 50)
-//   --long-budget  long-budget ms           (default: 4× --budget)
-//   --size         board size               (default: 9)
+// Usage: node findblunders.js [--agent <name>] [--budget <ms>] [--longbudget <ms>] [--size <n>]
+//   --agent        AI policy name           (default: rave)
+//   --budget       short-budget ms          (default: 100)
+//   --longbudget   long-budget ms           (default: 4× --budget)
+//   --size         board size               (default: 11)
 //
 // For each position in a self-play game, two short-budget and two long-budget
 // genMove calls are made.  If both short-budget calls agree on the same move
@@ -27,13 +27,13 @@ const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.error('Usage: node findblunders.js [--agent <name>] [--budget <ms>] [--long-budget <ms>] [--size <n>]');
+  console.error('Usage: node findblunders.js [--agent <name>] [--budget <ms>] [--longbudget <ms>] [--size <n>]');
   process.exit(0);
 }
 
-const agentName   = get('--agent',       'ravepat');
-const shortBudget = parseInt(get('--budget',      '50'), 10);
-const boardSize   = parseInt(get('--size',         '9'), 10);
+const agentName   = get('--agent',       'rave');
+const shortBudget = parseInt(get('--budget',      '100'), 10);
+const boardSize   = parseInt(get('--size',         '11'), 10);
 
 if (isNaN(shortBudget) || shortBudget < 1) {
   console.error('--budget must be a positive integer'); process.exit(1);
@@ -42,9 +42,9 @@ if (isNaN(boardSize) || boardSize < 2) {
   console.error('--size must be >= 2'); process.exit(1);
 }
 
-const longBudget = parseInt(get('--long-budget', String(shortBudget * 4)), 10);
+const longBudget = parseInt(get('--longbudget', String(shortBudget * 4)), 10);
 if (isNaN(longBudget) || longBudget <= shortBudget) {
-  console.error('--long-budget must be an integer greater than --budget'); process.exit(1);
+  console.error('--longbudget must be an integer greater than --budget'); process.exit(1);
 }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
