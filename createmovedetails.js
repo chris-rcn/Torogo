@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// gengamedata.js — generate per-position move-value data by self-play.
+// Generate per-position move-value data by self-play.
 //
-// Usage: node gengamedata.js [--agent <name>] [--budget <ms>] [--size <n>]
+// Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>]
 //   --agent    AI policy name   (default: rave)
 //   --budget   budget per move  (default: 100)
 //   --size     board size       (default: 11)
@@ -65,7 +65,7 @@ function coordStr(move) {
 while (true) {
   const game = new Game(boardSize, DEFAULT_KOMI);
 
-  const position = [];
+  const history = [];
 
   while (!game.gameOver) {
     if (Math.random() < 0.1) {
@@ -95,7 +95,8 @@ while (true) {
       moveInfos.sort((a, b) => (b.kwr ?? -Infinity) - (a.kwr ?? -Infinity));
 
       process.stdout.write(JSON.stringify({
-        position: position,
+        boardSize: boardSize,
+        history: history,
         candidates: moveInfos,
       }) + '\n');
     }
@@ -105,6 +106,6 @@ while (true) {
       break;
     }
     applyMove(game, advancingMove);
-    position.push(coordStr(advancingMove));
+    history.push(coordStr(advancingMove));
   }
 }
