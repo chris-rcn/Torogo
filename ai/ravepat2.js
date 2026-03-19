@@ -35,30 +35,17 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-// Head-to-head ELO prior.  Only works in Node.js (requires path + fs).
-// Set to true to enable; the browser always falls back to ratio weights.
-const USE_H2H = false;
-
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0.01;
 
 let ratioWeight;
-let makeEloTable;
-let DEFAULT_ELO;
-let _patternHash;
-let eloTable = null;
 
 if (_isNode) {
-  ({ weight: ratioWeight, makeEloTable, DEFAULT_ELO } = require('./pattern.js'));
-  if (USE_H2H) {
-    const path = require('path');
-    _patternHash = require('../patterns.js').patternHash;
-    eloTable = makeEloTable(path.join(__dirname, '..', 'patterns.csv'));
-  }
+  ({ weight: ratioWeight } = require('./pattern.js'));
 } else {
   // Browser: patternHash is a global from patterns.js loaded as a <script>.
   // Load patterns.csv via fetch and build the ratio table.
-  _patternHash = window.patternHash;
+  const _patternHash = window.patternHash;
   const _table = new Map();
   fetch('patterns.csv')
     .then(r => r.text())
@@ -189,10 +176,6 @@ function playTracked(game) {
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
 // Returns legal moves annotated with a normalised pattern prior (.prior field).
-// With USE_H2H: prior(i) ∝ Σ_{j≠i} E(i beats j) where E is the ELO expected
-// score formula, summed over all other legal candidates in this position.
-// Patterns absent from the table are assigned DEFAULT_ELO.
-// Without USE_H2H: falls back to normalised raw selection ratios.
 function legalMovesWithPriors(game) {
   const moves = [];
   const N = game.boardSize;
@@ -213,38 +196,9 @@ function legalMovesWithPriors(game) {
 
   let totalWeight = 0;
 
-  if (USE_H2H) {
-    // Resolve ELO for every candidate (pass treated as a weak DEFAULT_ELO move).
-    for (const m of moves) {
-      if (m.type === 'place') {
-        const hash = _patternHash(game, m.x, m.y, game.current);
-        m.elo = eloTable.has(hash) ? eloTable.get(hash) : DEFAULT_ELO;
-      } else {
-        m.elo = DEFAULT_ELO;
-      }
-    }
-
-    const n = moves.length;
-    if (n <= 1) {
-      // Trivial: only one legal move, prior = 1.
-      for (const m of moves) { m.w = 1; m.prior = 1; }
-      return moves;
-    }
-
-    // weight(i) = Σ_{j≠i} 1 / (1 + 10^((elo_j − elo_i) / 400))
-    for (let i = 0; i < n; i++) {
-      let score = 0;
-      for (let j = 0; j < n; j++) {
-        if (i !== j) score += 1 / (1 + Math.pow(10, (moves[j].elo - moves[i].elo) / 400));
-      }
-      moves[i].w = score;
-      totalWeight += score;
-    }
-  } else {
-    for (const m of moves) {
-      m.w = m.type === 'place' ? ratioWeight(game, m.x, m.y) : 1;
-      totalWeight += m.w;
-    }
+  for (const m of moves) {
+    m.w = m.type === 'place' ? ratioWeight(game, m.x, m.y) : 1;
+    totalWeight += m.w;
   }
 
   // Normalise to probabilities so priorWins = PRIOR_VISITS * p is a valid
