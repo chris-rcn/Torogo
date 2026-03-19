@@ -656,17 +656,19 @@ class Board {
   }
 
   // Parse a ● ○ · board string produced by toAscii().
-  // Mark decoration ( and ) are stripped before splitting.
+  // Mark decoration ( and ) and any alphanumeric characters (coordinate labels,
+  // row numbers, etc.) are ignored.
   // Returns { size, stones } where stones is [[x, y, color], ...].
   static parse(str) {
-    const rows = str.trim().split('\n').map(r => r.trim().replace(/[()]/g, ' ').split(/\s+/));
+    const rows = str.trim().split('\n')
+      .map(r => r.trim().replace(/[()a-zA-Z0-9]/g, ' ').split(/\s+/).filter(t => t))
+      .filter(row => row.some(t => t === '●' || t === '○' || t === '·'));
     const size = rows.length;
     const stones = [];
     for (let y = 0; y < size; y++)
       for (let x = 0; x < size; x++) {
-        const c = rows[y][x].replace(/[()]/g, '');
-        if (c === '●') stones.push([x, y, 'black']);
-        else if (c === '○') stones.push([x, y, 'white']);
+        if (rows[y][x] === '●') stones.push([x, y, 'black']);
+        else if (rows[y][x] === '○') stones.push([x, y, 'white']);
       }
     return { size, stones };
   }

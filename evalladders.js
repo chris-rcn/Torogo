@@ -65,6 +65,14 @@ if (isNaN(trials)   || trials   < 1) { console.error('--trials must be a positiv
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 
+// ── Coordinate helpers ─────────────────────────────────────────────────────
+
+// Parse a coordinate string like 'j8' → { x: 9, y: 7 }.
+// Column letter (a=0, b=1, …) gives x; row number (1-based) gives y.
+function parseCoord(str) {
+  return { x: str.charCodeAt(0) - 97, y: parseInt(str.slice(1), 10) - 1 };
+}
+
 // ── Position builder (mirrors predictmoves.js) ─────────────────────────────
 
 function buildPosition(pos) {
@@ -157,11 +165,11 @@ for (const pos of POSITIONS) {
 
     if (pos.answers && pos.answers.length > 0) {
       ok &&= move.type === 'place' &&
-             pos.answers.some(([ax, ay]) => ax === move.x && ay === move.y);
+             pos.answers.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; });
     }
     if (pos.prohibited && pos.prohibited.length > 0) {
       ok &&= !(move.type === 'place' &&
-               pos.prohibited.some(([ax, ay]) => ax === move.x && ay === move.y));
+               pos.prohibited.some(s => { const c = parseCoord(s); return c.x === move.x && c.y === move.y; }));
     }
 
     if (ok) passed++;
