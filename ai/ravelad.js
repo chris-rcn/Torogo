@@ -297,6 +297,7 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
 function applyLadderPriors(node, game2, N) {
+  const game3    = Game3.from(game2);  // Game3 at same position; used for ladder probing
   const moverInt = game2.current;  // BLACK2 or WHITE2
   const mover    = moverInt === BLACK2 ? 'black' : 'white';
 
@@ -332,7 +333,7 @@ function applyLadderPriors(node, game2, N) {
 
     if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
 
-    const statusEntries = getLadderStatus3(game2, i);
+    const statusEntries = getLadderStatus3(game3, i);
     if (!statusEntries) continue;
 
     const groupSize  = game2._ss[gid];
@@ -361,7 +362,7 @@ function getMove(game, timeBudgetMs) {
   const N          = game.boardSize;
   const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
-  const game2      = Game3.from(game.toGame2());
+  const game2      = game.toGame2();
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
