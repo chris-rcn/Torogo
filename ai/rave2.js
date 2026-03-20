@@ -36,7 +36,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -90,7 +90,7 @@ function playTracked(game2) {
       if (game2.isTrueEye(idx)) continue;
       if (!game2.isLegal(idx))  continue;
 
-      if (current === BLACK2) blackPlayed.push(idx);
+      if (current === BLACK) blackPlayed.push(idx);
       else                    whitePlayed.push(idx);
 
       // Snapshot neighbour occupancy to detect captures after play.
@@ -113,12 +113,12 @@ function playTracked(game2) {
       break;
     }
 
-    if (!placed) { game2.play(PASS2); moves++; }
+    if (!placed) { game2.play(PASS); moves++; }
   }
 
   const sc = game2.score();
-  const winner = sc.black > sc.white ? BLACK2
-               : sc.white > sc.black ? WHITE2
+  const winner = sc.black > sc.white ? BLACK
+               : sc.white > sc.black ? WHITE
                : null;
   return { winner, blackPlayed, whitePlayed };
 }
@@ -170,7 +170,7 @@ function moveIndex(move, N) {
 
 // Apply a {type,x,y}/pass move to a Game2 instance.
 function applyMove(game2, move) {
-  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS2);
+  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS);
 }
 
 // RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
@@ -243,7 +243,7 @@ function selectAndExpand(root, rootGame2, N) {
         const secondPass = makeNode({ type: 'pass' }, node, mover2, N);
         node.children.push(secondPass);
         node = secondPass;
-        game2.play(PASS2); // game2.gameOver becomes true
+        game2.play(PASS); // game2.gameOver becomes true
       }
     }
   }
@@ -265,8 +265,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     if (node.mover !== null && winner === node.mover) node.wins++;
 
     const chooser = node.mover === null ? rootPlayer
-      : (node.mover === BLACK2 ? WHITE2 : BLACK2);
-    const played = chooser === BLACK2 ? blackPlayed : whitePlayed;
+      : (node.mover === BLACK ? WHITE : BLACK);
+    const played = chooser === BLACK ? blackPlayed : whitePlayed;
     const won    = winner === chooser ? 1 : 0;
     for (const cellIdx of played) {
       node.raveVisits[cellIdx]++;
