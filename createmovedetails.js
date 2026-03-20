@@ -68,7 +68,7 @@ while (true) {
   const history = [];
 
   while (!game.gameOver) {
-    if (Math.random() < 0.1) {
+    if (Math.random() < 0.05) {
       const moves = legalMoves(game);
       const moveInfos = [];
 
@@ -84,11 +84,11 @@ while (true) {
         }
 
         oppResponseMove = agent(clone, budget);
-        if (oppResponseMove.winRatio === undefined) {
-          console.error('agent did not return winRatio');
+        if (oppResponseMove.rootWinRatio === undefined) {
+          console.error('agent did not return rootWinRatio');
           process.exit(1);
         }
-        const wr = 1 - oppResponseMove.winRatio;
+        const wr = 1 - oppResponseMove.rootWinRatio;
         moveInfos.push({ m: coordStr(move), kwr: Math.round(1000 * wr) });
       }
 
@@ -102,7 +102,7 @@ while (true) {
     }
   
     const advancingMove = agent(game, budget);
-    if (Math.abs(advancingMove.winRatio - 0.5) > 0.4) {  // Game is not balanced.
+    if (Math.abs(advancingMove.rootWinRatio - 0.5) > 0.3) {  // Game is not balanced.
       break;
     }
     applyMove(game, advancingMove);
