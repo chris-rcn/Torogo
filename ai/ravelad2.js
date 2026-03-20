@@ -62,6 +62,7 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 // Random playout using Game2.  Records the flat cell indices of every non-pass
 // move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game2) {
+  const wasAlreadyOver = game2.gameOver;
   const N     = game2.N;
   const cap   = N * N;
   const cells = game2.cells;
@@ -118,7 +119,7 @@ function playTracked(game2) {
     if (!placed) { game2.play(PASS2); moves++; }
   }
 
-  const sc = game2.score();
+  const sc = wasAlreadyOver ? game2.calcTerritory() : game2.estimateTerritory();
   const winner = sc.black > sc.white ? 'black'
                : sc.white > sc.black ? 'white'
                : null;

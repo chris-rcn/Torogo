@@ -91,7 +91,6 @@ function playRandom(game) {
     }
   }
 
-  if (!game.gameOver) game.endGame();
 }
 
 // ── Tree node ────────────────────────────────────────────────────────────────
@@ -182,9 +181,9 @@ function selectAndExpand(root, rootGame) {
 
 function simulate(game) {
   playRandom(game);
-  const s = game.scores;
-  return s.black.total > s.white.total ? 'black'
-       : s.white.total > s.black.total ? 'white'
+  const t = game.estimateTerritory();
+  return t.black > t.white + game.komi ? 'black'
+       : t.white + game.komi > t.black ? 'white'
        : null;
 }
 

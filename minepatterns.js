@@ -93,9 +93,9 @@ for (let gi = 0; gi < lines.length; gi++) {
     g.placeStone(mx, my);
   }
 
-  // Determine the winner (force scoring if the game did not end naturally).
-  if (!g.gameOver) g.endGame();
-  const winner = g.scores.black.total > g.scores.white.total ? 'black' : 'white';
+  // Determine the winner.
+  const _t = g.calcTerritory();
+  const winner = _t.black > _t.white + g.komi ? 'black' : 'white';
 
   // Only record patterns for moves made by the winning player.
   for (const { color, selHash, others } of gameMoves) {

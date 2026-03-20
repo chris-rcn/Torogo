@@ -152,10 +152,9 @@ function playTracked(game) {
     if (!placed) { game.pass(); moves++; }
   }
 
-  if (!game.gameOver) game.endGame();
-  const s = game.scores;
-  const winner = s.black.total > s.white.total ? 'black'
-               : s.white.total > s.black.total ? 'white'
+  const t = game.estimateTerritory();
+  const winner = t.black > t.white + game.komi ? 'black'
+               : t.white + game.komi > t.black ? 'white'
                : null;
   return { winner, blackPlayed, whitePlayed };
 }

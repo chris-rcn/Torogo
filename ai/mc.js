@@ -108,7 +108,6 @@ function playRandom(game) {
     }
   }
 
-  if (!game.gameOver) game.endGame();
 }
 
 function getMove(game, timeBudgetMs) {
@@ -145,9 +144,9 @@ function getMove(game, timeBudgetMs) {
     }
     playRandom(clone);
 
-    const s = clone.scores;
-    const winner = s.black.total > s.white.total ? 'black'
-                 : s.white.total > s.black.total ? 'white'
+    const t = clone.estimateTerritory();
+    const winner = t.black > t.white + clone.komi ? 'black'
+                 : t.white + clone.komi > t.black ? 'white'
                  : null;
 
     stats[cidx].plays++;
