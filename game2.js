@@ -81,6 +81,7 @@ class Game2 {
     const tables = _buildNbr(N);
     this._nbr  = tables.nbr;
     this._dnbr = tables.dnbr;
+    this.nbr   = tables.nbr;    // public read-only
 
     this.current = BLACK;
     this.ko      = PASS;
@@ -283,6 +284,15 @@ class Game2 {
     }
     return count;
   }
+
+  // ── Public group info ──────────────────────────────────────────────────────
+
+  /** Group id of the stone at idx, or -1 if empty. */
+  groupIdAt(idx)          { return this._gid[idx]; }
+  /** Number of stones in group gid. */
+  groupSize(gid)          { return this._ss[gid]; }
+  /** Number of liberties of group gid. */
+  groupLibertyCount(gid)  { return this._ls[gid]; }
 
   // ── Non-mutating legality checks ───────────────────────────────────────────
 
@@ -489,6 +499,7 @@ class Game2 {
     g._ls   = new Int32Array(this._ls);
     g._nbr  = this._nbr;   // immutable, share
     g._dnbr = this._dnbr;  // immutable, share
+    g.nbr   = this._nbr;   // public alias
     g.current           = this.current;
     g.ko                = this.ko;
     g.consecutivePasses = this.consecutivePasses;

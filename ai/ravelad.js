@@ -64,7 +64,7 @@ function playTracked(game2) {
   const N     = game2.N;
   const cap   = N * N;
   const cells = game2.cells;
-  const nbr   = game2._nbr;
+  const nbr   = game2.nbr;
   const blackPlayed = [];
   const whitePlayed = [];
 
@@ -324,17 +324,17 @@ function applyLadderPriors(node, game2, N) {
   for (let i = 0; i < cap; i++) {
     const color = cells[i];
     if (color === 0) continue;
-    const gid = game2._gid[i];
+    const gid = game2.groupIdAt(i);
     if (visitedGids.has(gid)) continue;
-    if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
+    if (game2.groupSize(gid) < 2) continue;   // only groups of size ≥ 2
     visitedGids.add(gid);
 
-    if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
+    if (game2.groupLibertyCount(gid) > 2) continue;   // skip groups with >2 liberties
 
     const statusEntries = getLadderStatus2(game2, i);
     if (!statusEntries) continue;
 
-    const groupSize  = game2._ss[gid];
+    const groupSize  = game2.groupSize(gid);
     const groupColor = color === BLACK2 ? 'black' : 'white';
 
     for (const entry of statusEntries) {
