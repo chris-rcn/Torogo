@@ -2,7 +2,7 @@
 
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
-// ladder.js must be loaded before this file.
+// game3.js and ladder3.js must be loaded before this file.
 
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy.
@@ -36,7 +36,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus2 } = _isNode ? require('./ladder2.js') : window;
+const { getLadderStatus3 } = _isNode ? require('./ladder3.js') : window;
+const { Game3 }            = _isNode ? require('../game3.js') : window;
 const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
@@ -296,6 +297,7 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
 function applyLadderPriors(node, game2, N) {
+  let game3 = null;  // created lazily on first getLadderStatus3 call
   const moverInt = game2.current;  // BLACK2 or WHITE2
   const mover    = moverInt === BLACK2 ? 'black' : 'white';
 
@@ -331,7 +333,8 @@ function applyLadderPriors(node, game2, N) {
 
     if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
 
-    const statusEntries = getLadderStatus2(game2, i);
+    if (game3 === null) game3 = Game3.from(game2);
+    const statusEntries = getLadderStatus3(game3, i);
     if (!statusEntries) continue;
 
     const groupSize  = game2._ss[gid];
