@@ -82,7 +82,19 @@ class Game3 extends Game2 {
     this.moveCount         = snap.prevMC;
 
     if (!snap.isPass) {
-      this._nextGid = snap.prevNextGid;
+      // Zero any gid slots that were allocated during this play.  _place() uses
+      // |= when writing _sw/_lw for a new gid, so stale data in a freed slot
+      // would corrupt a subsequent play that reallocates the same gid (which
+      // can happen when game3 is used for multi-branch search in ladder3).
+      const W  = this._W;
+      const ng = snap.prevNextGid;
+      for (let gid = ng; gid < this._nextGid; gid++) {
+        const b = gid * W;
+        for (let wi = 0; wi < W; wi++) { this._sw[b + wi] = 0; this._lw[b + wi] = 0; }
+        this._ss[gid] = 0; this._ls[gid] = 0; this._gc[gid] = 0;
+      }
+
+      this._nextGid = ng;
       this.cells.set(snap.prevCells);
       this._gid.set(snap.prevGid);
       this._gc.set(snap.prevGc);
