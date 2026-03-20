@@ -117,8 +117,8 @@ function playTracked(game2) {
   }
 
   const sc = game2.score();
-  const winner = sc.black > sc.white ? 'black'
-               : sc.white > sc.black ? 'white'
+  const winner = sc.black > sc.white ? BLACK2
+               : sc.white > sc.black ? WHITE2
                : null;
   return { winner, blackPlayed, whitePlayed };
 }
@@ -229,8 +229,7 @@ function selectAndExpand(root, rootGame2, N) {
       node.untried[bestIdx] = node.untried[node.untried.length - 1];
       node.untried[node.untried.length - 1] = winnerMove;
       const move = node.untried.pop();
-      const mover = game2.current === BLACK2 ? 'black' : 'white';
-      const child = makeNode(move, node, mover, N);
+      const child = makeNode(move, node, game2.current, N);
       node.children.push(child);
       node = child;
       applyMove(game2, move);
@@ -240,7 +239,7 @@ function selectAndExpand(root, rootGame2, N) {
       // randomly.  Without this, rollouts from a "one pass" state play on for
       // many more random moves, inflating the pass move's apparent win rate.
       if (!game2.gameOver && game2.consecutivePasses > 0) {
-        const mover2 = game2.current === BLACK2 ? 'black' : 'white';
+        const mover2 = game2.current;
         const secondPass = makeNode({ type: 'pass' }, node, mover2, N);
         node.children.push(secondPass);
         node = secondPass;
@@ -266,8 +265,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     if (node.mover !== null && winner === node.mover) node.wins++;
 
     const chooser = node.mover === null ? rootPlayer
-      : (node.mover === 'black' ? 'white' : 'black');
-    const played = chooser === 'black' ? blackPlayed : whitePlayed;
+      : (node.mover === BLACK2 ? WHITE2 : BLACK2);
+    const played = chooser === BLACK2 ? blackPlayed : whitePlayed;
     const won    = winner === chooser ? 1 : 0;
     for (const cellIdx of played) {
       node.raveVisits[cellIdx]++;
@@ -284,9 +283,9 @@ function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
   const N          = game.boardSize;
-  const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
   const game2      = game.toGame2();
+  const rootPlayer = game2.current;
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
