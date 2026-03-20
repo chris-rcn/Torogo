@@ -10,7 +10,6 @@ const { performance } = require('perf_hooks');
  *   --p1      <policy>   AI policy for player 1      (default: random)
  *   --p2      <policy>   AI policy for player 2      (default: random)
  *   --size    <n>        Board size: 9, 13, or 19    (default: 9)
- *   --komi    <n>        Komi (white's bonus points) (default: 3.5)
  *   --budget  <ms>       Time budget per move in ms  (default: 500)
  *   --verbose            Print the board after every move
  *   --help               Show this help message
@@ -25,7 +24,7 @@ const { performance } = require('perf_hooks');
  */
 
 const path = require('path');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game, KOMI } = require('./game.js');
 
 // Boolean flags that take no value.
 const BOOL_FLAGS = new Set(['help', 'verbose']);
@@ -57,7 +56,7 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--komi <n>] [--budget <ms>] [--verbose]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--verbose]`);
   process.exit(0);
 }
 
@@ -69,15 +68,10 @@ if (opts.games !== undefined) {
 const p1Name    = opts.p1   || 'random';
 const p2Name    = opts.p2   || 'random';
 const boardSize = parseInt(opts.size   || '9',   10);
-const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : DEFAULT_KOMI;
 const budgetMs  = parseInt(opts.budget || '500', 10);
 
 if (!Number.isInteger(boardSize) || boardSize < 7 || boardSize > 19 || boardSize % 2 === 0) {
   console.error('--size must be an odd integer between 7 and 19');
-  process.exit(1);
-}
-if (!Number.isFinite(komi)) {
-  console.error('--komi must be a number');
   process.exit(1);
 }
 
@@ -144,7 +138,7 @@ for (let g = 0; ; g++) {
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  const game = new Game(boardSize, komi);
+  const game = new Game(boardSize);
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === 'black';
@@ -162,10 +156,10 @@ for (let g = 0; ; g++) {
     if (verboseBoard) printBoard(game);
   }
 
-  const scores = game.scores;
-  if (scores.black.total > scores.white.total) {
+  const t = game.calcTerritory();
+  if (t.black > t.white + KOMI) {
     tally[p1IsBlack ? 'p1' : 'p2']++;
-  } else if (scores.white.total > scores.black.total) {
+  } else if (t.white + KOMI > t.black) {
     tally[p1IsBlack ? 'p2' : 'p1']++;
   }
 

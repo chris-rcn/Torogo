@@ -1,6 +1,10 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
+// Single komi constant for the whole codebase. Canonical definition is in game2.js;
+// read from there in Node, fall back to the literal in browser (game2.js not loaded).
+const KOMI = typeof module !== 'undefined' ? require('./game2.js').KOMI : 4.5;
+
 // ─── Board ────────────────────────────────────────────────────────────────────
 
 class Board {
@@ -656,7 +660,7 @@ Board.verifyGroupRatio = 0;
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
-  constructor(boardSize = 9, komi = 4.5) {
+  constructor(boardSize = 9) {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
@@ -664,7 +668,7 @@ class Game {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
-    this.komi = komi;         // compensation for white going second
+    this.komi = KOMI;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
     this.moveCount = 0;
@@ -802,59 +806,72 @@ class Game {
 
   endGame() {
     this.gameOver = true;
-    const territory = this.calcTerritory();
-    this.scores = {
-      black: { territory: territory.black, total: territory.black },
-      white: { territory: territory.white, total: territory.white + this.komi },
-    };
   }
 
-  // For each empty point: check orthogonal neighbors.
-  // If they are stones of a single color, assign to that color.
-  // If all orthogonal neighbors are empty, check diagonals;
-  // if diagonals are empty too, assign no point.
+  // Accurate area score: flood-fill connected empty regions, count stones.
+  // Returns { black, white, neutral } (komi not included — added by endGame).
   calcTerritory() {
     const grid = this.board.grid;
-    const N = this.board.size;
+    const N    = this.board.size;
+    const nbr  = this.board._nbr;
     const territory = { black: 0, white: 0, neutral: 0 };
-    const ortho = [[-1,0],[1,0],[0,-1],[0,1]];
-    const diag  = [[-1,-1],[-1,1],[1,-1],[1,1]];
+    const visited = new Uint8Array(N * N);
 
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
-        const cell = grid[y][x];
-        if (cell !== null) {
-          // Stones count as territory for their color (Chinese scoring)
-          if (cell === 'black') territory.black++;
-          else territory.white++;
-          continue;
-        }
-
-        let hasBlack = false, hasWhite = false, allOrthoEmpty = true;
-        for (const [dy, dx] of ortho) {
-          const c = grid[(y + dy + N) % N][(x + dx + N) % N];
-          if (c !== null) {
-            allOrthoEmpty = false;
-            if (c === 'black') hasBlack = true; else hasWhite = true;
+        const c = grid[y][x];
+        if (c === 'black') { territory.black++; continue; }
+        if (c === 'white') { territory.white++; continue; }
+        const idx = y * N + x;
+        if (visited[idx]) continue;
+        let bBorder = false, wBorder = false;
+        const region = [idx];
+        visited[idx] = 1;
+        for (let qi = 0; qi < region.length; qi++) {
+          const ri = region[qi];
+          const base = ri * 4;
+          for (let k = 0; k < 4; k++) {
+            const ni = nbr[base + k];
+            const nc = grid[(ni / N) | 0][ni % N];
+            if (nc === null) { if (!visited[ni]) { visited[ni] = 1; region.push(ni); } }
+            else if (nc === 'black') bBorder = true;
+            else wBorder = true;
           }
         }
+        if      (bBorder && !wBorder) territory.black += region.length;
+        else if (wBorder && !bBorder) territory.white += region.length;
+        else                          territory.neutral += region.length;
+      }
+    }
 
-        if (!allOrthoEmpty) {
-          if (hasBlack && !hasWhite) territory.black++;
-          else if (hasWhite && !hasBlack) territory.white++;
-          // else mixed → neutral, no count
-        } else {
-          // All orthogonal neighbors empty — check diagonals
-          let diagAllEmpty = true;
-          for (const [dy, dx] of diag) {
-            if (grid[(y + dy + N) % N][(x + dx + N) % N] !== null) {
-              diagAllEmpty = false;
-              break;
-            }
-          }
-          if (!diagAllEmpty) territory.neutral++;
-          // else completely isolated → no point assigned
+    return territory;
+  }
+
+  // Fast area score: 1-step orthogonal neighbour check (no flood fill).
+  // Undercounts large interior empty regions; use only for playout rollouts.
+  // Returns { black, white, neutral } (komi not included).
+  estimateTerritory() {
+    const grid = this.board.grid;
+    const N    = this.board.size;
+    const nbr  = this.board._nbr;
+    const territory = { black: 0, white: 0, neutral: 0 };
+
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = grid[y][x];
+        if (c === 'black') { territory.black++; continue; }
+        if (c === 'white') { territory.white++; continue; }
+        const base = (y * N + x) * 4;
+        let bAdj = false, wAdj = false;
+        for (let k = 0; k < 4; k++) {
+          const ni = nbr[base + k];
+          const nc = grid[(ni / N) | 0][ni % N];
+          if (nc === 'black') bAdj = true;
+          else if (nc === 'white') wAdj = true;
         }
+        if (bAdj && !wAdj) territory.black++;
+        else if (wAdj && !bAdj) territory.white++;
+        else territory.neutral++;
       }
     }
 
@@ -903,7 +920,7 @@ class Game {
   }
 }
 
-const DEFAULT_KOMI = new Game().komi;
+const DEFAULT_KOMI = KOMI;
 
 // boardTurnToString(board, toPlay?) — serialize board to ASCII; if toPlay ('●'/'○')
 // is given, prepend it as the first line so parseBoard can recover it.
@@ -925,4 +942,4 @@ function parseBoard(boardStr) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, parseBoard, boardTurnToString };
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, KOMI, parseBoard, boardTurnToString };

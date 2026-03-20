@@ -204,9 +204,9 @@ section('classifyEmpty');
 
 section('Game construction');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   assert(g.boardSize === 9, 'boardSize');
-  assert(g.komi === 3.5, 'komi');
+  assert(g.komi === DEFAULT_KOMI, 'komi');
   assert(g.current === 'white', 'white to play after center stone');
   assert(g.board.get(4, 4) === 'black', 'center stone placed');
   assert(!g.gameOver, 'game not over');
@@ -263,10 +263,10 @@ section('Double pass ends game');
   g.pass();
   g.pass();
   assert(g.gameOver, 'game over after two passes');
-  assert(g.scores !== null, 'scores populated');
-  assert(typeof g.scores.black.total === 'number', 'black score is number');
-  assert(typeof g.scores.white.total === 'number', 'white score is number');
-  assert(g.scores.white.total >= g.komi, 'white score includes komi');
+  const sc = g.calcTerritory();
+  assert(typeof sc.black === 'number', 'black territory is number');
+  assert(typeof sc.white === 'number', 'white territory is number');
+  assert(sc.white + g.komi >= g.komi, 'white territory + komi ≥ komi');
 }
 
 // ─── Clone ───────────────────────────────────────────────────────────────────
@@ -340,7 +340,7 @@ section('Territory calculation');
   assert(g.gameOver, 'game ended');
   // All territory should be black (one stone on board, all connected empty is black territory)
   // On a toroidal board, the single stone's territory = all empty cells
-  assert(g.scores.black.total > 0, 'black has territory');
+  assert(g.calcTerritory().black > 0, 'black has territory');
 }
 
 section('Territory scoring makes sense');
@@ -355,12 +355,11 @@ section('Territory scoring makes sense');
       if (move.type === 'place') g.placeStone(move.x, move.y);
       else g.pass();
     }
-    const s = g.scores;
-    if (s.black.territory < 0 || s.white.territory < 0) {
+    const territory = g.calcTerritory();
+    if (territory.black < 0 || territory.white < 0) {
       ok = false;
       console.error(`  Negative territory in game ${i}`);
     }
-    const territory = g.calcTerritory();
     const accounted = territory.black + territory.white + territory.neutral;
     if (accounted !== 49) {
       ok = false;
@@ -378,7 +377,11 @@ section('Komi in scoring');
   const g = new Game(7, 3.5);
   g.pass();
   g.pass();
-  assert(g.scores.white.total === g.scores.white.territory + 3.5, 'komi added to white');
+  const _t = g.calcTerritory();
+  // calcTerritory returns raw counts without komi; caller adds it.
+  assert(typeof _t.white === 'number' && _t.white >= 0, 'calcTerritory returns non-negative white count');
+  assert(typeof _t.black === 'number' && _t.black >= 0, 'calcTerritory returns non-negative black count');
+  assert(_t.black + _t.white + _t.neutral === 7 * 7, 'calcTerritory accounts for all cells');
 }
 
 section('DEFAULT_KOMI');
@@ -434,8 +437,8 @@ section('Random vs random roughly even (5x5, 20 games)');
       else g.pass();
     }
 
-    const s = g.scores;
-    const blackWins = s.black.total > s.white.total;
+    const _t = g.calcTerritory();
+    const blackWins = _t.black > _t.white + g.komi;
     if (p1IsBlack ? blackWins : !blackWins) p1Wins++;
     else p2Wins++;
   }
@@ -2239,6 +2242,199 @@ section('Game3 random play/undo stress test');
     }
     assert(ok, 'random positions: ladder2 and ladder3 always agree');
   }
+}
+
+// ─── calcTerritory / estimateTerritory ───────────────────────────────────────
+
+section('game.js calcTerritory — flood fill');
+{
+  // 3×3 board: all black stones except (1,1) empty → black claims everything
+  const g = new Game(3, 4.5);
+  // Clear the board (constructor places center stone)
+  for (let y = 0; y < 3; y++)
+    for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
+  // Fill perimeter with black
+  for (let y = 0; y < 3; y++)
+    for (let x = 0; x < 3; x++)
+      if (!(x === 1 && y === 1)) g.board.grid[y][x] = 'black';
+  const t = g.calcTerritory();
+  assert(t.black === 8 + 1, 'calcTerritory: 8 black stones + 1 interior empty = 9 black');
+  assert(t.white === 0,     'calcTerritory: no white');
+  assert(t.neutral === 0,   'calcTerritory: no neutral');
+}
+{
+  // 3×3 board split: left column black, right column white, middle empty.
+  // Middle column is adjacent to both → neutral.
+  const g = new Game(3, 4.5);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
+  for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
+  const t = g.calcTerritory();
+  assert(t.black === 3, 'calcTerritory split: 3 black stones');
+  assert(t.white === 3, 'calcTerritory split: 3 white stones');
+  assert(t.neutral === 3, 'calcTerritory split: 3 neutral empties (mixed border)');
+}
+{
+  // 5×5: black surrounds a 3-cell interior region.
+  // On a toroidal board, "surrounded" means the whole empty region must be
+  // enclosed — verify flood fill assigns the interior to black.
+  const g = new Game(5, 4.5);
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
+  // Clear a 1×3 interior strip
+  g.board.grid[2][1] = null;
+  g.board.grid[2][2] = null;
+  g.board.grid[2][3] = null;
+  const t = g.calcTerritory();
+  assert(t.black === 25, 'calcTerritory: interior empty region fully enclosed by black');
+  assert(t.white === 0,  'calcTerritory: no white');
+}
+
+section('game.js estimateTerritory — 1-step neighbour check');
+{
+  // Same 3×3 perimeter-black test.
+  const g = new Game(3, 4.5);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
+  for (let y = 0; y < 3; y++)
+    for (let x = 0; x < 3; x++)
+      if (!(x === 1 && y === 1)) g.board.grid[y][x] = 'black';
+  const t = g.estimateTerritory();
+  // The interior cell (1,1) has 4 black neighbours → counted as black.
+  assert(t.black === 9, 'estimateTerritory: 8 black + 1 interior empty adjacent to black');
+  assert(t.white === 0, 'estimateTerritory: no white');
+}
+{
+  // 3×3 split: middle column — mixed neighbours → neutral (same as calcTerritory here).
+  const g = new Game(3, 4.5);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
+  for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
+  const t = g.estimateTerritory();
+  assert(t.black === 3,   'estimateTerritory split: 3 black stones');
+  assert(t.white === 3,   'estimateTerritory split: 3 white stones');
+  assert(t.neutral === 3, 'estimateTerritory split: 3 neutral empties');
+}
+{
+  // estimateTerritory UNDERCOUNTS large interior regions.
+  // 5×5 all-black except 3-cell interior: each interior cell is adjacent to
+  // black, so all 3 are counted as black territory — SAME as flood fill here
+  // because the region is small and directly adjacent to stones.
+  const g = new Game(5, 4.5);
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
+  g.board.grid[2][1] = null;
+  g.board.grid[2][2] = null;
+  g.board.grid[2][3] = null;
+  const t = g.estimateTerritory();
+  assert(t.black === 25, 'estimateTerritory: small interior region correctly estimated');
+}
+{
+  // 5×5: white surrounds a 3×3 interior empty region.
+  // Flood fill assigns all 9 to white; 1-step assigns only cells directly
+  // adjacent to white (8 boundary cells).  The true interior cell has only
+  // empty neighbours → not counted (neutral).  Both agree on winner.
+  const g = new Game(5, 4.5);
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = null;
+  // White perimeter
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
+    if (y === 0 || y === 4 || x === 0 || x === 4) g.board.grid[y][x] = 'white';
+  }
+  const tc = g.calcTerritory();
+  const te = g.estimateTerritory();
+  // calcTerritory: 16 white stones + 9 interior empty → 25 white, 0 black
+  assert(tc.white === 25 && tc.black === 0, 'calcTerritory: large interior all white');
+  // estimateTerritory: 16 white stones + 8 edge-interior cells (adjacent to white)
+  // + 1 true centre cell (only empty neighbours) → neutral
+  assert(te.white === 24 && te.black === 0 && te.neutral === 1,
+         'estimateTerritory: true-interior cell with empty-only neighbours is neutral');
+}
+
+section('game2 calcTerritory — flood fill');
+{
+  const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
+  {
+    // Verify winner on a trivially won position.
+    const g = new Game2(5);
+    // Clear board, place all black
+    g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
+    for (let i = 0; i < 25; i++) g.cells[i] = B2;
+    const t = g.calcTerritory();
+    assert(t.black === 25,        'game2.calcTerritory: all black → black = 25');
+    assert(t.white === 0 + 4.5,  'game2.calcTerritory: all black → white = 4.5 (komi only)');
+    assert(t.black > t.white,     'game2.calcTerritory: black wins');
+  }
+  {
+    // 3×3 black perimeter, empty centre.  On a toroidal 3×3 board, all cells
+    // are adjacent to each other, so the "centre" is adjacent to 4 black stones.
+    const g = new Game2(3);
+    g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
+    for (let i = 0; i < 9; i++) if (i !== 4) g.cells[i] = B2;
+    const t = g.calcTerritory();
+    // The connected empty region {4} borders only black → black territory.
+    assert(t.black === 9, 'game2.calcTerritory: 8 black + 1 enclosed empty = 9');
+  }
+}
+
+section('game2 estimateTerritory — 1-step neighbour check');
+{
+  const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
+  {
+    // All-black board: estimateTerritory and calcTerritory should agree.
+    const g = new Game2(5);
+    g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
+    for (let i = 0; i < 25; i++) g.cells[i] = B2;
+    const te = g.estimateTerritory();
+    const tc = g.calcTerritory();
+    assert(te.black === tc.black && te.white === tc.white,
+           'game2.estimateTerritory: all-black agrees with calcTerritory');
+  }
+  {
+    // White perimeter, empty interior (5×5): estimate is slightly less than
+    // flood fill for the single true-interior cell, but both agree on winner.
+    const g = new Game2(5);
+    g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
+      if (y === 0 || y === 4 || x === 0 || x === 4) g.cells[y * 5 + x] = W2;
+    }
+    const tc = g.calcTerritory();
+    const te = g.estimateTerritory();
+    assert(tc.white > tc.black,  'game2.calcTerritory: white wins');
+    assert(te.white > te.black,  'game2.estimateTerritory: white also wins (same direction)');
+    assert(tc.black === te.black, 'game2: black counts agree (no black stones)');
+    // Flood fill gets all 9 interior cells; 1-step gets only 8 of them.
+    assert(tc.white > te.white,  'game2.calcTerritory white > estimateTerritory white (flood fill counts more)');
+  }
+  {
+    // estimateTerritory returns { black, white } with komi in white.
+    const g = new Game2(5);
+    g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
+    for (let i = 0; i < 25; i++) g.cells[i] = B2;
+    const te = g.estimateTerritory();
+    assert(Math.abs(te.white - 4.5) < 0.01, 'game2.estimateTerritory: komi present when no white stones');
+  }
+}
+
+section('calcTerritory and estimateTerritory agree on winner after random playouts');
+{
+  const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
+  let agree = 0, disagree = 0;
+  for (let trial = 0; trial < 200; trial++) {
+    const g = new Game2(7);
+    const cap = 49;
+    // Quick random playout
+    let passes = 0;
+    while (!g.gameOver) {
+      const cands = [];
+      for (let i = 0; i < cap; i++) if (g.cells[i] === 0 && !g.isTrueEye(i) && g.isLegal(i)) cands.push(i);
+      if (cands.length === 0) { g.play(-1); passes++; } else {
+        g.play(cands[Math.floor(Math.random() * cands.length)]); passes = 0;
+      }
+    }
+    const tc = g.calcTerritory();
+    const te = g.estimateTerritory();
+    const winC = tc.black > tc.white ? B2 : tc.white > tc.black ? W2 : 0;
+    const winE = te.black > te.white ? B2 : te.white > te.black ? W2 : 0;
+    if (winC === winE) agree++; else disagree++;
+  }
+  console.log(`  Agree on winner: ${agree}/200, disagree: ${disagree}`);
+  // Scoring methods may occasionally disagree on close games; large disagreement is a bug.
+  assert(disagree <= 10, 'calcTerritory and estimateTerritory agree on winner in ≥95% of games');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

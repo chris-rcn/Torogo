@@ -508,9 +508,11 @@ class Game2 {
     return g;
   }
 
-  // ── Score ─────────────────────────────────────────────────────────────────
+  // ── Scoring ───────────────────────────────────────────────────────────────
 
-  score() {
+  // Accurate area score via flood-fill of empty regions.
+  // Returns { black, white } where white already includes KOMI.
+  calcTerritory() {
     const N      = this.N;
     const cap    = N * N;
     const cells  = this.cells;
@@ -545,6 +547,31 @@ class Game2 {
 
     return { black, white: white + KOMI };
   }
+
+  // Fast area score via 1-step orthogonal neighbour check (no flood fill).
+  // Undercounts large interior empty regions; use only for playout rollouts.
+  // Returns { black, white } where white already includes KOMI.
+  estimateTerritory() {
+    const N = this.N, cap = N * N;
+    const cells = this.cells, nbr = this._nbr;
+    let black = 0, white = 0;
+    for (let i = 0; i < cap; i++) {
+      const c = cells[i];
+      if (c === BLACK) { black++; continue; }
+      if (c === WHITE) { white++; continue; }
+      const base = i * 4;
+      let bAdj = false, wAdj = false;
+      for (let k = 0; k < 4; k++) {
+        const nc = cells[nbr[base + k]];
+        if (nc === BLACK) bAdj = true;
+        else if (nc === WHITE) wAdj = true;
+      }
+      if (bAdj && !wAdj) black++;
+      else if (wAdj && !bAdj) white++;
+    }
+    return { black, white: white + KOMI };
+  }
+
 }
 
-module.exports = { Game2, PASS, BLACK, WHITE };
+module.exports = { Game2, PASS, BLACK, WHITE, KOMI };
