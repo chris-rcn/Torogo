@@ -3,8 +3,10 @@
 // game3.js — Game2 extended with move undo.
 //
 // API additions over Game2:
-//   game.play(idx)  → true/false  (same as Game2, but records an undo entry)
-//   game.undo()     → true/false  (false when stack is empty)
+//   game.play(idx)      → true/false  (same as Game2, but records an undo entry)
+//   game.undo()         → true/false  (false when stack is empty)
+//   game.clone()        → Game3       (shallow-copies board state; undo stack cleared)
+//   Game3.from(game2)   → Game3       (promote a Game2 snapshot to a Game3)
 //
 // Undo strategy: snapshot the state that changes on each play() call.
 //
@@ -16,7 +18,8 @@
 //
 // On a 13×13 board with ~100 allocated groups the snapshot is ~6 KB.
 // Newly allocated groups (gid >= prevNextGid) are discarded on undo simply
-// by restoring _nextGid; their array slots are irrelevant.
+// by restoring _nextGid; their array slots are zeroed to prevent stale |=
+// corruption when the same gid slot is later reused (multi-branch search).
 
 const { Game2, PASS, BLACK, WHITE } = require('./game2.js');
 
@@ -105,6 +108,26 @@ class Game3 extends Game2 {
     }
 
     return true;
+  }
+
+  // ── Clone ─────────────────────────────────────────────────────────────────
+
+  // Returns a Game3 with the same board position and an empty undo stack.
+  clone() {
+    const g = super.clone();                    // Game2 object
+    Object.setPrototypeOf(g, Game3.prototype);  // upgrade to Game3
+    g._undoStack = [];
+    return g;
+  }
+
+  // ── Static factory ────────────────────────────────────────────────────────
+
+  // Promote an existing Game2 snapshot to a Game3 (zero-copy for typed arrays).
+  static from(game2) {
+    const g = game2.clone();                    // Game2 object (full typed-array copy)
+    Object.setPrototypeOf(g, Game3.prototype);
+    g._undoStack = [];
+    return g;
   }
 }
 
