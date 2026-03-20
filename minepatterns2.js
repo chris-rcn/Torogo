@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-// minepatterns2.js — mine 3×3 pattern value statistics from gengamedata output.
+// minepatterns2.js — mine 3×3 pattern value statistics from createmovedetails output.
 //
-// Usage: node minepatterns2.js --file <path> [--size <n>]
-//   --file  path to newline-delimited JSON produced by gengamedata.js (required)
-//   --size  board size (default: 11)
+// Usage: node minepatterns2.js --file <path>
+//   --file  path to newline-delimited JSON produced by createmovedetails.js (required)
 //
 // For every position in the input file, for every legal non-true-eye candidate
 // move (excluding pass), the pattern value sample is computed as:
@@ -25,14 +24,11 @@ const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 const file = get('--file', null);
-const size = parseInt(get('--size', '11'), 10);
 
 if (!file) {
-  console.error('Usage: node minepatterns2.js --file <path> [--size <n>]');
+  console.error('Usage: node minepatterns2.js --file <path>');
   process.exit(1);
 }
-
-if (isNaN(size) || size < 2) { console.error('--size must be >= 2'); process.exit(1); }
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
 
@@ -66,17 +62,17 @@ for (const line of lines) {
   let entry;
   try { entry = JSON.parse(line); } catch (e) { continue; }
 
-  const { position, candidates } = entry;
-  if (!Array.isArray(position) || !Array.isArray(candidates)) continue;
+  const { boardSize, history, candidates } = entry;
+  if (!boardSize || !Array.isArray(history) || !Array.isArray(candidates)) continue;
 
   // Find the pass candidate's kwr.  Skip this position if it's unavailable.
   const passEntry = candidates.map(normalise).find(c => c.m === 'pass');
   if (!passEntry || passEntry.kwr == null) continue;
   const passKwr = passEntry.kwr;
 
-  // Reconstruct the game state by replaying position moves.
-  const game = new Game(size, DEFAULT_KOMI);
-  for (const m of position) {
+  // Reconstruct the game state by replaying history moves.
+  const game = new Game(boardSize, DEFAULT_KOMI);
+  for (const m of history) {
     const move = parseMove(m);
     if (move.type === 'pass') game.pass();
     else game.placeStone(move.x, move.y);
