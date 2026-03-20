@@ -1459,6 +1459,279 @@ section('Game2.clone: gameOver propagates correctly');
   assert(c.consecutivePasses === g.consecutivePasses, 'clone inherits consecutivePasses');
 }
 
+// ─── getLadderStatus2 ────────────────────────────────────────────────────────
+//
+// Every case mirrors the corresponding getLadderStatus test above.
+// Positions are built via _buildPos (Game) then converted with .toGame2().
+// stoneIdx = y * N + x.
+
+const { getLadderStatus2 } = require('./ai/ladder2.js');
+
+// Helper: build a Game2 from a board string using the existing _buildPos helper.
+function _buildGame2Pos(boardStr, toPlay) {
+  return _buildPos(boardStr, toPlay).toGame2();
+}
+
+// Helper: build a simple synthetic Game2 position from a list of stone placements.
+// stones = [{ x, y, color }] where color is 'black' or 'white'.
+// toPlay is 'black' or 'white'.
+function _syntheticGame2(N, stones, toPlay) {
+  const g = new Game(N, 0);
+  // Clear the constructor's center stone so we start truly empty.
+  const c = N >> 1;
+  g.board.set(c, c, null);
+  g.moveCount = 0;
+  g.current = toPlay;
+  g.consecutivePasses = 0;
+  g.koFlag = null;
+  for (const { x, y, color } of stones) g.board.set(x, y, color);
+  g.board._rebuildGroups();
+  return g.toGame2();
+}
+
+section('getLadderStatus2 – no stone / too many liberties');
+{
+  const N = 9;
+  // Empty cell → empty array.
+  {
+    const g2 = _syntheticGame2(N, [], 'black');
+    const r = getLadderStatus2(g2, 0);
+    assert(Array.isArray(r) && r.length === 0, 'no stone: empty array');
+  }
+  // Group with 4+ liberties → null.
+  {
+    const g2 = _syntheticGame2(N, [{ x: 4, y: 4, color: 'black' }], 'white');
+    const r = getLadderStatus2(g2, 4 * N + 4);
+    assert(r === null, '4-liberty group: null');
+  }
+}
+
+section('getLadderStatus2 – 1-liberty group: immediate escape to 3+ libs');
+{
+  // Black at (4,4), white at (3,4),(5,4),(4,3): liberty (4,5).
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 4, y: 4, color: 'black' },
+    { x: 3, y: 4, color: 'white' },
+    { x: 5, y: 4, color: 'white' },
+    { x: 4, y: 3, color: 'white' },
+  ], 'black');
+  const r = getLadderStatus2(g2, 4 * N + 4);
+  assert(Array.isArray(r) && r.length === 1, 'immediate escape: one entry');
+  assert(r[0].liberty.x === 4 && r[0].liberty.y === 5, 'liberty is (4,5)');
+  assert(r[0].canEscape === true,           'canEscape: black plays → 3+ libs → true');
+  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus2 – 1-liberty group: escape is suicide');
+{
+  // Black at (4,4), all four orthogonal neighbours occupied by white, plus the
+  // three cells around the only liberty (4,5) also white → playing (4,5) is suicide.
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 4, y: 4, color: 'black' },
+    { x: 3, y: 4, color: 'white' },
+    { x: 5, y: 4, color: 'white' },
+    { x: 4, y: 3, color: 'white' },
+    { x: 3, y: 5, color: 'white' },
+    { x: 5, y: 5, color: 'white' },
+    { x: 4, y: 6, color: 'white' },
+  ], 'black');
+  const r = getLadderStatus2(g2, 4 * N + 4);
+  assert(Array.isArray(r) && r.length === 1, 'suicide: one entry');
+  assert(r[0].canEscape === false,          'canEscape: suicide → false');
+  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus2 – 1-liberty group: ladder with breaker (can escape)');
+{
+  // Black at (4,4) with a breaker stone at (3,6); black can escape the ladder.
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 4, y: 4, color: 'black' },
+    { x: 3, y: 6, color: 'black' },  // breaker
+    { x: 3, y: 4, color: 'white' },
+    { x: 5, y: 4, color: 'white' },
+    { x: 4, y: 3, color: 'white' },
+    { x: 5, y: 5, color: 'white' },
+  ], 'black');
+  const r = getLadderStatus2(g2, 4 * N + 4);
+  assert(Array.isArray(r) && r.length === 1, 'breaker: one entry');
+  assert(r[0].canEscape === true,            'canEscape: breaker present → true');
+}
+
+section('getLadderStatus2 – 1-liberty group: two-step ladder');
+{
+  // Black at (4,4), atari position where escape to (4,5) leaves 2 libs which
+  // the attacker can still re-atari into a capture.
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 4, y: 4, color: 'black' },
+    { x: 3, y: 4, color: 'white' },
+    { x: 5, y: 4, color: 'white' },
+    { x: 4, y: 3, color: 'white' },
+    { x: 5, y: 5, color: 'white' },
+    { x: 5, y: 6, color: 'white' },
+    { x: 4, y: 7, color: 'white' },
+  ], 'black');
+  const r = getLadderStatus2(g2, 4 * N + 4);
+  assert(Array.isArray(r) && r.length === 1,  'two-step ladder: one entry');
+  assert(r[0].canEscape === false,            'canEscape: two-step ladder → false');
+  assert(r[0].canEscapeAfterPass === false,   'canEscapeAfterPass: white captures → false');
+}
+
+section('getLadderStatus2 – 2-liberty group');
+{
+  // Black at (4,4), white at (3,4) and (5,4): libs (4,3) and (4,5).
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 4, y: 4, color: 'black' },
+    { x: 3, y: 4, color: 'white' },
+    { x: 5, y: 4, color: 'white' },
+  ], 'black');
+  const r = getLadderStatus2(g2, 4 * N + 4);
+  assert(Array.isArray(r) && r.length === 2,             '2-lib group: two entries');
+  assert(r.every(e => e.canEscape === true),             'both liberties: canEscape=true (open board)');
+  assert(r.every(e => e.canEscapeAfterPass === true),    'both liberties: canEscapeAfterPass=true (open board)');
+}
+
+section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group');
+{
+  const N = 13;
+  const g2 = _buildGame2Pos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · · · · · · · ● · · ●
+    · ● · · ● ● · · ● · · · ·
+    · ○ · · ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '○');
+  const r = getLadderStatus2(g2, 5 * N + 4);  // white stone at (4,5)
+  assert(Array.isArray(r) && r.length === 1,    'pos1: one liberty entry');
+  assert(r[0].liberty.x === 3 && r[0].liberty.y === 5, 'pos1: liberty is (3,5)');
+  assert(r[0].canEscape === false,              'pos1 canEscape: still doomed → false');
+  assert(r[0].canEscapeAfterPass === false,     'pos1 canEscapeAfterPass: black captures → false');
+}
+
+section('getLadderStatus2 – real-game ladder pos3: white 12-stone doomed group');
+{
+  const N = 13;
+  const g2 = _buildGame2Pos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · · · · · · · ● · · ●
+    · ● · · ● ● · · ● · · · ·
+    · ○ ● ○ ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '○');
+  const r = getLadderStatus2(g2, 5 * N + 3);  // white stone at (3,5)
+  assert(Array.isArray(r) && r.length === 1,    'pos3: one liberty entry');
+  assert(r[0].liberty.x === 3 && r[0].liberty.y === 4, 'pos3: liberty is (3,4)');
+  assert(r[0].canEscape === false,              'pos3 canEscape: still doomed → false');
+  assert(r[0].canEscapeAfterPass === false,     'pos3 canEscapeAfterPass: black captures → false');
+}
+
+section('getLadderStatus2 – real-game ladder pos6: black to move, captures white 14-stone group');
+{
+  const N = 13;
+  const g2 = _buildGame2Pos(`
+    · · ○ · · · · ○ · ● · · ·
+    · ○ · · · · ○ ○ ● · · ● ○
+    · ○ ○ ○ ○ ○ ○ · · · · · ·
+    · ○ · ● · · · · · ● · · ●
+    · ● ○ ○ ● ● · · ● · · · ·
+    · ○ ● ○ ○ ○ ● ● · ○ · · ·
+    · ○ · ● ● ○ ○ ● · ● ○ ○ ·
+    · ○ · · ● ● ○ ○ ● ● · · ○
+    ○ · ○ ○ ● · ● ○ ○ ● · · ·
+    · · ● ○ · · ● ● ○ ● · ○ ·
+    · · · ○ · ○ ● ● ○ ○ ● · ·
+    · · ○ · · · ○ · ● ● · ● ·
+    ○ ○ · · ○ · ○ · · · ● · ·
+  `, '●');
+  const r = getLadderStatus2(g2, 4 * N + 2);  // white stone at (2,4)
+  assert(Array.isArray(r) && r.length === 1,    'pos6: one liberty entry');
+  assert(r[0].liberty.x === 2 && r[0].liberty.y === 3, 'pos6: liberty is (2,3)');
+  assert(r[0].canEscape === false,              'pos6 canEscape: black captures → false');
+  assert(r[0].canEscapeAfterPass === true,      'pos6 canEscapeAfterPass: white merges → true');
+}
+
+section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions');
+{
+  // Spot-check: for every group with ≤2 liberties found in 50 random Game positions,
+  // getLadderStatus2 must return the same canEscape / canEscapeAfterPass values.
+  let checks = 0, mismatches = 0;
+  for (let trial = 0; trial < 50; trial++) {
+    const N = 9;
+    const g = new Game(N, 0);
+    const c = N >> 1;
+    g.board.set(c, c, null);
+    g.moveCount = 0;
+    g.current = 'black';
+    g.consecutivePasses = 0;
+    g.koFlag = null;
+
+    // Play 20–40 random legal moves to reach a mid-game position.
+    const moves = 20 + Math.floor(Math.random() * 21);
+    for (let m = 0; m < moves && !g.gameOver; m++) {
+      const legal = [];
+      for (let y = 0; y < N; y++)
+        for (let x = 0; x < N; x++)
+          if (g.board.get(x, y) === null && g.isLegal(x, y)) legal.push([x, y]);
+      if (legal.length === 0) { g.pass(); continue; }
+      const [rx, ry] = legal[Math.floor(Math.random() * legal.length)];
+      g.placeStone(rx, ry);
+    }
+
+    const g2 = g.toGame2();
+
+    // Check every group with 1–2 liberties.
+    const visitedGids = new Set();
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const color = g.board.get(x, y);
+        if (!color) continue;
+        const gid = g.board._gid[g.board._idx(x, y)];
+        if (visitedGids.has(gid)) continue;
+        visitedGids.add(gid);
+        const libs = g.board.getLiberties(g.board.getGroup(x, y));
+        if (libs.size === 0 || libs.size > 2) continue;
+
+        const r1 = getLadderStatus(g, x, y);
+        const r2 = getLadderStatus2(g2, y * N + x);
+        if (!r1 || !r2) continue;  // null (>2 libs, shouldn't happen here)
+
+        // Match entries by liberty coordinates (iteration order may differ).
+        for (const e1 of r1) {
+          const e2 = r2.find(e => e.liberty.x === e1.liberty.x && e.liberty.y === e1.liberty.y);
+          if (!e2) { mismatches++; continue; }
+          checks++;
+          if (e1.canEscape          !== e2.canEscape ||
+              e1.canEscapeAfterPass !== e2.canEscapeAfterPass) {
+            mismatches++;
+          }
+        }
+      }
+    }
+  }
+  assert(checks > 0,        'getLadderStatus2 agreement: at least one group checked');
+  assert(mismatches === 0,  `getLadderStatus2 agreement: 0 mismatches across ${checks} checks`);
+}
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 
 console.log(`\n═══════════════════════`);
