@@ -47,10 +47,8 @@ function playOneRandom(game2) {
 }
 
 // Call getLadderStatus2 for every group with 1 or 2 liberties.
-// Returns the number of calls made.
 function probeAllGroups(game2) {
   const visitedGids = new Uint8Array(game2._nextGid + 1);
-  let calls = 0;
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] === 0) continue;
     const gid = game2._gid[i];
@@ -59,14 +57,11 @@ function probeAllGroups(game2) {
     const lc = game2._ls[gid];
     if (lc < 1 || lc > 2) continue;
     getLadderStatus2(game2, i);
-    calls++;
   }
-  return calls;
 }
 
-let games      = 0;
-let totalCalls = 0;
-let totalPos   = 0;  // number of positions probed (one per move + game start)
+let games    = 0;
+let totalPos = 0;  // number of positions probed (one per move + game start)
 let nextPrint  = 10;
 const deadline = performance.now() + duration * 1000;
 const start    = performance.now();
@@ -76,27 +71,20 @@ const game2 = new Game2(N);
 for (;;) {
   game2.reset();
   // Probe after the constructor's initial stone.
-  totalCalls += probeAllGroups(game2);
+  probeAllGroups(game2);
   totalPos++;
 
   while (!game2.gameOver) {
     playOneRandom(game2);
-    totalCalls += probeAllGroups(game2);
+    probeAllGroups(game2);
     totalPos++;
   }
   games++;
 
   if (games >= nextPrint) {
-    const elapsed   = (performance.now() - start) / 1000;
-    const gamesPerS = (games / elapsed).toFixed(1);
-    const callsPerS = (totalCalls / elapsed).toFixed(0);
-    const usPerCall = totalCalls > 0 ? ((elapsed * 1e6) / totalCalls).toFixed(2) : '-';
-    const usPerPos  = totalPos   > 0 ? ((elapsed * 1e6) / totalPos).toFixed(1)   : '-';
-    console.log(
-      `games: ${games}  games/s: ${gamesPerS}  ` +
-      `ladder calls: ${totalCalls}  calls/s: ${callsPerS}  µs/call: ${usPerCall}  ` +
-      `positions: ${totalPos}  µs/pos: ${usPerPos}`
-    );
+    const elapsed = (performance.now() - start) / 1000;
+    const usPerPos = totalPos > 0 ? ((elapsed * 1e6) / totalPos).toFixed(1) : '-';
+    console.log(`games: ${games}  positions: ${totalPos}  µs/pos: ${usPerPos}`);
     nextPrint = Math.ceil(nextPrint * 1.5);
   }
 
