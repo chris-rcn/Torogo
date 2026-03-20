@@ -54,14 +54,6 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
 // Random playout that records the cell indices (y*N+x) of every move made by
 // each player.  Pass moves carry no cell index and are not recorded.
 // Returns { winner, blackPlayed, whitePlayed }.
@@ -94,25 +86,7 @@ function playTracked(game) {
       empty[end - 1] = cellIdx;
       end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      if (board.classifyEmpty(x, y, current).isTrueEye) continue;
 
       const result = game.placeStone(x, y);
       if (result) {
@@ -120,7 +94,7 @@ function playTracked(game) {
         else                     whitePlayed.push(cellIdx);
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)

@@ -35,16 +35,6 @@ const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
 // Lightweight move application for use inside playouts.
 // Precondition: (x, y) has at least one empty orthogonal neighbour, which
 // guarantees the move is not suicide and makes Ko effectively impossible.
-// Skips the two O(n²) board-hash computations that placeStone always does.
-// Returns the total number of stones captured (0 in the common case).
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
 // Like playRandom in mc.js, but collects the cell indices (y*size+x) of
 // every subsequent move made by each side, in order (earliest first).
 // Returns { winner, played, oppPlayed } where winner is 'black'|'white'|null.
@@ -79,36 +69,15 @@ function playTracked(game, trackColor) {
       empty[end - 1] = cellIdx;
       end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
+      if (board.classifyEmpty(x, y, current).isTrueEye) continue;
 
-      if (info.hasEmptyNeighbor) {
-        // Fast path: at least one empty neighbour → no suicide/Ko possible
-        if (current === trackColor) played.push(cellIdx);
-        else oppPlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-
-      // Slow path: all four neighbours are occupied — suicide or Ko possible.
-      const color = current;
       const result = game.placeStone(x, y);
       if (result) {
-        if (color === trackColor) played.push(cellIdx);
+        if (current === trackColor) played.push(cellIdx);
         else oppPlayed.push(cellIdx);
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)

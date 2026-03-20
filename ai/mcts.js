@@ -22,14 +22,6 @@ const EXPLORATION_C = 1.4; // UCT exploration constant
 
 // ── Playout helpers (same as mc.js) ──────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
 function playRandom(game) {
   const size = game.boardSize;
   const empty = [];
@@ -51,29 +43,13 @@ function playRandom(game) {
       empty[end - 1] = [x, y];
       end--;
 
-      const info = game.board.classifyEmpty(x, y, game.current);
-      if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
 
       const result = game.placeStone(x, y);
       if (result) {
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
