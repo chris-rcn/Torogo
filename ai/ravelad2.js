@@ -36,7 +36,6 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus2 } = _isNode ? require('./ladder2.js') : window;
 const { getLadderStatus3 } = _isNode ? require('./ladder3.js') : window;
 const { Game3 }            = _isNode ? require('../game3.js') : window;
 const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
@@ -334,9 +333,8 @@ function applyLadderPriors(node, game2, N) {
 
     if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
 
-    const statusEntries = getLadderStatus2(game2, i);
-    //if (game3 === null) game3 = Game3.from(game2);
-    //const statusEntries = getLadderStatus3(game3, i);
+    if (game3 === null) game3 = Game3.from(game2);
+    const statusEntries = getLadderStatus3(game3, i);
 
     if (!statusEntries) continue;
 

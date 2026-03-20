@@ -2,11 +2,7 @@
 
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
-<<<<<<< Updated upstream
-// ladder2.js must be loaded before this file.
-=======
 // ladder.js must be loaded before this file.
->>>>>>> Stashed changes
 
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy.
@@ -37,12 +33,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-<<<<<<< Updated upstream
-const { getLadderStatus2 } = _isNode ? require('./ladder2.js') : window;
-const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
-=======
 const { getLadderStatus } = _isNode ? require('../ladder.js') : window;
->>>>>>> Stashed changes
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -63,15 +54,6 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-<<<<<<< Updated upstream
-// Random playout using Game2.  Records the flat cell indices of every non-pass
-// move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2) {
-  const N     = game2.N;
-  const cap   = N * N;
-  const cells = game2.cells;
-  const nbr   = game2.nbr;
-=======
 function applyFast(game, x, y) {
   game.board.set(x, y, game.current);
   const cap = game.board.captureGroups(x, y);
@@ -87,7 +69,6 @@ function playTracked(game) {
   const size = game.boardSize;
   const board = game.board;
   const grid  = board.grid;
->>>>>>> Stashed changes
   const blackPlayed = [];
   const whitePlayed = [];
 
@@ -324,14 +305,8 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
-<<<<<<< Updated upstream
-function applyLadderPriors(node, game2, N) {
-  const moverInt = game2.current;  // BLACK2 or WHITE2
-  const mover    = moverInt === BLACK2 ? 'black' : 'white';
-=======
 function applyLadderPriors(node, game, N) {
   const mover = game.current;
->>>>>>> Stashed changes
 
   // Promote a legal move to a pre-created child seeded with virtual wins/visits.
   // If the child already exists (two groups share a liberty), accumulate into it.
@@ -363,34 +338,6 @@ function applyLadderPriors(node, game, N) {
       const libs = game.board.getLiberties(group);
       if (libs.size > 2) continue;
 
-<<<<<<< Updated upstream
-  for (let i = 0; i < cap; i++) {
-    const color = cells[i];
-    if (color === 0) continue;
-    const gid = game2.groupIdAt(i);
-    if (visitedGids.has(gid)) continue;
-    if (game2.groupSize(gid) < 2) continue;   // only groups of size ≥ 2
-    visitedGids.add(gid);
-
-    if (game2.groupLibertyCount(gid) > 2) continue;   // skip groups with >2 liberties
-
-    const statusEntries = getLadderStatus2(game2, i);
-    if (!statusEntries) continue;
-
-    const groupSize  = game2.groupSize(gid);
-    const groupColor = color === BLACK2 ? 'black' : 'white';
-
-    for (const entry of statusEntries) {
-      const { liberty: { x: lx, y: ly } } = entry;
-      if (groupColor === mover && !entry.canEscape) {        // Don't extend doomed group.
-        seedChild(lx, ly, 0, 3 * groupSize + 1);
-      } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
-        seedChild(lx, ly, 0, 45);
-      } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
-        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
-      } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
-        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
-=======
       const statusEntries = getLadderStatus(game, px, py);
       if (!statusEntries) continue;
 
@@ -405,7 +352,6 @@ function applyLadderPriors(node, game, N) {
         } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
           seedChild(lx, ly, 2 * group.length, 2 * group.length);
         }
->>>>>>> Stashed changes
       }
     }
   }
