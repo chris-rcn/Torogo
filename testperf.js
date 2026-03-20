@@ -12,8 +12,10 @@ if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); p
 const engine = get('--engine', 'game');
 
 let playGame;
-if (engine === 'game2') {
-  const { Game2, PASS } = require('./game2.js');
+if (engine === 'game2' || engine === 'game3') {
+  const mod  = engine === 'game2' ? require('./game2.js') : require('./game3.js');
+  const Game2 = mod.Game2 || mod.Game3;
+  const PASS  = mod.PASS;
   const N = boardSize;
   const cap = N * N;
   const _sharedGame = new Game2(N);
