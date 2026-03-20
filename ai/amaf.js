@@ -148,8 +148,7 @@ module.exports = function getMove(game, timeBudgetMs) {
     for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (!probe.placeStone(x, y)) continue;
+      if (!game.isLegal(x, y)) continue;
       candidates.push({ type: 'place', x, y });
     }
   }

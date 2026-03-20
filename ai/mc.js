@@ -122,8 +122,7 @@ function getMove(game, timeBudgetMs) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) candidates.push({ type: 'place', x, y });
     }
   }
   // Pass is always legal.

@@ -82,7 +82,7 @@ while (true) {
   const game = new Game(boardSize, DEFAULT_KOMI);
 
   while (!game.gameOver) {
-    const posKey = `${game.hash}|${game.current}`;
+    const posKey = `${game.board.toAscii()}|${game.current}`;
 
     // Three short-budget calls on the current position.
     const s1 = agent(game.clone(), shortBudget);

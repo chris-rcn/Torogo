@@ -3,22 +3,16 @@
 
 // minepatterns.js — mine 3×3 pattern statistics from recorded games.
 //
-// Usage: node minepatterns.js --file <path> [--passes <n>]
+// Usage: node minepatterns.js --file <path>
 //   --file    path to game records produced by recordgames.js (required)
-//   --passes  number of ELO update passes (default 20)
 //
 // For every move in each game (excluding passes) the script:
 //   1. Enumerates all legal non-true-eye placements as candidates.
 //   2. Records a "seen" event for the pattern hash at each candidate.
 //   3. Records a "selected" event for the pattern hash of the actual move.
 //
-// ELO is computed iteratively: the selected pattern "beats" each non-selected
-// candidate.  K is divided by the number of candidates so one selection event
-// contributes the same total rating change as one standard ELO game.
-// Multiple passes are made until ratings settle.
-//
 // Output: one line per observed pattern hash:
-//   <hash>,<selection_ratio>,<seen_count>,<elo>
+//   <hash>,<selection_ratio>,<seen_count>
 
 const fs = require('fs');
 const { Game, DEFAULT_KOMI } = require('./game.js');
@@ -28,10 +22,9 @@ const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 const file   = get('--file', null);
-const passes = parseInt(get('--passes', '20'), 10);
 
 if (!file) {
-  console.error('Usage: node minepatterns.js --file <path> [--passes <n>]');
+  console.error('Usage: node minepatterns.js --file <path>');
   process.exit(1);
 }
 
@@ -46,9 +39,6 @@ function bump(hash, selected) {
   s.seen++;
   if (selected) s.selected++;
 }
-
-// Each entry: the selected pattern hash and the array of non-selected hashes.
-const decisions = [];
 
 for (let gi = 0; gi < lines.length; gi++) {
   const line   = lines[gi];
@@ -112,50 +102,10 @@ for (let gi = 0; gi < lines.length; gi++) {
     if (color !== winner) continue;
     for (const h of others) bump(h, false);
     bump(selHash, true);
-    if (others.length > 0) decisions.push({ selected: selHash, others });
   }
 }
 
-// ── ELO computation ──────────────────────────────────────────────────────────
-//
-// For each decision: selected beat every candidate in others.
-// K is divided by the number of candidates (N) so that one selection event
-// contributes the same total ELO change as one standard Elo game (K=32).
-// We snapshot both ratings before updating within a decision (Jacobi step)
-// so that the order of opponents doesn't bias the result.
-
-const K = 32;
-
-const elos = new Map();
-for (const [hash] of stats) elos.set(hash, 1500);
-
-for (let pass = 0; pass < passes; pass++) {
-  for (const { selected, others } of decisions) {
-    const Rs = elos.get(selected);
-    const N  = others.length;
-    const kN = K / N;
-
-    // Accumulate the total delta for the selected pattern, and per-hash deltas
-    // for losers, using rating snapshots from the start of this decision.
-    let dSelected = 0;
-    const dOthers = new Map();
-
-    for (const h of others) {
-      const Rh = elos.get(h);
-      // Expected score for selected against this opponent.
-      const Es    = 1 / (1 + Math.pow(10, (Rh - Rs) / 400));
-      const delta = kN * (1 - Es); // selected wins → positive delta
-      dSelected  += delta;
-      dOthers.set(h, (dOthers.get(h) ?? 0) - delta);
-    }
-
-    elos.set(selected, Rs + dSelected);
-    for (const [h, d] of dOthers) elos.set(h, elos.get(h) + d);
-  }
-}
-
-// Output: hash,ratio,seen,elo
+// Output: hash,ratio,seen
 for (const [hash, { seen, selected }] of stats) {
-  const elo = elos.get(hash) ?? 1500;
-  console.log(`${hash},${(selected / seen).toFixed(6)},${seen},${elo.toFixed(1)}`);
+  console.log(`${hash},${(selected / seen).toFixed(6)},${seen}`);
 }

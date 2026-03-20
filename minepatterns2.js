@@ -95,8 +95,20 @@ for (const line of lines) {
   }
 }
 
-// Output: hash,mean,count
-for (const [hash, { sum, count }] of stats) {
-  const mean = sum / count;
-  console.log(`${hash},${mean.toFixed(6)},${count}`);
+// Compute means, then normalize to [0, 1].
+const means = new Map();
+for (const [hash, { sum, count }] of stats) means.set(hash, sum / count);
+
+let minVal = Infinity, maxVal = -Infinity;
+for (const v of means.values()) {
+  if (v < minVal) minVal = v;
+  if (v > maxVal) maxVal = v;
+}
+const range = maxVal - minVal || 1;
+
+// Output: hash,normalized_mean,count
+for (const [hash, mean] of means) {
+  const { count } = stats.get(hash);
+  const normalized = (mean - minVal) / range;
+  console.log(`${hash},${normalized.toFixed(6)},${count}`);
 }

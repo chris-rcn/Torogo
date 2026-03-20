@@ -1,30 +1,6 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
-// ─── Zobrist hash table ───────────────────────────────────────────────────────
-// One deterministic 64-bit random value per (row, col, color) triple,
-// sized for the largest supported board (19×19).  Used for O(1) Ko detection.
-const ZOBRIST = (() => {
-  let s = 0xdeadbeef;
-  function rand32() {
-    s ^= s << 13;
-    s ^= s >> 17;
-    s ^= s << 5;
-    return s >>> 0;
-  }
-  function rand64() {
-    return (BigInt(rand32()) << 32n) | BigInt(rand32());
-  }
-  const t = [];
-  for (let y = 0; y < 19; y++) {
-    t.push([]);
-    for (let x = 0; x < 19; x++) {
-      t[y].push({ black: rand64(), white: rand64() });
-    }
-  }
-  return t;
-})();
-
 // ─── Board ────────────────────────────────────────────────────────────────────
 
 class Board {
@@ -684,7 +660,6 @@ class Game {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
-    this.hash     = 0n;       // Zobrist hash of current board position
     this.koFlag   = null;     // {x, y} of the single stone captured last move, or null
     this.consecutivePasses = 0;
     this.gameOver = false;
@@ -704,7 +679,6 @@ class Game {
     g.boardSize         = this.boardSize;
     g.board             = this.board.clone();
     g.current           = this.current;
-    g.hash              = this.hash;
     g.koFlag            = this.koFlag;
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
@@ -714,6 +688,15 @@ class Game {
     g.illegalFlash      = null;
     g.moveCount         = this.moveCount;
     return g;
+  }
+
+  // Non-mutating legality check: returns true if placing on (x, y) would be legal.
+  isLegal(x, y) {
+    if (this.gameOver) return false;
+    if (this.board.get(x, y) !== null) return false;
+    if (this.board.isSuicide(x, y, this.current)) return false;
+    if (this.board.isKo(x, y, this.current, this.koFlag)) return false;
+    return true;
   }
 
   // Returns true if move was legal and placed
@@ -737,16 +720,7 @@ class Game {
     // Move is legal — commit (no rollback path remains)
     const N = this.boardSize;
     this.board.set(x, y, this.current);
-    this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
-    for (let i = 0; i < caps.black.length; i++) {
-      const ci = caps.black[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
-    }
-    for (let i = 0; i < caps.white.length; i++) {
-      const ci = caps.white[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
-    }
 
     this.illegalFlash = null;
 
@@ -771,16 +745,7 @@ class Game {
   applyLegal(x, y) {
     const N = this.boardSize;
     this.board.set(x, y, this.current);
-    this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
-    for (let i = 0; i < caps.black.length; i++) {
-      const ci = caps.black[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
-    }
-    for (let i = 0; i < caps.white.length; i++) {
-      const ci = caps.white[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
-    }
     const totalCaptured = caps.black.length + caps.white.length;
     this.koFlag = totalCaptured === 1
       ? { x: (caps.black.length === 1 ? caps.black[0] : caps.white[0]) % N,
@@ -882,6 +847,41 @@ class Game {
     const name = this.current === 'black' ? 'Black' : 'White';
     return `${name} to play`;
   }
+
+  // Copy current game state into a Game2 instance.
+  toGame2() {
+    const { Game2, PASS: PASS2, BLACK, WHITE } = require('./game2.js');
+    const N  = this.boardSize;
+    const g2 = new Game2(N);
+
+    // Clear the state placed by the Game2 constructor
+    g2.cells.fill(0);
+    g2._gid.fill(-1);
+    const usedW = g2._nextGid * g2._W;
+    g2._sw.fill(0, 0, usedW);
+    g2._ss.fill(0, 0, g2._nextGid);
+    g2._lw.fill(0, 0, usedW);
+    g2._ls.fill(0, 0, g2._nextGid);
+    g2._nextGid = 0;
+
+    // Place all stones from this board
+    const board = this.board;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = board.get(x, y);
+        if (c !== null) g2._place(y * N + x, c === 'black' ? BLACK : WHITE);
+      }
+    }
+
+    // Copy game state
+    g2.current           = this.current === 'black' ? BLACK : WHITE;
+    g2.ko                = this.koFlag ? this.koFlag.y * N + this.koFlag.x : PASS2;
+    g2.consecutivePasses = this.consecutivePasses;
+    g2.gameOver          = this.gameOver;
+    g2.moveCount         = this.moveCount;
+
+    return g2;
+  }
 }
 
 const DEFAULT_KOMI = new Game().komi;
@@ -906,4 +906,4 @@ function parseBoard(boardStr) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, ZOBRIST, parseBoard, boardTurnToString };
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, parseBoard, boardTurnToString };

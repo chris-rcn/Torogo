@@ -151,8 +151,7 @@ function legalMoves(game) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
     }
   const area = game.boardSize * game.boardSize;
   if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
@@ -345,13 +344,13 @@ function applyLadderPriors(node, game, N) {
       for (const entry of statusEntries) {
         const { liberty: { x: lx, y: ly } } = entry;
         if (groupColor === mover && !entry.canEscape) {  // Don't extend doomed group.
-          seedChild(lx, ly, 0, 2 * group.length);
+          seedChild(lx, ly, 0, 3 * group.length + 1);
         } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
-          seedChild(lx, ly, 0, 40);
+          seedChild(lx, ly, 0, 45);  // The importance of this prior does not depend on the group size.
         } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
-          seedChild(lx, ly, 3 * group.length, 3 * group.length);
+          seedChild(lx, ly, 2 * group.length, 2 * group.length);
         } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
-          seedChild(lx, ly, 3 * group.length, 3 * group.length);
+          seedChild(lx, ly, 2 * group.length, 2 * group.length);
         }
       }
     }
@@ -388,8 +387,10 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
-  const result = { ...bestChild.move, children };
+  const rootWins = root.children.reduce((s, c) => s + c.wins, 0);
+  const rootWinRatio = root.visits > 0 ? rootWins / root.visits : 0.5;
+  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children, rootWinRatio };
+  const result = { ...bestChild.move, children, rootWinRatio };
   result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
   return result;
 }

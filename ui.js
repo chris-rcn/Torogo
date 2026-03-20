@@ -307,8 +307,7 @@ function buildLegalMoves() {
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
       if (game.board.get(x, y) !== null) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) legalMovesSet.add(y * N + x);
+      if (game.isLegal(x, y)) legalMovesSet.add(y * N + x);
     }
   }
 }

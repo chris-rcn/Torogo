@@ -1,7 +1,7 @@
 'use strict';
 const { performance } = require('perf_hooks');
 const path = require('path');
-const { Game, ZOBRIST, parseBoard } = require('./game.js');
+const { Game, parseBoard } = require('./game.js');
 
 /**
  * Ladder evaluation script — run hardcoded ladder positions against an AI agent.
@@ -81,14 +81,12 @@ function buildPosition(pos) {
   const game = new Game(size, 0);
   const c = size >> 1;
   game.board.set(c, c, null);
-  game.hash             = 0n;
   game.moveCount        = 0;
   game.current          = pos.toPlay === '●' ? 'black' : 'white';
   game.consecutivePasses = 0;
   game.koFlag           = null;
   for (const [x, y, color] of stones) {
     game.board.set(x, y, color);
-    game.hash ^= ZOBRIST[y][x][color];
   }
   game.board._rebuildGroups();
   return game;
