@@ -1340,6 +1340,125 @@ section('toGame2 consistency across 20 mid-game positions');
   assert(allMatch, 'toGame2: board/isLegal/isTrueEye consistent across 20 mid-game positions');
 }
 
+// ─── Game2.clone ─────────────────────────────────────────────────────────────
+
+section('Game2.clone: independence');
+{
+  const { Game2 } = require('./game2.js');
+  const N = 9;
+  const g = new Game2(N);
+  // Constructor places BLACK at center (current becomes WHITE, moveCount=1).
+  // Play at (2,3) as WHITE.
+  g.play(3 * N + 2);
+  // Now current=BLACK, moveCount=2. Clone and play BLACK at (7,7).
+  const c = g.clone();
+  const target = 7 * N + 7;
+  assert(g.cells[target] === 0, 'target cell starts empty');
+  c.play(target);
+  assert(g.cells[target] === 0, 'clone play does not affect original cells');
+  assert(c.moveCount === g.moveCount + 1, 'clone moveCount diverges after move');
+  assert(c.current !== g.current, 'clone current diverges after move');
+}
+
+section('Game2.clone: cells copied correctly');
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const N = 9;
+  const g = new Game2(N);
+  // Play several moves then clone and compare cells.
+  const moves = [3*N+3, 5*N+5, 3*N+5, 5*N+3, 4*N+4];
+  for (const m of moves) g.play(m);
+  const c = g.clone();
+  let match = true;
+  for (let i = 0; i < N * N; i++) {
+    if (c.cells[i] !== g.cells[i]) { match = false; break; }
+  }
+  assert(match, 'clone cells match original');
+  assert(c.current === g.current, 'clone current matches');
+  assert(c.ko === g.ko, 'clone ko matches');
+  assert(c.moveCount === g.moveCount, 'clone moveCount matches');
+  assert(c.consecutivePasses === g.consecutivePasses, 'clone consecutivePasses matches');
+}
+
+section('Game2.clone: group data copied correctly');
+{
+  const { Game2 } = require('./game2.js');
+  const N = 9;
+  const g = new Game2(N);
+  g.play(3*N+3); g.play(5*N+5); g.play(3*N+4); g.play(5*N+4);
+  const c = g.clone();
+  // Liberty counts must match for every occupied cell.
+  let match = true;
+  for (let i = 0; i < N * N; i++) {
+    if (g.cells[i] === 0) continue;
+    const gGid = g._gid[i], cGid = c._gid[i];
+    if (gGid === -1 || cGid === -1) { match = false; break; }
+    if (g._ls[gGid] !== c._ls[cGid]) { match = false; break; }
+    if (g._ss[gGid] !== c._ss[cGid]) { match = false; break; }
+  }
+  assert(match, 'clone liberty and stone counts match original');
+}
+
+section('Game2.clone: isLegal agrees between original and clone');
+{
+  const { Game2 } = require('./game2.js');
+  const N = 9;
+  const g = new Game2(N);
+  for (const m of [3*N+3, 5*N+5, 3*N+4, 5*N+4, 4*N+3]) g.play(m);
+  const c = g.clone();
+  let agree = true;
+  for (let i = 0; i < N * N; i++) {
+    if (g.isLegal(i) !== c.isLegal(i)) { agree = false; break; }
+  }
+  assert(agree, 'clone isLegal agrees with original on every cell');
+}
+
+section('Game2.clone: capture in clone does not affect original groups');
+{
+  // Build a capture scenario: surround a white stone and capture it in clone.
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const N = 9;
+  const g = new Game2(N);
+  // Center stone placed by constructor is BLACK.
+  // Play white at (1,0), then surround with black.
+  // Simpler: place a white stone in the open, surround it one liberty short, then clone.
+  const cx = 6, cy = 6;
+  // White at (cx, cy)
+  g.play(cy * N + cx);       // black (skip center already placed)
+  // Actually we need to be careful about whose turn it is.
+  // After constructor: black center placed, current = WHITE, moveCount = 1.
+  // So first play goes to WHITE.
+  // Re-create for clarity.
+  const g2 = new Game2(N);
+  // current = WHITE after constructor.
+  g2.play(3 * N + 3);  // white at (3,3)
+  g2.play(3 * N + 2);  // black at (2,3)
+  g2.play(5 * N + 5);  // white
+  g2.play(3 * N + 4);  // black at (4,3)
+  g2.play(5 * N + 4);  // white
+  g2.play(2 * N + 3);  // black at (3,2) — white (3,3) now has 1 liberty: (3,4) but (4,3) is taken
+  // Check white at (3,3) has some liberties left.
+  const wIdx = 3 * N + 3;
+  const libsBefore = g2._ls[g2._gid[wIdx]];
+  const clone = g2.clone();
+  // Play a move in clone only.
+  // We just verify independence: clone's _ls doesn't affect g2's _ls.
+  clone.play(6 * N + 6);
+  assert(g2._ls[g2._gid[wIdx]] === libsBefore, 'clone play does not change original liberty counts');
+}
+
+section('Game2.clone: gameOver propagates correctly');
+{
+  const { Game2, PASS } = require('./game2.js');
+  const g = new Game2(5);
+  // Force game over via consecutive passes.
+  while (!g.gameOver) g.play(PASS);
+  assert(g.gameOver, 'original game over');
+  const c = g.clone();
+  assert(c.gameOver === true, 'clone inherits gameOver=true');
+  assert(c.consecutivePasses === g.consecutivePasses, 'clone inherits consecutivePasses');
+}
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 
 console.log(`\n═══════════════════════`);

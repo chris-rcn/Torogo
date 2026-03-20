@@ -26,6 +26,9 @@
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *
+ * Internally the search converts the input Game to a Game2 instance via
+ * game.toGame2() and uses Game2 throughout for speed.
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -33,7 +36,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus } = _isNode ? require('../ladder.js') : window;
+const { getLadderStatus2 } = _isNode ? require('./ladder2.js') : window;
+const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -54,107 +58,91 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
-// Random playout that records the cell indices (y*N+x) of every move made by
-// each player.  Pass moves carry no cell index and are not recorded.
-// Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game) {
-  const size = game.boardSize;
-  const board = game.board;
-  const grid  = board.grid;
+// Random playout using Game2.  Records the flat cell indices of every non-pass
+// move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
+function playTracked(game2) {
+  const N     = game2.N;
+  const cap   = N * N;
+  const cells = game2.cells;
+  const nbr   = game2._nbr;
   const blackPlayed = [];
   const whitePlayed = [];
 
   const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (grid[y][x] === null) empty.push(y * size + x);
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] === 0) empty.push(i);
+  }
 
   const moveLimit = empty.length + 20;
   let moves = 0;
 
-  while (!game.gameOver && moves < moveLimit) {
+  while (!game2.gameOver && moves < moveLimit) {
     let placed = false;
     let end = empty.length;
-    const current = game.current;
+    const current = game2.current;
 
     while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const cellIdx = empty[i];
-      const x = cellIdx % size;
-      const y = (cellIdx / size) | 0;
-      empty[i] = empty[end - 1];
-      empty[end - 1] = cellIdx;
+      const ri  = Math.floor(Math.random() * end);
+      const idx = empty[ri];
+      empty[ri] = empty[end - 1];
+      empty[end - 1] = idx;
       end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
+      if (game2.isTrueEye(idx)) continue;
+      if (!game2.isLegal(idx))  continue;
 
-      if (info.hasEmptyNeighbor) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
+      if (current === BLACK2) blackPlayed.push(idx);
+      else                    whitePlayed.push(idx);
+
+      // Snapshot neighbour occupancy to detect captures after play.
+      const base = idx * 4;
+      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
+            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
+      game2.play(idx);
+      empty[end] = empty[empty.length - 1];
+      empty.pop();
+
+      // If any previously occupied neighbour became empty, captures occurred.
+      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
+          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
+        empty.length = 0;
+        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
       }
 
-      const result = game.placeStone(x, y);
-      if (result) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result > 1) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      placed = true;
+      moves++;
+      break;
     }
 
-    if (!placed) { game.pass(); moves++; }
+    if (!placed) { game2.play(PASS2); moves++; }
   }
 
-  if (!game.gameOver) game.endGame();
-  const s = game.scores;
-  const winner = s.black.total > s.white.total ? 'black'
-               : s.white.total > s.black.total ? 'white'
+  const sc = game2.score();
+  const winner = sc.black > sc.white ? 'black'
+               : sc.white > sc.black ? 'white'
                : null;
   return { winner, blackPlayed, whitePlayed };
 }
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
-function legalMoves(game) {
+// Enumerate legal non-true-eye moves from a Game2 state.
+function legalMoves(game2) {
+  const N     = game2.N;
+  const cells = game2.cells;
   const moves = [];
-  for (let y = 0; y < game.boardSize; y++)
-    for (let x = 0; x < game.boardSize; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const idx = y * N + x;
+      if (cells[idx] !== 0) continue;
+      if (game2.isTrueEye(idx)) continue;
+      if (game2.isLegal(idx)) moves.push({ type: 'place', x, y });
     }
-  const area = game.boardSize * game.boardSize;
-  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
+  }
+  const area = N * N;
+  if (game2.moveCount >= area / 2 || game2.consecutivePasses > 0) {
+    moves.push({ type: 'pass' });
+  }
   return moves;
 }
 
@@ -182,9 +170,9 @@ function moveIndex(move, N) {
   return move.type === 'pass' ? N * N : move.y * N + move.x;
 }
 
-function applyMove(game, move) {
-  if (move.type === 'place') game.placeStone(move.x, move.y);
-  else game.pass();
+// Apply a {type,x,y}/pass move to a Game2 instance.
+function applyMove(game2, move) {
+  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS2);
 }
 
 // RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
@@ -202,18 +190,18 @@ function raveScore(child, parentVisits, parentRaveWins, parentRaveVisits, midx) 
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame, N) {
+function selectAndExpand(root, rootGame2, N) {
   let node = root;
-  const game = rootGame.clone();
+  const game2 = rootGame2.clone();
 
   if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
-    applyLadderPriors(node, game, N);
+    applyLadderPriors(node, game2, N);
     node.ladderSeeded = true;
   }
 
   // Select: descend through fully-expanded nodes using the RAVE-blended score.
   while (node.untried !== null && node.untried.length === 0
-         && node.children.length > 0 && !game.gameOver) {
+         && node.children.length > 0 && !game2.gameOver) {
     let best = null, bestScore = -Infinity;
     for (const child of node.children) {
       const s = raveScore(child, node.visits,
@@ -222,16 +210,16 @@ function selectAndExpand(root, rootGame, N) {
       if (s > bestScore) { bestScore = s; best = child; }
     }
     node = best;
-    applyMove(game, node.move);
+    applyMove(game2, node.move);
     if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
-      applyLadderPriors(node, game, N);
+      applyLadderPriors(node, game2, N);
       node.ladderSeeded = true;
     }
   }
 
   // Expand: attach one untried child.
-  if (!game.gameOver) {
-    if (node.untried === null) node.untried = legalMoves(game);
+  if (!game2.gameOver) {
+    if (node.untried === null) node.untried = legalMoves(game2);
     if (node.untried.length > 0) {
       // Sample up to EXPANSION_CANDIDATES distinct moves and pick the one
       // with the best parent RAVE win rate (default 0.5 when unvisited).
@@ -252,25 +240,27 @@ function selectAndExpand(root, rootGame, N) {
       node.untried[bestIdx] = node.untried[node.untried.length - 1];
       node.untried[node.untried.length - 1] = winnerMove;
       const move = node.untried.pop();
-      const child = makeNode(move, node, game.current, N);
+      const mover = game2.current === BLACK2 ? 'black' : 'white';
+      const child = makeNode(move, node, mover, N);
       node.children.push(child);
       node = child;
-      applyMove(game, move);
+      applyMove(game2, move);
 
       // After a pass, always force a second pass as a terminal tree node so the
       // simulation scores the current board position rather than rolling out
       // randomly.  Without this, rollouts from a "one pass" state play on for
       // many more random moves, inflating the pass move's apparent win rate.
-      if (!game.gameOver && game.consecutivePasses > 0) {
-        const secondPass = makeNode({ type: 'pass' }, node, game.current, N);
+      if (!game2.gameOver && game2.consecutivePasses > 0) {
+        const mover2 = game2.current === BLACK2 ? 'black' : 'white';
+        const secondPass = makeNode({ type: 'pass' }, node, mover2, N);
         node.children.push(secondPass);
         node = secondPass;
-        applyMove(game, { type: 'pass' }); // game.gameOver becomes true
+        game2.play(PASS2); // game2.gameOver becomes true
       }
     }
   }
 
-  return { node, game };
+  return { node, game2 };
 }
 
 // Backpropagate MCTS wins/visits and update each ancestor's RAVE arrays.
@@ -305,8 +295,9 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
-function applyLadderPriors(node, game, N) {
-  const mover = game.current;
+function applyLadderPriors(node, game2, N) {
+  const moverInt = game2.current;  // BLACK2 or WHITE2
+  const mover    = moverInt === BLACK2 ? 'black' : 'white';
 
   // Promote a legal move to a pre-created child seeded with virtual wins/visits.
   // If the child already exists (two groups share a liberty), accumulate into it.
@@ -314,7 +305,7 @@ function applyLadderPriors(node, game, N) {
   function seedChild(lx, ly, wins, visits) {
     let child = node.children.find(c => c.move.type === 'place' && c.move.x === lx && c.move.y === ly);
     if (!child) {
-      if (node.untried === null) node.untried = legalMoves(game);
+      if (node.untried === null) node.untried = legalMoves(game2);
       const idx = node.untried.findIndex(m => m.type === 'place' && m.x === lx && m.y === ly);
       if (idx === -1) return;
       const [move] = node.untried.splice(idx, 1);
@@ -326,32 +317,36 @@ function applyLadderPriors(node, game, N) {
     node.visits  += visits;
   }
 
-  const visited = new Set();
-  for (let py = 0; py < N; py++) {
-    for (let px = 0; px < N; px++) {
-      const group = game.board.getGroup(px, py);
-      if (group.length < 2) continue;
-      const groupColor = game.board.get(px, py);
-      const gid = game.board._gid[game.board._idx(px, py)];
-      if (visited.has(gid)) continue;
-      visited.add(gid);
-      const libs = game.board.getLiberties(group);
-      if (libs.size > 2) continue;
+  const cap        = N * N;
+  const cells      = game2.cells;
+  const visitedGids = new Set();
 
-      const statusEntries = getLadderStatus(game, px, py);
-      if (!statusEntries) continue;
+  for (let i = 0; i < cap; i++) {
+    const color = cells[i];
+    if (color === 0) continue;
+    const gid = game2._gid[i];
+    if (visitedGids.has(gid)) continue;
+    if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
+    visitedGids.add(gid);
 
-      for (const entry of statusEntries) {
-        const { liberty: { x: lx, y: ly } } = entry;
-        if (groupColor === mover && !entry.canEscape) {  // Don't extend doomed group.
-          seedChild(lx, ly, 0, 3 * group.length + 1);
-        } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
-          seedChild(lx, ly, 0, 45);  // The importance of this prior does not depend on the group size.
-        } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
-          seedChild(lx, ly, 2 * group.length, 2 * group.length);
-        } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
-          seedChild(lx, ly, 2 * group.length, 2 * group.length);
-        }
+    if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
+
+    const statusEntries = getLadderStatus2(game2, i);
+    if (!statusEntries) continue;
+
+    const groupSize  = game2._ss[gid];
+    const groupColor = color === BLACK2 ? 'black' : 'white';
+
+    for (const entry of statusEntries) {
+      const { liberty: { x: lx, y: ly } } = entry;
+      if (groupColor === mover && !entry.canEscape) {        // Don't extend doomed group.
+        seedChild(lx, ly, 0, 3 * groupSize + 1);
+      } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
+        seedChild(lx, ly, 0, 45);
+      } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
+        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
+      } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
+        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
       }
     }
   }
@@ -365,6 +360,7 @@ function getMove(game, timeBudgetMs) {
   const N          = game.boardSize;
   const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
+  const game2      = game.toGame2();
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
@@ -372,8 +368,8 @@ function getMove(game, timeBudgetMs) {
 
   do {
     playouts++;
-    const { node, game: simGame } = selectAndExpand(root, game, N);
-    const { winner, blackPlayed, whitePlayed } = playTracked(simGame);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
+    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 

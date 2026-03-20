@@ -472,6 +472,31 @@ class Game2 {
     return true;
   }
 
+  // ── Clone ─────────────────────────────────────────────────────────────────
+
+  clone() {
+    const g = Object.create(Game2.prototype);
+    g.N         = this.N;
+    g.boardSize = this.N;
+    g.cells = new Int8Array(this.cells);
+    g._gid  = new Int32Array(this._gid);
+    g._nextGid = this._nextGid;
+    g._W    = this._W;
+    g._gc   = new Uint8Array(this._gc);
+    g._sw   = new Int32Array(this._sw);
+    g._ss   = new Int32Array(this._ss);
+    g._lw   = new Int32Array(this._lw);
+    g._ls   = new Int32Array(this._ls);
+    g._nbr  = this._nbr;   // immutable, share
+    g._dnbr = this._dnbr;  // immutable, share
+    g.current           = this.current;
+    g.ko                = this.ko;
+    g.consecutivePasses = this.consecutivePasses;
+    g.gameOver          = this.gameOver;
+    g.moveCount         = this.moveCount;
+    return g;
+  }
+
   // ── Score ─────────────────────────────────────────────────────────────────
 
   score() {
