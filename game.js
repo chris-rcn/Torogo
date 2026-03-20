@@ -724,11 +724,22 @@ class Game {
 
     this.illegalFlash = null;
 
-    // Update koFlag: set to the captured position only when exactly one stone was taken
+    // Update koFlag: set only when exactly one stone was captured AND the
+    // capturing group is also a solo stone whose sole liberty is the captured cell.
+    // (If the captor has more stones/liberties, replaying the captured point
+    //  cannot recreate the previous position, so no ko restriction applies.)
     const totalCaptured = caps.black.length + caps.white.length;
     if (totalCaptured === 1) {
       const ci = caps.black.length === 1 ? caps.black[0] : caps.white[0];
-      this.koFlag = { x: ci % N, y: (ci / N) | 0 };
+      const placedGid = this.board._gid[y * N + x];
+      const placedGroup = this.board._groups.get(placedGid);
+      if (placedGroup.stones.size === 1 &&
+          placedGroup.liberties.size === 1 &&
+          placedGroup.liberties.has(ci)) {
+        this.koFlag = { x: ci % N, y: (ci / N) | 0 };
+      } else {
+        this.koFlag = null;
+      }
     } else {
       this.koFlag = null;
     }
@@ -747,10 +758,18 @@ class Game {
     this.board.set(x, y, this.current);
     const caps = this.board.captureGroups(x, y);
     const totalCaptured = caps.black.length + caps.white.length;
-    this.koFlag = totalCaptured === 1
-      ? { x: (caps.black.length === 1 ? caps.black[0] : caps.white[0]) % N,
-          y: ((caps.black.length === 1 ? caps.black[0] : caps.white[0]) / N) | 0 }
-      : null;
+    if (totalCaptured === 1) {
+      const ci = caps.black.length === 1 ? caps.black[0] : caps.white[0];
+      const placedGid = this.board._gid[y * N + x];
+      const placedGroup = this.board._groups.get(placedGid);
+      this.koFlag = (placedGroup.stones.size === 1 &&
+                     placedGroup.liberties.size === 1 &&
+                     placedGroup.liberties.has(ci))
+        ? { x: ci % N, y: (ci / N) | 0 }
+        : null;
+    } else {
+      this.koFlag = null;
+    }
     this.lastMove = { x, y };
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
