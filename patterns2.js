@@ -3,7 +3,7 @@
 // patterns2.js — pattern recognition helpers for Game2 (integer-move engine).
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; ladder2.js must be loaded before this file.
-if (typeof require === 'function') { var { getLadderStatus2 } = require('./ai/ladder2.js'); }
+if (typeof require === 'function') { var { getLadderStatus2 } = require('./ladder2.js'); }
 
 // Liberty counts above this threshold are treated as equivalent.
 const MAX_LIBS = 1;

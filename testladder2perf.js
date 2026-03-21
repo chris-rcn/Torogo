@@ -19,7 +19,7 @@ const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? ar
 const duration = parseFloat(get('--duration', 'Infinity'));
 
 const { Game2, PASS } = require('./game2.js');
-const { getLadderStatus2 } = require('./ai/ladder2.js');
+const { getLadderStatus2 } = require('./ladder2.js');
 
 const N   = 13;
 const cap = N * N;

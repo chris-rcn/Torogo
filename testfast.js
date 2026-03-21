@@ -1562,7 +1562,7 @@ section('Game2.clone: gameOver propagates correctly');
 // Positions are built via _buildPos (Game) then converted with .toGame2().
 // stoneIdx = y * N + x.
 
-const { getLadderStatus2 } = require('./ai/ladder2.js');
+const { getLadderStatus2 } = require('./ladder2.js');
 
 // Helper: build a Game2 from a board string using the existing _buildPos helper.
 function _buildGame2Pos(boardStr, toPlay) {

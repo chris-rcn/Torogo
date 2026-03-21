@@ -35,7 +35,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus2: getLadderStatus } = _isNode ? require('./ladder2.js') : window;
+const { getLadderStatus2: getLadderStatus } = _isNode ? require('../ladder2.js') : window;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;

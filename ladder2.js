@@ -5,7 +5,7 @@
 // Mirrors the API of ladder.js but operates on Game2 instances.
 // getLadderStatus2(game2, stoneIdx) → same shape as getLadderStatus.
 
-const { PASS, BLACK, WHITE } = require('../game2.js');
+const { PASS, BLACK, WHITE } = require('./game2.js');
 
 // Module-level output slots for _readLibs.  Written once, then immediately
 // copied to locals by the caller before any recursive call can overwrite them.
