@@ -48,10 +48,10 @@ if (engine === 'game2' || engine === 'game3') {
     }
   };
 } else {
-  const { Game, DEFAULT_KOMI } = require('./game.js');
+  const { Game } = require('./game.js');
   const random = require('./ai/random.js');
   playGame = function () {
-    const game = new Game(boardSize, DEFAULT_KOMI);
+    const game = new Game(boardSize);
     while (!game.gameOver) {
       const move = random(game);
       if (move.type === 'place') game.placeStone(move.x, move.y);

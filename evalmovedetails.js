@@ -29,7 +29,7 @@ if (!filePath)              { console.error('--file is required'); process.exit(
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 function coordStr(move) {
   if (move.type === 'pass') return 'pass';
@@ -72,7 +72,7 @@ if (verbose) {
 for (let i = 0; i < lines.length; i++) {
   const { boardSize, history, candidates } = JSON.parse(lines[i]);
 
-  const game = new Game(boardSize, DEFAULT_KOMI);
+  const game = new Game(boardSize);
   for (const h of history) applyMove(game, parseMove(h));
 
   const agentMove = agent(game, budgetMs);

@@ -1,6 +1,6 @@
 'use strict';
 
-const { Board, Game } = require('./game.js');
+const { Board, Game, KOMI } = require('./game.js');
 const { performance } = require('perf_hooks');
 
 let pass = 0, fail = 0;
@@ -26,7 +26,7 @@ function runMatch(p1Name, p2Name, games, size, budget) {
   let p1Wins = 0, p2Wins = 0;
 
   for (let i = 0; i < games; i++) {
-    const g = new Game(size, 3.5);
+    const g = new Game(size);
     // Alternate colors: odd games p1=black, even games p1=white
     const blackAgent = i % 2 === 0 ? p1 : p2;
     const whiteAgent = i % 2 === 0 ? p2 : p1;
@@ -55,7 +55,7 @@ section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
   let mismatches = 0;
 
   for (let trial = 0; trial < 100; trial++) {
-    const g = new Game(7, 3.5);
+    const g = new Game(7);
     const moveCount = Math.floor(Math.random() * 30) + 5;
     for (let i = 0; i < moveCount && !g.gameOver; i++) {
       const move = random(g);
@@ -93,7 +93,7 @@ section('Group tracker verification under stress (5 games)', () => {
   let ok = true;
 
   for (let i = 0; i < 5; i++) {
-    const g = new Game(7, 3.5);
+    const g = new Game(7);
     try {
       while (!g.gameOver) {
         const move = random(g);
@@ -113,7 +113,7 @@ section('Group tracker verification under stress (5 games)', () => {
 
 section('MC playout throughput (7x7)', () => {
   const mc = require('./ai/mc.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const budgetMs = 200;
   const t0 = performance.now();
   const move = mc(g, budgetMs);
@@ -125,7 +125,7 @@ section('MC playout throughput (7x7)', () => {
 
 section('MCTS playout throughput (7x7)', () => {
   const mcts = require('./ai/mcts.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const budgetMs = 200;
   const t0 = performance.now();
   const move = mcts(g, budgetMs);
@@ -161,7 +161,7 @@ section('Winning agent passes after opponent passes (7x7)', () => {
     'W W B . W . B',  // y=6
   ];
 
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const board = g.board;
   const SZ = 7;
   const nbr = board._nbr;
@@ -232,9 +232,9 @@ section('Winning agent passes after opponent passes (7x7)', () => {
   g.koFlag = null;
 
   const territory = g.calcTerritory();
-  console.log(`  white territory: ${territory.white} vs black: ${territory.black} (komi ${g.komi})`);
-  assert(territory.white + g.komi > territory.black,
-    `position should favour white: ${territory.white + g.komi} vs ${territory.black}`);
+  console.log(`  white territory: ${territory.white} vs black: ${territory.black} (komi ${KOMI})`);
+  assert(territory.white + KOMI > territory.black,
+    `position should favour white: ${territory.white + KOMI} vs ${territory.black}`);
 
   // black (loser) passes once; white (winner) should then also pass to end game.
   for (const [agentName, agent] of [['mcts', mcts], ['rave', rave]]) {
@@ -256,7 +256,7 @@ section('AI legality stress test (all agents, 5 full games each)', () => {
   for (const name of agents) {
     const agent = require(`./ai/${name}.js`);
     for (let i = 0; i < 3; i++) {
-      const g = new Game(5, 3.5);
+      const g = new Game(5);
       let moveNum = 0;
       while (!g.gameOver && moveNum < 200) {
         const move = agent(g, 20);

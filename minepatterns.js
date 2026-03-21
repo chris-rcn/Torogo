@@ -15,7 +15,7 @@
 //   <hash>,<selection_ratio>,<seen_count>
 
 const fs = require('fs');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 const { patternHash } = require('./patterns.js');
 
 const args   = process.argv.slice(2);
@@ -46,7 +46,7 @@ for (let gi = 0; gi < lines.length; gi++) {
   const size   = parseInt(fields[0], 10);
   const moves  = fields.slice(1);
 
-  const g = new Game(size, DEFAULT_KOMI);
+  const g = new Game(size);
 
   // Collect per-move data; we defer bumping until the winner is known.
   const gameMoves = [];
@@ -94,8 +94,7 @@ for (let gi = 0; gi < lines.length; gi++) {
   }
 
   // Determine the winner.
-  const _t = g.calcTerritory();
-  const winner = _t.black > _t.white + g.komi ? 'black' : 'white';
+  const winner = g.calcWinner() ?? 'white'; // komi gives white ties
 
   // Only record patterns for moves made by the winning player.
   for (const { color, selHash, others } of gameMoves) {

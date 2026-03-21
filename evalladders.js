@@ -78,7 +78,7 @@ function matchesMove(s, move) {
 
 function buildPosition(pos) {
   const { size, stones } = parseBoard(pos.board);
-  const game = new Game(size, 0);
+  const game = new Game(size);
   const c = size >> 1;
   game.board.set(c, c, null);
   game.moveCount        = 0;

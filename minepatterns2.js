@@ -17,7 +17,7 @@
 //   <hash>,<mean_value>,<count>
 
 const fs = require('fs');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 const { patternHash } = require('./patterns.js');
 
 const args = process.argv.slice(2);
@@ -71,7 +71,7 @@ for (const line of lines) {
   const passKwr = passEntry.kwr;
 
   // Reconstruct the game state by replaying history moves.
-  const game = new Game(boardSize, DEFAULT_KOMI);
+  const game = new Game(boardSize);
   for (const m of history) {
     const move = parseMove(m);
     if (move.type === 'pass') game.pass();

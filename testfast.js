@@ -76,14 +76,14 @@ section('Groups and liberties');
 
 section('Simple capture');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   // g starts with black at center (4,4), white to play
   // Surround a white stone and capture it
   const b = g.board;
 
   // Place white at (0,0)
   // Need to set up a capture scenario manually
-  const g2 = new Game(9, 3.5);
+  const g2 = new Game(9);
   // After constructor: black at (4,4), current = white
   // White plays somewhere
   g2.placeStone(2, 2); // white at (2,2), current = black
@@ -206,7 +206,6 @@ section('Game construction');
 {
   const g = new Game(9);
   assert(g.boardSize === 9, 'boardSize');
-  assert(g.komi === DEFAULT_KOMI, 'komi');
   assert(g.current === 'white', 'white to play after center stone');
   assert(g.board.get(4, 4) === 'black', 'center stone placed');
   assert(!g.gameOver, 'game not over');
@@ -215,11 +214,11 @@ section('Game construction');
 
 section('Game with different sizes');
 {
-  const g7 = new Game(7, 3.5);
+  const g7 = new Game(7);
   assert(g7.boardSize === 7, 'size 7');
   assert(g7.board.get(3, 3) === 'black', 'center stone on 7x7');
 
-  const g13 = new Game(13, 3.5);
+  const g13 = new Game(13);
   assert(g13.boardSize === 13, 'size 13');
   assert(g13.board.get(6, 6) === 'black', 'center stone on 13x13');
 }
@@ -228,7 +227,7 @@ section('Game with different sizes');
 
 section('Game placeStone');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   // White's turn
   const result = g.placeStone(0, 0);
   assert(result !== false, 'legal move returns truthy');
@@ -239,7 +238,7 @@ section('Game placeStone');
 
 section('Illegal moves');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   // Try to play on occupied cell
   const result = g.placeStone(4, 4);
   assert(result === false, 'cannot play on occupied cell');
@@ -248,7 +247,7 @@ section('Illegal moves');
 
 section('Pass');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   const passer = g.pass();
   assert(passer === 'white', 'pass returns the passer');
   assert(g.current === 'black', 'turn switches after pass');
@@ -259,21 +258,21 @@ section('Pass');
 
 section('Double pass ends game');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.pass();
   g.pass();
   assert(g.gameOver, 'game over after two passes');
   const sc = g.calcTerritory();
   assert(typeof sc.black === 'number', 'black territory is number');
   assert(typeof sc.white === 'number', 'white territory is number');
-  assert(sc.white + g.komi >= g.komi, 'white territory + komi ≥ komi');
+  assert(sc.white + DEFAULT_KOMI >= DEFAULT_KOMI, 'white territory + komi ≥ komi');
 }
 
 // ─── Clone ───────────────────────────────────────────────────────────────────
 
 section('Game clone');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.placeStone(0, 0);
   const c = g.clone();
   assert(c.boardSize === g.boardSize, 'clone boardSize');
@@ -291,7 +290,7 @@ section('Clone divergence (independent futures)');
   let ok = true;
 
   for (let trial = 0; trial < 10; trial++) {
-    const g = new Game(7, 3.5);
+    const g = new Game(7);
     for (let i = 0; i < 5 && !g.gameOver; i++) {
       const move = random(g);
       if (move.type === 'place') g.placeStone(move.x, move.y);
@@ -333,7 +332,7 @@ section('Board clone');
 
 section('Territory calculation');
 {
-  const g = new Game(7, 0);
+  const g = new Game(7);
   // End immediately — only center stone
   g.pass();
   g.pass();
@@ -349,7 +348,7 @@ section('Territory scoring makes sense');
   let ok = true;
 
   for (let i = 0; i < 10; i++) {
-    const g = new Game(7, 3.5);
+    const g = new Game(7);
     while (!g.gameOver) {
       const move = random(g);
       if (move.type === 'place') g.placeStone(move.x, move.y);
@@ -374,7 +373,7 @@ section('Territory scoring makes sense');
 section('Komi in scoring');
 {
   // On an empty-ish board with only center stone, white gets komi
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   g.pass();
   g.pass();
   const _t = g.calcTerritory();
@@ -393,7 +392,7 @@ section('DEFAULT_KOMI');
 
 section('statusText');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   assert(g.statusText() === 'White to play', 'white to play after init');
   g.placeStone(0, 0);
   assert(g.statusText() === 'Black to play', 'black to play');
@@ -406,7 +405,7 @@ section('statusText');
 
 section('Move count auto-end');
 {
-  const g = new Game(5, 0);
+  const g = new Game(5);
   // Threshold = 4 * 25 = 100 moves. Play passes until it ends.
   let moves = 0;
   while (!g.gameOver && moves < 200) {
@@ -425,7 +424,7 @@ section('Random vs random roughly even (5x5, 20 games)');
   let p1Wins = 0, p2Wins = 0;
 
   for (let i = 0; i < 20; i++) {
-    const g = new Game(5, 3.5);
+    const g = new Game(5);
     const blackAgent = i % 2 === 0 ? p1 : p2;
     const whiteAgent = i % 2 === 0 ? p2 : p1;
     const p1IsBlack = i % 2 === 0;
@@ -438,7 +437,7 @@ section('Random vs random roughly even (5x5, 20 games)');
     }
 
     const _t = g.calcTerritory();
-    const blackWins = _t.black > _t.white + g.komi;
+    const blackWins = _t.black > _t.white + DEFAULT_KOMI;
     if (p1IsBlack ? blackWins : !blackWins) p1Wins++;
     else p2Wins++;
   }
@@ -450,7 +449,7 @@ section('Random vs random roughly even (5x5, 20 games)');
 section('Random agent');
 {
   const randomAgent = require('./ai/random.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const move = randomAgent(g);
   assert(move.type === 'place' || move.type === 'pass', 'random returns valid move type');
   if (move.type === 'place') {
@@ -460,7 +459,7 @@ section('Random agent');
   }
 
   // Ended game should return pass
-  const g2 = new Game(7, 3.5);
+  const g2 = new Game(7);
   g2.pass(); g2.pass();
   assert(randomAgent(g2).type === 'pass', 'pass on ended game');
 }
@@ -470,7 +469,7 @@ section('Random agent');
 section('MC agent');
 {
   const mc = require('./ai/mc.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const move = mc(g, 50); // very short budget
   assert(move.type === 'place' || move.type === 'pass', 'mc returns valid move');
   if (move.type === 'place') {
@@ -485,7 +484,7 @@ section('MC agent');
 section('MCTS agent');
 {
   const mcts = require('./ai/mcts.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const move = mcts(g, 50);
   assert(move.type === 'place' || move.type === 'pass', 'mcts returns valid move');
   if (move.type === 'place') {
@@ -499,7 +498,7 @@ section('MCTS agent');
 section('AMAF agent');
 {
   const amaf = require('./ai/amaf.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const move = amaf(g, 50);
   assert(move.type === 'place' || move.type === 'pass', 'amaf returns valid move');
   if (move.type === 'place') {
@@ -514,7 +513,7 @@ section('Group tracker verification');
 {
   const oldRatio = Board.verifyGroupRatio;
   Board.verifyGroupRatio = 1; // verify every captureGroups call
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   // Play a sequence of moves — if tracker is wrong, verification throws
   let ok = true;
   try {
@@ -537,7 +536,7 @@ section('Group tracker verification');
 
 section('classifyEmpty matches isTrueEye on random board');
 {
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const random = require('./ai/random.js');
   // Play some random moves
   for (let i = 0; i < 15 && !g.gameOver; i++) {
@@ -576,7 +575,7 @@ section('classifyEmpty matches isTrueEye on random board');
 
 section('placeStone return values');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   const r = g.placeStone(0, 0);
   assert(r === true, 'no capture returns true (not a number)');
   const r2 = g.placeStone(4, 4);
@@ -588,7 +587,7 @@ section('placeStone return values');
 section('Board serialize/parse round-trip');
 {
   const { parseBoard, boardTurnToString } = require('./game.js');
-  const g = new Game(7, 3.5);
+  const g = new Game(7);
   const random = require('./ai/random.js');
   for (let i = 0; i < 10 && !g.gameOver; i++) {
     const move = random(g);
@@ -636,7 +635,7 @@ function applyD4(sym, dx, dy) {
 // Build a 9×9 game, place stones relative to (cx, cy), return patternHash.
 // Center (1,1) is used so it stays clear of Game's initial stone at (4,4).
 function buildAndHash(stones, cx, cy, mover) {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   for (const { dx, dy, color } of stones) {
     g.board.set(cx + dx, cy + dy, color);
     g.board.captureGroups(cx + dx, cy + dy);
@@ -710,7 +709,7 @@ section('patternHash mover-relative encoding');
 {
   // Same physical board should hash differently for different movers because
   // cell codes are relative to the mover (friend vs enemy swap).
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(0, 0, 'black');
   g.board.captureGroups(0, 0);
   const hBlack = patternHash(g, 1, 1, 'black');
@@ -720,7 +719,7 @@ section('patternHash mover-relative encoding');
 
 section('patternHash return value is non-negative and bounded');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(0, 1, 'black'); g.board.captureGroups(0, 1);
   g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
   const h = patternHash(g, 1, 1, 'black');
@@ -731,7 +730,7 @@ section('patternHash return value is non-negative and bounded');
 
 section('patternHash determinism');
 {
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
   const h1 = patternHash(g, 1, 1, 'black');
   const h2 = patternHash(g, 1, 1, 'black');
@@ -748,7 +747,7 @@ section('getLadderStatus – no stone / too many liberties');
 {
   // No stone at (0,0) → empty array (constructor places stone at center (4,4))
   {
-    const g = new Game(9, 3.5);
+    const g = new Game(9);
     const r = getLadderStatus(g, 0, 0);
     assert(Array.isArray(r) && r.length === 0, 'no stone: empty array');
   }
@@ -756,7 +755,7 @@ section('getLadderStatus – no stone / too many liberties');
   // Group with 4 liberties → null (warns)
   // new Game places black at center (4,4) with 4 liberties; current flips to white.
   {
-    const g = new Game(9, 3.5);
+    const g = new Game(9);
     const r = getLadderStatus(g, 4, 4);
     assert(r === null, '4-liberty group: null');
   }
@@ -767,7 +766,7 @@ section('getLadderStatus – 1-liberty group: immediate escape to 3+ libs');
   // Black at (4,4), white at (3,4),(5,4),(4,3): liberty (4,5).
   // After black plays (4,5): group gains (3,5),(4,6),(5,5) → 3 libs → canEscape=true.
   // After white plays (4,5): black captured → canEscapeAfterPass=false.
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
@@ -784,7 +783,7 @@ section('getLadderStatus – 1-liberty group: escape is suicide');
 {
   // Playing the liberty is suicide → canEscape=false.
   // White playing the liberty captures black → canEscapeAfterPass=false.
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
@@ -802,7 +801,7 @@ section('getLadderStatus – 1-liberty group: escape is suicide');
 section('getLadderStatus – 1-liberty group: ladder with breaker (can escape)');
 {
   // canEscape should be true.
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
   g.board.set(3, 6, 'black'); g.board.captureGroups(3, 6);  // breaker
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
@@ -821,7 +820,7 @@ section('getLadderStatus – 1-liberty group: two-step ladder (bug: canEscape wr
   // _canEscape returns null immediately for 2-lib groups ("not a ladder threat")
   // without recursing to check whether the attacker can re-atari and complete
   // the capture.  getLadderStatus therefore sets canEscape=true — wrong.
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
@@ -845,7 +844,7 @@ section('getLadderStatus – 2-liberty group');
   // Mover = black (group owner).
   // For each liberty: black plays → 4+ libs → canEscape=true.
   // For each liberty: white plays → group has 1 lib, open board → canEscapeAfterPass=true.
-  const g = new Game(9, 3.5);
+  const g = new Game(9);
   g.board.set(4, 4, 'black'); g.board.captureGroups(4, 4);
   g.board.set(3, 4, 'white'); g.board.captureGroups(3, 4);
   g.board.set(5, 4, 'white'); g.board.captureGroups(5, 4);
@@ -868,7 +867,7 @@ section('getLadderStatus – 2-liberty group');
 // Shared helper — mirrors evalladders.js buildPosition.
 function _buildPos(boardStr, toPlay) {
   const { size, stones } = parseBoard(boardStr);
-  const g = new Game(size, 0);
+  const g = new Game(size);
   const c = size >> 1;
   g.board.set(c, c, null);
   g.moveCount = 0;
@@ -1196,7 +1195,7 @@ section('Game2 matches game.js: board state, isLegal, isTrueEye (20 random 7x7 g
 
   for (let trial = 0; trial < 20 && allMatch; trial++) {
     const N = 7;
-    const g1 = new Game(N, 3.5);
+    const g1 = new Game(N);
     const g2 = new Game2(N);
 
     while (!g1.gameOver) {
@@ -1258,7 +1257,7 @@ section('Game2 matches game.js: board state, isLegal, isTrueEye (20 random 7x7 g
 
 section('toGame2 basic state');
 {
-  const g1 = new Game(9, 3.5);
+  const g1 = new Game(9);
   g1.placeStone(0, 0); // white at (0,0)
   g1.placeStone(1, 1); // black at (1,1)
   const g2 = g1.toGame2();
@@ -1274,7 +1273,7 @@ section('toGame2 board cells match');
 {
   const N = 7;
   const random = require('./ai/random.js');
-  const g1 = new Game(N, 3.5);
+  const g1 = new Game(N);
   for (let i = 0; i < 15 && !g1.gameOver; i++) {
     const m = random(g1);
     if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
@@ -1295,7 +1294,7 @@ section('toGame2 isLegal and isTrueEye match');
 {
   const N = 7;
   const random = require('./ai/random.js');
-  const g1 = new Game(N, 3.5);
+  const g1 = new Game(N);
   for (let i = 0; i < 20 && !g1.gameOver; i++) {
     const m = random(g1);
     if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
@@ -1325,7 +1324,7 @@ section('toGame2 ko is transferred');
   // Use a sequence that produces a ko: surround a single stone so capturing it
   // leaves the capturer with exactly 1 liberty pointing at the captured cell.
   const N = 9;
-  const g1 = new Game(N, 3.5);
+  const g1 = new Game(N);
   // white plays (3,3); black surrounds from N/E/S, white fills W neighbour
   // to leave black with 1 lib; black captures; ko is set.
   // Simpler: use a known ko-producing sequence.
@@ -1338,7 +1337,7 @@ section('toGame2 ko is transferred');
 
 section('toGame2 gameOver and consecutivePasses transferred');
 {
-  const g1 = new Game(7, 3.5);
+  const g1 = new Game(7);
   g1.pass(); g1.pass();
   assert(g1.gameOver, 'precondition: game over');
   const g2 = g1.toGame2();
@@ -1350,7 +1349,7 @@ section('toGame2 result is playable');
 {
   const N = 7;
   const random = require('./ai/random.js');
-  const g1 = new Game(N, 3.5);
+  const g1 = new Game(N);
   for (let i = 0; i < 10 && !g1.gameOver; i++) {
     const m = random(g1);
     if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
@@ -1380,7 +1379,7 @@ section('toGame2 consistency across 20 mid-game positions');
   let allMatch = true;
 
   for (let trial = 0; trial < 20; trial++) {
-    const g1 = new Game(N, 3.5);
+    const g1 = new Game(N);
     const steps = 5 + Math.floor(Math.random() * 20);
     for (let i = 0; i < steps && !g1.gameOver; i++) {
       const m = random(g1);
@@ -1574,7 +1573,7 @@ function _buildGame2Pos(boardStr, toPlay) {
 // stones = [{ x, y, color }] where color is 'black' or 'white'.
 // toPlay is 'black' or 'white'.
 function _syntheticGame2(N, stones, toPlay) {
-  const g = new Game(N, 0);
+  const g = new Game(N);
   // Clear the constructor's center stone so we start truly empty.
   const c = N >> 1;
   g.board.set(c, c, null);
@@ -1775,7 +1774,7 @@ section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions
   let checks = 0, mismatches = 0;
   for (let trial = 0; trial < 50; trial++) {
     const N = 9;
-    const g = new Game(N, 0);
+    const g = new Game(N);
     const c = N >> 1;
     g.board.set(c, c, null);
     g.moveCount = 0;
@@ -1941,7 +1940,7 @@ section('Game3 undo restores ko');
   const g3 = new Game3(N);
   // Clear the constructor's center stone by resetting to a custom position via Game.
   const { Game } = require('./game.js');
-  const gRef = new Game(N, 0);
+  const gRef = new Game(N);
   const cg = N >> 1;
   gRef.board.set(cg, cg, null);
   gRef.moveCount = 0; gRef.current = 'black'; gRef.consecutivePasses = 0; gRef.koFlag = null;
@@ -2249,7 +2248,7 @@ section('Game3 random play/undo stress test');
 section('game.js calcTerritory — flood fill');
 {
   // 3×3 board: all black stones except (1,1) empty → black claims everything
-  const g = new Game(3, 4.5);
+  const g = new Game(3);
   // Clear the board (constructor places center stone)
   for (let y = 0; y < 3; y++)
     for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
@@ -2265,7 +2264,7 @@ section('game.js calcTerritory — flood fill');
 {
   // 3×3 board split: left column black, right column white, middle empty.
   // Middle column is adjacent to both → neutral.
-  const g = new Game(3, 4.5);
+  const g = new Game(3);
   for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
   for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
   const t = g.calcTerritory();
@@ -2277,7 +2276,7 @@ section('game.js calcTerritory — flood fill');
   // 5×5: black surrounds a 3-cell interior region.
   // On a toroidal board, "surrounded" means the whole empty region must be
   // enclosed — verify flood fill assigns the interior to black.
-  const g = new Game(5, 4.5);
+  const g = new Game(5);
   for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
   // Clear a 1×3 interior strip
   g.board.grid[2][1] = null;

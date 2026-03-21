@@ -110,7 +110,7 @@ const PASS_PROB = 0.05; // 5 % chance to pass even when moves exist
 let totalMoves = 0;
 
 for (let gameIdx = 0; gameIdx < N_GAMES; gameIdx++) {
-  const game = new Game(9, 3.5);
+  const game = new Game(9);
   const g2   = new Game2(9);
 
   // Both constructors place a black stone at center; sync initial state.

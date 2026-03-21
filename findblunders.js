@@ -23,7 +23,7 @@
 //   Paste the output into the POSITIONS array in evalladders.js.
 
 const path = require('path');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -79,7 +79,7 @@ let blunderCount = 0;
 // Run forever; pipe output to a file or Ctrl-C to stop.
 while (true) {
   gameCount++;
-  const game = new Game(boardSize, DEFAULT_KOMI);
+  const game = new Game(boardSize);
 
   while (!game.gameOver) {
     const posKey = `${game.board.toAscii()}|${game.current}`;

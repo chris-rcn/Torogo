@@ -21,6 +21,7 @@
 
 const { performance } = require('perf_hooks');
 const randomAgent = require('./random.js');
+const { KOMI } = require('../game.js');
 
 const DEFAULT_BUDGET_MS = 500;
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
@@ -211,7 +212,7 @@ module.exports = function getMove(game, timeBudgetMs) {
   if (candidates[bestIdx].type === 'pass' && plays[PASS_IDX] > 0) {
     const territory = game.calcTerritory();
     const blackTotal = territory.black;
-    const whiteTotal = territory.white + game.komi;
+    const whiteTotal = territory.white + KOMI;
     const actualWinner = blackTotal > whiteTotal ? 'black'
                        : whiteTotal > blackTotal ? 'white'
                        : null;

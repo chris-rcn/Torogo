@@ -15,7 +15,7 @@
 // Output is newline-delimited JSON, one object per position.
 
 const path = require('path');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -63,7 +63,7 @@ function coordStr(move) {
 }
 
 while (true) {
-  const game = new Game(boardSize, DEFAULT_KOMI);
+  const game = new Game(boardSize);
 
   const history = [];
 

@@ -15,7 +15,7 @@
 // When such a move is found the board position is printed with the move marked.
 
 const fs = require('fs');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 const { getLadderStatus }    = require('./ladder.js');
 
 const args = process.argv.slice(2);
@@ -44,7 +44,7 @@ for (const line of lines) {
   const size   = parseInt(fields[0], 10);
   const moves  = fields.slice(1);
 
-  const g = new Game(size, DEFAULT_KOMI);
+  const g = new Game(size);
 
   // moves[0] is the initial center stone placed by the constructor; start at 1.
   for (let mi = 1; mi < moves.length; mi++) {

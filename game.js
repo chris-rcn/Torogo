@@ -668,7 +668,6 @@ class Game {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
-    this.komi = KOMI;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
     this.moveCount = 0;
@@ -687,7 +686,6 @@ class Game {
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
     g.lastMove          = null;
-    g.komi              = this.komi;
     g.scores            = null;
     g.illegalFlash      = null;
     g.moveCount         = this.moveCount;
@@ -850,8 +848,8 @@ class Game {
   // Accurate winner using flood-fill territory + komi.  Returns 'black', 'white', or null.
   calcWinner() {
     const t = this.calcTerritory();
-    return t.black > t.white + this.komi ? 'black'
-         : t.white + this.komi > t.black ? 'white' : null;
+    return t.black > t.white + KOMI ? 'black'
+         : t.white + KOMI > t.black ? 'white' : null;
   }
 
   // Fast area score: 1-step orthogonal neighbour check (no flood fill).
@@ -883,8 +881,8 @@ class Game {
       }
     }
 
-    return black > white + this.komi ? 'black'
-         : white + this.komi > black ? 'white'
+    return black > white + KOMI ? 'black'
+         : white + KOMI > black ? 'white'
          : null;
   }
 
