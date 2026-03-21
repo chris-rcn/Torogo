@@ -49,74 +49,6 @@ function loadPatterns(filePath) {
 }
 
 /**
- * Create an agent function that uses the supplied pattern table.
- *
- * @param {string} patternFile
- * @returns {function(game, timeBudgetMs): {type: string, x?: number, y?: number}}
- */
-function makeAgent(patternFile) {
-  const table = loadPatterns(patternFile);
-
-  return function getMove(game, _timeBudgetMs) {
-    if (game.gameOver) return { type: 'pass' };
-
-    const N     = game.boardSize;
-    const color = game.current;
-    const board = game.board;
-
-    // Collect all legal non-true-eye cells into a pool.
-    const pool = [];
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        if (board.get(x, y) === null && !board.isTrueEye(x, y, color))
-          pool.push([x, y]);
-      }
-    }
-
-    if (pool.length === 0) return { type: 'pass' };
-
-    // Draw up to CANDIDATES cells from the pool using reservoir-style random
-    // selection (swap-with-last), then check full legality and score each.
-    const candidates = [];  // [x, y]
-    const weights    = [];  // parallel selection-ratio weights
-    let remaining = pool.length;
-
-    while (candidates.length < CANDIDATES && remaining > 0) {
-      const i = Math.floor(Math.random() * remaining);
-      const [x, y] = pool[i];
-      pool[i] = pool[--remaining];   // swap-with-last (no splice)
-
-      if (board.isSuicide(x, y, color)) continue;
-      if (board.isKo(x, y, color, game.koFlag)) continue;
-
-      const hash   = patternHash(game, x, y, color);
-      const weight = table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
-      candidates.push([x, y]);
-      weights.push(weight);
-    }
-
-    if (candidates.length === 0) return { type: 'pass' };
-
-    // Weighted random sample among the chosen candidates.
-    let total = 0;
-    for (const w of weights) total += w;
-
-    let r = Math.random() * total;
-    for (let i = 0; i < candidates.length; i++) {
-      r -= weights[i];
-      if (r <= 0) {
-        const [x, y] = candidates[i];
-        return { type: 'place', x, y };
-      }
-    }
-
-    // Floating-point rounding safety: return the last candidate.
-    const [x, y] = candidates[candidates.length - 1];
-    return { type: 'place', x, y };
-  };
-}
-
-/**
  * Create a weighting function (game, x, y) → number from a pattern file.
  * Lighter than makeAgent: no candidate sampling, just the hash→ratio lookup.
  * Intended for callers (e.g. ravepat) that manage candidate selection themselves.
@@ -137,10 +69,7 @@ function makeWeighter(patternFile) {
 // Looks for patterns.csv next to game.js (project root).
 const path = require('path');
 const _defaultFile   = path.join(__dirname, '..', 'patterns.csv');
-const _defaultGetMove = makeAgent(_defaultFile);
 const _defaultWeight  = makeWeighter(_defaultFile);
 
-module.exports = Object.assign(_defaultGetMove, {
-  makeAgent, makeWeighter,
-  weight: _defaultWeight,
-});
+module.exports = { weight: _defaultWeight };
+
