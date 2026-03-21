@@ -64,11 +64,11 @@ const DEFAULT_WEIGHT = 0.01;
 let patternSelectionRatio;
 
 if (_isNode) {
-  ({ weight: patternSelectionRatio } = require('./pattern.js'));
+  ({ weight: patternSelectionRatio } = require('../patternValue.js'));
 } else {
-  // Browser: patternHash is a global from patterns.js loaded as a <script>.
+  // Browser: patternHash2 is a global from patterns2.js loaded as a <script>.
   // Load patterns.csv via fetch and build the ratio table.
-  const _patternHash = window.patternHash;
+  const _patternHash2 = window.patternHash2;
   const _table = new Map();
   fetch('patterns.csv')
     .then(r => r.text())
@@ -81,8 +81,8 @@ if (_isNode) {
         if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
       }
     });
-  patternSelectionRatio = function(game, x, y) {
-    const hash = _patternHash(game, x, y, game.current);
+  patternSelectionRatio = function(game2, idx) {
+    const hash = _patternHash2(game2, idx, game2.current);
     return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
   };
 }
@@ -375,6 +375,12 @@ function applyLadderPriors(node, game2, N) {
         seedChild(li, 2 * groupSize, 2 * groupSize);      // Do chase doomed group (when urgent).
       }
     }
+  }
+  const legals = legalMoves(game2); // not great                                                                                                                                                        
+  for (const move of legals) {                                                                                                                                                                        
+    if (move === PASS) continue;                                                                                                                                                                        
+    const ratio = patternSelectionRatio(game2, move);                                                                                                                                            
+    seedChild(move, PAT_PRIOR_VISITS * ratio, PAT_PRIOR_VISITS);  
   }
 }
 

@@ -1,25 +1,15 @@
 'use strict';
 
 /**
- * Pattern-based policy agent.
- *
- * Loads a pattern-statistics file produced by minepatterns.js, then selects
- * moves by sampling from a distribution proportional to each candidate's
- * selection ratio.  Patterns not present in the file receive a small uniform
+ * Loads a pattern-statistics file produced by minepatterns.js.  Patterns not 
+ * present in the file receive a small uniform
  * prior weight (DEFAULT_WEIGHT) so that novel positions still produce legal
  * moves.  Falls back to pass when no legal non-eye move exists.
  *
- * Interface: makeAgent(patternFile) → getMove(game, timeBudgetMs)
- *   patternFile  - path to the file emitted by minepatterns.js
- *                  format per line: <hash>,<ratio>,<seen_count>
- *   getMove      - standard agent interface (timeBudgetMs is ignored)
- *
- * Usage (selfplay / recordgames):
- *   const getMove = require('./ai/pattern.js').makeAgent('patterns.csv');
  */
 
 const fs = require('fs');
-const { patternHash } = require('../patterns.js');
+const { patternHash2 } = require('./patterns2.js');
 
 // Weight given to patterns that were never observed in the training data.
 const DEFAULT_WEIGHT = 0.01;
@@ -49,27 +39,24 @@ function loadPatterns(filePath) {
 }
 
 /**
- * Create a weighting function (game, x, y) → number from a pattern file.
+ * Create a weighting function (game2, idx) → number from a pattern file.
  * Lighter than makeAgent: no candidate sampling, just the hash→ratio lookup.
- * Intended for callers (e.g. ravepat) that manage candidate selection themselves.
+ * Intended for callers (e.g. raveladpat2) that manage candidate selection themselves.
  *
  * @param {string} patternFile
- * @returns {function(game, x, y): number}
+ * @returns {function(game2, idx): number}
  */
 function makeWeighter(patternFile) {
   const table = loadPatterns(patternFile);
-  return function weight(game, x, y) {
-    const hash = patternHash(game, x, y, game.current);
+  return function weight(game2, idx) {
+    const hash = patternHash2(game2, idx, game2.current);
     return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
   };
 }
 
-// Default getMove for use with selfplay.js / recordgames.js:
-//   node selfplay.js --p1 pattern --p2 random
-// Looks for patterns.csv next to game.js (project root).
 const path = require('path');
-const _defaultFile   = path.join(__dirname, '..', 'patterns.csv');
-const _defaultWeight  = makeWeighter(_defaultFile);
+const _defaultFile  = path.join(__dirname, process.env.PAT_DATA || 'patterns.csv');
+const _defaultWeight = makeWeighter(_defaultFile);
 
 module.exports = { weight: _defaultWeight };
 
