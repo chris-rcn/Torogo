@@ -2288,61 +2288,45 @@ section('game.js calcTerritory — flood fill');
   assert(t.white === 0,  'calcTerritory: no white');
 }
 
-section('game.js estimateTerritory — 1-step neighbour check');
+section('game.js estimateWinner — 1-step neighbour check');
 {
-  // Same 3×3 perimeter-black test.
-  const g = new Game(3, 4.5);
+  // 3×3 all-black except interior: 8 black stones + interior cell adjacent to black.
+  // black=9, white=0 → black wins (9 > 0 + komi=4.5).
+  const g = new Game(3);
   for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
   for (let y = 0; y < 3; y++)
     for (let x = 0; x < 3; x++)
       if (!(x === 1 && y === 1)) g.board.grid[y][x] = 'black';
-  const t = g.estimateTerritory();
-  // The interior cell (1,1) has 4 black neighbours → counted as black.
-  assert(t.black === 9, 'estimateTerritory: 8 black + 1 interior empty adjacent to black');
-  assert(t.white === 0, 'estimateTerritory: no white');
+  assert(g.estimateWinner() === 'black', 'estimateWinner: 8 black + 1 interior → black wins');
 }
 {
-  // 3×3 split: middle column — mixed neighbours → neutral (same as calcTerritory here).
-  const g = new Game(3, 4.5);
+  // 3×3 split: 3 black on left, 3 white on right, 3 neutral empties in middle.
+  // black=3, white=3, neutral=3 → 3 vs 3+4.5 → white wins by komi.
+  const g = new Game(3);
   for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
   for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
-  const t = g.estimateTerritory();
-  assert(t.black === 3,   'estimateTerritory split: 3 black stones');
-  assert(t.white === 3,   'estimateTerritory split: 3 white stones');
-  assert(t.neutral === 3, 'estimateTerritory split: 3 neutral empties');
+  assert(g.estimateWinner() === 'white', 'estimateWinner: equal territory → white wins by komi');
 }
 {
-  // estimateTerritory UNDERCOUNTS large interior regions.
-  // 5×5 all-black except 3-cell interior: each interior cell is adjacent to
-  // black, so all 3 are counted as black territory — SAME as flood fill here
-  // because the region is small and directly adjacent to stones.
-  const g = new Game(5, 4.5);
+  // 5×5 all-black except 3-cell interior: black=25, white=0 → black wins.
+  const g = new Game(5);
   for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
   g.board.grid[2][1] = null;
   g.board.grid[2][2] = null;
   g.board.grid[2][3] = null;
-  const t = g.estimateTerritory();
-  assert(t.black === 25, 'estimateTerritory: small interior region correctly estimated');
+  assert(g.estimateWinner() === 'black', 'estimateWinner: dominated board → black wins');
 }
 {
-  // 5×5: white surrounds a 3×3 interior empty region.
-  // Flood fill assigns all 9 to white; 1-step assigns only cells directly
-  // adjacent to white (8 boundary cells).  The true interior cell has only
-  // empty neighbours → not counted (neutral).  Both agree on winner.
-  const g = new Game(5, 4.5);
+  // 5×5: white perimeter, empty interior.
+  // calcTerritory → white wins; estimateWinner agrees (1-step undercounts but still white).
+  const g = new Game(5);
   for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = null;
-  // White perimeter
   for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
     if (y === 0 || y === 4 || x === 0 || x === 4) g.board.grid[y][x] = 'white';
   }
   const tc = g.calcTerritory();
-  const te = g.estimateTerritory();
-  // calcTerritory: 16 white stones + 9 interior empty → 25 white, 0 black
   assert(tc.white === 25 && tc.black === 0, 'calcTerritory: large interior all white');
-  // estimateTerritory: 16 white stones + 8 edge-interior cells (adjacent to white)
-  // + 1 true centre cell (only empty neighbours) → neutral
-  assert(te.white === 24 && te.black === 0 && te.neutral === 1,
-         'estimateTerritory: true-interior cell with empty-only neighbours is neutral');
+  assert(g.estimateWinner() === 'white', 'estimateWinner: white perimeter → white wins');
 }
 
 section('game2 calcTerritory — flood fill');
@@ -2371,70 +2355,58 @@ section('game2 calcTerritory — flood fill');
   }
 }
 
-section('game2 estimateTerritory — 1-step neighbour check');
+section('game2 estimateWinner — 1-step neighbour check');
 {
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   {
-    // All-black board: estimateTerritory and calcTerritory should agree.
+    // All-black board: both estimate and flood-fill agree black wins.
     const g = new Game2(5);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
-    const te = g.estimateTerritory();
     const tc = g.calcTerritory();
-    assert(te.black === tc.black && te.white === tc.white,
-           'game2.estimateTerritory: all-black agrees with calcTerritory');
+    assert(tc.black > tc.white,       'game2.calcTerritory: all-black → black wins');
+    assert(g.estimateWinner() === B2, 'game2.estimateWinner: all-black → black wins');
   }
   {
-    // White perimeter, empty interior (5×5): estimate is slightly less than
-    // flood fill for the single true-interior cell, but both agree on winner.
+    // White perimeter, empty interior (5×5): both methods agree white wins.
     const g = new Game2(5);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
       if (y === 0 || y === 4 || x === 0 || x === 4) g.cells[y * 5 + x] = W2;
     }
     const tc = g.calcTerritory();
-    const te = g.estimateTerritory();
-    assert(tc.white > tc.black,  'game2.calcTerritory: white wins');
-    assert(te.white > te.black,  'game2.estimateTerritory: white also wins (same direction)');
-    assert(tc.black === te.black, 'game2: black counts agree (no black stones)');
-    // Flood fill gets all 9 interior cells; 1-step gets only 8 of them.
-    assert(tc.white > te.white,  'game2.calcTerritory white > estimateTerritory white (flood fill counts more)');
+    assert(tc.white > tc.black,        'game2.calcTerritory: white perimeter → white wins');
+    assert(g.estimateWinner() === W2,  'game2.estimateWinner: white perimeter → white wins');
   }
   {
-    // estimateTerritory returns { black, white } with komi in white.
+    // Empty board: white wins by komi alone.
     const g = new Game2(5);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
-    for (let i = 0; i < 25; i++) g.cells[i] = B2;
-    const te = g.estimateTerritory();
-    assert(Math.abs(te.white - 4.5) < 0.01, 'game2.estimateTerritory: komi present when no white stones');
+    assert(g.estimateWinner() === W2, 'game2.estimateWinner: empty board → white wins by komi');
   }
 }
 
-section('calcTerritory and estimateTerritory agree on winner after random playouts');
+section('calcTerritory winner and estimateWinner agree after random playouts');
 {
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   let agree = 0, disagree = 0;
   for (let trial = 0; trial < 200; trial++) {
     const g = new Game2(7);
     const cap = 49;
-    // Quick random playout
-    let passes = 0;
     while (!g.gameOver) {
       const cands = [];
       for (let i = 0; i < cap; i++) if (g.cells[i] === 0 && !g.isTrueEye(i) && g.isLegal(i)) cands.push(i);
-      if (cands.length === 0) { g.play(-1); passes++; } else {
-        g.play(cands[Math.floor(Math.random() * cands.length)]); passes = 0;
+      if (cands.length === 0) { g.play(-1); } else {
+        g.play(cands[Math.floor(Math.random() * cands.length)]);
       }
     }
     const tc = g.calcTerritory();
-    const te = g.estimateTerritory();
-    const winC = tc.black > tc.white ? B2 : tc.white > tc.black ? W2 : 0;
-    const winE = te.black > te.white ? B2 : te.white > te.black ? W2 : 0;
+    const winC = tc.black > tc.white ? B2 : tc.white > tc.black ? W2 : null;
+    const winE = g.estimateWinner();
     if (winC === winE) agree++; else disagree++;
   }
   console.log(`  Agree on winner: ${agree}/200, disagree: ${disagree}`);
-  // Scoring methods may occasionally disagree on close games; large disagreement is a bug.
-  assert(disagree <= 10, 'calcTerritory and estimateTerritory agree on winner in ≥95% of games');
+  assert(disagree <= 10, 'calcTerritory and estimateWinner agree on winner in ≥95% of games');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

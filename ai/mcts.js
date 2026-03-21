@@ -156,11 +156,12 @@ function selectAndExpand(root, rootGame) {
 }
 
 function simulate(game) {
+  const wasAlreadyOver = game.gameOver;
   playRandom(game);
-  const t = game.estimateTerritory();
-  return t.black > t.white + game.komi ? 'black'
-       : t.white + game.komi > t.black ? 'white'
-       : null;
+  if (wasAlreadyOver) {
+    return game.calcWinner();
+  }
+  return game.estimateWinner();
 }
 
 function backpropagate(node, winner) {

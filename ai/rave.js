@@ -107,14 +107,9 @@ function playTracked(game) {
   if (wasAlreadyOver) {
     // Tree terminal: the game ended by double-pass inside the search tree.
     // Use accurate flood-fill scoring.
-    const t = game.calcTerritory();
-    winner = t.black > t.white + game.komi ? 'black'
-           : t.white + game.komi > t.black ? 'white' : null;
+    winner = game.calcWinner();
   } else {
-    // Playout result: use fast 1-step estimate (no flood fill).
-    const t = game.estimateTerritory();
-    winner = t.black > t.white + game.komi ? 'black'
-           : t.white + game.komi > t.black ? 'white' : null;
+    winner = game.estimateWinner();
   }
   return { winner, blackPlayed, whitePlayed };
 }

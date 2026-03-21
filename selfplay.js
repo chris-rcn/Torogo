@@ -24,7 +24,7 @@ const { performance } = require('perf_hooks');
  */
 
 const path = require('path');
-const { Game, KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 // Boolean flags that take no value.
 const BOOL_FLAGS = new Set(['help', 'verbose']);
@@ -156,10 +156,10 @@ for (let g = 0; ; g++) {
     if (verboseBoard) printBoard(game);
   }
 
-  const t = game.calcTerritory();
-  if (t.black > t.white + KOMI) {
+  const winner = game.calcWinner();
+  if (winner === 'black') {
     tally[p1IsBlack ? 'p1' : 'p2']++;
-  } else if (t.white + KOMI > t.black) {
+  } else if (winner === 'white') {
     tally[p1IsBlack ? 'p2' : 'p1']++;
   }
 

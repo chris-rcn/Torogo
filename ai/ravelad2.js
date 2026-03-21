@@ -36,9 +36,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus3 } = _isNode ? require('./ladder3.js') : window;
-const { Game3 }            = _isNode ? require('../game3.js') : window;
-const { PASS: PASS2, BLACK: BLACK2, WHITE: WHITE2 } = _isNode ? require('../game2.js') : window;
+const { getLadderStatus2: getLadderStatus } = _isNode ? require('./ladder2.js') : window;
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
@@ -93,7 +92,7 @@ function playTracked(game2) {
       if (game2.isTrueEye(idx)) continue;
       if (!game2.isLegal(idx))  continue;
 
-      if (current === BLACK2) blackPlayed.push(idx);
+      if (current === BLACK) blackPlayed.push(idx);
       else                    whitePlayed.push(idx);
 
       // Snapshot neighbour occupancy to detect captures after play.
@@ -116,13 +115,15 @@ function playTracked(game2) {
       break;
     }
 
-    if (!placed) { game2.play(PASS2); moves++; }
+    if (!placed) { game2.play(PASS); moves++; }
   }
 
-  const sc = wasAlreadyOver ? game2.calcTerritory() : game2.estimateTerritory();
-  const winner = sc.black > sc.white ? 'black'
-               : sc.white > sc.black ? 'white'
-               : null;
+  let winner;
+  if (wasAlreadyOver) {
+    winner = game2.calcWinner();
+  } else {
+    winner = game2.estimateWinner();
+  }
   return { winner, blackPlayed, whitePlayed };
 }
 
@@ -174,7 +175,7 @@ function moveIndex(move, N) {
 
 // Apply a {type,x,y}/pass move to a Game2 instance.
 function applyMove(game2, move) {
-  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS2);
+  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS);
 }
 
 // RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
@@ -242,8 +243,7 @@ function selectAndExpand(root, rootGame2, N) {
       node.untried[bestIdx] = node.untried[node.untried.length - 1];
       node.untried[node.untried.length - 1] = winnerMove;
       const move = node.untried.pop();
-      const mover = game2.current === BLACK2 ? 'black' : 'white';
-      const child = makeNode(move, node, mover, N);
+      const child = makeNode(move, node, game2.current, N);
       node.children.push(child);
       node = child;
       applyMove(game2, move);
@@ -253,11 +253,10 @@ function selectAndExpand(root, rootGame2, N) {
       // randomly.  Without this, rollouts from a "one pass" state play on for
       // many more random moves, inflating the pass move's apparent win rate.
       if (!game2.gameOver && game2.consecutivePasses > 0) {
-        const mover2 = game2.current === BLACK2 ? 'black' : 'white';
-        const secondPass = makeNode({ type: 'pass' }, node, mover2, N);
+        const secondPass = makeNode({ type: 'pass' }, node, game2.current, N);
         node.children.push(secondPass);
         node = secondPass;
-        game2.play(PASS2); // game2.gameOver becomes true
+        game2.play(PASS); // game2.gameOver becomes true
       }
     }
   }
@@ -279,8 +278,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     if (node.mover !== null && winner === node.mover) node.wins++;
 
     const chooser = node.mover === null ? rootPlayer
-      : (node.mover === 'black' ? 'white' : 'black');
-    const played = chooser === 'black' ? blackPlayed : whitePlayed;
+      : (node.mover === BLACK ? WHITE : BLACK);
+    const played = chooser === BLACK ? blackPlayed : whitePlayed;
     const won    = winner === chooser ? 1 : 0;
     for (const cellIdx of played) {
       node.raveVisits[cellIdx]++;
@@ -298,9 +297,7 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
 function applyLadderPriors(node, game2, N) {
-  let game3 = null;  // created lazily on first getLadderStatus3 call
-  const moverInt = game2.current;  // BLACK2 or WHITE2
-  const mover    = moverInt === BLACK2 ? 'black' : 'white';
+  const mover = game2.current;  // BLACK or WHITE
 
   // Promote a legal move to a pre-created child seeded with virtual wins/visits.
   // If the child already exists (two groups share a liberty), accumulate into it.
@@ -334,23 +331,20 @@ function applyLadderPriors(node, game2, N) {
 
     if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
 
-    if (game3 === null) game3 = Game3.from(game2);
-    const statusEntries = getLadderStatus3(game3, i);
-
+    const statusEntries = getLadderStatus(game2, i);
     if (!statusEntries) continue;
 
-    const groupSize  = game2._ss[gid];
-    const groupColor = color === BLACK2 ? 'black' : 'white';
+    const groupSize = game2._ss[gid];
 
     for (const entry of statusEntries) {
       const { liberty: { x: lx, y: ly } } = entry;
-      if (groupColor === mover && !entry.canEscape) {        // Don't extend doomed group.
+      if (color === mover && !entry.canEscape) {        // Don't extend doomed group.
         seedChild(lx, ly, 0, 3 * groupSize + 1);
-      } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
+      } else if (color !== mover && entry.canEscape) {  // Don't chase escaping group.
         seedChild(lx, ly, 0, 45);
-      } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
+      } else if (color === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
         seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
-      } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
+      } else if (color !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
         seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
       }
     }
@@ -363,9 +357,9 @@ function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
   const N          = game.boardSize;
-  const rootPlayer = game.current;
   const root       = makeNode(null, null, null, N);
   const game2      = game.toGame2();
+  const rootPlayer = game2.current;
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;

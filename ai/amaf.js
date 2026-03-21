@@ -95,10 +95,7 @@ function playTracked(game, trackColor) {
     }
   }
 
-  const t = game.estimateTerritory();
-  const winner = t.black > t.white + game.komi ? 'black'
-               : t.white + game.komi > t.black ? 'white'
-               : null;
+  const winner = game.estimateWinner();
 
   return { winner, played, oppPlayed, moves };
 }

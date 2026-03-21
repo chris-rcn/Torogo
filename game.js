@@ -847,20 +847,29 @@ class Game {
     return territory;
   }
 
+  // Accurate winner using flood-fill territory + komi.  Returns 'black', 'white', or null.
+  calcWinner() {
+    const t = this.calcTerritory();
+    return t.black > t.white + this.komi ? 'black'
+         : t.white + this.komi > t.black ? 'white' : null;
+  }
+
   // Fast area score: 1-step orthogonal neighbour check (no flood fill).
   // Undercounts large interior empty regions; use only for playout rollouts.
   // Returns { black, white, neutral } (komi not included).
-  estimateTerritory() {
+  // Fast 1-step area estimate.  Returns 'black', 'white', or null.
+  // Undercounts large interior empty regions; use only for playout rollouts.
+  estimateWinner() {
     const grid = this.board.grid;
     const N    = this.board.size;
     const nbr  = this.board._nbr;
-    const territory = { black: 0, white: 0, neutral: 0 };
+    let black = 0, white = 0;
 
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
         const c = grid[y][x];
-        if (c === 'black') { territory.black++; continue; }
-        if (c === 'white') { territory.white++; continue; }
+        if (c === 'black') { black++; continue; }
+        if (c === 'white') { white++; continue; }
         const base = (y * N + x) * 4;
         let bAdj = false, wAdj = false;
         for (let k = 0; k < 4; k++) {
@@ -869,13 +878,14 @@ class Game {
           if (nc === 'black') bAdj = true;
           else if (nc === 'white') wAdj = true;
         }
-        if (bAdj && !wAdj) territory.black++;
-        else if (wAdj && !bAdj) territory.white++;
-        else territory.neutral++;
+        if (bAdj && !wAdj) black++;
+        else if (wAdj && !bAdj) white++;
       }
     }
 
-    return territory;
+    return black > white + this.komi ? 'black'
+         : white + this.komi > black ? 'white'
+         : null;
   }
 
   statusText() {

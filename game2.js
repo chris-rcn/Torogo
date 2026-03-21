@@ -548,10 +548,15 @@ class Game2 {
     return { black, white: white + KOMI };
   }
 
-  // Fast area score via 1-step orthogonal neighbour check (no flood fill).
+  // Accurate winner using flood-fill territory + komi.  Returns BLACK, WHITE, or null.
+  calcWinner() {
+    const sc = this.calcTerritory();
+    return sc.black > sc.white ? BLACK : sc.white > sc.black ? WHITE : null;
+  }
+
+  // Fast 1-step area estimate.  Returns 'black', 'white', or null.
   // Undercounts large interior empty regions; use only for playout rollouts.
-  // Returns { black, white } where white already includes KOMI.
-  estimateTerritory() {
+  estimateWinner() {
     const N = this.N, cap = N * N;
     const cells = this.cells, nbr = this._nbr;
     let black = 0, white = 0;
@@ -569,7 +574,9 @@ class Game2 {
       if (bAdj && !wAdj) black++;
       else if (wAdj && !bAdj) white++;
     }
-    return { black, white: white + KOMI };
+    return black > white + KOMI ? BLACK
+         : white + KOMI > black ? WHITE
+         : null;
   }
 
 }

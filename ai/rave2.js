@@ -119,10 +119,12 @@ function playTracked(game2) {
     if (!placed) { game2.play(PASS); moves++; }
   }
 
-  const sc = wasAlreadyOver ? game2.calcTerritory() : game2.estimateTerritory();
-  const winner = sc.black > sc.white ? BLACK
-               : sc.white > sc.black ? WHITE
-               : null;
+  let winner;
+  if (wasAlreadyOver) {
+    winner = game2.calcWinner();
+  } else {
+    winner = game2.estimateWinner();
+  }
   return { winner, blackPlayed, whitePlayed };
 }
 

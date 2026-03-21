@@ -106,10 +106,7 @@ function getMove(game, timeBudgetMs) {
     }
     playRandom(clone);
 
-    const t = clone.estimateTerritory();
-    const winner = t.black > t.white + clone.komi ? 'black'
-                 : t.white + clone.komi > t.black ? 'white'
-                 : null;
+    const winner = clone.estimateWinner();
 
     stats[cidx].plays++;
     if (winner === player) stats[cidx].wins++;

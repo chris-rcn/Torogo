@@ -58,6 +58,7 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 // each player.  Pass moves carry no cell index and are not recorded.
 // Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game) {
+  const wasAlreadyOver = game.gameOver;
   const size = game.boardSize;
   const board = game.board;
   const grid  = board.grid;
@@ -109,10 +110,12 @@ function playTracked(game) {
     if (!placed) { game.pass(); moves++; }
   }
 
-  const t = game.estimateTerritory();
-  const winner = t.black > t.white + game.komi ? 'black'
-               : t.white + game.komi > t.black ? 'white'
-               : null;
+  let winner;
+  if (wasAlreadyOver) {
+    winner = game.calcWinner();
+  } else {
+    winner = game.estimateWinner();
+  }
   return { winner, blackPlayed, whitePlayed };
 }
 
