@@ -2,7 +2,6 @@
 
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
-// game3.js and ladder3.js must be loaded before this file.
 
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy.
