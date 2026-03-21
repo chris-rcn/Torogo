@@ -338,14 +338,14 @@ function applyLadderPriors(node, game2, N) {
 
     for (const entry of statusEntries) {
       const { liberty: { x: lx, y: ly } } = entry;
-      if (color === mover && !entry.canEscape) {        // Don't extend doomed group.
-        seedChild(lx, ly, 0, 3 * groupSize + 1);
-      } else if (color !== mover && entry.canEscape) {  // Don't chase escaping group.
-        seedChild(lx, ly, 0, 45);
-      } else if (color === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
-        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
-      } else if (color !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
-        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);
+      if (color === mover && !entry.canEscape) {
+        seedChild(lx, ly, 0, 2 * groupSize);              // Don't extend doomed group.
+      } else if (color !== mover && entry.canEscape) {
+        seedChild(lx, ly, 0, 10);                         // Don't chase escaping group.
+      } else if (color === mover && entry.canEscape && !entry.canEscapeAfterPass) {
+        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);  // Do escape (when urgent).
+      } else if (color !== mover && !entry.canEscape && entry.canEscapeAfterPass) {
+        seedChild(lx, ly, 2 * groupSize, 2 * groupSize);  // Do chase doomed group (when urgent).
       }
     }
   }
