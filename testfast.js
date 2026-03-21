@@ -2243,6 +2243,140 @@ section('Game3 random play/undo stress test');
   }
 }
 
+// ─── patterns2.js ────────────────────────────────────────────────────────────
+
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const { patternHash, patternHashes } = require('./patterns.js');
+  const { patternHash2, patternHashes2, MAX_LIBS: MAX_LIBS2 } = require('./patterns2.js');
+
+  section('patterns2: MAX_LIBS matches patterns.js');
+  {
+    const { MAX_LIBS } = require('./patterns.js');
+    assert(MAX_LIBS2 === MAX_LIBS, 'MAX_LIBS matches');
+  }
+
+  section('patterns2: patternHash2 agrees with patternHash on random games');
+  {
+    const rave = require('./ai/rave.js');
+    let mismatches = 0;
+    for (let trial = 0; trial < 10; trial++) {
+      const g = new Game(7);
+      // Play 20 random moves to get a non-trivial position.
+      for (let m = 0; m < 20 && !g.gameOver; m++) {
+        const move = rave(g, 1);
+        if (move.type === 'pass') g.pass();
+        else g.placeStone(move.x, move.y);
+      }
+      const game2 = g.toGame2();
+      const N = g.boardSize;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const idx  = y * N + x;
+          const mover = game2.current; // BLACK or WHITE
+          const h1 = patternHash(g, x, y, g.current);
+          const h2 = patternHash2(game2, idx, mover);
+          if (h1 !== h2) mismatches++;
+        }
+      }
+    }
+    assert(mismatches === 0, `patternHash2 agrees with patternHash on all cells (mismatches: ${mismatches})`);
+  }
+
+  section('patterns2: patternHash2 is deterministic');
+  {
+    const g = new Game(9);
+    g.placeStone(4, 3);
+    g.placeStone(4, 5);
+    const game2 = g.toGame2();
+    const h1 = patternHash2(game2, 4 * 9 + 4, game2.current);
+    const h2 = patternHash2(game2, 4 * 9 + 4, game2.current);
+    assert(h1 === h2, 'same call returns same hash');
+    assert(typeof h1 === 'number' && h1 >= 0, 'hash is a non-negative number');
+  }
+
+  section('patterns2: patternHash2 distinguishes different patterns');
+  {
+    // Empty cell surrounded only by friendly stones vs. only by enemy stones.
+    const N = 5;
+    const g1 = new Game(N);
+    const g2 = new Game(N);
+    // Centre of a 5×5 board is (2,2), idx=12.
+    // g1: place black stones around center on black's turn.
+    // g2: place white stones around center on black's turn.
+    // We'll work with the game2 states and check black's view of idx=12.
+    const gm1 = g1.toGame2();
+    const gm2 = g2.toGame2();
+    // Manually set neighbours for a quick structural test.
+    // Hash of empty center surrounded by nothing vs. surrounded by a friend.
+    const hEmpty  = patternHash2(gm1, 12, BLACK);
+    // After placing a black stone next to center:
+    g1.placeStone(2, 1); // black at (2,1) = idx 7
+    const gm1b = g1.toGame2();
+    const hWithFriend = patternHash2(gm1b, 12, BLACK);
+    assert(hEmpty !== hWithFriend, 'empty neighbourhood hash differs from neighbourhood with a friend');
+  }
+
+  section('patterns2: patternHash2 is rotation/reflection invariant');
+  {
+    // Place a single black stone at different rotations of the same relative
+    // position from the center of a 7×7 board; the hash of the empty center
+    // should be the same from all 4 rotations.
+    const N = 7;
+    const rotPositions = [[3,2],[4,3],[3,4],[2,3]]; // N/E/S/W of center (3,3)
+    const hashes = rotPositions.map(([sx, sy]) => {
+      const g = new Game(N);
+      // Place black at (sx, sy); need to reach it via play sequence.
+      // Easier: use game2 directly.
+      const gm = g.toGame2();
+      // Manually set cell and gid to simulate a single stone.
+      gm.cells[sy * N + sx] = BLACK;
+      gm._gid[sy * N + sx] = 0;
+      gm._ss[0] = 1;
+      gm._ls[0] = 4;
+      return patternHash2(gm, 3 * N + 3, BLACK); // hash of center
+    });
+    const allSame = hashes.every(h => h === hashes[0]);
+    assert(allSame, `center hash is same regardless of which cardinal neighbour has a stone (${hashes.join(',')})`);
+  }
+
+  section('patterns2: patternHashes2 agrees with patternHashes');
+  {
+    const rave = require('./ai/rave.js');
+    let mismatches = 0;
+    for (let trial = 0; trial < 5; trial++) {
+      const g = new Game(7);
+      for (let m = 0; m < 15 && !g.gameOver; m++) {
+        const move = rave(g, 1);
+        if (move.type === 'pass') g.pass();
+        else g.placeStone(move.x, move.y);
+      }
+      const N = g.boardSize;
+      const game2 = g.toGame2();
+
+      // Build coords / indices for all empty cells.
+      const coords  = [];
+      const indices = [];
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          if (g.board.get(x, y) === null) {
+            coords.push({ x, y });
+            indices.push(y * N + x);
+          }
+        }
+      }
+
+      const r1 = patternHashes(g, coords);
+      const r2 = patternHashes2(game2, indices);
+
+      for (let i = 0; i < r1.length; i++) {
+        if (r1[i].pHash !== r2[i].pHash) mismatches++;
+      }
+    }
+    assert(mismatches === 0, `patternHashes2 pHash agrees with patternHashes on all empty cells (mismatches: ${mismatches})`);
+  }
+}
+
 // ─── calcTerritory / estimateTerritory ───────────────────────────────────────
 
 section('game.js calcTerritory — flood fill');

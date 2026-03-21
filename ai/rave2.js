@@ -130,22 +130,20 @@ function playTracked(game2) {
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
-// Enumerate legal non-true-eye moves from a Game2 state.
+// Enumerate legal non-true-eye moves from a Game2 state as integers.
+// Place moves are y*N+x; pass is PASS (-1).
 function legalMoves(game2) {
   const N     = game2.N;
+  const cap   = N * N;
   const cells = game2.cells;
   const moves = [];
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const idx = y * N + x;
-      if (cells[idx] !== 0) continue;
-      if (game2.isTrueEye(idx)) continue;
-      if (game2.isLegal(idx)) moves.push({ type: 'place', x, y });
-    }
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] !== 0) continue;
+    if (game2.isTrueEye(i)) continue;
+    if (game2.isLegal(i)) moves.push(i);
   }
-  const area = N * N;
-  if (game2.moveCount >= area / 2 || game2.consecutivePasses > 0) {
-    moves.push({ type: 'pass' });
+  if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
+    moves.push(PASS);
   }
   return moves;
 }
@@ -169,13 +167,10 @@ function makeNode(move, parent, mover, N) {
   };
 }
 
+// Map an integer move to its RAVE array index.
+// Place moves (0..N*N-1) are their own index; PASS (-1) maps to N*N.
 function moveIndex(move, N) {
-  return move.type === 'pass' ? N * N : move.y * N + move.x;
-}
-
-// Apply a {type,x,y}/pass move to a Game2 instance.
-function applyMove(game2, move) {
-  game2.play(move.type === 'place' ? move.y * game2.N + move.x : PASS);
+  return move === PASS ? N * N : move;
 }
 
 // RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
@@ -208,7 +203,7 @@ function selectAndExpand(root, rootGame2, N) {
       if (s > bestScore) { bestScore = s; best = child; }
     }
     node = best;
-    applyMove(game2, node.move);
+    game2.play(node.move);
   }
 
   // Expand: attach one untried child.
@@ -237,15 +232,14 @@ function selectAndExpand(root, rootGame2, N) {
       const child = makeNode(move, node, game2.current, N);
       node.children.push(child);
       node = child;
-      applyMove(game2, move);
+      game2.play(move);
 
       // After a pass, always force a second pass as a terminal tree node so the
       // simulation scores the current board position rather than rolling out
       // randomly.  Without this, rollouts from a "one pass" state play on for
       // many more random moves, inflating the pass move's apparent win rate.
       if (!game2.gameOver && game2.consecutivePasses > 0) {
-        const mover2 = game2.current;
-        const secondPass = makeNode({ type: 'pass' }, node, mover2, N);
+        const secondPass = makeNode(PASS, node, game2.current, N);
         node.children.push(secondPass);
         node = secondPass;
         game2.play(PASS); // game2.gameOver becomes true
@@ -310,20 +304,22 @@ function getMove(game, timeBudgetMs) {
   }
 
   const children = root.children
-    .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
+    .map(c => ({
+      move: c.move === PASS ? { type: 'pass' }
+                            : { type: 'place', x: c.move % N, y: (c.move / N) | 0 },
+      visits: c.visits, wins: c.wins,
+    }))
     .sort((a, b) => b.visits - a.visits);
 
   const rootWins = root.children.reduce((s, c) => s + c.wins, 0);
   const rootWinRatio = root.visits > 0 ? rootWins / root.visits : 0.5;
-  const result = { ...bestChild.move, children, rootWinRatio };
-  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) {
-    result.type = 'pass';
-    result.winRatio = 0;
-    result.info = 'no winning line found';
-  } else {
-    result.winRatio = bestChild.wins / bestChild.visits;
-    result.info = '';
-  }
+
+  const isPass = bestChild.move === PASS || (bestChild.wins === 0 && game.moveCount >= N * N / 2);
+  const result = isPass
+    ? { type: 'pass', children, rootWinRatio, winRatio: 0, info: 'no winning line found' }
+    : { type: 'place', x: bestChild.move % N, y: (bestChild.move / N) | 0,
+        children, rootWinRatio,
+        winRatio: bestChild.wins / bestChild.visits, info: '' };
   return result;
 }
 

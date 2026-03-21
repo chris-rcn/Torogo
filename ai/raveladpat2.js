@@ -55,6 +55,38 @@ const EXPANSION_CANDIDATES = 2;
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
+// A node must reach this many visits before its ladder priors are applied.
+const PAT_PRIOR_VISITS = (typeof process !== 'undefined' && process.env.PAT_PRIOR_VISITS)
+  ? parseInt(process.env.PAT_PRIOR_VISITS, 10) : 50;
+
+// Default weight for patterns absent from the training data.
+const DEFAULT_WEIGHT = 0.01;
+
+let patternSelectionRatio;
+
+if (_isNode) {
+  ({ weight: patternSelectionRatio } = require('./pattern.js'));
+} else {
+  // Browser: patternHash is a global from patterns.js loaded as a <script>.
+  // Load patterns.csv via fetch and build the ratio table.
+  const _patternHash = window.patternHash;
+  const _table = new Map();
+  fetch('patterns.csv')
+    .then(r => r.text())
+    .then(text => {
+      for (const line of text.trim().split('\n')) {
+        if (!line.trim()) continue;
+        const parts = line.split(',');
+        const hash  = parseInt(parts[0], 10);
+        const ratio = parseFloat(parts[1]);
+        if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
+      }
+    });
+  patternSelectionRatio = function(game, x, y) {
+    const hash = _patternHash(game, x, y, game.current);
+    return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
+  };
+}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 

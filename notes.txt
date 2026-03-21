@@ -1,5 +1,9 @@
 WASM?  C?
 
+Determine good ladder priors.
+Copy to each class.
+Test raveladpat.
+
 Decide which type pattern generation is better.
 
 

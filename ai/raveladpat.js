@@ -39,7 +39,6 @@ const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISI
 const PAT_PRIOR_VISITS = (typeof process !== 'undefined' && process.env.PAT_PRIOR_VISITS)
   ? parseInt(process.env.PAT_PRIOR_VISITS, 10) : 50;
 
-
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0.01;
 
@@ -170,12 +169,10 @@ function legalMovesWithPriors(game) {
   }
 
   let totalWeight = 0;
-
   for (const m of moves) {
     m.w = m.type === 'place' ? patternSelectionRatio(game, m.x, m.y) : 1;
     totalWeight += m.w;
   }
-
   const inv = totalWeight > 0 ? 1 / totalWeight : 0;
   for (const m of moves) m.prior = m.w * inv;
 
