@@ -11,6 +11,7 @@ const { performance } = require('perf_hooks');
  *   --p2      <policy>   AI policy for player 2      (default: random)
  *   --size    <n>        Board size: 9, 13, or 19    (default: 9)
  *   --budget  <ms>       Time budget per move in ms  (default: 500)
+ *   --limit   <n>        Stop after this many games and print final stats
  *   --verbose            Print the board after every move
  *   --help               Show this help message
  *
@@ -56,12 +57,13 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--verbose]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>] [--verbose]`);
   process.exit(0);
 }
 
-if (opts.games !== undefined) {
-  console.error('--games is not supported; this script runs indefinitely');
+const gameLimit = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+if (isNaN(gameLimit) || gameLimit < 1) {
+  console.error('--limit must be a positive integer');
   process.exit(1);
 }
 
@@ -70,7 +72,7 @@ const p2Name    = opts.p2   || 'random';
 const boardSize = parseInt(opts.size   || '9',   10);
 const budgetMs  = parseInt(opts.budget || '500', 10);
 
-if (!Number.isInteger(boardSize) || boardSize < 7 || boardSize > 19 || boardSize % 2 === 0) {
+if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');
   process.exit(1);
 }
@@ -109,6 +111,19 @@ let printPeriodMs  = 1000;
 let lastPrintTime  = startTime;
 let lastPrintGames = 0;
 
+function printStats(gamesPlayed) {
+  const now     = performance.now();
+  const pct     = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%').padStart(PW);
+  const avgMs   = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—').padStart(MW);
+  const elapsed = (((now - startTime) / 1000).toFixed(1) + 's').padStart(EW);
+  console.log(
+    `${String(gamesPlayed).padStart(GW)}` +
+    `  ${elapsed}` +
+    `  ${pct(tally.p2)}` +
+    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}`
+  );
+}
+
 function maybePrint(gamesPlayed) {
   const now = performance.now();
   if (now - lastPrintTime < printPeriodMs) return;
@@ -116,24 +131,12 @@ function maybePrint(gamesPlayed) {
 
   lastPrintTime  = now;
   lastPrintGames = gamesPlayed;
-
-  const n       = gamesPlayed;
-  const pct     = (w) => ((100 * w / n).toFixed(1) + '%').padStart(PW);
-  const avgMs   = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—').padStart(MW);
-  const elapsed = (((now - startTime) / 1000).toFixed(1) + 's').padStart(EW);
-
-  console.log(
-    `${String(n).padStart(GW)}` +
-    `  ${elapsed}` +
-    `  ${pct(tally.p2)}` +
-    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}`
-  );
-
+  printStats(gamesPlayed);
   printPeriodMs = Math.round(printPeriodMs * 1.5);
 }
 
-// Run games forever.
-for (let g = 0; ; g++) {
+// Run games until the limit (or forever if no limit).
+for (let g = 0; g < gameLimit; g++) {
   const p1IsBlack = g % 2 === 0;
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
@@ -165,3 +168,6 @@ for (let g = 0; ; g++) {
 
   maybePrint(g + 1);
 }
+
+// Final stats row (always printed, even if maybePrint already fired).
+printStats(tally.p1 + tally.p2);

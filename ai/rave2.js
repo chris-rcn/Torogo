@@ -281,9 +281,9 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
-  const N          = game.boardSize;
+  const N          = game.cells ? game.N : game.boardSize;
   const root       = makeNode(null, null, null, N);
-  const game2      = game.toGame2();
+  const game2      = game.cells ? game.clone() : game.toGame2();
   const rootPlayer = game2.current;
 
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;

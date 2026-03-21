@@ -12,7 +12,7 @@ const fs = require('fs');
 const { patternHash2 } = require('./patterns2.js');
 
 // Weight given to patterns that were never observed in the training data.
-const DEFAULT_WEIGHT = 0.01;
+const DEFAULT_WEIGHT = 0;
 
 // Number of randomly sampled candidates to score per move.
 const CANDIDATES = 8;
@@ -40,8 +40,6 @@ function loadPatterns(filePath) {
 
 /**
  * Create a weighting function (game2, idx) → number from a pattern file.
- * Lighter than makeAgent: no candidate sampling, just the hash→ratio lookup.
- * Intended for callers (e.g. raveladpat2) that manage candidate selection themselves.
  *
  * @param {string} patternFile
  * @returns {function(game2, idx): number}

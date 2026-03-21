@@ -54,6 +54,39 @@ const EXPANSION_CANDIDATES = 2;
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
+// Total virtual visits contributed by the pattern prior across all children.
+// Higher values make the prior resist being overridden by early playouts longer.
+const PAT_PRIOR_WEIGHT = (typeof process !== 'undefined' && process.env.PAT_PRIOR_WEIGHT)
+  ? parseFloat(process.env.PAT_PRIOR_WEIGHT) : 0;
+
+// Default weight for patterns absent from the training data.
+const DEFAULT_WEIGHT = 0.01;
+
+let patternSelectionRatio;
+
+if (_isNode) {
+  ({ weight: patternSelectionRatio } = require('../patternValue.js'));
+} else {
+  // Browser: patternHash2 is a global from patterns2.js loaded as a <script>.
+  // Load patterns.csv via fetch and build the ratio table.
+  const _patternHash2 = window.patternHash2;
+  const _table = new Map();
+  fetch('patterns.csv')
+    .then(r => r.text())
+    .then(text => {
+      for (const line of text.trim().split('\n')) {
+        if (!line.trim()) continue;
+        const parts = line.split(',');
+        const hash  = parseInt(parts[0], 10);
+        const ratio = parseFloat(parts[1]);
+        if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
+      }
+    });
+  patternSelectionRatio = function(game2, idx) {
+    const hash = _patternHash2(game2, idx, game2.current);
+    return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
+  };
+}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -130,7 +163,7 @@ function playTracked(game2) {
 
 // Enumerate legal non-true-eye moves from a Game2 state as integers.
 // Place moves are y*N+x; pass is PASS (-1).
-function legalMoves(game2) {
+function getLegalMoves(game2) {
   const N     = game2.N;
   const cap   = N * N;
   const cells = game2.cells;
@@ -146,7 +179,7 @@ function legalMoves(game2) {
   return moves;
 }
 
-// Each node owns two Float64Arrays of length N*N+1 that store AMAF statistics
+// Each node owns two arrays of length N*N+1 that store AMAF statistics
 // for child moves indexed by cell (y*N+x), with pass at index N*N.
 // These answer: "for the player whose turn it is at this node, what is the
 // AMAF win rate of playing cell idx from here?"
@@ -160,9 +193,9 @@ function makeNode(move, parent, mover, N) {
     untried:   null,
     wins:         0,
     visits:       0,
-    ladderSeeded: false,
-    raveWins:     new Float64Array(len),
-    raveVisits:   new Float64Array(len),
+    priorsApplied: false,
+    raveWins:     new Float32Array(len),
+    raveVisits:   new Float32Array(len),
   };
 }
 
@@ -191,9 +224,8 @@ function selectAndExpand(root, rootGame2, N) {
   let node = root;
   const game2 = rootGame2.clone();
 
-  if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
-    applyLadderPriors(node, game2, N);
-    node.ladderSeeded = true;
+  if (!node.priorsApplied && node.visits >= LADDER_VISITS) {
+    applyPriors(node, game2, N);
   }
 
   // Select: descend through fully-expanded nodes using the RAVE-blended score.
@@ -208,15 +240,14 @@ function selectAndExpand(root, rootGame2, N) {
     }
     node = best;
     game2.play(node.move);
-    if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
-      applyLadderPriors(node, game2, N);
-      node.ladderSeeded = true;
+    if (!node.priorsApplied && node.visits >= LADDER_VISITS) {
+      applyPriors(node, game2, N);
     }
   }
 
   // Expand: attach one untried child.
   if (!game2.gameOver) {
-    if (node.untried === null) node.untried = legalMoves(game2);
+    if (node.untried === null) node.untried = getLegalMoves(game2);
     if (node.untried.length > 0) {
       // Sample up to EXPANSION_CANDIDATES distinct moves and pick the one
       // with the best parent RAVE win rate (default 0.5 when unvisited).
@@ -286,11 +317,10 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // A node must reach this many visits before its ladder priors are applied.
 const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
-  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
+  ? parseInt(process.env.LADDER_VISITS, 10) : 0;
 
 
-// ── Ladder priors ────────────────────────────────────────────────────────────
-function applyLadderPriors(node, game2, N) {
+function applyPriors(node, game2, N) {
   const mover = game2.current;  // BLACK or WHITE
 
   // Promote a legal move to a pre-created child seeded with virtual wins/visits.
@@ -299,7 +329,7 @@ function applyLadderPriors(node, game2, N) {
   function seedChild(li, wins, visits) {
     let child = node.children.find(c => c.move === li);
     if (!child) {
-      if (node.untried === null) node.untried = legalMoves(game2);
+      if (node.untried === null) node.untried = getLegalMoves(game2);
       const idx = node.untried.indexOf(li);
       if (idx === -1) return;
       node.untried.splice(idx, 1);
@@ -344,6 +374,17 @@ function applyLadderPriors(node, game2, N) {
       }
     }
   }
+  if (PAT_PRIOR_WEIGHT > 0) {
+    const legals = legalMoves(game2).filter(m => m !== PASS);
+    const ratios = legals.map(m => patternSelectionRatio(game2, m));
+    const maxR   = ratios.reduce((m, r) => r > m ? r : m, 0);
+    const norm   = maxR > 0 ? 1 / maxR : 0;
+    const vpp    = PAT_PRIOR_WEIGHT / legals.length;
+    for (let i = 0; i < legals.length; i++) {
+      seedChild(legals[i], ratios[i] * norm * vpp, vpp);
+    }
+  }
+  node.priorsApplied = true;
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────

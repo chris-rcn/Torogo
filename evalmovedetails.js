@@ -29,23 +29,22 @@ if (!filePath)              { console.error('--file is required'); process.exit(
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
-const { Game } = require('./game.js');
+const { Game2, PASS } = require('./game2.js');
 
-function coordStr(move) {
-  if (move.type === 'pass') return 'pass';
-  return String.fromCharCode(97 + move.x) + (move.y + 1);
+function coordStr(move, N) {
+  if (move === PASS) return 'pass';
+  return String.fromCharCode(97 + move % N) + ((move / N | 0) + 1);
 }
 
-function parseMove(str) {
-  if (str === 'pass') return { type: 'pass' };
+function parseMove(str, N) {
+  if (str === 'pass') return PASS;
   const x = str.charCodeAt(0) - 97;
   const y = parseInt(str.slice(1), 10) - 1;
-  return { type: 'place', x, y };
+  return y * N + x;
 }
 
-function applyMove(game, move) {
-  if (move.type === 'place') game.placeStone(move.x, move.y);
-  else game.pass();
+function agentMoveToIdx(agentMove, N) {
+  return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
 const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(l => l.trim());
@@ -72,11 +71,11 @@ if (verbose) {
 for (let i = 0; i < lines.length; i++) {
   const { boardSize, history, candidates } = JSON.parse(lines[i]);
 
-  const game = new Game(boardSize);
-  for (const h of history) applyMove(game, parseMove(h));
+  const game = new Game2(boardSize);
+  for (const h of history) game.play(parseMove(h, boardSize));
 
   const agentMove = agent(game, budgetMs);
-  const agentStr  = coordStr(agentMove);
+  const agentStr  = coordStr(agentMoveToIdx(agentMove, boardSize), boardSize);
 
   const topCand   = candidates[0];
   const agentCand = candidates.find(c => c.m === agentStr);
