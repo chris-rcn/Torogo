@@ -609,7 +609,7 @@ section('Board serialize/parse round-trip');
 // ─── Pattern symmetry ────────────────────────────────────────────────────────
 
 // Helpers shared by all pattern-symmetry sections.
-const { patternHash2, MAX_LIBS } = require('./patterns2.js');
+const { patternHash2 } = require('./patterns2.js');
 const { BLACK: _BLACK, WHITE: _WHITE } = require('./game2.js');
 
 // D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
@@ -648,8 +648,7 @@ function buildAndHash(stones, cx, cy, mover) {
 
 section('patternHash symmetry – diagonal stones');
 {
-  // Two diagonal stones. LIB_WEIGHT is 0 for diagonal positions so this
-  // exercises the cellHash component in isolation.
+  // Two diagonal stones.
   const base = [
     { dx: -1, dy: -1, color: 'black' },
     { dx:  1, dy: -1, color: 'white' },
@@ -666,7 +665,7 @@ section('patternHash symmetry – diagonal stones');
 
 section('patternHash symmetry – orthogonal stone');
 {
-  // Single orthogonal stone exercises the liberty-count (libHash) component.
+  // Single orthogonal stone.
   const base = [{ dx: 0, dy: -1, color: 'black' }];
   const hashes = _D4_PERMS.map((_, sym) =>
     buildAndHash(
@@ -680,10 +679,10 @@ section('patternHash symmetry – orthogonal stone');
 
 section('patternHash symmetry – mixed pattern');
 {
-  // One orthogonal stone + one diagonal stone: exercises both hash components.
+  // One orthogonal stone + one diagonal stone.
   const base = [
-    { dx:  0, dy: -1, color: 'black' }, // orthogonal (contributes to libHash)
-    { dx: -1, dy: -1, color: 'white' }, // diagonal   (cellHash only)
+    { dx:  0, dy: -1, color: 'black' },
+    { dx: -1, dy: -1, color: 'white' },
   ];
   const hashes = _D4_PERMS.map((_, sym) =>
     buildAndHash(
@@ -728,9 +727,9 @@ section('patternHash2 return value is non-negative and bounded');
   g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
   const game2 = g.toGame2();
   const h = patternHash2(game2, 1 * 9 + 1, _BLACK);
-  const maxHash = (3 ** 9 - 1) + 19683 * ((MAX_LIBS + 1) ** 4 - 1);
+  const maxHash = 0xFFFFFFFF;
   assert(h >= 0,       `hash is non-negative (got ${h})`);
-  assert(h <= maxHash, `hash is within bounds (got ${h}, max ${maxHash})`);
+  assert(h <= maxHash, `hash is within uint32 bounds (got ${h})`);
 }
 
 section('patternHash2 determinism');
@@ -2086,7 +2085,7 @@ section('Game3 random play/undo stress test');
 
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const { patternHash2, patternHashes2, MAX_LIBS: MAX_LIBS2 } = require('./patterns2.js');
+  const { patternHash2, patternHashes2 } = require('./patterns2.js');
 
   section('patterns2: patternHash2 is deterministic');
   {

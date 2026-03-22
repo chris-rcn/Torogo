@@ -5,21 +5,25 @@
 // Loaded as a plain <script> tag; ladder2.js must be loaded before this file.
 if (typeof require === 'function') { var { getLadderStatus2 } = require('./ladder2.js'); }
 
-// Liberty counts above this threshold are treated as equivalent.
-const MAX_LIBS = 1;
+// Zobrist random table: flat Int32Array. Generated with xorshift32.
+function makeZobrist(seed, size) {
+  const t = new Int32Array(size);
+  let s = seed;
+  for (let p = 0; p < size; p++) {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5; 
+    t[p] = s;
+  }
+  return t;
+};
 
-// Powers of 3 for weighting the 9 cells (base-3 hash).
-const POW3 = [1, 3, 9, 27, 81, 243, 729, 2187, 6561]; // 3^0 … 3^8
+// Size 9*3, indexed [pos*3 + cellCode].
+// cellCode 0 = empty, cellCode 1 = mover stone, 2 = opponent stone.
+const ZOBRIST = makeZobrist(0x12345678, 9 * 3);
 
-// Powers of (MAX_LIBS+1) for weighting the 4 orthogonal liberty counts.
-// Orthogonal neighbours occupy flat positions 1, 3, 5, 7 in row-major order:
-//
-//   0 1 2
-//   3 4 5   ← 1,3,5,7 are the 4 orthogonal neighbours of centre (4)
-//   6 7 8
-//
-const _M1 = MAX_LIBS + 1;
-const LIB_WEIGHT = [0, 1, 0, _M1, 0, _M1 * _M1, 0, _M1 * _M1 * _M1, 0];
+// XOR'd into the final hash when the ladder flag is urgent (ladderFlag > 1).
+const LADDER_ZOBRIST = makeZobrist(874245861, 5);
 
 // The 8 symmetries of the square (dihedral group D4) as index permutations.
 const SYMMETRY_PERMS = [
@@ -33,18 +37,8 @@ const SYMMETRY_PERMS = [
   [8, 5, 2, 7, 4, 1, 6, 3, 0], // reflect anti-diagonal
 ];
 
-// Clamped liberty count for the group at idx, or 0 if idx is empty.
-function cellLiberties2(game2, idx) {
-  const gid = game2._gid[idx];
-  if (gid < 0) return 0;
-  return Math.min(game2._ls[gid], MAX_LIBS);
-}
-
-// patternHash2(game2, idx, mover) → canonical integer in [0, 3^9 · (MAX_LIBS+1)^4).
-//
-// Returns a rotation- and reflection-invariant hash of the 3×3 neighbourhood
-// centred on the cell at flat index idx = y*N+x.  Produces identical values
-// to patternHash(game, x, y, mover) in patterns.js for the same board state.
+// patternHash2(game2, idx, mover) → rotation- and reflection-invariant Zobrist hash
+// of the 3×3 neighbourhood centred on the cell at flat index idx = y*N+x.
 //
 // mover — game2.current (BLACK=1 or WHITE=2)
 function patternHash2(game2, idx, mover) {
@@ -53,79 +47,67 @@ function patternHash2(game2, idx, mover) {
   const x = idx % N;
   const y = (idx / N) | 0;
 
-  // Collect cell codes and liberty counts for all 9 positions in row-major
-  // order: (dy,dx) = (-1,-1),(−1,0),(−1,+1),(0,−1),(0,0),(0,+1),(+1,−1),(+1,0),(+1,+1).
-  const cellCodes = new Uint8Array(9);
-  const libs      = new Uint8Array(9);
-  let i = 0;
-  for (let dy = -1; dy <= 1; dy++) {
-    const ry = (y + dy + N) % N;
-    for (let dx = -1; dx <= 1; dx++) {
-      const rx   = (x + dx + N) % N;
-      const ridx = ry * N + rx;
-      const c    = cells[ridx];
-      cellCodes[i] = c === 0 ? 0 : c === mover ? 1 : 2;
-      if (cellCodes[i] !== 0) libs[i] = cellLiberties2(game2, ridx);
-      i++;
-    }
-  }
+  const rN = ((y - 1 + N) % N) * N,  r0 = y * N,  rS = ((y + 1) % N) * N;
+  const cW =  (x - 1 + N) % N,       c0 = x,      cE =  (x + 1) % N;
 
-  // Try all 8 symmetry transforms; keep the minimum combined hash.
-  let minHash = Infinity;
+  const cc = new Uint8Array(9);
+  const encode = c => c === 0 ? 0 : c === mover ? 1 : 2;
+  cc[0] = encode(cells[rN + cW]); cc[1] = encode(cells[rN + c0]); cc[2] = encode(cells[rN + cE]);
+  cc[3] = encode(cells[r0 + cW]); cc[4] = encode(cells[r0 + c0]); cc[5] = encode(cells[r0 + cE]);
+  cc[6] = encode(cells[rS + cW]); cc[7] = encode(cells[rS + c0]); cc[8] = encode(cells[rS + cE]);
+
+  // Try all 8 symmetry transforms; keep the minimum Zobrist hash.
+  let minHash = 0xFFFFFFFF;
   for (const perm of SYMMETRY_PERMS) {
-    let cellHash = 0, libHash = 0;
+    let h = 0;
     for (let k = 0; k < 9; k++) {
-      const src = perm[k];
-      cellHash += cellCodes[src] * POW3[k];
-      libHash  += libs[src]      * LIB_WEIGHT[k];
+      h ^= ZOBRIST[k * 3 + cc[perm[k]]];
     }
-    const combined = cellHash + 19683 * libHash;
-    if (combined < minHash) minHash = combined;
+    h = h >>> 0;  // treat as unsigned uint32
+    if (h < minHash) minHash = h;
   }
   return minHash;
 }
 
 // patternHashes2(game2, indices) — batch hash with ladder urgency flags.
 // Returns an array of { idx, pHash } in the same order as `indices`.
-// Produces identical pHash values to patternHashes(game, coords) in patterns.js
-// for corresponding positions.
 function patternHashes2(game2, indices) {
   const N     = game2.N;
   const cap   = N * N;
   const cells = game2.cells;
   const mover = game2.current;
 
-  // Start every cell's ladder-flag at 1 (neutral; above-1 means urgent).
-  const ladderFlag  = new Int32Array(cap).fill(1);
+  const ladderFlag  = new Int32Array(cap);
   const visitedGids = new Set();
 
-  for (let i = 0; i < cap; i++) {
-    const color = cells[i];
-    if (color === 0) continue;
-    const gid = game2._gid[i];
-    if (visitedGids.has(gid)) continue;
-    if (game2._ss[gid] < 2) continue;
-    visitedGids.add(gid);
-    if (game2._ls[gid] > 2) continue;
-
-    const statusEntries = getLadderStatus2(game2, i);
-    if (!statusEntries) continue;
-
-    for (const entry of statusEntries) {
-      const { x: lx, y: ly } = entry.liberty;
-      const li = ly * N + lx;
-      if (color === mover && !entry.canEscape) {
-        ladderFlag[li]++;  // mover's group is doomed: avoid extending it
-      } else if (color !== mover && entry.canEscape) {
-        ladderFlag[li]++;  // opponent's group will escape: avoid chasing it
-      }
-    }
-  }
+  // Skip ladder stuff for now.
+//  for (let i = 0; i < cap; i++) {
+//    const color = cells[i];
+//    if (color === 0) continue;
+//    const gid = game2._gid[i];
+//    if (visitedGids.has(gid)) continue;
+//    visitedGids.add(gid);
+//    if (game2._ls[gid] > 2) continue;
+//
+//    const statusEntries = getLadderStatus2(game2, i);
+//    if (!statusEntries) continue;
+//
+//    for (const entry of statusEntries) {
+//      const { x: lx, y: ly } = entry.liberty;
+//      const li = ly * N + lx;
+//      if (color === mover && !entry.canEscape) {  // mover's group is doomed
+//        ladderFlag[li]++;  
+//      } else if (color !== mover && entry.canEscape) {  // opponent's group will escape
+//        ladderFlag[li]++;  
+//      }
+//    }
+//  }
 
   return indices.map(idx => {
-    const stoneLibHash = patternHash2(game2, idx, mover);
-    return { idx, pHash: stoneLibHash * 14836251 + ladderFlag[idx] * 49576351 };
+    const hash = patternHash2(game2, idx, mover);
+    const center = LADDER_ZOBRIST[ladderFlag[idx]];
+    return { idx, pHash: hash ^ center };
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { patternHash2, patternHashes2, MAX_LIBS };
+if (typeof module !== 'undefined') module.exports = { patternHash2, patternHashes2 };
