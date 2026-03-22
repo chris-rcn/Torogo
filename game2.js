@@ -583,4 +583,23 @@ class Game2 {
 
 }
 
-module.exports = { Game2, PASS, BLACK, WHITE, KOMI };
+// Flat index → coordinate string, e.g. 10 on a 9×9 board → "b2".  PASS → 'pass'.
+function coordStr(move, N) {
+  if (move === PASS) return 'pass';
+  return String.fromCharCode(97 + move % N) + ((move / N | 0) + 1);
+}
+
+// Coordinate string → flat index.  'pass' → PASS.
+function parseMove(str, N) {
+  if (str === 'pass') return PASS;
+  const x = str.charCodeAt(0) - 97;
+  const y = parseInt(str.slice(1), 10) - 1;
+  return y * N + x;
+}
+
+// Agent move object { type, x, y } → flat index.
+function agentMoveToIdx(agentMove, N) {
+  return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
+}
+
+module.exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };

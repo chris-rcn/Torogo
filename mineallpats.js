@@ -18,7 +18,7 @@
 //   <hash>,<mean_value>,<count>
 
 const fs = require('fs');
-const { Game2, PASS } = require('./game2.js');
+const { Game2, PASS, parseMove } = require('./game2.js');
 const { patternHash2 } = require('./patterns2.js');
 
 const args = process.argv.slice(2);
@@ -43,13 +43,6 @@ function addSample(hash, value) {
   s.count++;
 }
 
-// Parse a move string ("a1", "k11", "pass") into an integer index or PASS.
-function parseMove(m, N) {
-  if (m === 'pass') return PASS;
-  const x = m.charCodeAt(0) - 97;
-  const y = parseInt(m.slice(1), 10) - 1;
-  return y * N + x;
-}
 
 // Normalise a candidate entry to { m: string, kwr: number|null }.
 function normalise(c) {

@@ -29,23 +29,8 @@ if (!filePath)              { console.error('--file is required'); process.exit(
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
-const { Game2, PASS } = require('./game2.js');
+const { Game2, PASS, coordStr, parseMove, agentMoveToIdx } = require('./game2.js');
 
-function coordStr(move, N) {
-  if (move === PASS) return 'pass';
-  return String.fromCharCode(97 + move % N) + ((move / N | 0) + 1);
-}
-
-function parseMove(str, N) {
-  if (str === 'pass') return PASS;
-  const x = str.charCodeAt(0) - 97;
-  const y = parseInt(str.slice(1), 10) - 1;
-  return y * N + x;
-}
-
-function agentMoveToIdx(agentMove, N) {
-  return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
-}
 
 const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(l => l.trim());
 

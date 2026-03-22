@@ -24,15 +24,9 @@
  *   timeBudgetMs - ignored (always fast)
  */
 
-// ── helpers ────────────────────────────────────────────────────────────────
+if (typeof require === 'function') { var { shuffle } = require('../util.js'); }
 
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
+// ── helpers ────────────────────────────────────────────────────────────────
 
 // Return all groups of `color`, each as { group, libs }, sorted by group size
 // descending (largest first).

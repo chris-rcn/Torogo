@@ -17,15 +17,9 @@
  *   timeBudgetMs - ignored (always fast)
  */
 
-// ── helpers ────────────────────────────────────────────────────────────────
+if (typeof require === 'function') { var { shuffle } = require('../util.js'); }
 
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
+// ── helpers ────────────────────────────────────────────────────────────────
 
 // Scan all groups of `color` on board; return a map from liberty-key to group.
 // Only includes groups with exactly `targetLibs` liberties.

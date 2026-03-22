@@ -2,12 +2,6 @@
 'use strict';
 
 // Generate per-position move-value data by self-play.
-//
-// Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>]
-//   --agent    AI policy name   (default: rave)
-//   --budget   budget per move  (default: 100)
-//   --size     board size       (default: 11)
-//
 // At each position every legal move is enumerated.  For each candidate move the
 // game is cloned, the move is made, then agent.genMove is called with the full
 // budget.  The winRatio is flipped to the original player's perspective and
@@ -15,7 +9,7 @@
 // Output is newline-delimited JSON, one object per position.
 
 const path = require('path');
-const { Game2, PASS } = require('./game2.js');
+const { Game2, PASS, coordStr } = require('./game2.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -34,6 +28,8 @@ if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); p
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 
+const SKIP = 21;
+
 function legalMoves(game2) {
   const N   = game2.N;
   const cap = N * N;
@@ -45,21 +41,17 @@ function legalMoves(game2) {
   return moves;
 }
 
-function coordStr(move, N) {
-  if (move === PASS) return 'pass';
-  const x = move % N;
-  const y = (move / N) | 0;
-  return String.fromCharCode(97 + x) + (y + 1);
-}
 
 while (true) {
   const game = new Game2(boardSize);
   const N = boardSize;
 
   const history = [];
+  let nextAnalysis = Math.floor(Math.random() * SKIP) + 1;
 
   while (!game.gameOver) {
-    if (Math.random() < 0.05) {
+    if (game.moveCount === nextAnalysis) {
+      nextAnalysis += SKIP;
       const moves = legalMoves(game);
       const moveInfos = [];
 
