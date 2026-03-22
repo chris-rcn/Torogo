@@ -118,4 +118,28 @@ function getLadderStatus2(game2, stoneIdx) {
   return results;
 }
 
-module.exports = { getLadderStatus2 };
+// getAllLadderStatuses(game2) — run getLadderStatus2 on every group with 1 or 2
+// liberties and return an array of { gid, color, stoneIdx, entries } objects,
+// one per group (groups with 0 or 3+ liberties are skipped).
+function getAllLadderStatuses(game2) {
+  const cap  = game2.N * game2.N;
+  const results = [];
+  const visited = new Set();
+
+  for (let i = 0; i < cap; i++) {
+    if (game2.cells[i] === 0) continue;
+    const gid = game2._gid[i];
+    if (visited.has(gid)) continue;
+    visited.add(gid);
+    const lc = game2._ls[gid];
+    if (lc === 0 || lc > 2) continue;
+
+    const entries = getLadderStatus2(game2, i);
+    if (!entries) continue;
+    results.push({ gid, color: game2.cells[i], entries });
+  }
+
+  return results;
+}
+
+module.exports = { getLadderStatus2, getAllLadderStatuses };

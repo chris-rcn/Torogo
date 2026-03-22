@@ -80,28 +80,27 @@ function patternHashes2(game2, indices) {
   const ladderFlag  = new Int32Array(cap);
   const visitedGids = new Set();
 
-  // Skip ladder stuff for now.
-//  for (let i = 0; i < cap; i++) {
-//    const color = cells[i];
-//    if (color === 0) continue;
-//    const gid = game2._gid[i];
-//    if (visitedGids.has(gid)) continue;
-//    visitedGids.add(gid);
-//    if (game2._ls[gid] > 2) continue;
-//
-//    const statusEntries = getLadderStatus2(game2, i);
-//    if (!statusEntries) continue;
-//
-//    for (const entry of statusEntries) {
-//      const { x: lx, y: ly } = entry.liberty;
-//      const li = ly * N + lx;
-//      if (color === mover && !entry.canEscape) {  // mover's group is doomed
-//        ladderFlag[li]++;  
-//      } else if (color !== mover && entry.canEscape) {  // opponent's group will escape
-//        ladderFlag[li]++;  
-//      }
-//    }
-//  }
+  for (let i = 0; i < cap; i++) {
+    const color = cells[i];
+    if (color === 0) continue;
+    const gid = game2._gid[i];
+    if (visitedGids.has(gid)) continue;
+    visitedGids.add(gid);
+    if (game2._ls[gid] > 2) continue;
+
+    const statusEntries = getLadderStatus2(game2, i);
+    if (!statusEntries) continue;
+
+    for (const entry of statusEntries) {
+      const { x: lx, y: ly } = entry.liberty;
+      const li = ly * N + lx;
+      if (color === mover && !entry.canEscape) {  // mover's group is doomed
+        ladderFlag[li]++;  
+      } else if (color !== mover && entry.canEscape) {  // opponent's group will escape
+        ladderFlag[li]++;  
+      }
+    }
+  }
 
   return indices.map(idx => {
     const hash = patternHash2(game2, idx, mover);

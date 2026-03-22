@@ -1567,7 +1567,7 @@ section('Game2.clone: gameOver propagates correctly');
 // Positions are built via _buildPos (Game) then converted with .toGame2().
 // stoneIdx = y * N + x.
 
-const { getLadderStatus2 } = require('./ladder2.js');
+const { getLadderStatus2, getAllLadderStatuses } = require('./ladder2.js');
 
 // Helper: build a Game2 from a board string using the existing _buildPos helper.
 function _buildGame2Pos(boardStr, toPlay) {
@@ -1832,6 +1832,116 @@ section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions
   }
   assert(checks > 0,        'getLadderStatus2 agreement: at least one group checked');
   assert(mismatches === 0,  `getLadderStatus2 agreement: 0 mismatches across ${checks} checks`);
+}
+
+// ─── getAllLadderStatuses ─────────────────────────────────────────────────────
+
+section('getAllLadderStatuses – empty board returns no results');
+{
+  const g2 = new Game2(9, false);
+  const r = getAllLadderStatuses(g2);
+  assert(Array.isArray(r) && r.length === 0, 'empty board: no groups');
+}
+
+section('getAllLadderStatuses – skips groups with 3+ liberties');
+{
+  // A lone stone in the interior has 4 liberties — should be skipped.
+  const g2 = new Game2(9, false);
+  const N = 9;
+  g2._place(4 * N + 4, BLACK);
+  g2.current = WHITE;
+  const r = getAllLadderStatuses(g2);
+  assert(r.length === 0, 'interior stone (4 libs) not included');
+}
+
+section('getAllLadderStatuses – finds a group in atari');
+{
+  // Single black stone on the edge has 2 liberties; surround 3 of them to get 1.
+  //   · · · · ·
+  //   · · ● · ·   ← black at (2,1), white at (1,1),(3,1),(2,0)
+  //   · · · · ·
+  const N = 5;
+  const g2 = _buildGame2Pos(`
+    · · ○ · ·
+    · ○ ● ○ ·
+    · · · · ·
+    · · · · ·
+    · · · · ·
+  `, '●');
+  const r = getAllLadderStatuses(g2);
+  assert(r.length === 1, 'one group in atari');
+  assert(r[0].color === BLACK, 'the group is black');
+  assert(r[0].entries.length === 1, 'one liberty entry');
+}
+
+section('getAllLadderStatuses – finds multiple low-liberty groups');
+{
+  // Two separate groups each in atari.
+  const N = 9;
+  const g2 = _buildGame2Pos(`
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · ○ ● ○ · ○ ● ○ ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+  `, '●');
+  const r = getAllLadderStatuses(g2);
+  assert(r.length === 2, `two groups in atari (got ${r.length})`);
+  assert(r.every(e => e.color === BLACK), 'both groups are black');
+}
+
+section('getAllLadderStatuses – each entry matches getLadderStatus2');
+{
+  const g2 = _buildGame2Pos(`
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · ○ · · · · · · ·
+    · ○ ● ○ · · · · ·
+    · ○ · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+  `, '●');
+  const all = getAllLadderStatuses(g2);
+  assert(all.length >= 1, 'at least one low-liberty group found');
+  for (const { gid, entries } of all) {
+    const stoneIdx = g2._gid.indexOf(gid);
+    const single = getLadderStatus2(g2, stoneIdx);
+    assert(single !== null, `getLadderStatus2 returned null for gid ${gid}`);
+    assert(entries.length === single.length, 'entry count matches');
+    for (const e of entries) {
+      const match = single.find(s => s.liberty.x === e.liberty.x && s.liberty.y === e.liberty.y);
+      assert(match !== undefined, `liberty (${e.liberty.x},${e.liberty.y}) found in single result`);
+      assert(e.canEscape          === match.canEscape,          'canEscape matches');
+      assert(e.canEscapeAfterPass === match.canEscapeAfterPass, 'canEscapeAfterPass matches');
+    }
+  }
+}
+
+section('getAllLadderStatuses – each gid appears exactly once');
+{
+  // A 2-stone group sharing a gid should appear only once.
+  const N = 9;
+  const g2 = _buildGame2Pos(`
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · ○ · · · · · ·
+    · ○ ● ○ · · · · ·
+    · · ○ · · · · · ·
+    · · ● · · · · · ·
+    · · ○ · · · · · ·
+    · · · · · · · · ·
+  `, '●');
+  const all = getAllLadderStatuses(g2);
+  const gids = all.map(e => e.gid);
+  const unique = new Set(gids);
+  assert(gids.length === unique.size, `each gid appears once (got ${gids})`);
 }
 
 // ─── Game3 ───────────────────────────────────────────────────────────────────

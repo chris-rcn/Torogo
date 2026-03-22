@@ -6,4 +6,5 @@ Test raveladpat.
 
 Decide which type pattern generation is better.
 
+patterns2.patternHashes2 should accept an object of that type.  If it is not present, construct it by calling ladder2.getAllLadderStatuses.  Then use it instead of making individual calls to getLadderStatus2.
 
