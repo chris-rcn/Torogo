@@ -36,7 +36,7 @@ const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
 
 // Total virtual visits contributed by the pattern prior across all children.
 const PAT_PRIOR_WEIGHT = (typeof process !== 'undefined' && process.env.PAT_PRIOR_WEIGHT)
-  ? parseFloat(process.env.PAT_PRIOR_WEIGHT) : 0;
+  ? parseFloat(process.env.PAT_PRIOR_WEIGHT) : 200;
 
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
@@ -156,7 +156,8 @@ function getLegalMoves(game2) {
     if (game2.isTrueEye(i)) continue;
     if (game2.isLegal(i)) moves.push(i);
   }
-  if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
+  // Pass move must be at the end (if present).
+  if (moves.length < cap / 3 || game2.consecutivePasses > 0) {
     moves.push(PASS);
   }
   return moves;
@@ -225,18 +226,15 @@ function makeNode(move, parent, ci, mover, game2, N) {
 
   // Pattern priors — max-normalised, applied to non-PASS moves only.
   if (PAT_PRIOR_WEIGHT > 0) {
-    const nonPassMoves = [];
-    for (let i = 0; i < M; i++) {
-      if (legalMoves[i] !== PASS) nonPassMoves.push(legalMoves[i]);
-    }
-    if (nonPassMoves.length > 0) {
-      const ratios = nonPassMoves.map(m => patternSelectionRatio(game2, m));
+    if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();  // Pass move is always at the end (if present).
+    if (movesArr.length > 0) {
+      const ratios = movesArr.map(m => patternSelectionRatio(game2, m));
       const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
       const norm   = maxR > 0 ? 1 / maxR : 0;
-      const vpp    = PAT_PRIOR_WEIGHT / nonPassMoves.length;
-      for (let k = 0; k < nonPassMoves.length; k++) {
-        raveWins[nonPassMoves[k]]   += ratios[k] * norm * vpp;
-        raveVisits[nonPassMoves[k]] += vpp;
+      const vpp    = PAT_PRIOR_WEIGHT / movesArr.length;
+      for (let k = 0; k < movesArr.length; k++) {
+        raveWins[movesArr[k]]   += ratios[k] * norm * vpp;
+        raveVisits[movesArr[k]] += vpp;
       }
     }
   }
