@@ -54,6 +54,9 @@ const EXPANSION_CANDIDATES = 2;
 const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
   ? parseInt(process.env.PLAYOUTS, 10) : 0;
 
+// A node must reach this many visits before its ladder priors are applied.
+const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
+  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -283,11 +286,6 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     node = node.parent;
   }
 }
-
-// A node must reach this many visits before its ladder priors are applied.
-const LADDER_VISITS = (typeof process !== 'undefined' && process.env.LADDER_VISITS)
-  ? parseInt(process.env.LADDER_VISITS, 10) : 5;
-
 
 // ── Ladder priors ────────────────────────────────────────────────────────────
 function applyLadderPriors(node, game2, N) {
