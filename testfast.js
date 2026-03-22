@@ -609,7 +609,8 @@ section('Board serialize/parse round-trip');
 // ─── Pattern symmetry ────────────────────────────────────────────────────────
 
 // Helpers shared by all pattern-symmetry sections.
-const { patternHash, MAX_LIBS } = require('./patterns.js');
+const { patternHash2, MAX_LIBS } = require('./patterns2.js');
+const { BLACK: _BLACK, WHITE: _WHITE } = require('./game2.js');
 
 // D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
 const _D4_PERMS = [
@@ -632,7 +633,7 @@ function applyD4(sym, dx, dy) {
   return [dest % 3 - 1, Math.floor(dest / 3) - 1];
 }
 
-// Build a 9×9 game, place stones relative to (cx, cy), return patternHash.
+// Build a 9×9 game, place stones relative to (cx, cy), return patternHash2.
 // Center (1,1) is used so it stays clear of Game's initial stone at (4,4).
 function buildAndHash(stones, cx, cy, mover) {
   const g = new Game(9);
@@ -640,7 +641,9 @@ function buildAndHash(stones, cx, cy, mover) {
     g.board.set(cx + dx, cy + dy, color);
     g.board.captureGroups(cx + dx, cy + dy);
   }
-  return patternHash(g, cx, cy, mover);
+  const game2 = g.toGame2();
+  const moverConst = mover === 'black' ? _BLACK : _WHITE;
+  return patternHash2(game2, cy * 9 + cx, moverConst);
 }
 
 section('patternHash symmetry – diagonal stones');
@@ -712,29 +715,32 @@ section('patternHash mover-relative encoding');
   const g = new Game(9);
   g.board.set(0, 0, 'black');
   g.board.captureGroups(0, 0);
-  const hBlack = patternHash(g, 1, 1, 'black');
-  const hWhite = patternHash(g, 1, 1, 'white');
+  const game2 = g.toGame2();
+  const hBlack = patternHash2(game2, 1 * 9 + 1, _BLACK);
+  const hWhite = patternHash2(game2, 1 * 9 + 1, _WHITE);
   assert(hBlack !== hWhite, 'different mover ⇒ different hash for same board');
 }
 
-section('patternHash return value is non-negative and bounded');
+section('patternHash2 return value is non-negative and bounded');
 {
   const g = new Game(9);
   g.board.set(0, 1, 'black'); g.board.captureGroups(0, 1);
   g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
-  const h = patternHash(g, 1, 1, 'black');
+  const game2 = g.toGame2();
+  const h = patternHash2(game2, 1 * 9 + 1, _BLACK);
   const maxHash = (3 ** 9 - 1) + 19683 * ((MAX_LIBS + 1) ** 4 - 1);
   assert(h >= 0,       `hash is non-negative (got ${h})`);
   assert(h <= maxHash, `hash is within bounds (got ${h}, max ${maxHash})`);
 }
 
-section('patternHash determinism');
+section('patternHash2 determinism');
 {
   const g = new Game(9);
   g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
-  const h1 = patternHash(g, 1, 1, 'black');
-  const h2 = patternHash(g, 1, 1, 'black');
-  assert(h1 === h2, 'patternHash returns the same value on repeated calls');
+  const game2 = g.toGame2();
+  const h1 = patternHash2(game2, 1 * 9 + 1, _BLACK);
+  const h2 = patternHash2(game2, 1 * 9 + 1, _BLACK);
+  assert(h1 === h2, 'patternHash2 returns the same value on repeated calls');
 }
 
 // ─── Ladder reader ───────────────────────────────────────────────────────────
@@ -2080,41 +2086,7 @@ section('Game3 random play/undo stress test');
 
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const { patternHash, patternHashes } = require('./patterns.js');
   const { patternHash2, patternHashes2, MAX_LIBS: MAX_LIBS2 } = require('./patterns2.js');
-
-  section('patterns2: MAX_LIBS matches patterns.js');
-  {
-    const { MAX_LIBS } = require('./patterns.js');
-    assert(MAX_LIBS2 === MAX_LIBS, 'MAX_LIBS matches');
-  }
-
-  section('patterns2: patternHash2 agrees with patternHash on random games');
-  {
-    const rave = require('./ai/rave.js');
-    let mismatches = 0;
-    for (let trial = 0; trial < 10; trial++) {
-      const g = new Game(7);
-      // Play 20 random moves to get a non-trivial position.
-      for (let m = 0; m < 20 && !g.gameOver; m++) {
-        const move = rave(g, 1);
-        if (move.type === 'pass') g.pass();
-        else g.placeStone(move.x, move.y);
-      }
-      const game2 = g.toGame2();
-      const N = g.boardSize;
-      for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-          const idx  = y * N + x;
-          const mover = game2.current; // BLACK or WHITE
-          const h1 = patternHash(g, x, y, g.current);
-          const h2 = patternHash2(game2, idx, mover);
-          if (h1 !== h2) mismatches++;
-        }
-      }
-    }
-    assert(mismatches === 0, `patternHash2 agrees with patternHash on all cells (mismatches: ${mismatches})`);
-  }
 
   section('patterns2: patternHash2 is deterministic');
   {
@@ -2173,41 +2145,6 @@ section('Game3 random play/undo stress test');
     assert(allSame, `center hash is same regardless of which cardinal neighbour has a stone (${hashes.join(',')})`);
   }
 
-  section('patterns2: patternHashes2 agrees with patternHashes');
-  {
-    const rave = require('./ai/rave.js');
-    let mismatches = 0;
-    for (let trial = 0; trial < 5; trial++) {
-      const g = new Game(7);
-      for (let m = 0; m < 15 && !g.gameOver; m++) {
-        const move = rave(g, 1);
-        if (move.type === 'pass') g.pass();
-        else g.placeStone(move.x, move.y);
-      }
-      const N = g.boardSize;
-      const game2 = g.toGame2();
-
-      // Build coords / indices for all empty cells.
-      const coords  = [];
-      const indices = [];
-      for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-          if (g.board.get(x, y) === null) {
-            coords.push({ x, y });
-            indices.push(y * N + x);
-          }
-        }
-      }
-
-      const r1 = patternHashes(g, coords);
-      const r2 = patternHashes2(game2, indices);
-
-      for (let i = 0; i < r1.length; i++) {
-        if (r1[i].pHash !== r2[i].pHash) mismatches++;
-      }
-    }
-    assert(mismatches === 0, `patternHashes2 pHash agrees with patternHashes on all empty cells (mismatches: ${mismatches})`);
-  }
 }
 
 // ─── calcTerritory / estimateTerritory ───────────────────────────────────────
