@@ -896,17 +896,7 @@ class Game {
   toGame2() {
     const { Game2, PASS: PASS2, BLACK, WHITE } = require('./game2.js');
     const N  = this.boardSize;
-    const g2 = new Game2(N);
-
-    // Clear the state placed by the Game2 constructor
-    g2.cells.fill(0);
-    g2._gid.fill(-1);
-    const usedW = g2._nextGid * g2._W;
-    g2._sw.fill(0, 0, usedW);
-    g2._ss.fill(0, 0, g2._nextGid);
-    g2._lw.fill(0, 0, usedW);
-    g2._ls.fill(0, 0, g2._nextGid);
-    g2._nextGid = 0;
+    const g2 = new Game2(N, false);
 
     // Place all stones from this board
     const board = this.board;

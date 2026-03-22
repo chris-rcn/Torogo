@@ -58,7 +58,7 @@ function _pop32(x) {
 }
 
 class Game2 {
-  constructor(size) {
+  constructor(size, applyFirstMove = true) {
     const N = size;
     const cap = N * N;
     this.N        = N;
@@ -89,10 +89,12 @@ class Game2 {
     this.gameOver = false;
     this.moveCount = 0;
 
-    const center = (N >> 1) * N + (N >> 1);
-    this._place(center, BLACK);
-    this.current   = WHITE;
-    this.moveCount = 1;
+    if (applyFirstMove) {
+      const center = (N >> 1) * N + (N >> 1);
+      this._place(center, BLACK);
+      this.current   = WHITE;
+      this.moveCount = 1;
+    }
   }
 
   // ── Reset (reuse instance across games) ───────────────────────────────────
