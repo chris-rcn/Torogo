@@ -3,7 +3,7 @@
 // patterns2.js — pattern recognition helpers for Game2 (integer-move engine).
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; ladder2.js must be loaded before this file.
-if (typeof require === 'function') { var { getLadderStatus2 } = require('./ladder2.js'); }
+if (typeof require === 'function') { var { getAllLadderStatuses } = require('./ladder2.js'); }
 
 // Zobrist random table: flat Int32Array. Generated with xorshift32.
 function makeZobrist(seed, size) {
@@ -71,33 +71,22 @@ function patternHash2(game2, idx, mover) {
 
 // patternHashes2(game2, indices) — batch hash with ladder urgency flags.
 // Returns an array of { idx, pHash } in the same order as `indices`.
-function patternHashes2(game2, indices) {
+function patternHashes2(game2, indices, ladderStatuses) {
   const N     = game2.N;
   const cap   = N * N;
-  const cells = game2.cells;
   const mover = game2.current;
 
-  const ladderFlag  = new Int32Array(cap);
-  const visitedGids = new Set();
+  const ladderFlag = new Int32Array(cap);
+  const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
 
-  for (let i = 0; i < cap; i++) {
-    const color = cells[i];
-    if (color === 0) continue;
-    const gid = game2._gid[i];
-    if (visitedGids.has(gid)) continue;
-    visitedGids.add(gid);
-    if (game2._ls[gid] > 2) continue;
-
-    const statusEntries = getLadderStatus2(game2, i);
-    if (!statusEntries) continue;
-
-    for (const entry of statusEntries) {
+  for (const { color, entries } of statuses) {
+    for (const entry of entries) {
       const { x: lx, y: ly } = entry.liberty;
       const li = ly * N + lx;
-      if (color === mover && !entry.canEscape) {  // mover's group is doomed
-        ladderFlag[li]++;  
+      if (color === mover && !entry.canEscape) {        // mover's group is doomed
+        ladderFlag[li]++;
       } else if (color !== mover && entry.canEscape) {  // opponent's group will escape
-        ladderFlag[li]++;  
+        ladderFlag[li]++;
       }
     }
   }
