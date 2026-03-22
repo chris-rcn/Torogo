@@ -178,13 +178,13 @@ function moveIndex(move, N) {
 // RAVE-blended UCT score.  The AMAF win rate is read from the *parent* node's
 // arrays because those accumulate stats over all simulations through the parent
 // that happened to play this child's move.
-function raveScore(child, parentVisits, parentRaveWins, parentRaveVisits, midx) {
+function raveScore(child, parentVisits, parentRaveWins, parentRaveVisits, move) {
   if (child.visits === 0) return Infinity;
-  const mcWR   = child.wins / child.visits;
-  const rv     = parentRaveVisits[midx];
-  const raveWR = rv > 0 ? parentRaveWins[midx] / rv : mcWR;
+  const realWR   = child.wins / child.visits;
+  const raveV     = parentRaveVisits[move];
+  const raveWR = raveV > 0 ? parentRaveWins[move] / raveV : realWR;
   const beta   = Math.sqrt(RAVE_EQUIV / (3 * child.visits + RAVE_EQUIV));
-  return (1 - beta) * mcWR + beta * raveWR
+  return (1 - beta) * realWR + beta * raveWR
        + EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / child.visits);
 }
 

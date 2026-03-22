@@ -81,14 +81,11 @@ for (let gi = 0; gi < lines.length; gi++) {
     g.play(midx);
   }
 
-  // Determine the winner (komi gives white any tie).
-  const winner = g.calcWinner() ?? WHITE;
+  const winner = g.calcWinner();
 
-  // Only record patterns for moves made by the winning player.
-  for (const { color, selHash, others } of gameMoves) {
-    if (color !== winner) continue;
-    for (const h of others) bump(h, false);
-    bump(selHash, true);
+  for (const { turn, selectedMoveHash, others } of gameMoves) {
+    bump(selectedMoveHash, true);
+    for (const otherMove of others) bump(otherMove, false);
   }
 }
 

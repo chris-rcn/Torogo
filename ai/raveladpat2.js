@@ -45,6 +45,11 @@ const DEFAULT_WEIGHT = 0;
 const N_EXPAND = (typeof process !== 'undefined' && process.env.N_EXPAND)
   ? parseInt(process.env.N_EXPAND, 10) : 5;
 
+// Whether to apply ladder priors.  Override with LADDER=0.
+const LADDER = (typeof process !== 'undefined' && process.env.LADDER !== undefined)
+  ? process.env.LADDER !== '0'
+  : true;
+
 let patternSelectionRatio;
 
 if (_isNode) {
@@ -176,50 +181,50 @@ function makeNode(move, parent, ci, mover, game2, N) {
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
   const children    = new Array(M).fill(null);
-  const childWins   = new Float32Array(M);
-  const childVisits = new Float32Array(M);
-  // RAVE arrays indexed by cell (0..N*N-1).  Priors are seeded here so they
-  // guide cv=0 selection without inflating the UCB denominator (which uses
-  // childVisits only, not virtual prior visits).
-  const raveWins    = new Float32Array(N * N);
-  const raveVisits  = new Float32Array(N * N);
+  const wins        = new Float32Array(M).fill(0.01);
+  const visits      = new Float32Array(M).fill(0.02);
+  const raveWins    = new Float32Array(N * N).fill(0.01);
+  const raveVisits  = new Float32Array(N * N).fill(0.02);
 
   // Ladder priors encoded as RAVE seeds.  `chooser` = player to move here.
   const chooser = game2.current;
   const cap = N * N;
-  const cells = game2.cells;
-  const visitedGids = new Set();
 
-  for (let i = 0; i < cap; i++) {
-    const color = cells[i];
-    if (color === 0) continue;
-    const gid = game2._gid[i];
-    if (visitedGids.has(gid)) continue;
-    if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
-    visitedGids.add(gid);
+  if (LADDER) {
+    const cells = game2.cells;
+    const visitedGids = new Set();
 
-    if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
+    for (let i = 0; i < cap; i++) {
+      const color = cells[i];
+      if (color === 0) continue;
+      const gid = game2._gid[i];
+      if (visitedGids.has(gid)) continue;
+      if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
+      visitedGids.add(gid);
 
-    const statusEntries = getLadderStatus(game2, i);
-    if (!statusEntries) continue;
+      if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
 
-    const groupSize = game2._ss[gid];
+      const statusEntries = getLadderStatus(game2, i);
+      if (!statusEntries) continue;
 
-    for (const entry of statusEntries) {
-      const { x: lx, y: ly } = entry.liberty;
-      const li = ly * N + lx;
-      if (li < 0 || li >= cap) continue;
+      const groupSize = game2._ss[gid];
 
-      if (color === chooser && !entry.canEscape) {
-        raveVisits[li] += 2 * groupSize;              // Don't extend doomed group.
-      } else if (color !== chooser && entry.canEscape) {
-        raveVisits[li] += 10;                         // Don't chase escaping group.
-      } else if (color === chooser && entry.canEscape && !entry.canEscapeAfterPass) {
-        raveWins[li]   += 2 * groupSize;              // Do escape (when urgent).
-        raveVisits[li] += 2 * groupSize;
-      } else if (color !== chooser && !entry.canEscape && entry.canEscapeAfterPass) {
-        raveWins[li]   += 2 * groupSize;              // Do chase doomed group (when urgent).
-        raveVisits[li] += 2 * groupSize;
+      for (const entry of statusEntries) {
+        const { x: lx, y: ly } = entry.liberty;
+        const li = ly * N + lx;
+        if (li < 0 || li >= cap) continue;
+
+        if (color === chooser && !entry.canEscape) {
+          raveVisits[li] += 2 * groupSize;              // Don't extend doomed group.
+        } else if (color !== chooser && entry.canEscape) {
+          raveVisits[li] += 10;                         // Don't chase escaping group.
+        } else if (color === chooser && entry.canEscape && !entry.canEscapeAfterPass) {
+          raveWins[li]   += 2 * groupSize;              // Do escape (when urgent).
+          raveVisits[li] += 2 * groupSize;
+        } else if (color !== chooser && !entry.canEscape && entry.canEscapeAfterPass) {
+          raveWins[li]   += 2 * groupSize;              // Do chase doomed group (when urgent).
+          raveVisits[li] += 2 * groupSize;
+        }
       }
     }
   }
@@ -244,14 +249,14 @@ function makeNode(move, parent, ci, mover, game2, N) {
     parent,
     ci,           // this node's index in parent.children / parent.child* arrays (-1 for root)
     mover,        // player who made `move` to reach this node (null at root)
-    totalVisits:  0,  // sum of childVisits; incremented each playout
+    totalVisits:  1,  // sum of visits; incremented each playout
     selectedChild: -1,  // set by selectAndExpand; read by backpropagate
 
     legalMoves,   // Int32Array(M)
     children,     // Array(M) — promoted child node or null
 
-    childWins,    // Float32Array(M) — playout wins per child
-    childVisits,  // Float32Array(M) — playout visits per child
+    wins,    // Float32Array(M) — playout wins per child
+    visits,  // Float32Array(M) — playout visits per child
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; seeded with priors
     raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; seeded with priors
@@ -262,23 +267,26 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // Children with no real playout visits (cv === 0) get a large bonus so they
 // are always preferred over visited children.  RAVE (seeded with ladder/pattern
 // priors) ranks them within the unvisited tier.
-// For visited children, UCB uses childVisits alone (not inflated by prior
+// For visited children, UCB uses visits alone (not inflated by prior
 // virtual visits) so priors guide early exploration without suppressing later
 // UCB-driven exploitation.
-function raveScore(i, node) {
-  const cv = node.childVisits[i];
-  const m  = node.legalMoves[i];
-  const rv = m >= 0 ? node.raveVisits[m] : 0;
-  const raveWR = rv > 0 ? node.raveWins[m] / rv : 0.5;
-
-  if (cv === 0) {
-    return 10 + raveWR;
+function raveScore(moveIdx, node) {
+  // wins initialized to 0.01;
+  // visits initialized to 0.02;
+  // raveWins initialized to 0.01;
+  // raveVisits initialized to 0.02;
+  // totalVisits initialized to 1;
+  const move  = node.legalMoves[moveIdx];
+  const realV = node.visits[moveIdx];
+  const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
+  if (realV < 1) {
+    return 10 + raveWR + 0.001 * Math.random();
   }
-
-  const mcWR = node.childWins[i] / cv;
-  const beta = Math.sqrt(RAVE_EQUIV / (3 * cv + RAVE_EQUIV));
-  return (1 - beta) * mcWR + beta * raveWR
-       + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits + 1) / cv);
+  const realWR = node.wins[moveIdx] / realV;
+  const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
+  return 0.001 * Math.random() +
+    (1 - beta) * realWR + beta * raveWR +
+    EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
@@ -305,7 +313,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Fall through to the descent check so the loop continues into the new node;
     // its children all have cv=0 < N_EXPAND, so the leaf case fires next iteration
     // (exactly one makeNode per playout, same as rave2's one-expansion-per-playout).
-    if (node.children[best] === null && node.childVisits[best] >= N_EXPAND) {
+    if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
       node.children[best] = makeNode(node.legalMoves[best], node, best, mover, game2, N);
     }
 
@@ -354,8 +362,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   if (leafIdx !== -1) {
     const chooser = childMover(node);
     const won     = winner === chooser ? 1 : 0;
-    node.childVisits[leafIdx]++;
-    node.childWins[leafIdx] += won;
+    node.visits[leafIdx]++;
+    node.wins[leafIdx] += won;
     node.totalVisits++;
 
     const played = chooser === BLACK ? blackPlayed : whitePlayed;
@@ -369,8 +377,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   while (node.parent !== null) {
     const ci  = node.ci;   // stored at promotion time — no lookup needed
     const won = winner === node.mover ? 1 : 0;
-    node.parent.childVisits[ci]++;
-    node.parent.childWins[ci] += won;
+    node.parent.visits[ci]++;
+    node.parent.wins[ci] += won;
     node.parent.totalVisits++;
 
     // RAVE update at node.parent: credit the parent's chooser's playout moves.
@@ -412,7 +420,7 @@ function getMove(game, timeBudgetMs) {
   const M = root.legalMoves.length;
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
-    const cv = root.childVisits[i];
+    const cv = root.visits[i];
     if (cv > bestVisits || (cv === bestVisits && raveScore(i, root) > bestScore)) {
       bestVisits = cv;
       bestScore  = raveScore(i, root);
@@ -425,23 +433,23 @@ function getMove(game, timeBudgetMs) {
     const m = root.legalMoves[i];
     children.push({
       move: m === PASS ? { type: 'pass' } : { type: 'place', x: m % N, y: (m / N) | 0 },
-      visits: root.childVisits[i],
-      wins:   root.childWins[i],
+      visits: root.visits[i],
+      wins:   root.wins[i],
     });
   }
   children.sort((a, b) => b.visits - a.visits);
 
   let totalChildWins = 0;
-  for (let i = 0; i < M; i++) totalChildWins += root.childWins[i];
+  for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
   const rootWinRatio = root.totalVisits > 0 ? totalChildWins / root.totalVisits : 0.5;
 
-  if (root.childWins[bestIdx] === 0 && game.moveCount >= N * N / 2) {
+  if (root.wins[bestIdx] === 0 && game.moveCount >= N * N / 2) {
     return { type: 'pass', info: 'no winning line found', children, rootWinRatio };
   }
 
   const m = root.legalMoves[bestIdx];
-  const cv = root.childVisits[bestIdx];
-  const bestWinRatio = cv > 0 ? root.childWins[bestIdx] / cv : 0.5;
+  const cv = root.visits[bestIdx];
+  const bestWinRatio = cv > 0 ? root.wins[bestIdx] / cv : 0.5;
 
   const result = m === PASS ? { type: 'pass', children, rootWinRatio }
                             : { type: 'place', x: m % N, y: (m / N) | 0, children, rootWinRatio };
