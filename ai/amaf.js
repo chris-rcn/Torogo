@@ -20,173 +20,122 @@
  */
 
 const { performance } = require('perf_hooks');
-const randomAgent = require('./random.js');
+const { PASS, BLACK, WHITE } = require('../game2.js');
+const Util = require('../util.js');
 
 const DEFAULT_BUDGET_MS = 500;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
-const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
-  ? parseFloat(process.env.AMAF_DISCOUNT)
-  : 0.5;
+const DISCOUNT = Util.envFloat('AMAF_DISCOUNT', 0.5);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
-const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
-  ? parseFloat(process.env.AMAF_OPP_WEIGHT)
-  : 0;
+const OPP_MOVE_WEIGHT = Util.envFloat('AMAF_OPP_WEIGHT', 0);
 
-// Lightweight move application for use inside playouts.
-// Precondition: (x, y) has at least one empty orthogonal neighbour, which
-// guarantees the move is not suicide and makes Ko effectively impossible.
-// Skips the two O(n²) board-hash computations that placeStone always does.
-// Returns the total number of stones captured (0 in the common case).
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
+// Random playout using Game2.  Returns the ordered lists of cell indices
+// played by the current player (played) and opponent (oppPlayed) during the
+// playout.  winner is BLACK or WHITE.
+function playTracked(game2, trackColor) {
+  const N     = game2.N;
+  const cap   = N * N;
+  const cells = game2.cells;
+  const nbr   = game2._nbr;
+  const played    = [];  // ordered cell indices for trackColor
+  const oppPlayed = [];  // ordered cell indices for the other color
 
-// Like playRandom in mc.js, but collects the cell indices (y*size+x) of
-// every subsequent move made by each side, in order (earliest first).
-// Returns { winner, played, oppPlayed } where winner is 'black'|'white'|null.
-function playTracked(game, trackColor) {
-  const size = game.boardSize;
-  const board = game.board;
-  const grid = board.grid;
-  const played = []; // ordered list of cell indices for trackColor's moves
-  const oppPlayed = []; // ordered list of cell indices for opponent's moves
-
-  // Build the initial list of empty cell indices (flat).
   const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (grid[y][x] === null) empty.push(y * size + x);
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] === 0) empty.push(i);
+  }
 
   const moveLimit = empty.length + 20;
   let moves = 0;
 
-  while (!game.gameOver && moves < moveLimit) {
+  while (!game2.gameOver && moves < moveLimit) {
     let placed = false;
     let end = empty.length;
-    const current = game.current;
+    const current = game2.current;
 
     while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const cellIdx = empty[i];
-      const x = cellIdx % size;
-      const y = (cellIdx / size) | 0;
-
-      empty[i] = empty[end - 1];
-      empty[end - 1] = cellIdx;
+      const ri  = Math.floor(Math.random() * end);
+      const idx = empty[ri];
+      empty[ri] = empty[end - 1];
+      empty[end - 1] = idx;
       end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
+      if (game2.isTrueEye(idx)) continue;
+      if (!game2.isLegal(idx))  continue;
 
-      if (info.hasEmptyNeighbor) {
-        // Fast path: at least one empty neighbour → no suicide/Ko possible
-        if (current === trackColor) played.push(cellIdx);
-        else oppPlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
+      if (current === trackColor) played.push(idx);
+      else                        oppPlayed.push(idx);
+
+      // Snapshot neighbour occupancy to detect captures after play.
+      const base = idx * 4;
+      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
+            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
+      game2.play(idx);
+      empty[end] = empty[empty.length - 1];
+      empty.pop();
+
+      // If any previously occupied neighbour became empty, captures occurred.
+      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
+          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
+        empty.length = 0;
+        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
       }
 
-      // Slow path: all four neighbours are occupied — suicide or Ko possible.
-      const color = current;
-      const result = game.placeStone(x, y);
-      if (result) {
-        if (color === trackColor) played.push(cellIdx);
-        else oppPlayed.push(cellIdx);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result > 1) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-    }
-
-    if (!placed) {
-      game.pass();
+      placed = true;
       moves++;
+      break;
     }
+
+    if (!placed) { game2.play(PASS); moves++; }
   }
 
-  if (!game.gameOver) game.endGame();
-
-  const s = game.scores;
-  const winner = s.black.total > s.white.total ? 'black'
-               : s.white.total > s.black.total ? 'white'
-               : null;
-
-  return { winner, played, oppPlayed, moves };
+  return { winner: game2.estimateWinner(), played, oppPlayed };
 }
 
 module.exports = function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
-  const player = game.current;
-  const N = game.boardSize;
+  const game2  = game.cells ? game.clone() : game.toGame2();
+  const player = game2.current;
+  const N      = game2.N;
+  const cap    = N * N;
 
-  // Build list of legal candidate moves.
+  // Build list of legal candidate moves (flat cell indices; pass at cap).
   const candidates = [];
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (!probe.placeStone(x, y)) continue;
-      candidates.push({ type: 'place', x, y });
-    }
+  const cells = game2.cells;
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] !== 0) continue;
+    if (game2.isTrueEye(i)) continue;
+    if (game2.isLegal(i)) candidates.push(i);
   }
-  if (game.moveCount > N * N / 2) {
-    candidates.push({ type: 'pass' });
+  if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
+    candidates.push(PASS);
   }
 
-  // AMAF stats indexed by cell (y*N + x); pass stored at N*N.
+  // AMAF stats indexed by cell (0..N*N-1); pass stored at N*N.
   // Float64 to accommodate fractional discount weights.
-  const wins  = new Float64Array(N * N + 1);
-  const plays = new Float64Array(N * N + 1);
-  const PASS_IDX = N * N;
+  const wins  = new Float64Array(cap + 1);
+  const plays = new Float64Array(cap + 1);
+  const PASS_IDX = cap;
 
-  // Round-robin playouts across candidates until the time budget is spent.
+  // Round-robin playouts across candidates until the budget is exhausted.
   const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
   const deadline = performance.now() + budgetMs;
-  let cidx = 0;
-  while (performance.now() < deadline) {
-    const move = candidates[cidx];
-    const clone = game.clone();
-    if (move.type === 'place') {
-      clone.placeStone(move.x, move.y);
-    } else {
-      clone.pass();
-    }
-    const { winner, played, oppPlayed, moves } = playTracked(clone, player);
+  let cidx = 0, playoutCount = 0;
+  while (PLAYOUTS > 0 ? playoutCount < PLAYOUTS : performance.now() < deadline) {
+    playoutCount++;
+    const move   = candidates[cidx];
+    const clone  = game2.clone();
+    clone.play(move);  // works for both cell indices and PASS (-1)
+
+    const { winner, played, oppPlayed } = playTracked(clone, player);
     const won = winner === player ? 1 : 0;
 
     // Credit the opening move at full weight (it was played "first").
-    if (move.type === 'place') {
-      const firstIdx = move.y * N + move.x;
-      plays[firstIdx] += 1.0;
-      wins[firstIdx]  += won;
-    } else {
-      plays[PASS_IDX] += 1.0;
-      wins[PASS_IDX]  += won;
-    }
+    const firstIdx = move === PASS ? PASS_IDX : move;
+    plays[firstIdx] += 1.0;
+    wins[firstIdx]  += won;
 
     // Credit subsequent player moves with exponential discount: the i-th
     // subsequent move gets weight DISCOUNT^(i+1).  Moves near the end of
@@ -199,8 +148,6 @@ module.exports = function getMove(game, timeBudgetMs) {
     }
 
     // Credit opponent moves with inverted outcome, scaled by OPP_MOVE_WEIGHT.
-    // If the opponent played at X and the opponent won, X is probably an
-    // important move — credit it as a win for us too (at reduced weight).
     if (OPP_MOVE_WEIGHT > 0) {
       let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
       for (const idx of oppPlayed) {
@@ -213,19 +160,17 @@ module.exports = function getMove(game, timeBudgetMs) {
     cidx = (cidx + 1) % candidates.length;
   }
 
-  // Select the candidate with the highest AMAF win ratio.  If pass is
-  // tied for best it wins outright; otherwise ties are broken randomly.
+  // Select the candidate with the highest AMAF win ratio; ties broken randomly.
   let bestRatio = -1;
   let bestCount = 0;
-  let bestIdx = 0;
+  let bestIdx   = 0;
   for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    const idx = c.type === 'pass' ? PASS_IDX : c.y * N + c.x;
+    const idx   = candidates[i] === PASS ? PASS_IDX : candidates[i];
     if (plays[idx] === 0) continue;
     const ratio = wins[idx] / plays[idx];
     if (ratio > bestRatio) {
       bestRatio = ratio;
-      bestIdx = i;
+      bestIdx   = i;
       bestCount = 1;
     } else if (ratio === bestRatio) {
       bestCount++;
@@ -238,36 +183,30 @@ module.exports = function getMove(game, timeBudgetMs) {
 
   // Prefer pass when it ties for best ratio.
   if (plays[PASS_IDX] > 0 && wins[PASS_IDX] / plays[PASS_IDX] === bestRatio) {
-    const passCandIdx = candidates.findIndex(c => c.type === 'pass');
+    const passCandIdx = candidates.indexOf(PASS);
     if (passCandIdx !== -1) bestIdx = passCandIdx;
   }
 
-  // Before committing to a pass, verify that the actual winner if the game
-  // ends now matches the winner in every single pass playout.  If there is
-  // any disagreement, fall back to the best non-pass candidate.
-  if (candidates[bestIdx].type === 'pass' && plays[PASS_IDX] > 0) {
-    const territory = game.calcTerritory();
-    const blackTotal = territory.black;
-    const whiteTotal = territory.white + game.komi;
-    const actualWinner = blackTotal > whiteTotal ? 'black'
-                       : whiteTotal > blackTotal ? 'white'
-                       : null;
+  // Before committing to a pass, verify that the position is actually won.
+  // If calcWinner disagrees with playout winners, fall back to the best
+  // non-pass candidate.
+  if (candidates[bestIdx] === PASS && plays[PASS_IDX] > 0) {
+    const actualWinner = game2.calcWinner();
     const allPlayoutsAgree = actualWinner === player
       ? wins[PASS_IDX] === plays[PASS_IDX]
-      : true; // losing by territory — always allow passing
+      : true;
     if (!allPlayoutsAgree) {
-      // Pick best non-pass candidate instead.
       let altRatio = -1;
       let altCount = 0;
-      let altIdx = -1;
+      let altIdx   = -1;
       for (let i = 0; i < candidates.length; i++) {
-        if (candidates[i].type === 'pass') continue;
-        const idx = candidates[i].y * N + candidates[i].x;
+        if (candidates[i] === PASS) continue;
+        const idx = candidates[i];
         if (plays[idx] === 0) continue;
         const ratio = wins[idx] / plays[idx];
         if (ratio > altRatio) {
           altRatio = ratio;
-          altIdx = i;
+          altIdx   = i;
           altCount = 1;
         } else if (ratio === altRatio) {
           altCount++;
@@ -278,5 +217,8 @@ module.exports = function getMove(game, timeBudgetMs) {
     }
   }
 
-  return candidates[bestIdx];
+  const best = candidates[bestIdx];
+  return best === PASS
+    ? { type: 'pass' }
+    : { type: 'place', x: best % N, y: (best / N) | 0 };
 };

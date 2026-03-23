@@ -1,0 +1,13 @@
+WASM?  C?
+
+Determine good ladder priors.
+Copy to each class.
+Test raveladpat.
+
+Decide which type pattern generation is better.
+
+Finish the migration to game2.
+Verify that UI-enabled agent is better.
+
+Integrate ladder results into patterns.
+

@@ -24,15 +24,17 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
+
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !== undefined)
-  ? parseFloat(process.env.RAVE_EQUIV)
-  : 300;
+const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 
 // Number of untried moves to sample when expanding a node.  The candidate
 // with the best parent RAVE win rate is expanded first.  Set to 1 to revert
@@ -40,23 +42,17 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 const EXPANSION_CANDIDATES = 2;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
-  ? parseInt(process.env.PLAYOUTS, 10) : 0;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
-
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
 
 // Random playout that records the cell indices (y*N+x) of every move made by
 // each player.  Pass moves carry no cell index and are not recorded.
 // Returns { winner, blackPlayed, whitePlayed }.
+// Uses accurate flood-fill scoring for tree-terminal nodes (already game-over
+// when called) and fast 1-step estimate for ordinary rollout results.
 function playTracked(game) {
+  const wasAlreadyOver = game.gameOver;
   const size = game.boardSize;
   const board = game.board;
   const grid  = board.grid;
@@ -85,25 +81,7 @@ function playTracked(game) {
       empty[end - 1] = cellIdx;
       end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        if (current === 'black') blackPlayed.push(cellIdx);
-        else                     whitePlayed.push(cellIdx);
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (grid[ey][ex] === null) empty.push(ey * size + ex);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      if (board.classifyEmpty(x, y, current).isTrueEye) continue;
 
       const result = game.placeStone(x, y);
       if (result) {
@@ -111,7 +89,7 @@ function playTracked(game) {
         else                     whitePlayed.push(cellIdx);
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
@@ -126,11 +104,14 @@ function playTracked(game) {
     if (!placed) { game.pass(); moves++; }
   }
 
-  if (!game.gameOver) game.endGame();
-  const s = game.scores;
-  const winner = s.black.total > s.white.total ? 'black'
-               : s.white.total > s.black.total ? 'white'
-               : null;
+  let winner;
+  if (wasAlreadyOver) {
+    // Tree terminal: the game ended by double-pass inside the search tree.
+    // Use accurate flood-fill scoring.
+    winner = game.calcWinner();
+  } else {
+    winner = game.estimateWinner();
+  }
   return { winner, blackPlayed, whitePlayed };
 }
 
@@ -142,8 +123,7 @@ function legalMoves(game) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
     }
   const area = game.boardSize * game.boardSize;
   if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
@@ -311,9 +291,17 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
-  const result = { ...bestChild.move, children };
-  result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
+  const rootWins = root.children.reduce((s, c) => s + c.wins, 0);
+  const rootWinRatio = root.visits > 0 ? rootWins / root.visits : 0.5;
+  const result = { ...bestChild.move, children, rootWinRatio };
+  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) {
+    result.type = 'pass';
+    result.winRatio = 0;
+    result.info = 'no winning line found';
+  } else {
+    result.winRatio = bestChild.wins / bestChild.visits;
+    result.info = ``;
+  }
   return result;
 }
 

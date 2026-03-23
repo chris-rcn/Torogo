@@ -8,7 +8,6 @@
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
- * Priors (ladder + pattern) are computed once at node creation time.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
@@ -31,40 +30,11 @@ const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
-// Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 1);
-
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 5);
-
-let patternSelectionRatio;
-
-if (_isNode) {
-  patternSelectionRatio = require('../patternValue.js').weight;
-} else {
-  // Browser: patternHash2 is a global from patterns2.js loaded as a <script>.
-  // Load patterns.csv via fetch and build the ratio table.
-  const _patternHash2 = window.patternHash2;
-  const _table = new Map();
-  fetch('patterns.csv')
-    .then(r => r.text())
-    .then(text => {
-      for (const line of text.trim().split('\n')) {
-        if (!line.trim()) continue;
-        const parts = line.split(',');
-        const hash  = parseInt(parts[0], 10);
-        const ratio = parseFloat(parts[1]);
-        if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
-      }
-    });
-  patternSelectionRatio = function(game2, idx) {
-    const hash = _patternHash2(game2, idx, game2.current);
-    return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
-  };
-}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -176,26 +146,6 @@ function makeNode(move, parent, ci, mover, game2, N) {
   const raveWins    = new Float32Array(N * N).fill(0.01);
   const raveVisits  = new Float32Array(N * N).fill(0.02);
 
-  // Per-move prior bonuses, kept separate from RAVE so they never dilute
-  // playout statistics.  Applied as priorBonus[move] / (1 + child.visits).
-  const priorBonus  = new Float32Array(N * N);
-
-  // Pattern priors — max-normalised, applied to non-PASS moves only.
-  // norm_ratio ∈ [0,1]; centred at 0.5 so the best pattern gets +0.5*W and
-  // the worst gets -0.5*W relative to an unrated move.  PAT_PRIOR_WEIGHT
-  // controls the overall scale (0 = disabled).
-  if (PAT_PRIOR_WEIGHT > 0) {
-    if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
-    if (movesArr.length > 0) {
-      const ratios = movesArr.map(m => patternSelectionRatio(game2, m));
-      const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
-      const norm   = maxR > 0 ? 1 / maxR : 0;
-      for (let k = 0; k < movesArr.length; k++) {
-        priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
-      }
-    }
-  }
-
   return {
     move,
     parent,
@@ -212,29 +162,23 @@ function makeNode(move, parent, ci, mover, game2, N) {
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
     raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; updated by rollouts
-    priorBonus,   // Float32Array(N*N) — ladder prior bonuses (separate from RAVE)
   };
 }
 
 // RAVE-blended UCT score for child index i of node.
 // Children with no real playout visits (cv === 0) get a large bonus so they
-// are always preferred over visited children.  RAVE (seeded with pattern
-// priors) ranks them within the unvisited tier.
-// A separate priorBonus term decays as bonus/(1+realV), so ladder priors
-// guide early exploration without ever diluting the RAVE statistics.
+// are always preferred over visited children.  RAVE ranks them within the unvisited tier.
 function raveScore(moveIdx, node) {
   const move   = node.legalMoves[moveIdx];
   const realV  = node.visits[moveIdx];
   const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
-  const prior  = move === PASS ? 0 : node.priorBonus[move];
   if (realV < 1) {
-    return 10 + raveWR + prior + 0.001 * Math.random();
+    return 10 + raveWR + 0.001 * Math.random();
   }
   const realWR = node.wins[moveIdx] / realV;
   const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
   return 0.001 * Math.random() +
     (1 - beta) * realWR + beta * raveWR +
-    prior / realV +
     EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 

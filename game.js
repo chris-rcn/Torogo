@@ -1,29 +1,9 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
-// ─── Zobrist hash table ───────────────────────────────────────────────────────
-// One deterministic 64-bit random value per (row, col, color) triple,
-// sized for the largest supported board (19×19).  Used for O(1) Ko detection.
-const ZOBRIST = (() => {
-  let s = 0xdeadbeef;
-  function rand32() {
-    s ^= s << 13;
-    s ^= s >> 17;
-    s ^= s << 5;
-    return s >>> 0;
-  }
-  function rand64() {
-    return (BigInt(rand32()) << 32n) | BigInt(rand32());
-  }
-  const t = [];
-  for (let y = 0; y < 19; y++) {
-    t.push([]);
-    for (let x = 0; x < 19; x++) {
-      t[y].push({ black: rand64(), white: rand64() });
-    }
-  }
-  return t;
-})();
+// Single komi constant for the whole codebase. Canonical definition is in game2.js;
+// read from there in Node, fall back to the literal in browser (game2.js not loaded).
+const KOMI = typeof module !== 'undefined' ? require('./game2.js').KOMI : 4.5;
 
 // ─── Board ────────────────────────────────────────────────────────────────────
 
@@ -656,17 +636,19 @@ class Board {
   }
 
   // Parse a ● ○ · board string produced by toAscii().
-  // Mark decoration ( and ) are stripped before splitting.
+  // Mark decoration ( and ) and any alphanumeric characters (coordinate labels,
+  // row numbers, etc.) are ignored.
   // Returns { size, stones } where stones is [[x, y, color], ...].
   static parse(str) {
-    const rows = str.trim().split('\n').map(r => r.trim().replace(/[()]/g, ' ').split(/\s+/));
+    const rows = str.trim().split('\n')
+      .map(r => r.trim().replace(/[()a-zA-Z0-9]/g, ' ').split(/\s+/).filter(t => t))
+      .filter(row => row.some(t => t === '●' || t === '○' || t === '·'));
     const size = rows.length;
     const stones = [];
     for (let y = 0; y < size; y++)
       for (let x = 0; x < size; x++) {
-        const c = rows[y][x].replace(/[()]/g, '');
-        if (c === '●') stones.push([x, y, 'black']);
-        else if (c === '○') stones.push([x, y, 'white']);
+        if (rows[y][x] === '●') stones.push([x, y, 'black']);
+        else if (rows[y][x] === '○') stones.push([x, y, 'white']);
       }
     return { size, stones };
   }
@@ -678,16 +660,14 @@ Board.verifyGroupRatio = 0;
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
-  constructor(boardSize = 9, komi = 4.5) {
+  constructor(boardSize = 9) {
     this.boardSize = boardSize;
     this.board = new Board(boardSize);
     this.current = 'black';
-    this.hash     = 0n;       // Zobrist hash of current board position
     this.koFlag   = null;     // {x, y} of the single stone captured last move, or null
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.lastMove = null;
-    this.komi = komi;         // compensation for white going second
     this.scores = null;       // set on game end
     this.illegalFlash = null; // {x, y} of last rejected move, for visual feedback
     this.moveCount = 0;
@@ -702,16 +682,23 @@ class Game {
     g.boardSize         = this.boardSize;
     g.board             = this.board.clone();
     g.current           = this.current;
-    g.hash              = this.hash;
     g.koFlag            = this.koFlag;
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
     g.lastMove          = null;
-    g.komi              = this.komi;
     g.scores            = null;
     g.illegalFlash      = null;
     g.moveCount         = this.moveCount;
     return g;
+  }
+
+  // Non-mutating legality check: returns true if placing on (x, y) would be legal.
+  isLegal(x, y) {
+    if (this.gameOver) return false;
+    if (this.board.get(x, y) !== null) return false;
+    if (this.board.isSuicide(x, y, this.current)) return false;
+    if (this.board.isKo(x, y, this.current, this.koFlag)) return false;
+    return true;
   }
 
   // Returns true if move was legal and placed
@@ -735,24 +722,26 @@ class Game {
     // Move is legal — commit (no rollback path remains)
     const N = this.boardSize;
     this.board.set(x, y, this.current);
-    this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
-    for (let i = 0; i < caps.black.length; i++) {
-      const ci = caps.black[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
-    }
-    for (let i = 0; i < caps.white.length; i++) {
-      const ci = caps.white[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
-    }
 
     this.illegalFlash = null;
 
-    // Update koFlag: set to the captured position only when exactly one stone was taken
+    // Update koFlag: set only when exactly one stone was captured AND the
+    // capturing group is also a solo stone whose sole liberty is the captured cell.
+    // (If the captor has more stones/liberties, replaying the captured point
+    //  cannot recreate the previous position, so no ko restriction applies.)
     const totalCaptured = caps.black.length + caps.white.length;
     if (totalCaptured === 1) {
       const ci = caps.black.length === 1 ? caps.black[0] : caps.white[0];
-      this.koFlag = { x: ci % N, y: (ci / N) | 0 };
+      const placedGid = this.board._gid[y * N + x];
+      const placedGroup = this.board._groups.get(placedGid);
+      if (placedGroup.stones.size === 1 &&
+          placedGroup.liberties.size === 1 &&
+          placedGroup.liberties.has(ci)) {
+        this.koFlag = { x: ci % N, y: (ci / N) | 0 };
+      } else {
+        this.koFlag = null;
+      }
     } else {
       this.koFlag = null;
     }
@@ -769,21 +758,20 @@ class Game {
   applyLegal(x, y) {
     const N = this.boardSize;
     this.board.set(x, y, this.current);
-    this.hash ^= ZOBRIST[y][x][this.current];
     const caps = this.board.captureGroups(x, y);
-    for (let i = 0; i < caps.black.length; i++) {
-      const ci = caps.black[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].black;
-    }
-    for (let i = 0; i < caps.white.length; i++) {
-      const ci = caps.white[i];
-      this.hash ^= ZOBRIST[(ci / N) | 0][ci % N].white;
-    }
     const totalCaptured = caps.black.length + caps.white.length;
-    this.koFlag = totalCaptured === 1
-      ? { x: (caps.black.length === 1 ? caps.black[0] : caps.white[0]) % N,
-          y: ((caps.black.length === 1 ? caps.black[0] : caps.white[0]) / N) | 0 }
-      : null;
+    if (totalCaptured === 1) {
+      const ci = caps.black.length === 1 ? caps.black[0] : caps.white[0];
+      const placedGid = this.board._gid[y * N + x];
+      const placedGroup = this.board._groups.get(placedGid);
+      this.koFlag = (placedGroup.stones.size === 1 &&
+                     placedGroup.liberties.size === 1 &&
+                     placedGroup.liberties.has(ci))
+        ? { x: ci % N, y: (ci / N) | 0 }
+        : null;
+    } else {
+      this.koFlag = null;
+    }
     this.lastMove = { x, y };
     this.consecutivePasses = 0;
     this.current = this.current === 'black' ? 'white' : 'black';
@@ -816,63 +804,86 @@ class Game {
 
   endGame() {
     this.gameOver = true;
-    const territory = this.calcTerritory();
-    this.scores = {
-      black: { territory: territory.black, total: territory.black },
-      white: { territory: territory.white, total: territory.white + this.komi },
-    };
   }
 
-  // For each empty point: check orthogonal neighbors.
-  // If they are stones of a single color, assign to that color.
-  // If all orthogonal neighbors are empty, check diagonals;
-  // if diagonals are empty too, assign no point.
+  // Accurate area score: flood-fill connected empty regions, count stones.
+  // Returns { black, white, neutral } (komi not included — added by endGame).
   calcTerritory() {
     const grid = this.board.grid;
-    const N = this.board.size;
+    const N    = this.board.size;
+    const nbr  = this.board._nbr;
     const territory = { black: 0, white: 0, neutral: 0 };
-    const ortho = [[-1,0],[1,0],[0,-1],[0,1]];
-    const diag  = [[-1,-1],[-1,1],[1,-1],[1,1]];
+    const visited = new Uint8Array(N * N);
 
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
-        const cell = grid[y][x];
-        if (cell !== null) {
-          // Stones count as territory for their color (Chinese scoring)
-          if (cell === 'black') territory.black++;
-          else territory.white++;
-          continue;
-        }
-
-        let hasBlack = false, hasWhite = false, allOrthoEmpty = true;
-        for (const [dy, dx] of ortho) {
-          const c = grid[(y + dy + N) % N][(x + dx + N) % N];
-          if (c !== null) {
-            allOrthoEmpty = false;
-            if (c === 'black') hasBlack = true; else hasWhite = true;
+        const c = grid[y][x];
+        if (c === 'black') { territory.black++; continue; }
+        if (c === 'white') { territory.white++; continue; }
+        const idx = y * N + x;
+        if (visited[idx]) continue;
+        let bBorder = false, wBorder = false;
+        const region = [idx];
+        visited[idx] = 1;
+        for (let qi = 0; qi < region.length; qi++) {
+          const ri = region[qi];
+          const base = ri * 4;
+          for (let k = 0; k < 4; k++) {
+            const ni = nbr[base + k];
+            const nc = grid[(ni / N) | 0][ni % N];
+            if (nc === null) { if (!visited[ni]) { visited[ni] = 1; region.push(ni); } }
+            else if (nc === 'black') bBorder = true;
+            else wBorder = true;
           }
         }
-
-        if (!allOrthoEmpty) {
-          if (hasBlack && !hasWhite) territory.black++;
-          else if (hasWhite && !hasBlack) territory.white++;
-          // else mixed → neutral, no count
-        } else {
-          // All orthogonal neighbors empty — check diagonals
-          let diagAllEmpty = true;
-          for (const [dy, dx] of diag) {
-            if (grid[(y + dy + N) % N][(x + dx + N) % N] !== null) {
-              diagAllEmpty = false;
-              break;
-            }
-          }
-          if (!diagAllEmpty) territory.neutral++;
-          // else completely isolated → no point assigned
-        }
+        if      (bBorder && !wBorder) territory.black += region.length;
+        else if (wBorder && !bBorder) territory.white += region.length;
+        else                          territory.neutral += region.length;
       }
     }
 
     return territory;
+  }
+
+  // Accurate winner using flood-fill territory + komi.  Returns 'black', 'white', or null.
+  calcWinner() {
+    const t = this.calcTerritory();
+    return t.black > t.white + KOMI ? 'black'
+         : t.white + KOMI > t.black ? 'white' : null;
+  }
+
+  // Fast area score: 1-step orthogonal neighbour check (no flood fill).
+  // Undercounts large interior empty regions; use only for playout rollouts.
+  // Returns { black, white, neutral } (komi not included).
+  // Fast 1-step area estimate.  Returns 'black', 'white', or null.
+  // Undercounts large interior empty regions; use only for playout rollouts.
+  estimateWinner() {
+    const grid = this.board.grid;
+    const N    = this.board.size;
+    const nbr  = this.board._nbr;
+    let black = 0, white = 0;
+
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = grid[y][x];
+        if (c === 'black') { black++; continue; }
+        if (c === 'white') { white++; continue; }
+        const base = (y * N + x) * 4;
+        let bAdj = false, wAdj = false;
+        for (let k = 0; k < 4; k++) {
+          const ni = nbr[base + k];
+          const nc = grid[(ni / N) | 0][ni % N];
+          if (nc === 'black') bAdj = true;
+          else if (nc === 'white') wAdj = true;
+        }
+        if (bAdj && !wAdj) black++;
+        else if (wAdj && !bAdj) white++;
+      }
+    }
+
+    return black > white + KOMI ? 'black'
+         : white + KOMI > black ? 'white'
+         : null;
   }
 
   statusText() {
@@ -880,7 +891,53 @@ class Game {
     const name = this.current === 'black' ? 'Black' : 'White';
     return `${name} to play`;
   }
+
+  // Copy current game state into a Game2 instance.
+  toGame2() {
+    const { Game2, PASS: PASS2, BLACK, WHITE } = require('./game2.js');
+    const N  = this.boardSize;
+    const g2 = new Game2(N, false);
+
+    // Place all stones from this board
+    const board = this.board;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = board.get(x, y);
+        if (c !== null) g2._place(y * N + x, c === 'black' ? BLACK : WHITE);
+      }
+    }
+
+    // Copy game state
+    g2.current           = this.current === 'black' ? BLACK : WHITE;
+    g2.ko                = this.koFlag ? this.koFlag.y * N + this.koFlag.x : PASS2;
+    g2.consecutivePasses = this.consecutivePasses;
+    g2.gameOver          = this.gameOver;
+    g2.moveCount         = this.moveCount;
+
+    return g2;
+  }
 }
 
-const DEFAULT_KOMI = new Game().komi;
-if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, ZOBRIST };
+const DEFAULT_KOMI = KOMI;
+
+// boardTurnToString(board, toPlay?) — serialize board to ASCII; if toPlay ('●'/'○')
+// is given, prepend it as the first line so parseBoard can recover it.
+function boardTurnToString(board, toPlay) {
+  const body = board.toAscii();
+  return toPlay ? toPlay + '\n' + body : body;
+}
+
+// parseBoard(str) — returns { size, stones, toPlay? }.
+// toPlay is '●' or '○' if the string was produced with boardTurnToString(board, toPlay).
+function parseBoard(boardStr) {
+  const lines = boardStr.trim().split('\n').map(r => r.trim());
+  let toPlay;
+  if (lines[0] === '●' || lines[0] === '○') {
+    toPlay = lines.shift();
+  }
+  const result = Board.parse(lines.join('\n'));
+  if (toPlay !== undefined) result.toPlay = toPlay;
+  return result;
+}
+
+if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, KOMI, parseBoard, boardTurnToString };

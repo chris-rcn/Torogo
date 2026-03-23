@@ -1,7 +1,7 @@
 'use strict';
 const { performance } = require('perf_hooks');
 /**
- * Self-play script — play multiple games of one AI policy against another.
+ * Self-play script — play games of one AI policy against another indefinitely.
  *
  * Usage:
  *   node selfplay.js [options]
@@ -9,10 +9,9 @@ const { performance } = require('perf_hooks');
  * Options:
  *   --p1      <policy>   AI policy for player 1      (default: random)
  *   --p2      <policy>   AI policy for player 2      (default: random)
- *   --games   <n>        Number of games to play     (default: 100)
  *   --size    <n>        Board size: 9, 13, or 19    (default: 9)
- *   --komi    <n>        Komi (white's bonus points) (default: 3.5)
  *   --budget  <ms>       Time budget per move in ms  (default: 500)
+ *   --limit   <n>        Stop after this many games and print final stats
  *   --verbose            Print the board after every move
  *   --help               Show this help message
  *
@@ -20,13 +19,13 @@ const { performance } = require('perf_hooks');
  * Policy names are filenames without the .js extension inside the ai/ folder.
  *
  * Examples:
- *   node selfplay.js --p1 random --p2 always-pass --games 20
- *   node selfplay.js --size 13 --games 50
- *   node selfplay.js --p1 always-pass --p2 always-pass --games 5 --size 9
+ *   node selfplay.js --p1 random --p2 always-pass
+ *   node selfplay.js --size 13
+ *   node selfplay.js --p1 always-pass --p2 always-pass --size 9
  */
 
 const path = require('path');
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 // Boolean flags that take no value.
 const BOOL_FLAGS = new Set(['help', 'verbose']);
@@ -58,27 +57,23 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--games <n>] [--size <n>] [--komi <n>] [--budget <ms>] [--verbose]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>] [--verbose]`);
   process.exit(0);
 }
 
-const p1Name    = opts.p1    || 'random';
-const p2Name    = opts.p2    || 'random';
-const numGames  = parseInt(opts.games || '100', 10);
-const boardSize = parseInt(opts.size  || '9',   10);
-const komi      = opts.komi !== undefined ? parseFloat(opts.komi) : DEFAULT_KOMI;
+const gameLimit = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+if (isNaN(gameLimit) || gameLimit < 1) {
+  console.error('--limit must be a positive integer');
+  process.exit(1);
+}
+
+const p1Name    = opts.p1   || 'random';
+const p2Name    = opts.p2   || 'random';
+const boardSize = parseInt(opts.size   || '9',   10);
 const budgetMs  = parseInt(opts.budget || '500', 10);
 
-if (isNaN(numGames) || numGames < 1) {
-  console.error('--games must be a positive integer');
-  process.exit(1);
-}
-if (!Number.isInteger(boardSize) || boardSize < 7 || boardSize > 19 || boardSize % 2 === 0) {
+if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');
-  process.exit(1);
-}
-if (!Number.isFinite(komi)) {
-  console.error('--komi must be a number');
   process.exit(1);
 }
 
@@ -94,24 +89,59 @@ function printBoard(game) {
   console.log();
 }
 
-
-const tally = { p1: 0, p2: 0, draw: 0, black: 0, white: 0 };
-const stats = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
+const tally = { p1: 0, p2: 0 };
+const stats  = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
 const startTime = performance.now();
-const verbose = numGames <= 20;
 const verboseBoard = !!opts.verbose;
 
-// Column widths for per-game score output, derived from board size.
-const scoreW = String(boardSize * boardSize * 2).length + 2; // +2 for '.5' from komi
-const statW  = String(boardSize * boardSize).length;         // territory
+// Column widths for the summary table.
+const GW = 6;   // games
+const PW = 6;   // percentage  "66.7%"
+const MW = 7;   // ms/move     "123.45"
+const EW = 8;   // elapsed     "1234.5s"
 
-for (let g = 0; g < numGames; g++) {
-  // Alternate colors: even g → p1=black, odd g → p1=white
+const hdr =
+  `${'games'.padStart(GW)}` +
+  `  ${'elapsed'.padStart(EW)}` +
+  `  ${'p2%'.padStart(PW)}` +
+  `  ${'p1ms'.padStart(MW)}  ${'p2ms'.padStart(MW)}`;
+console.log(hdr);
+
+let printPeriodMs  = 1000;
+let lastPrintTime  = startTime;
+let lastPrintGames = 0;
+
+function printStats(gamesPlayed) {
+  const now     = performance.now();
+  const pct     = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%').padStart(PW);
+  const avgMs   = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—').padStart(MW);
+  const elapsed = (((now - startTime) / 1000).toFixed(1) + 's').padStart(EW);
+  console.log(
+    `${String(gamesPlayed).padStart(GW)}` +
+    `  ${elapsed}` +
+    `  ${pct(tally.p2)}` +
+    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}`
+  );
+}
+
+function maybePrint(gamesPlayed) {
+  const now = performance.now();
+  if (now - lastPrintTime < printPeriodMs) return;
+  if (gamesPlayed === lastPrintGames) return;
+
+  lastPrintTime  = now;
+  lastPrintGames = gamesPlayed;
+  printStats(gamesPlayed);
+  printPeriodMs = Math.round(printPeriodMs * 1.5);
+}
+
+// Run games until the limit (or forever if no limit).
+for (let g = 0; g < gameLimit; g++) {
   const p1IsBlack = g % 2 === 0;
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  const game = new Game(boardSize, komi);
+  const game = new Game(boardSize);
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === 'black';
@@ -129,52 +159,15 @@ for (let g = 0; g < numGames; g++) {
     if (verboseBoard) printBoard(game);
   }
 
-  const scores = game.scores;
-  const blackScore = scores.black.total;
-  const whiteScore = scores.white.total;
-
-  let winner;
-  if (blackScore > whiteScore) {
-    tally.black++;
-    const winningPlayer = p1IsBlack ? 'p1' : 'p2';
-    tally[winningPlayer]++;
-    winner = `BLACK (${winningPlayer === 'p1' ? p1Name : p2Name})`;
-  } else if (whiteScore > blackScore) {
-    tally.white++;
-    const winningPlayer = p1IsBlack ? 'p2' : 'p1';
-    tally[winningPlayer]++;
-    winner = `WHITE (${winningPlayer === 'p1' ? p1Name : p2Name})`;
-  } else {
-    tally.draw++;
-    winner = 'DRAW';
+  const winner = game.calcWinner();
+  if (winner === 'black') {
+    tally[p1IsBlack ? 'p1' : 'p2']++;
+  } else if (winner === 'white') {
+    tally[p1IsBlack ? 'p2' : 'p1']++;
   }
 
-  if (verbose) {
-    const p1Color = p1IsBlack ? 'B' : 'W';
-    const p2Color = p1IsBlack ? 'W' : 'B';
-    const fmtScore = (n) => String(n).padStart(scoreW);
-    const fmtStat  = (n) => String(n).padStart(statW);
-    console.log(
-      `Game ${String(g + 1).padStart(2)} [p1=${p1Color} p2=${p2Color}] ${String(game.moveCount).padStart(3)} moves:` +
-      `  B ${fmtScore(blackScore)} (${fmtStat(scores.black.territory)}t)` +
-      `  W ${fmtScore(whiteScore)} (${fmtStat(scores.white.territory)}t)` +
-      `  → ${winner}`
-    );
-  }
+  maybePrint(g + 1);
 }
 
-const labelW = 'Black:'.length;
-const wW     = Math.max(4, String(numGames).length);
-const label  = (s) => s.padEnd(labelW);
-const wCol   = (n) => String(n).padStart(wW);
-const pct    = (n) => ((100 * n) / numGames).toFixed(1).padStart(6) + '%';
-const avgMs  = (s) => s.moves ? (s.ms / s.moves).toFixed(2).padStart(7) : '      —';
-const movesW = Math.max(5, String(Math.max(stats.p1.moves, stats.p2.moves)).length);
-const mCol   = (n) => String(n).padStart(movesW);
-console.log(`  ${label('')}  ${'wins'.padStart(wW)}  ${'%'.padStart(7)}  ${'ms/move'.padStart(7)}  ${'moves'.padStart(movesW)}  policy`);
-console.log(`  ${label('P1:')}  ${wCol(tally.p1)}  ${pct(tally.p1)}  ${avgMs(stats.p1)}  ${mCol(stats.p1.moves)}  ${p1Name}`);
-console.log(`  ${label('P2:')}  ${wCol(tally.p2)}  ${pct(tally.p2)}  ${avgMs(stats.p2)}  ${mCol(stats.p2.moves)}  ${p2Name}`);
-if (p1Name === p2Name)
-  console.log(`  ${label('Black:')}  ${wCol(tally.black)}  ${pct(tally.black)}  ${''.padStart(7)}  (color win rate, komi=${komi})`);
-const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
-console.log(`  Total time: ${elapsedSec}s`);
+// Final stats row (always printed, even if maybePrint already fired).
+printStats(tally.p1 + tally.p2);

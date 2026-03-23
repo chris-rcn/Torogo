@@ -20,18 +20,6 @@ const DEFAULT_BUDGET_MS = 500;
 
 // Lightweight move application for use inside playouts.
 // Precondition: (x, y) has at least one empty orthogonal neighbour, which
-// guarantees the move is not suicide and makes Ko effectively impossible.
-// Skips the two O(n²) board-hash computations that placeStone always does.
-// Returns the total number of stones captured (0 in the common case).
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
-
 function playRandom(game) {
   const size = game.boardSize;
 
@@ -46,49 +34,23 @@ function playRandom(game) {
 
   while (!game.gameOver && moves < moveLimit) {
     let placed = false;
-
-    // Scan candidates in random order without replacement using a partition
-    // index `end`.  Elements in [0, end) are untried this turn; elements in
-    // [end, empty.length) were tried but were illegal (Ko/suicide) and stay
-    // in the list for future turns.
     let end = empty.length;
 
     while (end > 0) {
       const i = Math.floor(Math.random() * end);
       const [x, y] = empty[i];
 
-      // Move candidate to the boundary so we can remove it cheaply if needed.
       empty[i] = empty[end - 1];
       empty[end - 1] = [x, y];
       end--;
 
-      // Single scan: true-eye check + empty-neighbor detection.
-      const info = game.board.classifyEmpty(x, y, game.current);
-      if (info.isTrueEye) continue;
+      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
 
-      // Fast path: at least one empty neighbour means the move cannot be
-      // suicide and Ko is effectively impossible.
-      if (info.hasEmptyNeighbor) {
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
-
-      // Slow path: all four neighbours are occupied — suicide or Ko possible.
       const result = game.placeStone(x, y);
       if (result) {
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
@@ -108,7 +70,6 @@ function playRandom(game) {
     }
   }
 
-  if (!game.gameOver) game.endGame();
 }
 
 function getMove(game, timeBudgetMs) {
@@ -122,8 +83,7 @@ function getMove(game, timeBudgetMs) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) candidates.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) candidates.push({ type: 'place', x, y });
     }
   }
   // Pass is always legal.
@@ -146,10 +106,7 @@ function getMove(game, timeBudgetMs) {
     }
     playRandom(clone);
 
-    const s = clone.scores;
-    const winner = s.black.total > s.white.total ? 'black'
-                 : s.white.total > s.black.total ? 'white'
-                 : null;
+    const winner = clone.estimateWinner();
 
     stats[cidx].plays++;
     if (winner === player) stats[cidx].wins++;

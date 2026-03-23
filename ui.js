@@ -1,6 +1,8 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
+const KOMI = 4.5; // must match game.js / game2.js
+
 // How many extra intersections to render beyond each tile edge.
 // 0 = exact tile boundaries; increase to show wrapping rows/cols and make
 // the toroidal topology more intuitive.
@@ -174,7 +176,7 @@ class Renderer {
         // Wrap visual index to logical grid coordinate
         const bx = ((gx % N) + N) % N;
         const by = ((gy % N) + N) % N;
-        const color = this.game.board.get(bx, by);
+        const color = this.game.cells[by * N + bx];
         if (!color) continue;
 
         const [cx, cy] = this.toCanvas(gx, gy, offX, offY);
@@ -189,7 +191,7 @@ class Renderer {
           cx - r * 0.3, cy - r * 0.3, r * 0.05,
           cx, cy, r
         );
-        if (color === 'black') {
+        if (color === BLACK) {
           grad.addColorStop(0, '#666');
           grad.addColorStop(1, '#111');
         } else {
@@ -202,7 +204,7 @@ class Renderer {
         ctx.fill();
         ctx.restore();
 
-        ctx.strokeStyle = color === 'black' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.18)';
+        ctx.strokeStyle = color === BLACK ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.18)';
         ctx.lineWidth = 0.5;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -243,7 +245,7 @@ class Renderer {
         const cy = baseY + m * ts;
         if (cx < -r || cx > W + r || cy < -r || cy > H + r) continue;
         const grad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.05, cx, cy, r);
-        if (color === 'black') {
+        if (color === BLACK) {
           grad.addColorStop(0, '#666');
           grad.addColorStop(1, '#111');
         } else {
@@ -263,8 +265,8 @@ class Renderer {
     const lm = this.game.lastMove;
     if (!lm) return;
     const N = this.game.boardSize;
-    const prev = this.game.current === 'black' ? 'white' : 'black';
-    this.ctx.fillStyle = prev === 'black' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
+    const prev = this.game.current === BLACK ? WHITE : BLACK;
+    this.ctx.fillStyle = prev === BLACK ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)';
     const r = this.cellSize * 0.14;
     // Draw marker at every visual position that maps to the last-move cell
     const loL = -Math.floor(OVERLAP / 2), hiL = N + Math.ceil(OVERLAP / 2);
@@ -303,12 +305,11 @@ let legalMovesSet = null;
 function buildLegalMoves() {
   const N = game.boardSize;
   legalMovesSet = new Set();
-  if (game.gameOver || game.current !== 'white') return;
+  if (game.gameOver || game.current !== WHITE) return;
   for (let y = 0; y < N; y++) {
     for (let x = 0; x < N; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) legalMovesSet.add(y * N + x);
+      if (game.cells[y * N + x] !== 0) continue;
+      if (game.isLegal(y * N + x)) legalMovesSet.add(y * N + x);
     }
   }
 }
@@ -338,14 +339,14 @@ function animatePan(targetX, targetY, durationMs, onComplete) {
 }
 
 function scheduleComputerMove() {
-  if (game.gameOver || game.current !== 'black') return;
+  if (game.gameOver || game.current !== BLACK) return;
   computerBusy = true;
   legalMovesSet = null;
   updateUI();
   renderer.draw();
   requestAnimationFrame(() => {
     setTimeout(() => {
-      if (game.gameOver || game.current !== 'black') {
+      if (game.gameOver || game.current !== BLACK) {
         computerBusy = false;
         return;
       }
@@ -356,11 +357,13 @@ function scheduleComputerMove() {
         if (move.type === 'place') {
           computerPassedLast = false;
           logMove('C', `(${move.x}, ${move.y})`, move.info);
-          game.placeStone(move.x, move.y);
+          game.play(move.y * game.N + move.x);
+          game.lastMove = { x: move.x, y: move.y };
         } else {
           computerPassedLast = true;
           logMove('C', 'pass', move.info);
-          game.pass();
+          game.play(PASS);
+          game.lastMove = null;
         }
         renderer.draw();
         // Brief cooldown so queued pointer events don't sneak through
@@ -397,14 +400,14 @@ const canvas = document.getElementById('board-canvas');
 
 function updateUI() {
   const g = game;
-  const thinking = !g.gameOver && g.current === 'black';
+  const thinking = !g.gameOver && g.current === BLACK;
 
   // Score bar — always visible, computed every update
   const t = g.calcTerritory();
   const blackTotal = t.black;
-  const whiteTotal = t.white + g.komi;
+  const whiteTotal = t.white + KOMI;
   document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
-  document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${g.komi})`;
+  document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${KOMI})`;
 
   // Three-section controls row
   const blackMsgEl = document.getElementById('black-msg');
@@ -438,7 +441,7 @@ function updateUI() {
   }
 
   // Right: white message
-  const isHumanTurn = !g.gameOver && !computerBusy && g.current === 'white';
+  const isHumanTurn = !g.gameOver && !computerBusy && g.current === WHITE;
   whiteMsgEl.textContent = isHumanTurn ? 'Your turn' : '';
 
   document.getElementById('pass-btn').style.display = isHumanTurn ? '' : 'none';
@@ -451,7 +454,9 @@ function startGame(boardSize) {
   computerPassedLast = false;
   moveNumber = 0;
   console.log(`[Game] new game started (${boardSize}×${boardSize})`);
-  game = new Game(boardSize);
+  game = new Game2(boardSize);
+  game.lastMove = null;
+  game.illegalFlash = null;
   renderer = new Renderer(canvas, game);
   renderer.draw();
   buildLegalMoves();
@@ -505,7 +510,7 @@ canvas.addEventListener('pointermove', (e) => {
   } else {
     // Hover — update ghost stone (only when it's the human's turn)
     const rect = canvas.getBoundingClientRect();
-    renderer.hoverPos = !game.gameOver && game.current === 'white'
+    renderer.hoverPos = !game.gameOver && game.current === WHITE
       ? renderer.fromCanvas(e.clientX - rect.left, e.clientY - rect.top)
       : null;
     scheduleDraw();
@@ -519,7 +524,7 @@ canvas.addEventListener('pointerleave', () => {
 
 canvas.addEventListener('pointerup', (e) => {
   canvas.classList.remove('panning', 'placing');
-  if (!isPanning && !computerBusy && game.current === 'white') {
+  if (!isPanning && !computerBusy && game.current === WHITE) {
     // Short tap / click → place human (white) stone
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -534,7 +539,8 @@ canvas.addEventListener('pointerup', (e) => {
       // the pan animation starts.
       moveNumber++;
       logMove('H', `(${pos.x}, ${pos.y})`);
-      game.placeStone(pos.x, pos.y);
+      game.play(pos.y * N + pos.x);
+      game.lastMove = { x: pos.x, y: pos.y };
       renderer.draw();
       updateUI();
 
@@ -552,7 +558,12 @@ canvas.addEventListener('pointerup', (e) => {
       animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
     } else {
       console.log(`            human     (${pos.x}, ${pos.y})  — illegal`);
-      const legal = game.placeStone(pos.x, pos.y);
+      const legal = game.play(pos.y * N + pos.x);
+      if (legal) {
+        game.lastMove = { x: pos.x, y: pos.y };
+      } else {
+        game.illegalFlash = { x: pos.x, y: pos.y };
+      }
       renderer.draw();
       updateUI();
       if (!legal && game.illegalFlash) {
@@ -564,11 +575,12 @@ canvas.addEventListener('pointerup', (e) => {
 });
 
 document.getElementById('pass-btn').addEventListener('click', () => {
-  if (computerBusy || game.current !== 'white') return;
+  if (computerBusy || game.current !== WHITE) return;
   computerPassedLast = false;
   moveNumber++;
   logMove('H', 'pass');
-  game.pass();
+  game.play(PASS);
+  game.lastMove = null;
   renderer.draw();
   updateUI();
   scheduleComputerMove();

@@ -1,5 +1,9 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+// ladder.js must be loaded before this file.
+
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy.
  *
@@ -24,28 +28,18 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { weight: patternWeight } = require('./pattern.js');
-
-// Number of randomly sampled candidates to score per playout move.
-const PLAYOUT_CANDIDATES = 8;
-
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
+const { getLadderStatus } = _isNode ? require('../ladder.js') : window;
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !== undefined)
-  ? parseFloat(process.env.RAVE_EQUIV)
-  : 300;
+const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 
 // Number of untried moves to sample when expanding a node.  The candidate
 // with the best parent RAVE win rate is expanded first.  Set to 1 to revert
@@ -53,23 +47,22 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 const EXPANSION_CANDIDATES = 2;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
-  ? parseInt(process.env.PLAYOUTS, 10) : 0;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
-// ── Pattern-guided playout ────────────────────────────────────────────────────
 
-// Playout using pattern weights for move selection, with the same incremental
-// empty-list and classifyEmpty fast-path as the original rave playout.
-// Tracks cell indices (y*N+x) for RAVE backpropagation.
+// ── Fast playout helpers ──────────────────────────────────────────────────────
+
+// Random playout that records the cell indices (y*N+x) of every move made by
+// each player.  Pass moves carry no cell index and are not recorded.
 // Returns { winner, blackPlayed, whitePlayed }.
 function playTracked(game) {
+  const wasAlreadyOver = game.gameOver;
   const size = game.boardSize;
   const board = game.board;
   const grid  = board.grid;
   const blackPlayed = [];
   const whitePlayed = [];
 
-  // Build the initial empty-cell list once.
   const empty = [];
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++)
@@ -79,72 +72,48 @@ function playTracked(game) {
   let moves = 0;
 
   while (!game.gameOver && moves < moveLimit) {
+    let placed = false;
+    let end = empty.length;
     const current = game.current;
 
-    // Reservoir-sample up to PLAYOUT_CANDIDATES cells, scoring each with the
-    // pattern weight.  Swap sampled cells to the front of `empty` so their
-    // positions are known for efficient removal after selection.
-    let sampleEnd = 0;
-    const cands = [];   // { pos, fast, w }
-
-    while (sampleEnd < empty.length && cands.length < PLAYOUT_CANDIDATES) {
-      const i = sampleEnd + Math.floor(Math.random() * (empty.length - sampleEnd));
-      const tmp = empty[sampleEnd]; empty[sampleEnd] = empty[i]; empty[i] = tmp;
-      const cellIdx = empty[sampleEnd];
+    while (end > 0) {
+      const i = Math.floor(Math.random() * end);
+      const cellIdx = empty[i];
       const x = cellIdx % size;
       const y = (cellIdx / size) | 0;
-      sampleEnd++;
+      empty[i] = empty[end - 1];
+      empty[end - 1] = cellIdx;
+      end--;
 
-      const info = board.classifyEmpty(x, y, current);
-      if (info.isTrueEye) continue;
-      // hasEmptyNeighbor ⇒ can't be suicide or ko; skip the expensive checks.
-      if (!info.hasEmptyNeighbor) {
-        if (board.isSuicide(x, y, current)) continue;
-        if (board.isKo(x, y, current, game.koFlag)) continue;
+      if (board.classifyEmpty(x, y, current).isTrueEye) continue;
+
+      const result = game.placeStone(x, y);
+      if (result) {
+        if (current === 'black') blackPlayed.push(cellIdx);
+        else                     whitePlayed.push(cellIdx);
+        empty[end] = empty[empty.length - 1];
+        empty.pop();
+        if (result !== true) {
+          empty.length = 0;
+          for (let ey = 0; ey < size; ey++)
+            for (let ex = 0; ex < size; ex++)
+              if (grid[ey][ex] === null) empty.push(ey * size + ex);
+        }
+        placed = true;
+        moves++;
+        break;
       }
-
-      cands.push({ pos: sampleEnd - 1, fast: info.hasEmptyNeighbor,
-                   w: patternWeight(game, x, y) });
     }
 
-    if (cands.length === 0) { game.pass(); moves++; continue; }
-
-    // Weighted selection among sampled candidates.
-    let total = 0;
-    for (const c of cands) total += c.w;
-    let r = Math.random() * total;
-    let chosen = cands[cands.length - 1];
-    for (const c of cands) { r -= c.w; if (r <= 0) { chosen = c; break; } }
-
-    const cellIdx = empty[chosen.pos];
-    const x = cellIdx % size;
-    const y = (cellIdx / size) | 0;
-
-    if (current === 'black') blackPlayed.push(cellIdx);
-    else                     whitePlayed.push(cellIdx);
-
-    // Remove chosen cell from empty (swap with last).
-    empty[chosen.pos] = empty[empty.length - 1];
-    empty.pop();
-
-    // Apply: fast path when we know there's an empty neighbour (no ko update
-    // needed); full applyLegal otherwise (updates koFlag for next move's check).
-    const captures = chosen.fast ? applyFast(game, x, y)
-                                 : game.applyLegal(x, y);
-    if (captures > 0) {
-      empty.length = 0;
-      for (let ey = 0; ey < size; ey++)
-        for (let ex = 0; ex < size; ex++)
-          if (grid[ey][ex] === null) empty.push(ey * size + ex);
-    }
-    moves++;
+    if (!placed) { game.pass(); moves++; }
   }
 
-  if (!game.gameOver) game.endGame();
-  const s = game.scores;
-  const winner = s.black.total > s.white.total ? 'black'
-               : s.white.total > s.black.total ? 'white'
-               : null;
+  let winner;
+  if (wasAlreadyOver) {
+    winner = game.calcWinner();
+  } else {
+    winner = game.estimateWinner();
+  }
   return { winner, blackPlayed, whitePlayed };
 }
 
@@ -156,8 +125,7 @@ function legalMoves(game) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
     }
   const area = game.boardSize * game.boardSize;
   if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
@@ -176,10 +144,11 @@ function makeNode(move, parent, mover, N) {
     mover,        // player who made `move` to reach this node (null at root)
     children:  [],
     untried:   null,
-    wins:      0,
-    visits:    0,
-    raveWins:   new Float64Array(len),
-    raveVisits: new Float64Array(len),
+    wins:         0,
+    visits:       0,
+    ladderSeeded: false,
+    raveWins:     new Float64Array(len),
+    raveVisits:   new Float64Array(len),
   };
 }
 
@@ -211,6 +180,11 @@ function selectAndExpand(root, rootGame, N) {
   let node = root;
   const game = rootGame.clone();
 
+  if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
+    applyLadderPriors(node, game, N);
+    node.ladderSeeded = true;
+  }
+
   // Select: descend through fully-expanded nodes using the RAVE-blended score.
   while (node.untried !== null && node.untried.length === 0
          && node.children.length > 0 && !game.gameOver) {
@@ -223,6 +197,10 @@ function selectAndExpand(root, rootGame, N) {
     }
     node = best;
     applyMove(game, node.move);
+    if (!node.ladderSeeded && node.visits >= LADDER_VISITS) {
+      applyLadderPriors(node, game, N);
+      node.ladderSeeded = true;
+    }
   }
 
   // Expand: attach one untried child.
@@ -295,6 +273,63 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
   }
 }
 
+// A node must reach this many visits before its ladder priors are applied.
+const LADDER_VISITS = Util.envInt('LADDER_VISITS', 5);
+
+
+// ── Ladder priors ────────────────────────────────────────────────────────────
+function applyLadderPriors(node, game, N) {
+  const mover = game.current;
+
+  // Promote a legal move to a pre-created child seeded with virtual wins/visits.
+  // If the child already exists (two groups share a liberty), accumulate into it.
+  // node.visits is kept in sync so the UCB exploration term is well-defined.
+  function seedChild(lx, ly, wins, visits) {
+    let child = node.children.find(c => c.move.type === 'place' && c.move.x === lx && c.move.y === ly);
+    if (!child) {
+      if (node.untried === null) node.untried = legalMoves(game);
+      const idx = node.untried.findIndex(m => m.type === 'place' && m.x === lx && m.y === ly);
+      if (idx === -1) return;
+      const [move] = node.untried.splice(idx, 1);
+      child = makeNode(move, node, mover, N);
+      node.children.push(child);
+    }
+    child.wins   += wins;
+    child.visits += visits;
+    node.visits  += visits;
+  }
+
+  const visited = new Set();
+  for (let py = 0; py < N; py++) {
+    for (let px = 0; px < N; px++) {
+      const group = game.board.getGroup(px, py);
+      if (group.length < 2) continue;
+      const groupColor = game.board.get(px, py);
+      const gid = game.board._gid[game.board._idx(px, py)];
+      if (visited.has(gid)) continue;
+      visited.add(gid);
+      const libs = game.board.getLiberties(group);
+      if (libs.size > 2) continue;
+
+      const statusEntries = getLadderStatus(game, px, py);
+      if (!statusEntries) continue;
+
+      for (const entry of statusEntries) {
+        const { liberty: { x: lx, y: ly } } = entry;
+        if (groupColor === mover && !entry.canEscape) {  // Don't extend doomed group.
+          seedChild(lx, ly, 0, 3 * group.length + 1);
+        } else if (groupColor !== mover && entry.canEscape) {  // Don't chase escaping group.
+          seedChild(lx, ly, 0, 45);  // The importance of this prior does not depend on the group size.
+        } else if (groupColor === mover && entry.canEscape && !entry.canEscapeAfterPass) {  // Do escape (when urgent).
+          seedChild(lx, ly, 2 * group.length, 2 * group.length);
+        } else if (groupColor !== mover && !entry.canEscape && entry.canEscapeAfterPass) {  // Do chase doomed group (when urgent).
+          seedChild(lx, ly, 2 * group.length, 2 * group.length);
+        }
+      }
+    }
+  }
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
@@ -315,7 +350,7 @@ function getMove(game, timeBudgetMs) {
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
-  // Pick the root child with the most visits (most robust criterion).
+  // Pick the root child with the most visits.
   let bestChild = null, bestVisits = -1;
   for (const child of root.children) {
     if (child.visits > bestVisits) { bestVisits = child.visits; bestChild = child; }
@@ -325,10 +360,13 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children };
-  const result = { ...bestChild.move, children };
+  const rootWins = root.children.reduce((s, c) => s + c.wins, 0);
+  const rootWinRatio = root.visits > 0 ? rootWins / root.visits : 0.5;
+  if (bestChild.wins === 0 && game.moveCount >= N * N / 2) return { type: 'pass', info: 'no winning line found', children, rootWinRatio };
+  const result = { ...bestChild.move, children, rootWinRatio };
   result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
   return result;
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+

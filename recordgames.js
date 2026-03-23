@@ -17,7 +17,7 @@
 // Example line for a 7x7 game:
 //   7,dd,ac,cd,...,..,..,
 
-const { Game, DEFAULT_KOMI } = require('./game.js');
+const { Game } = require('./game.js');
 
 const args = process.argv.slice(2);
 const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -35,7 +35,7 @@ const row = y => String.fromCharCode(97 + y);
 let count = 0;
 while (max === 0 || count < max) {
   count++;
-  const g = new Game(size, DEFAULT_KOMI);
+  const g = new Game(size);
   const parts = [size];
 
   // The constructor always places black at the board centre as move 1.

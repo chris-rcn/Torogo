@@ -22,14 +22,6 @@ const EXPLORATION_C = 1.4; // UCT exploration constant
 
 // ── Playout helpers (same as mc.js) ──────────────────────────────────────────
 
-function applyFast(game, x, y) {
-  game.board.set(x, y, game.current);
-  const cap = game.board.captureGroups(x, y);
-  game.consecutivePasses = 0;
-  game.current = game.current === 'black' ? 'white' : 'black';
-  return cap.black.length + cap.white.length;
-}
-
 function playRandom(game) {
   const size = game.boardSize;
   const empty = [];
@@ -51,29 +43,13 @@ function playRandom(game) {
       empty[end - 1] = [x, y];
       end--;
 
-      const info = game.board.classifyEmpty(x, y, game.current);
-      if (info.isTrueEye) continue;
-
-      if (info.hasEmptyNeighbor) {
-        const captures = applyFast(game, x, y);
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (captures > 0) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
-      }
+      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
 
       const result = game.placeStone(x, y);
       if (result) {
         empty[end] = empty[empty.length - 1];
         empty.pop();
-        if (result > 1) {
+        if (result !== true) {
           empty.length = 0;
           for (let ey = 0; ey < size; ey++)
             for (let ex = 0; ex < size; ex++)
@@ -91,7 +67,6 @@ function playRandom(game) {
     }
   }
 
-  if (!game.gameOver) game.endGame();
 }
 
 // ── Tree node ────────────────────────────────────────────────────────────────
@@ -102,8 +77,7 @@ function legalMoves(game) {
     for (let x = 0; x < game.boardSize; x++) {
       if (game.board.get(x, y) !== null) continue;
       if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      const probe = game.clone();
-      if (probe.placeStone(x, y)) moves.push({ type: 'place', x, y });
+      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
     }
   const area = game.boardSize * game.boardSize;
   if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
@@ -182,11 +156,12 @@ function selectAndExpand(root, rootGame) {
 }
 
 function simulate(game) {
+  const wasAlreadyOver = game.gameOver;
   playRandom(game);
-  const s = game.scores;
-  return s.black.total > s.white.total ? 'black'
-       : s.white.total > s.black.total ? 'white'
-       : null;
+  if (wasAlreadyOver) {
+    return game.calcWinner();
+  }
+  return game.estimateWinner();
 }
 
 function backpropagate(node, winner) {

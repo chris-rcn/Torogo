@@ -23,15 +23,9 @@
  *   timeBudgetMs - ignored (always fast)
  */
 
-// ── helpers ────────────────────────────────────────────────────────────────
+if (typeof require === 'function') { var Util = require('../util.js'); }
 
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
+// ── helpers ────────────────────────────────────────────────────────────────
 
 // Return all groups of `color`, each as { group, libs }, sorted by group size
 // descending (largest first).
@@ -227,7 +221,7 @@ module.exports = function getMove(game, _timeBudgetMs) {
       candidates.push([x, y]);
     }
   }
-  shuffle(candidates);
+  Util.shuffle(candidates);
 
   return findThreat(game, candidates)
       || findInfluence(game, candidates)
