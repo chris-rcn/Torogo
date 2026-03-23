@@ -105,11 +105,11 @@ function getLadderStatus2(game2, stoneIdx) {
     console.warn(`getLadderStatus2: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
     return null;
   }
+  const atari = lc === 1;
   const libs = atari ? [_lib0] : [_lib0, _lib1];  // Set by _readLibs.  Nasty stuff.
   const gColor = game2.cells[stoneIdx];
   const mover = game2.current;   // BLACK or WHITE
   const defending = gColor === mover;
-  const atari = lc === 1;
 
   let escape;
   // Try opponent playing first.

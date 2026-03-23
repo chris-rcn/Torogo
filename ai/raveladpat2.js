@@ -41,7 +41,7 @@ const DEFAULT_WEIGHT = 0;
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 5);
 
-// Whether to apply ladder priors.  Override with LADDER=0.
+// Whether to apply ladder priors.
 const LADDER = Util.envStr('LADDER', '1') !== '0';
 
 let patternSelectionRatio;
@@ -187,7 +187,7 @@ function makeNode(move, parent, ci, mover, game2, N) {
   if (LADDER) {
     for (const { gid, color, status } of getAllLadderStatuses(game2)) {
       const groupSize = game2._ss[gid];
-      if (moverSucceeds) {
+      if (status.moverSucceeds) {
         for (const lib of status.urgentLibs) {
           raveWins[lib]   += 2 * groupSize;              // Urgent escape / capture.
           raveVisits[lib] += 2 * groupSize;

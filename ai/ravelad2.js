@@ -35,7 +35,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus2: getLadderStatus } = _isNode ? require('../ladder2.js') : window;
+const { getAllLadderStatuses } = _isNode ? require('../ladder2.js') : window;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 const Util = _isNode ? require('../util.js') : window.Util;
 
@@ -306,19 +306,19 @@ function applyLadderPriors(node, game2, N) {
     node.visits  += visits;
   }
 
-  const cap        = N * N;
-  const cells      = game2.cells;
+  const cap         = N * N;
+  const cells       = game2.cells;
   const visitedGids = new Set();
 
   for (const { gid, color, status } of getAllLadderStatuses(game2)) {
     const groupSize = game2._ss[gid];
-    if (moverSucceeds) {
+    if (status.moverSucceeds) {
       for (const lib of status.urgentLibs) {
         seedChild(lib, 2 * groupSize, 2 * groupSize);
       }
     } else {
       // Possible wasted moves.
-      const defending = color === chooser;
+      const defending = color === mover;
       let penalty;
       if (defending) {
         penalty = 2 * groupSize;  // Don't extend doomed group.
