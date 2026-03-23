@@ -11,3 +11,5 @@ Verify that UI-enabled agent is better.
 
 Integrate ladder results into patterns.
 
+Pollute the global namespace less.
+
