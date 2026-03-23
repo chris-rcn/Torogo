@@ -17,7 +17,7 @@
  *   timeBudgetMs - ignored (always fast)
  */
 
-if (typeof require === 'function') { var { shuffle } = require('../util.js'); }
+if (typeof require === 'function') { var Util = require('../util.js'); }
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ function findCapture(game) {
   const opp = game.current === 'black' ? 'white' : 'black';
   const moves = groupsWithLibCount(game.board, opp, 1);
   // Shuffle so we don't always take the top-left capture.
-  shuffle(moves);
+  Util.shuffle(moves);
   for (const [x, y] of moves) {
     // Capturing an atari group is always legal, but double-check for Ko.
     const clone = game.clone();
@@ -63,7 +63,7 @@ function findCapture(game) {
 function findEscape(game) {
   const color = game.current;
   const moves = groupsWithLibCount(game.board, color, 1);
-  shuffle(moves);
+  Util.shuffle(moves);
   for (const [x, y] of moves) {
     const clone = game.clone();
     if (clone.placeStone(x, y)) return { type: 'place', x, y };
@@ -132,7 +132,7 @@ module.exports = function getMove(game, _timeBudgetMs) {
       candidates.push([x, y]);
     }
   }
-  shuffle(candidates);
+  Util.shuffle(candidates);
 
   return findThreat(game, candidates)
       || findRandom(game, candidates)

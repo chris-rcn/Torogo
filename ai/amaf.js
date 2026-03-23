@@ -21,17 +21,14 @@
 
 const { performance } = require('perf_hooks');
 const { PASS, BLACK, WHITE } = require('../game2.js');
+const Util = require('../util.js');
 
 const DEFAULT_BUDGET_MS = 500;
-const PLAYOUTS = process.env.PLAYOUTS ? parseInt(process.env.PLAYOUTS, 10) : 0;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
-const DISCOUNT = process.env.AMAF_DISCOUNT !== undefined
-  ? parseFloat(process.env.AMAF_DISCOUNT)
-  : 0.5;
+const DISCOUNT = Util.envFloat('AMAF_DISCOUNT', 0.5);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
-const OPP_MOVE_WEIGHT = process.env.AMAF_OPP_WEIGHT !== undefined
-  ? parseFloat(process.env.AMAF_OPP_WEIGHT)
-  : 0;
+const OPP_MOVE_WEIGHT = Util.envFloat('AMAF_OPP_WEIGHT', 0);
 
 // Random playout using Game2.  Returns the ordered lists of cell indices
 // played by the current player (played) and opponent (oppPlayed) during the

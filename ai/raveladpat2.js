@@ -22,38 +22,32 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { getLadderStatus2: getLadderStatus } = _isNode ? require('../ladder2.js') : window;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !== undefined)
-  ? parseFloat(process.env.RAVE_EQUIV)
-  : 300;
+const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
-  ? parseInt(process.env.PLAYOUTS, 10) : 0;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = (typeof process !== 'undefined' && process.env.PAT_PRIOR_WEIGHT)
-  ? parseFloat(process.env.PAT_PRIOR_WEIGHT) : 200;
+const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 200);
 
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = (typeof process !== 'undefined' && process.env.N_EXPAND)
-  ? parseInt(process.env.N_EXPAND, 10) : 5;
+const N_EXPAND = Util.envInt('N_EXPAND', 5);
 
 // Whether to apply ladder priors.  Override with LADDER=0.
-const LADDER = (typeof process !== 'undefined' && process.env.LADDER !== undefined)
-  ? process.env.LADDER !== '0'
-  : true;
+const LADDER = Util.envStr('LADDER', '1') !== '0';
 
 let patternSelectionRatio;
 
 if (_isNode) {
-  ({ weight: patternSelectionRatio } = require('../patternValue.js'));
+  patternSelectionRatio = require('../patternValue.js').weight;
 } else {
   // Browser: patternHash2 is a global from patterns2.js loaded as a <script>.
   // Load patterns.csv via fetch and build the ratio table.

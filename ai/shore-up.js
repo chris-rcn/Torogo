@@ -24,7 +24,7 @@
  *   timeBudgetMs - ignored (always fast)
  */
 
-if (typeof require === 'function') { var { shuffle } = require('../util.js'); }
+if (typeof require === 'function') { var Util = require('../util.js'); }
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -180,7 +180,7 @@ module.exports = function getMove(game, _timeBudgetMs) {
       candidates.push([x, y]);
     }
   }
-  shuffle(candidates);
+  Util.shuffle(candidates);
 
   return findThreat(game, candidates)
       || findRandom(game, candidates)

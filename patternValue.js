@@ -1,60 +1,51 @@
 'use strict';
 
-/**
- * Loads a pattern-statistics file produced by minepatterns.js.  Patterns not 
- * present in the file receive a small uniform
- * prior weight (DEFAULT_WEIGHT) so that novel positions still produce legal
- * moves.  Falls back to pass when no legal non-eye move exists.
- *
- */
+// patternValue.js — pattern weight lookup.
+// BROWSER-COMPATIBLE: no Node.js-only APIs at top level.  Keep it this way.
 
-const fs = require('fs');
-const { patternHash2 } = require('./patterns2.js');
+const PatternValue = (() => {
+  if (typeof require === 'function') { var Patterns2 = require('./patterns2.js'); var Util = require('./util.js'); }
 
-// Weight given to patterns that were never observed in the training data.
-const DEFAULT_WEIGHT = 0;
-
-// Number of randomly sampled candidates to score per move.
-const CANDIDATES = 8;
-
-/**
- * Load a pattern-statistics file and return a Map<hash, weight>.
- *
- * @param {string} filePath
- * @returns {Map<number, number>}
- */
-function loadPatterns(filePath) {
+  const DEFAULT_WEIGHT = 0;
   const table = new Map();
-  const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const parts = line.split(',');
-    const hash  = parseInt(parts[0], 10);
-    const value = parseFloat(parts[1]);
-    if (!Number.isNaN(hash) && !Number.isNaN(value)) {
-      table.set(hash, value);
+
+  function parseCSV(text) {
+    table.clear();
+    for (const line of text.trim().split('\n')) {
+      if (!line.trim()) continue;
+      const parts = line.split(',');
+      const hash  = parseInt(parts[0], 10);
+      const value = parseFloat(parts[1]);
+      if (!Number.isNaN(hash) && !Number.isNaN(value)) table.set(hash, value);
     }
   }
-  return table;
-}
 
-/**
- * Create a weighting function (game2, idx) → number from a pattern file.
- *
- * @param {string} patternFile
- * @returns {function(game2, idx): number}
- */
-function makeWeighter(patternFile) {
-  const table = loadPatterns(patternFile);
-  return function weight(game2, idx) {
-    const hash = patternHash2(game2, idx, game2.current);
-    return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+  // Load patterns from a file path (Node) or URL (browser).
+  // Returns a Promise.
+  function load(source) {
+    if (typeof require === 'function') {
+      parseCSV(require('fs').readFileSync(source, 'utf8'));
+      return Promise.resolve();
+    }
+    return fetch(source).then(r => r.text()).then(parseCSV);
+  }
+
+  // Node: auto-load the default patterns file synchronously at require time.
+  if (typeof require === 'function') {
+    const path = require('path');
+    load(path.join(__dirname, Util.envStr('PAT_DATA', 'patterns.csv')));
+  }
+
+  return {
+
+    load: load,
+
+    weight(game2, idx) {
+      const hash = Patterns2.patternHash2(game2, idx, game2.current);
+      return table.has(hash) ? table.get(hash) : DEFAULT_WEIGHT;
+    },
+
   };
-}
+})();
 
-const path = require('path');
-const _defaultFile  = path.join(__dirname, process.env.PAT_DATA || 'patterns.csv');
-const _defaultWeight = makeWeighter(_defaultFile);
-
-module.exports = { weight: _defaultWeight };
-
+if (typeof module !== 'undefined') module.exports = PatternValue;

@@ -24,15 +24,17 @@
  *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
  */
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
+
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !== undefined)
-  ? parseFloat(process.env.RAVE_EQUIV)
-  : 300;
+const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 
 // Number of untried moves to sample when expanding a node.  The candidate
 // with the best parent RAVE win rate is expanded first.  Set to 1 to revert
@@ -40,8 +42,7 @@ const RAVE_EQUIV = (typeof process !== 'undefined' && process.env.RAVE_EQUIV !==
 const EXPANSION_CANDIDATES = 2;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = (typeof process !== 'undefined' && process.env.PLAYOUTS)
-  ? parseInt(process.env.PLAYOUTS, 10) : 0;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
