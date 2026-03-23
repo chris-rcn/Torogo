@@ -20,8 +20,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
-const Util = _isNode ? require('../util.js') : window.Util;
+if (_isNode) { const _g2 = require('../game2.js'); global.PASS = _g2.PASS; global.BLACK = _g2.BLACK; global.WHITE = _g2.WHITE; global.Util = require('../util.js'); }
 
 const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
