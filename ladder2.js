@@ -119,7 +119,7 @@ function getLadderStatus2(game2, stoneIdx) {
 }
 
 // getAllLadderStatuses(game2) — run getLadderStatus2 on every group with 1 or 2
-// liberties and return an array of { gid, color, stoneIdx, entries } objects,
+// liberties and return an array of { gid, color, entries } objects,
 // one per group (groups with 0 or 3+ liberties are skipped).
 function getAllLadderStatuses(game2) {
   const cap  = game2.N * game2.N;

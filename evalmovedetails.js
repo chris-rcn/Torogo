@@ -20,17 +20,17 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-const agentName = get('--agent',  'rave');
+const agentName = get('--agent');
 const budgetMs  = parseInt(get('--budget', '100'), 10);
-const filePath  = get('--file', null);
+const filePath  = get('--file');
 const verbose   = args.includes('--verbose');
 
 if (!filePath)              { console.error('--file is required'); process.exit(1); }
+if (!agentName)             { console.error('--agent is required'); process.exit(1); }
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 const { Game2, PASS, coordStr, parseMove, agentMoveToIdx } = require('./game2.js');
-
 
 const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(l => l.trim());
 
@@ -83,6 +83,8 @@ for (let i = 0; i < lines.length; i++) {
 }
 
 const gapRms = Math.sqrt(gapSqSum / lines.length);
-const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-console.log(`positions: ${lines.length}  elapsed: ${elapsed}s  gapRms: ${gapRms.toFixed(4)}  agent: ${agentName}`);
+const elapsedMs = performance.now() - startTime;
+const elapsed = (elapsedMs / 1000).toFixed(1);
+const tMoveMs = (elapsedMs / lines.length).toFixed(1);
+console.log(`positions: ${lines.length}  elapsed: ${elapsed}s  tMoveMs: ${tMoveMs}  gapRms: ${gapRms.toFixed(4)}  agent: ${agentName}`);
 

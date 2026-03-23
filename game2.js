@@ -1,13 +1,5 @@
 'use strict';
 
-// game2.js — speed-optimized Go engine for fast playouts.
-//
-// Key differences from game.js:
-//   Board:  Int8Array, flat 1-D, values 0=empty 1=black 2=white
-//   Moves:  plain integer  (y*N + x),  PASS = -1
-//   Ko:     integer index  (or -1)
-//   Colors: integer constants BLACK=1 WHITE=2
-//
 // Group storage: flat typed arrays indexed by gid, bitsets for stones/liberties.
 //
 // Interface:
