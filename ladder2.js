@@ -48,19 +48,22 @@ function _canReach3Libs(game2, idx) {
   const lib0 = _lib0, lib1 = _lib1;
   const defColor = game2.cells[idx];
 
-  if (lc === 1 && game2.current === defColor) {
-    // Defender's turn in atari: play the only liberty.
-    const g = game2.clone();
-    if (!g.play(lib0)) return false;    // suicide
-    if (g.cells[idx] === 0) return false; // captured
-    return _canReach3Libs(g, idx);
+  if (game2.current === defColor) {
+    // Defender's turn: play one of the liberties; succeed if any leads to safety.
+    const libs = lc === 1 ? [lib0] : [lib0, lib1];
+    for (const libIdx of libs) {
+      const g = game2.clone();
+      if (!g.play(libIdx)) continue;      // suicide — skip
+      if (g.cells[idx] === 0) continue;   // captured — skip
+      if (_canReach3Libs(g, idx)) return true;
+    }
+    return false;
   }
 
-  // 1 lib (attacker's turn) or 2 libs: attacker tries each liberty.
+  // Attacker's turn (1 or 2 libs): tries each liberty; succeeds if any leads to capture.
   const libs = lc === 1 ? [lib0] : [lib0, lib1];
   for (const libIdx of libs) {
     const g = game2.clone();
-    g.current = 3 - defColor;            // attacker's turn
     if (!g.play(libIdx)) continue;        // illegal for attacker — skip
     if (g.cells[idx] === 0) return false; // captured immediately
     const agid = g._gid[idx];
@@ -121,8 +124,8 @@ function getLadderStatus2(game2, stoneIdx) {
     escape = _canReach3Libs(g, stoneIdx);
   }
   if (defending === escape) {
-     // group is not urgent
-     return { libs, moverSucceeds: true, urgentLibs: [] }
+    // group is not urgent
+    return { libs, moverSucceeds: true, urgentLibs: [] };
   }
 
   // Try mover playing first.

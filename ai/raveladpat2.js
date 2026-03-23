@@ -33,7 +33,7 @@ const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 200);
+const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 0);
 
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
@@ -180,29 +180,33 @@ function makeNode(move, parent, ci, mover, game2, N) {
   const raveWins    = new Float32Array(N * N).fill(0.01);
   const raveVisits  = new Float32Array(N * N).fill(0.02);
 
-  // Ladder priors encoded as RAVE seeds.  `chooser` = player to move here.
-  const chooser = game2.current;
-  const cap = N * N;
+  // Per-move prior bonuses, kept separate from RAVE so they never dilute
+  // playout statistics.  Applied as priorBonus[move] / (1 + child.visits).
+  const priorBonus  = new Float32Array(N * N);
 
   if (LADDER) {
     for (const { gid, color, status } of getAllLadderStatuses(game2)) {
       const groupSize = game2._ss[gid];
+      const defending = color === game2.current;                                                                                                                                                     
       if (status.moverSucceeds) {
+        let bonus;  // Applies to urgent moves only.
+        if (defending) {                                                                                                                                                                         
+          bonus = 3 + 1 * groupSize;  // Do save the critical group.
+        } else {                                                                                                                                                                                 
+          bonus = 3 + 1 * groupSize;  // Do kill the critical group.
+        }                                                                                        
         for (const lib of status.urgentLibs) {
-          raveWins[lib]   += 2 * groupSize;              // Urgent escape / capture.
-          raveVisits[lib] += 2 * groupSize;
+          priorBonus[lib] += bonus;
         }
       } else {
-        // Possible wasted moves.
-        const defending = color === chooser;
-        let penalty;
-        if (defending) {
-          penalty = 2 * groupSize;  // Don't extend doomed group.
-        } else {
-          penalty = 10;             // Don't chase escaping group.
-        }
+        let penalty;                                                                                                                                                                             
+        if (defending) {                                                                                                                                                                         
+          penalty = 6 + 1 * groupSize;  // Don't extend doomed group.                                                                                                                                
+        } else {                                                                                                                                                                                 
+          penalty = 6 + 1 * groupSize;  // Don't chase escaping group.                                                                                                                               
+        }                                                                                        
         for (const li of status.libs) {
-          raveVisits[li] += penalty;
+          priorBonus[li] -= penalty;
         }
       }
     }
@@ -237,34 +241,31 @@ function makeNode(move, parent, ci, mover, game2, N) {
     wins,    // Float32Array(M) — playout wins per child
     visits,  // Float32Array(M) — playout visits per child
 
-    raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; seeded with priors
-    raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; seeded with priors
+    raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; seeded with pattern priors
+    raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; seeded with pattern priors
+    priorBonus,   // Float32Array(N*N) — ladder prior bonuses (separate from RAVE)
   };
 }
 
 // RAVE-blended UCT score for child index i of node.
 // Children with no real playout visits (cv === 0) get a large bonus so they
-// are always preferred over visited children.  RAVE (seeded with ladder/pattern
+// are always preferred over visited children.  RAVE (seeded with pattern
 // priors) ranks them within the unvisited tier.
-// For visited children, UCB uses visits alone (not inflated by prior
-// virtual visits) so priors guide early exploration without suppressing later
-// UCB-driven exploitation.
+// A separate priorBonus term decays as bonus/(1+realV), so ladder priors
+// guide early exploration without ever diluting the RAVE statistics.
 function raveScore(moveIdx, node) {
-  // wins initialized to 0.01;
-  // visits initialized to 0.02;
-  // raveWins initialized to 0.01;
-  // raveVisits initialized to 0.02;
-  // totalVisits initialized to 1;
-  const move  = node.legalMoves[moveIdx];
-  const realV = node.visits[moveIdx];
+  const move   = node.legalMoves[moveIdx];
+  const realV  = node.visits[moveIdx];
   const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
+  const prior  = move === PASS ? 0 : node.priorBonus[move];
   if (realV < 1) {
-    return 10 + raveWR + 0.001 * Math.random();
+    return 10 + raveWR + prior + 0.001 * Math.random();
   }
   const realWR = node.wins[moveIdx] / realV;
   const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
   return 0.001 * Math.random() +
     (1 - beta) * realWR + beta * raveWR +
+    prior / (1 + realV) +
     EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 

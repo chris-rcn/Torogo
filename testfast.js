@@ -1698,6 +1698,100 @@ section('getLadderStatus2 – 2-liberty group');
   assert(r.urgentLibs.length === 0,           'no urgent libs: group needs no immediate action');
 }
 
+section('getLadderStatus2 – 2-liberty group: attacker has one correct capturing liberty');
+{
+  // White {(5,4),(5,5)} enclosed by black on 3 sides; 2 libs: (5,3) and (4,4).
+  // Black to play.  Playing (5,3) starts a successful ladder (white can't reach
+  // 3 libs); playing (4,4) lets white escape to 3+ libs.
+  // getLadderStatus2 must return urgentLibs = [(5,3)] — NOT the empty array.
+  //
+  //   0 1 2 3 4 5 6
+  // 0 · · · · · · ·
+  // 1 · · · · · · ·
+  // 2 · · · · · · ·
+  // 3 · · · · · L ·   L = urgent lib (5,3)
+  // 4 · · · · L ○ ●   L = non-urgent lib (4,4); ○=white, ●=black
+  // 5 · · · · ● ○ ●
+  // 6 · · · · ● ● ●
+  const N = 7;
+  const g2 = _syntheticGame2(N, [
+    { x: 5, y: 4, color: 'white' },
+    { x: 5, y: 5, color: 'white' },
+    { x: 6, y: 4, color: 'black' },
+    { x: 4, y: 5, color: 'black' },
+    { x: 6, y: 5, color: 'black' },
+    { x: 4, y: 6, color: 'black' },
+    { x: 5, y: 6, color: 'black' },
+    { x: 6, y: 6, color: 'black' },
+  ], 'black');
+  const whiteStone = 4 * N + 5;   // (5,4)
+  const urgentLib  = 3 * N + 5;   // (5,3) — starts the capturing ladder
+  const r = getLadderStatus2(g2, whiteStone);
+  assert(r !== null,                      '2-lib attacker: non-null result');
+  assert(r.moverSucceeds === true,        '2-lib attacker: black can capture → moverSucceeds true');
+  assert(r.urgentLibs.length === 1,       '2-lib attacker: exactly one urgent lib (the ladder starter)');
+  assert(r.urgentLibs[0] === urgentLib,   '2-lib attacker: urgent lib is (5,3)');
+}
+
+section('getLadderStatus2 – 2-liberty group: attacker fails (ladder has escape stone)');
+{
+  // "Attack 2 stones (fail)" from evalladders.js: white helper at b2 breaks
+  // the ladder — neither attacking liberty starts a successful capture.
+  //
+  //   a b c d e f g
+  // 1 · · · · · · ·
+  // 2 · ○ · · · · ·  ← white escape stone at b2
+  // 3 · · · · · · ·
+  // 4 · · · · · · ·
+  // 5 · · · · · ○ ●
+  // 6 · · · · ● ○ ●
+  // 7 · · · · ● ● ●
+  const N = 7;
+  const g2 = _buildGame2Pos(`
+    · · · · · · ·
+    · ○ · · · · ·
+    · · · · · · ·
+    · · · · · · ·
+    · · · · · ○ ●
+    · · · · ● ○ ●
+    · · · · ● ● ●
+  `, '●');
+  const whiteStone = 4 * N + 5;   // f5 = (5,4)
+  const r = getLadderStatus2(g2, whiteStone);
+  assert(r !== null,                'attack fail: non-null result');
+  assert(r.libs.length === 2,       'attack fail: group has 2 libs');
+  assert(r.moverSucceeds === false, 'attack fail: attacker cannot capture → moverSucceeds false');
+  assert(r.urgentLibs.length === 0, 'attack fail: no urgent libs');
+}
+
+section('getLadderStatus2 – 2-liberty group: defender escapes via one lib only');
+{
+  // White {(1,1),(1,2)} has two libs: (0,1) and (1,3).
+  // Playing (0,1) creates a dead-end group — black immediately captures.
+  // Playing (1,3) opens to the board; black cannot stop the escape.
+  //
+  //   0 1 2
+  // 0 ● ● ●
+  // 1 · ○ ●   lib (0,1) = trap
+  // 2 ● ○ ●
+  // 3 · · ●   lib (1,3) = escape (opens south to empty board)
+  const N = 9;
+  const g2 = _syntheticGame2(N, [
+    { x: 0, y: 0, color: 'black' }, { x: 1, y: 0, color: 'black' }, { x: 2, y: 0, color: 'black' },
+    { x: 1, y: 1, color: 'white' }, { x: 2, y: 1, color: 'black' },
+    { x: 0, y: 2, color: 'black' }, { x: 1, y: 2, color: 'white' }, { x: 2, y: 2, color: 'black' },
+    { x: 2, y: 3, color: 'black' },
+  ], 'white');
+  const whiteStone = 1 * N + 1;   // (1,1)
+  const urgentLib  = 3 * N + 1;   // (1,3) — extends south to open board
+  const r = getLadderStatus2(g2, whiteStone);
+  assert(r !== null,                      'defender escape: non-null result');
+  assert(r.libs.length === 2,             'defender escape: group has 2 libs');
+  assert(r.moverSucceeds === true,        'defender escape: white can escape → moverSucceeds true');
+  assert(r.urgentLibs.length === 1,       'defender escape: exactly one urgent lib');
+  assert(r.urgentLibs[0] === urgentLib,   'defender escape: urgent lib is (1,3)');
+}
+
 section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group');
 {
   const N = 13;
@@ -1899,6 +1993,31 @@ section('getAllLadderStatuses – finds multiple low-liberty groups');
   assert(r.length === 2, `two groups in atari (got ${r.length})`);
   assert(r.every(e => e.color === BLACK), 'both groups are black');
   assert(r.every(e => typeof e.status.moverSucceeds === 'boolean'), 'status has moverSucceeds');
+}
+
+section('getAllLadderStatuses – finds a 2-liberty group being attacked');
+{
+  // "Attack 2 stones" from evalladders.js: black to play, white group has 2 libs.
+  // getAllLadderStatuses must include the white group and report moverSucceeds true
+  // with one urgent lib (the ladder-starting move).
+  const N = 7;
+  const g2 = _buildGame2Pos(`
+    · · · · · · ·
+    · ● · · · · ·
+    · · · · · · ·
+    · · · · · · ·
+    · · · · · ○ ●
+    · · · · ● ○ ●
+    · · · · ● ● ●
+  `, '●');
+  const r = getAllLadderStatuses(g2);
+  assert(r.length >= 1, 'at least one low-liberty group found');
+  const entry = r.find(e => e.color === WHITE);
+  assert(entry !== undefined,              'white 2-lib group is present');
+  assert(entry.status !== null,            'status is non-null');
+  assert(entry.status.libs.length === 2,   'group has 2 libs');
+  assert(entry.status.moverSucceeds === true,     'attacker can capture');
+  assert(entry.status.urgentLibs.length === 1,    'one urgent capturing lib');
 }
 
 section('getAllLadderStatuses – each entry matches getLadderStatus2');
