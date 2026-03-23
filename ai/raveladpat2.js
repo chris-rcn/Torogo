@@ -185,15 +185,16 @@ function makeNode(move, parent, ci, mover, game2, N) {
   const priorBonus  = new Float32Array(N * N);
 
   if (LADDER) {
+
     for (const { gid, color, status } of getAllLadderStatuses(game2)) {
       const groupSize = game2._ss[gid];
       const defending = color === game2.current;                                                                                                                                                     
       if (status.moverSucceeds) {
         let bonus;  // Applies to urgent moves only.
         if (defending) {                                                                                                                                                                         
-          bonus = 3 + 1 * groupSize;  // Do save the critical group.
+          bonus = 4 + 0 * groupSize;  // Do save the critical group.
         } else {                                                                                                                                                                                 
-          bonus = 3 + 1 * groupSize;  // Do kill the critical group.
+          bonus = 4 + 0 * groupSize;  // Do kill the critical group.
         }                                                                                        
         for (const lib of status.urgentLibs) {
           priorBonus[lib] += bonus;
@@ -201,9 +202,9 @@ function makeNode(move, parent, ci, mover, game2, N) {
       } else {
         let penalty;                                                                                                                                                                             
         if (defending) {                                                                                                                                                                         
-          penalty = 6 + 1 * groupSize;  // Don't extend doomed group.                                                                                                                                
+          penalty = 7 + 1 * groupSize;  // Don't extend doomed group.
         } else {                                                                                                                                                                                 
-          penalty = 6 + 1 * groupSize;  // Don't chase escaping group.                                                                                                                               
+          penalty = 7 + 1 * groupSize;  // Don't chase escaping group.
         }                                                                                        
         for (const li of status.libs) {
           priorBonus[li] -= penalty;
