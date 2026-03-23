@@ -79,18 +79,6 @@ function patternHashes2(game2, indices, ladderStatuses) {
   const ladderFlag = new Int32Array(cap);
   const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
 
-  for (const { color, entries } of statuses) {
-    for (const entry of entries) {
-      const { x: lx, y: ly } = entry.liberty;
-      const li = ly * N + lx;
-      if (color === mover && !entry.canEscape) {        // mover's group is doomed
-        ladderFlag[li]++;
-      } else if (color !== mover && entry.canEscape) {  // opponent's group will escape
-        ladderFlag[li]++;
-      }
-    }
-  }
-
   return indices.map(idx => {
     const hash = patternHash2(game2, idx, mover);
     const center = LADDER_ZOBRIST[ladderFlag[idx]];

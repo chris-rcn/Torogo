@@ -20,7 +20,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getLadderStatus2: getLadderStatus } = _isNode ? require('../ladder2.js') : window;
+const { getAllLadderStatuses } = _isNode ? require('../ladder2.js') : window;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 const Util = _isNode ? require('../util.js') : window.Util;
 
@@ -185,39 +185,24 @@ function makeNode(move, parent, ci, mover, game2, N) {
   const cap = N * N;
 
   if (LADDER) {
-    const cells = game2.cells;
-    const visitedGids = new Set();
-
-    for (let i = 0; i < cap; i++) {
-      const color = cells[i];
-      if (color === 0) continue;
-      const gid = game2._gid[i];
-      if (visitedGids.has(gid)) continue;
-      if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
-      visitedGids.add(gid);
-
-      if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
-
-      const statusEntries = getLadderStatus(game2, i);
-      if (!statusEntries) continue;
-
+    for (const { gid, color, status } of getAllLadderStatuses(game2)) {
       const groupSize = game2._ss[gid];
-
-      for (const entry of statusEntries) {
-        const { x: lx, y: ly } = entry.liberty;
-        const li = ly * N + lx;
-        if (li < 0 || li >= cap) continue;
-
-        if (color === chooser && !entry.canEscape) {
-          raveVisits[li] += 2 * groupSize;              // Don't extend doomed group.
-        } else if (color !== chooser && entry.canEscape) {
-          raveVisits[li] += 10;                         // Don't chase escaping group.
-        } else if (color === chooser && entry.canEscape && !entry.canEscapeAfterPass) {
-          raveWins[li]   += 2 * groupSize;              // Do escape (when urgent).
-          raveVisits[li] += 2 * groupSize;
-        } else if (color !== chooser && !entry.canEscape && entry.canEscapeAfterPass) {
-          raveWins[li]   += 2 * groupSize;              // Do chase doomed group (when urgent).
-          raveVisits[li] += 2 * groupSize;
+      if (moverSucceeds) {
+        for (const lib of status.urgentLibs) {
+          raveWins[lib]   += 2 * groupSize;              // Urgent escape / capture.
+          raveVisits[lib] += 2 * groupSize;
+        }
+      } else {
+        // Possible wasted moves.
+        const defending = color === chooser;
+        let penalty;
+        if (defending) {
+          penalty = 2 * groupSize;  // Don't extend doomed group.
+        } else {
+          penalty = 10;             // Don't chase escaping group.
+        }
+        for (const li of status.libs) {
+          raveVisits[li] += penalty;
         }
       }
     }

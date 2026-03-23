@@ -287,6 +287,23 @@ class Game2 {
   groupSize(gid)          { return this._ss[gid]; }
   /** Number of liberties of group gid. */
   groupLibertyCount(gid)  { return this._ls[gid]; }
+  /** Liberty indices of group gid as an Int32Array. */
+  groupLibs(gid) {
+    const lc  = this._ls[gid];
+    const out = new Int32Array(lc);
+    const cap = this.N * this.N;
+    const lb  = gid * this._W;
+    let found = 0;
+    for (let wi = 0; wi < this._W && found < lc; wi++) {
+      let w = this._lw[lb + wi];
+      while (w && found < lc) {
+        const i = wi * 32 + (31 - Math.clz32(w & -w));
+        if (i < cap) out[found++] = i;
+        w &= w - 1;
+      }
+    }
+    return out;
+  }
 
   // ── Non-mutating legality checks ───────────────────────────────────────────
 

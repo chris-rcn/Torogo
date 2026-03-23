@@ -1,9 +1,6 @@
 'use strict';
 
-// ladder2.js — Ladder detection using Game2 (fast typed-array engine).
-//
-// Mirrors the API of ladder.js but operates on Game2 instances.
-// getLadderStatus2(game2, stoneIdx) → same shape as getLadderStatus.
+// ladder2.js — Ladder detection using Game2.
 
 const { PASS, BLACK, WHITE } = require('./game2.js');
 
@@ -75,57 +72,13 @@ function _canReach3Libs(game2, idx) {
   return true;
 }
 
-// Examines the group containing the stone at stoneIdx (must have 1 or 2
-// liberties).  For each liberty, simulates both colours playing it first.
-//
-// Returns an array — one entry per liberty — of:
-//   { liberty: {x, y}, canEscape: boolean, canEscapeAfterPass: boolean }
-//
-// Logs a warning and returns null when the group has more than 2 liberties.
-function getLadderStatus2(game2, stoneIdx) {
-  if (game2.cells[stoneIdx] === 0) return [];
-
-  const lc = _readLibs(game2, stoneIdx);
-  if (lc > 2) {
-    const N = game2.N;
-    console.warn(`getLadderStatus2: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
-    return null;
-  }
-
-  // Copy before cloning/recursing.
-  const lib0 = _lib0, lib1 = _lib1;
-  const mover = game2.current;   // BLACK or WHITE
-  const opp   = 3 - mover;
-  const N     = game2.N;
-  const libs  = lc === 1 ? [lib0] : [lib0, lib1];
-  const results = [];
-
-  for (const libIdx of libs) {
-    const entry = { liberty: { x: libIdx % N, y: (libIdx / N) | 0 } };
-    for (const color of [mover, opp]) {
-      const g = game2.clone();
-      g.current = color;
-      let escaped;
-      if (!g.play(libIdx)) {
-        escaped = false;
-      } else {
-        escaped = g.cells[stoneIdx] !== 0 && _canReach3Libs(g, stoneIdx);
-      }
-      entry[color === mover ? 'canEscape' : 'canEscapeAfterPass'] = escaped;
-    }
-    results.push(entry);
-  }
-  return results;
-}
-
 // getAllLadderStatuses(game2) — run getLadderStatus2 on every group with 1 or 2
-// liberties and return an array of { gid, color, entries } objects,
+// liberties and return an array of { gid, color, status } objects,
 // one per group (groups with 0 or 3+ liberties are skipped).
 function getAllLadderStatuses(game2) {
   const cap  = game2.N * game2.N;
   const results = [];
   const visited = new Set();
-
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] === 0) continue;
     const gid = game2._gid[i];
@@ -133,13 +86,61 @@ function getAllLadderStatuses(game2) {
     visited.add(gid);
     const lc = game2._ls[gid];
     if (lc === 0 || lc > 2) continue;
+    const status = getLadderStatus2(game2, i);
+    results.push({ gid, color: game2.cells[i], status });
+  }
+  return results;
+}
 
-    const entries = getLadderStatus2(game2, i);
-    if (!entries) continue;
-    results.push({ gid, color: game2.cells[i], entries });
+// Examines the group containing the stone at stoneIdx (must have 1 or 2
+// liberties).  For each liberty, simulates both colours playing it first.
+//
+// Returns { libs: [], moverSucceeds: boolean, urgentLibs: [] }
+//
+// Logs a warning and returns null when the group has more than 2 liberties.
+function getLadderStatus2(game2, stoneIdx) {
+  const lc = _readLibs(game2, stoneIdx);
+  if (lc < 1 || lc > 2) {
+    const N = game2.N;
+    console.warn(`getLadderStatus2: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
+    return null;
+  }
+  const libs = atari ? [_lib0] : [_lib0, _lib1];  // Set by _readLibs.  Nasty stuff.
+  const gColor = game2.cells[stoneIdx];
+  const mover = game2.current;   // BLACK or WHITE
+  const defending = gColor === mover;
+  const atari = lc === 1;
+
+  let escape;
+  // Try opponent playing first.
+  if (defending && atari) {
+    escape = false;
+  } else {
+    const g = game2.clone();
+    g.play(PASS);
+    escape = _canReach3Libs(g, stoneIdx);
+  }
+  if (defending === escape) {
+     // group is not urgent
+     return { libs, moverSucceeds: true, urgentLibs: [] }
   }
 
-  return results;
+  // Try mover playing first.
+  let moverSucceeds = false;
+  let urgentLibs = [];
+  for (const libIdx of libs) {
+    if (!defending && atari) {
+      escape = false;
+    } else {
+      const g = game2.clone();
+      escape = g.play(libIdx) && _canReach3Libs(g, stoneIdx);
+    }
+    if (defending === escape) {
+      moverSucceeds = true;
+      urgentLibs.push(libIdx);
+    }
+  }
+  return { libs, moverSucceeds, urgentLibs };
 }
 
 module.exports = { getLadderStatus2, getAllLadderStatuses };

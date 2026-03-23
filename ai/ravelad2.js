@@ -310,32 +310,23 @@ function applyLadderPriors(node, game2, N) {
   const cells      = game2.cells;
   const visitedGids = new Set();
 
-  for (let i = 0; i < cap; i++) {
-    const color = cells[i];
-    if (color === 0) continue;
-    const gid = game2._gid[i];
-    if (visitedGids.has(gid)) continue;
-    if (game2._ss[gid] < 2) continue;   // only groups of size ≥ 2
-    visitedGids.add(gid);
-
-    if (game2._ls[gid] > 2) continue;   // skip groups with >2 liberties
-
-    const statusEntries = getLadderStatus(game2, i);
-    if (!statusEntries) continue;
-
+  for (const { gid, color, status } of getAllLadderStatuses(game2)) {
     const groupSize = game2._ss[gid];
-
-    for (const entry of statusEntries) {
-      const { x: lx, y: ly } = entry.liberty;
-      const li = ly * N + lx;
-      if (color === mover && !entry.canEscape) {
-        seedChild(li, 0, 2 * groupSize);              // Don't extend doomed group.
-      } else if (color !== mover && entry.canEscape) {
-        seedChild(li, 0, 10);                             // Don't chase escaping group.
-      } else if (color === mover && entry.canEscape && !entry.canEscapeAfterPass) {
-        seedChild(li, 2 * groupSize, 2 * groupSize);      // Do escape (when urgent).
-      } else if (color !== mover && !entry.canEscape && entry.canEscapeAfterPass) {
-        seedChild(li, 2 * groupSize, 2 * groupSize);      // Do chase doomed group (when urgent).
+    if (moverSucceeds) {
+      for (const lib of status.urgentLibs) {
+        seedChild(lib, 2 * groupSize, 2 * groupSize);
+      }
+    } else {
+      // Possible wasted moves.
+      const defending = color === chooser;
+      let penalty;
+      if (defending) {
+        penalty = 2 * groupSize;  // Don't extend doomed group.
+      } else {
+        penalty = 10;             // Don't chase escaping group.
+      }
+      for (const li of status.libs) {
+        seedChild(li, 0, penalty);
       }
     }
   }

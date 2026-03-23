@@ -1594,11 +1594,11 @@ function _syntheticGame2(N, stones, toPlay) {
 section('getLadderStatus2 – no stone / too many liberties');
 {
   const N = 9;
-  // Empty cell → empty array.
+  // Empty cell → null.
   {
     const g2 = _syntheticGame2(N, [], 'black');
     const r = getLadderStatus2(g2, 0);
-    assert(Array.isArray(r) && r.length === 0, 'no stone: empty array');
+    assert(r === null, 'no stone: null');
   }
   // Group with 4+ liberties → null.
   {
@@ -1619,10 +1619,10 @@ section('getLadderStatus2 – 1-liberty group: immediate escape to 3+ libs');
     { x: 4, y: 3, color: 'white' },
   ], 'black');
   const r = getLadderStatus2(g2, 4 * N + 4);
-  assert(Array.isArray(r) && r.length === 1, 'immediate escape: one entry');
-  assert(r[0].liberty.x === 4 && r[0].liberty.y === 5, 'liberty is (4,5)');
-  assert(r[0].canEscape === true,           'canEscape: black plays → 3+ libs → true');
-  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+  assert(r !== null,                         'immediate escape: non-null result');
+  assert(r.moverSucceeds === true,           'moverSucceeds: black plays → 3+ libs → true');
+  assert(r.urgentLibs.length === 1,          'one urgent liberty');
+  assert(r.urgentLibs[0] === 5 * N + 4,     'urgent lib is (4,5)');
 }
 
 section('getLadderStatus2 – 1-liberty group: escape is suicide');
@@ -1640,9 +1640,9 @@ section('getLadderStatus2 – 1-liberty group: escape is suicide');
     { x: 4, y: 6, color: 'white' },
   ], 'black');
   const r = getLadderStatus2(g2, 4 * N + 4);
-  assert(Array.isArray(r) && r.length === 1, 'suicide: one entry');
-  assert(r[0].canEscape === false,          'canEscape: suicide → false');
-  assert(r[0].canEscapeAfterPass === false, 'canEscapeAfterPass: white captures → false');
+  assert(r !== null,                         'suicide: non-null result');
+  assert(r.moverSucceeds === false,          'moverSucceeds: suicide → false');
+  assert(r.urgentLibs.length === 0,          'no urgent libs');
 }
 
 section('getLadderStatus2 – 1-liberty group: ladder with breaker (can escape)');
@@ -1658,8 +1658,9 @@ section('getLadderStatus2 – 1-liberty group: ladder with breaker (can escape)'
     { x: 5, y: 5, color: 'white' },
   ], 'black');
   const r = getLadderStatus2(g2, 4 * N + 4);
-  assert(Array.isArray(r) && r.length === 1, 'breaker: one entry');
-  assert(r[0].canEscape === true,            'canEscape: breaker present → true');
+  assert(r !== null,                          'breaker: non-null result');
+  assert(r.moverSucceeds === true,            'moverSucceeds: breaker present → true');
+  assert(r.urgentLibs.length === 1,           'one urgent liberty');
 }
 
 section('getLadderStatus2 – 1-liberty group: two-step ladder');
@@ -1677,9 +1678,9 @@ section('getLadderStatus2 – 1-liberty group: two-step ladder');
     { x: 4, y: 7, color: 'white' },
   ], 'black');
   const r = getLadderStatus2(g2, 4 * N + 4);
-  assert(Array.isArray(r) && r.length === 1,  'two-step ladder: one entry');
-  assert(r[0].canEscape === false,            'canEscape: two-step ladder → false');
-  assert(r[0].canEscapeAfterPass === false,   'canEscapeAfterPass: white captures → false');
+  assert(r !== null,                           'two-step ladder: non-null result');
+  assert(r.moverSucceeds === false,            'moverSucceeds: two-step ladder → false');
+  assert(r.urgentLibs.length === 0,            'no urgent libs: ladder catches black');
 }
 
 section('getLadderStatus2 – 2-liberty group');
@@ -1692,9 +1693,9 @@ section('getLadderStatus2 – 2-liberty group');
     { x: 5, y: 4, color: 'white' },
   ], 'black');
   const r = getLadderStatus2(g2, 4 * N + 4);
-  assert(Array.isArray(r) && r.length === 2,             '2-lib group: two entries');
-  assert(r.every(e => e.canEscape === true),             'both liberties: canEscape=true (open board)');
-  assert(r.every(e => e.canEscapeAfterPass === true),    'both liberties: canEscapeAfterPass=true (open board)');
+  assert(r !== null,                          '2-lib group: non-null result');
+  assert(r.moverSucceeds === true,            'moverSucceeds: group is safe on open board');
+  assert(r.urgentLibs.length === 0,           'no urgent libs: group needs no immediate action');
 }
 
 section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group');
@@ -1716,10 +1717,9 @@ section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
   const r = getLadderStatus2(g2, 5 * N + 4);  // white stone at (4,5)
-  assert(Array.isArray(r) && r.length === 1,    'pos1: one liberty entry');
-  assert(r[0].liberty.x === 3 && r[0].liberty.y === 5, 'pos1: liberty is (3,5)');
-  assert(r[0].canEscape === false,              'pos1 canEscape: still doomed → false');
-  assert(r[0].canEscapeAfterPass === false,     'pos1 canEscapeAfterPass: black captures → false');
+  assert(r !== null,                            'pos1: non-null result');
+  assert(r.moverSucceeds === false,             'pos1: white group is doomed → moverSucceeds false');
+  assert(r.urgentLibs.length === 0,             'pos1: no escape → no urgent libs');
 }
 
 section('getLadderStatus2 – real-game ladder pos3: white 12-stone doomed group');
@@ -1741,10 +1741,9 @@ section('getLadderStatus2 – real-game ladder pos3: white 12-stone doomed group
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
   const r = getLadderStatus2(g2, 5 * N + 3);  // white stone at (3,5)
-  assert(Array.isArray(r) && r.length === 1,    'pos3: one liberty entry');
-  assert(r[0].liberty.x === 3 && r[0].liberty.y === 4, 'pos3: liberty is (3,4)');
-  assert(r[0].canEscape === false,              'pos3 canEscape: still doomed → false');
-  assert(r[0].canEscapeAfterPass === false,     'pos3 canEscapeAfterPass: black captures → false');
+  assert(r !== null,                            'pos3: non-null result');
+  assert(r.moverSucceeds === false,             'pos3: white group is doomed → moverSucceeds false');
+  assert(r.urgentLibs.length === 0,             'pos3: no escape → no urgent libs');
 }
 
 section('getLadderStatus2 – real-game ladder pos6: black to move, captures white 14-stone group');
@@ -1766,16 +1765,18 @@ section('getLadderStatus2 – real-game ladder pos6: black to move, captures whi
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '●');
   const r = getLadderStatus2(g2, 4 * N + 2);  // white stone at (2,4)
-  assert(Array.isArray(r) && r.length === 1,    'pos6: one liberty entry');
-  assert(r[0].liberty.x === 2 && r[0].liberty.y === 3, 'pos6: liberty is (2,3)');
-  assert(r[0].canEscape === false,              'pos6 canEscape: black captures → false');
-  assert(r[0].canEscapeAfterPass === true,      'pos6 canEscapeAfterPass: white merges → true');
+  assert(r !== null,                            'pos6: non-null result');
+  assert(r.moverSucceeds === true,              'pos6: black can capture → moverSucceeds true');
+  assert(r.urgentLibs.length === 1,             'pos6: one urgent liberty');
+  assert(r.urgentLibs[0] === 3 * N + 2,        'pos6: urgent lib is (2,3)');
 }
 
-section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions');
+section('getLadderStatus2 – sanity check on 50 random positions');
 {
-  // Spot-check: for every group with ≤2 liberties found in 50 random Game positions,
-  // getLadderStatus2 must return the same canEscape / canEscapeAfterPass values.
+  // For every 1–2 liberty group in 50 random positions:
+  //   1. Structural: result has correct types and urgentLibs implies moverSucceeds.
+  //   2. Cross-validate defending 1-lib groups against getLadderStatus:
+  //      moverSucceeds must equal r1[0].canEscape (both ask "can the defender escape?").
   let checks = 0, mismatches = 0;
   for (let trial = 0; trial < 50; trial++) {
     const N = 9;
@@ -1787,7 +1788,6 @@ section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions
     g.consecutivePasses = 0;
     g.koFlag = null;
 
-    // Play 20–40 random legal moves to reach a mid-game position.
     const moves = 20 + Math.floor(Math.random() * 21);
     for (let m = 0; m < moves && !g.gameOver; m++) {
       const legal = [];
@@ -1801,7 +1801,6 @@ section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions
 
     const g2 = g.toGame2();
 
-    // Check every group with 1–2 liberties.
     const visitedGids = new Set();
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
@@ -1813,25 +1812,30 @@ section('getLadderStatus2 – agrees with getLadderStatus on 50 random positions
         const libs = g.board.getLiberties(g.board.getGroup(x, y));
         if (libs.size === 0 || libs.size > 2) continue;
 
-        const r1 = getLadderStatus(g, x, y);
         const r2 = getLadderStatus2(g2, y * N + x);
-        if (!r1 || !r2) continue;  // null (>2 libs, shouldn't happen here)
+        if (!r2) continue;
 
-        // Match entries by liberty coordinates (iteration order may differ).
-        for (const e1 of r1) {
-          const e2 = r2.find(e => e.liberty.x === e1.liberty.x && e.liberty.y === e1.liberty.y);
-          if (!e2) { mismatches++; continue; }
-          checks++;
-          if (e1.canEscape          !== e2.canEscape ||
-              e1.canEscapeAfterPass !== e2.canEscapeAfterPass) {
-            mismatches++;
+        // Structural checks.
+        assert(typeof r2.moverSucceeds === 'boolean', 'moverSucceeds is boolean');
+        assert(Array.isArray(r2.urgentLibs),          'urgentLibs is array');
+        if (r2.urgentLibs.length > 0) {
+          assert(r2.moverSucceeds === true, 'urgentLibs non-empty implies moverSucceeds');
+        }
+        checks++;
+
+        // Cross-validate defending 1-lib groups: moverSucceeds === canEscape.
+        const defending = color === g.current;
+        if (libs.size === 1 && defending) {
+          const r1 = getLadderStatus(g, x, y);
+          if (r1 && r1.length === 1) {
+            if (r2.moverSucceeds !== r1[0].canEscape) mismatches++;
           }
         }
       }
     }
   }
-  assert(checks > 0,        'getLadderStatus2 agreement: at least one group checked');
-  assert(mismatches === 0,  `getLadderStatus2 agreement: 0 mismatches across ${checks} checks`);
+  assert(checks > 0,       'sanity check: at least one group checked');
+  assert(mismatches === 0, `sanity check: 0 mismatches on defending 1-lib groups (${checks} total groups)`);
 }
 
 // ─── getAllLadderStatuses ─────────────────────────────────────────────────────
@@ -1871,7 +1875,9 @@ section('getAllLadderStatuses – finds a group in atari');
   const r = getAllLadderStatuses(g2);
   assert(r.length === 1, 'one group in atari');
   assert(r[0].color === BLACK, 'the group is black');
-  assert(r[0].entries.length === 1, 'one liberty entry');
+  assert(r[0].status !== null,                    'status is non-null');
+  assert(r[0].status.moverSucceeds === true,      'mover can escape atari');
+  assert(r[0].status.urgentLibs.length === 1,     'one urgent liberty');
 }
 
 section('getAllLadderStatuses – finds multiple low-liberty groups');
@@ -1892,6 +1898,7 @@ section('getAllLadderStatuses – finds multiple low-liberty groups');
   const r = getAllLadderStatuses(g2);
   assert(r.length === 2, `two groups in atari (got ${r.length})`);
   assert(r.every(e => e.color === BLACK), 'both groups are black');
+  assert(r.every(e => typeof e.status.moverSucceeds === 'boolean'), 'status has moverSucceeds');
 }
 
 section('getAllLadderStatuses – each entry matches getLadderStatus2');
@@ -1909,16 +1916,14 @@ section('getAllLadderStatuses – each entry matches getLadderStatus2');
   `, '●');
   const all = getAllLadderStatuses(g2);
   assert(all.length >= 1, 'at least one low-liberty group found');
-  for (const { gid, entries } of all) {
+  for (const { gid, status } of all) {
     const stoneIdx = g2._gid.indexOf(gid);
     const single = getLadderStatus2(g2, stoneIdx);
     assert(single !== null, `getLadderStatus2 returned null for gid ${gid}`);
-    assert(entries.length === single.length, 'entry count matches');
-    for (const e of entries) {
-      const match = single.find(s => s.liberty.x === e.liberty.x && s.liberty.y === e.liberty.y);
-      assert(match !== undefined, `liberty (${e.liberty.x},${e.liberty.y}) found in single result`);
-      assert(e.canEscape          === match.canEscape,          'canEscape matches');
-      assert(e.canEscapeAfterPass === match.canEscapeAfterPass, 'canEscapeAfterPass matches');
+    assert(status.moverSucceeds === single.moverSucceeds, 'moverSucceeds matches');
+    assert(status.urgentLibs.length === single.urgentLibs.length, 'urgentLibs length matches');
+    for (let i = 0; i < status.urgentLibs.length; i++) {
+      assert(status.urgentLibs[i] === single.urgentLibs[i], `urgentLibs[${i}] matches`);
     }
   }
 }
