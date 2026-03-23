@@ -611,4 +611,4 @@ function agentMoveToIdx(agentMove, N) {
   return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
-module.exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };
+if (typeof module !== 'undefined') module.exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };

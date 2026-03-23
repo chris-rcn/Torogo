@@ -2,7 +2,7 @@
 
 // ladder2.js — Ladder detection using Game2.
 
-const { PASS, BLACK, WHITE } = require('./game2.js');
+if (typeof require === 'function') { var { PASS, BLACK, WHITE } = require('./game2.js'); }
 
 // Module-level output slots for _readLibs.  Written once, then immediately
 // copied to locals by the caller before any recursive call can overwrite them.
@@ -146,4 +146,4 @@ function getLadderStatus2(game2, stoneIdx) {
   return { libs, moverSucceeds, urgentLibs };
 }
 
-module.exports = { getLadderStatus2, getAllLadderStatuses };
+if (typeof module !== 'undefined') module.exports = { getLadderStatus2, getAllLadderStatuses };
