@@ -191,9 +191,9 @@ function makeNode(move, parent, ci, mover, game2, N) {
       if (status.moverSucceeds) {
         let bonus;  // Applies to urgent moves only.
         if (defending) {                                                                                                                                                                         
-          bonus = 0 + 0.2 * groupSize;  // Do save the critical group.
+          bonus = 0 + 0.1 * groupSize;  // Do save the critical group.
         } else {                                                                                                                                                                                 
-          bonus = 0 + 0.2 * groupSize;  // Do kill the critical group.
+          bonus = 0 + 0.1 * groupSize;  // Do kill the critical group.
         }                                                                                        
         for (const lib of status.urgentLibs) {
           priorBonus[lib] += bonus;
@@ -201,9 +201,9 @@ function makeNode(move, parent, ci, mover, game2, N) {
       } else {
         let penalty;                                                                                                                                                                             
         if (defending) {                                                                                                                                                                         
-          penalty = 0 + 0.2 * groupSize;  // Don't extend doomed group.
+          penalty = 0 + 0.1 * groupSize;  // Don't extend doomed group.
         } else {                                                                                                                                                                                 
-          penalty = 0 + 0.2 * groupSize;  // Don't chase escaping group.
+          penalty = 0 + 0.1 * groupSize;  // Don't chase escaping group.
         }                                                                                        
         for (const li of status.libs) {
           priorBonus[li] -= penalty;

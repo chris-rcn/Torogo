@@ -32,7 +32,7 @@ const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 0);
+const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 1);
 
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
