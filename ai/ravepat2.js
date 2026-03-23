@@ -20,7 +20,6 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getAllLadderStatuses } = _isNode ? require('../ladder2.js') : window;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 const Util = _isNode ? require('../util.js') : window.Util;
 
@@ -40,9 +39,6 @@ const DEFAULT_WEIGHT = 0;
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 5);
-
-// Whether to apply ladder priors.
-const LADDER = Util.envStr('LADDER', '1') !== '0';
 
 let patternSelectionRatio;
 
@@ -183,34 +179,6 @@ function makeNode(move, parent, ci, mover, game2, N) {
   // Per-move prior bonuses, kept separate from RAVE so they never dilute
   // playout statistics.  Applied as priorBonus[move] / (1 + child.visits).
   const priorBonus  = new Float32Array(N * N);
-
-  if (LADDER) {
-    for (const { gid, color, status } of getAllLadderStatuses(game2)) {
-      const groupSize = game2._ss[gid];
-      const defending = color === game2.current;                                                                                                                                                     
-      if (status.moverSucceeds) {
-        let bonus;  // Applies to urgent moves only.
-        if (defending) {                                                                                                                                                                         
-          bonus = 0 + 0.2 * groupSize;  // Do save the critical group.
-        } else {                                                                                                                                                                                 
-          bonus = 0 + 0.2 * groupSize;  // Do kill the critical group.
-        }                                                                                        
-        for (const lib of status.urgentLibs) {
-          priorBonus[lib] += bonus;
-        }
-      } else {
-        let penalty;                                                                                                                                                                             
-        if (defending) {                                                                                                                                                                         
-          penalty = 0 + 0.2 * groupSize;  // Don't extend doomed group.
-        } else {                                                                                                                                                                                 
-          penalty = 0 + 0.2 * groupSize;  // Don't chase escaping group.
-        }                                                                                        
-        for (const li of status.libs) {
-          priorBonus[li] -= penalty;
-        }
-      }
-    }
-  }
 
   // Pattern priors — max-normalised, applied to non-PASS moves only.
   // norm_ratio ∈ [0,1]; centred at 0.5 so the best pattern gets +0.5*W and
