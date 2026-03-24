@@ -2,6 +2,8 @@
 
 // ladder2.js — Ladder detection using Game2.
 
+(function() {
+
 const { PASS } = typeof require === 'function' ? require('./game2.js') : window.Game2;
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
@@ -110,5 +112,8 @@ function getLadderStatus2(game2, stoneIdx) {
   return { libs, moverSucceeds, urgentLibs };
 }
 
-if (typeof module !== 'undefined') module.exports = { getLadderStatus2, getAllLadderStatuses };
+const _exports = { getLadderStatus2, getAllLadderStatuses };
+if (typeof module !== 'undefined') module.exports = _exports;
+else window.Ladder2 = _exports;
 
+})();

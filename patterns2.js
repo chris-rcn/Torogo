@@ -3,7 +3,10 @@
 // patterns2.js — pattern recognition helpers for Game2 (integer-move engine).
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; ladder2.js must be loaded before this file.
-if (typeof require === 'function') { var { getAllLadderStatuses } = require('./ladder2.js'); }
+
+(function() {
+
+const { getAllLadderStatuses } = typeof require === 'function' ? require('./ladder2.js') : window.Ladder2;
 
 // Zobrist random table: flat Int32Array. Generated with xorshift32.
 function makeZobrist(seed, size) {
@@ -12,7 +15,7 @@ function makeZobrist(seed, size) {
   for (let p = 0; p < size; p++) {
     s ^= s << 13;
     s ^= s >>> 17;
-    s ^= s << 5; 
+    s ^= s << 5;
     t[p] = s;
   }
   return t;
@@ -79,6 +82,13 @@ function patternHashes2(game2, indices, ladderStatuses) {
   const ladderFlag = new Int32Array(cap);
   const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
 
+  // TODO: Ladder information that we want to include in the pattern:
+  // On each stone in a group:
+  // - Whether the group can reach 3 libs when the current player moves first.
+  // - Whether the group can reach 3 libs when the opponent player moves first.
+  // On open vertexes:
+  // - Whether the move is urgent for a neighbor group.
+
   return indices.map(idx => {
     const hash = patternHash2(game2, idx, mover);
     const center = LADDER_ZOBRIST[ladderFlag[idx]];
@@ -86,4 +96,8 @@ function patternHashes2(game2, indices, ladderStatuses) {
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { patternHash2, patternHashes2 };
+const _exports = { patternHash2, patternHashes2 };
+if (typeof module !== 'undefined') module.exports = _exports;
+else window.Patterns2 = _exports;
+
+})();

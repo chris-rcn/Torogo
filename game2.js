@@ -21,7 +21,8 @@ const KOMI  = 4.5;
 // Shared neighbor-table cache (same design as game.js)
 const _nbrCache = new Map();
 function _buildNbr(N) {
-  if (_nbrCache.has(N)) return _nbrCache.get(N);
+  const cached = _nbrCache.get(N);
+  if (cached !== undefined) return cached;
   const cap = N * N;
   const nbr  = new Int32Array(cap * 4);
   const dnbr = new Int32Array(cap * 4);

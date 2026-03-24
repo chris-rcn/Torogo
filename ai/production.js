@@ -41,11 +41,11 @@ const DEFAULT_WEIGHT = 0;
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = 5;
 
-const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.patternHash2;
+const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.Patterns2.patternHash2;
 const _patternTable = _isNode ? require('../patterns-data.js') : window.patternTable;
 function patternSelectionRatio(game2, idx) {
   const hash = _patternHash2(game2, idx, game2.current);
-  return _patternTable.has(hash) ? _patternTable.get(hash) : DEFAULT_WEIGHT;
+  return _patternTable.get(hash) ?? DEFAULT_WEIGHT;
 }
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────

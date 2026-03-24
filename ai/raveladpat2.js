@@ -20,7 +20,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { getAllLadderStatuses } = _isNode ? require('../ladder2.js') : window;
+const { getAllLadderStatuses } = _isNode ? require('../ladder2.js') : window.Ladder2;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
@@ -44,11 +44,11 @@ const N_EXPAND = Util.envInt('N_EXPAND', 5);
 const LADDER = Util.envStr('LADDER', '1') !== '0';
 const PAT_DATA = Util.envStr('PAT_DATA', 'patterns-data.js');
 
-const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.patternHash2;
+const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.Patterns2.patternHash2;
 const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
 function patternSelectionRatio(game2, idx) {
   const hash = _patternHash2(game2, idx, game2.current);
-  return _patternTable.has(hash) ? _patternTable.get(hash) : DEFAULT_WEIGHT;
+  return _patternTable.get(hash) ?? DEFAULT_WEIGHT;
 }
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────

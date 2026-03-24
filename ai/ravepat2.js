@@ -40,12 +40,8 @@ const DEFAULT_WEIGHT = 0;
 const N_EXPAND = Util.envInt('N_EXPAND', 5);
 const PAT_DATA = Util.envStr('PAT_DATA', 'patterns-data.js');
 
-const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.patternHash2;
+const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
 const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
-function patternSelectionRatio(game2, idx) {
-  const hash = _patternHash2(game2, idx, game2.current);
-  return _patternTable.has(hash) ? _patternTable.get(hash) : DEFAULT_WEIGHT;
-}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -168,7 +164,8 @@ function makeNode(move, parent, ci, mover, game2, N) {
   if (PAT_PRIOR_WEIGHT > 0) {
     if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
     if (movesArr.length > 0) {
-      const ratios = movesArr.map(m => patternSelectionRatio(game2, m));
+      const hashes = _patternHashes2(game2, movesArr);
+      const ratios = hashes.map(({ pHash }) => _patternTable.get(pHash) ?? DEFAULT_WEIGHT);
       const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
       const norm   = maxR > 0 ? 1 / maxR : 0;
       for (let k = 0; k < movesArr.length; k++) {
