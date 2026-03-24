@@ -38,7 +38,7 @@ function _readLibs(game2, idx) {
 }
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
-// attacker play.  Same logic as _canReach3Libs in ladder.js.
+// attacker play.
 function _canReach3Libs(game2, idx) {
   const lc = _readLibs(game2, idx);
   if (lc >= 3) return true;
