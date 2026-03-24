@@ -234,11 +234,11 @@
 </div>
 
 
-
+<!--These should all be listed in 'sourceFiles' below.-->
+<script src="util.js"></script>
 <script src="game2.js"></script>
 <script src="ladder2.js"></script>
 <script src="patterns2.js"></script>
-<script src="util.js"></script>
 <script src="patterns-data.js"></script>
 <script src="ai/production.js"></script>
 <script src="ui.js"></script>
@@ -247,11 +247,11 @@
 
 <script>
   (async () => {
-    const files = ['index.html', 'game.js', 'ui.js'];
+    const sourceFiles = ['index.html', 'util.js', 'game.js', 'ladder2.js', 'patterns2.js', 'patterns-data.js', 'ai/production.js', 'ui.js'];
     let latest = null;
     try {
       const results = await Promise.all(
-        files.map(f => fetch(f, { method: 'HEAD' }).catch(() => null))
+        sourceFiles.map(f => fetch(f, { method: 'HEAD' }).catch(() => null))
       );
       for (const res of results) {
         if (!res || !res.ok) continue;
@@ -262,7 +262,7 @@
       }
     } catch (_) {}
 
-    const stamp = latest ?? new Date(document.lastModified);
+    const stamp = new Date(document.lastModified);
     document.getElementById('last-modified').textContent =
       stamp.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   })();
