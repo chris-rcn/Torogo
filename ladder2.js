@@ -111,3 +111,4 @@ function getLadderStatus2(game2, stoneIdx) {
 }
 
 if (typeof module !== 'undefined') module.exports = { getLadderStatus2, getAllLadderStatuses };
+
