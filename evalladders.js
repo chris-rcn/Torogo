@@ -1,7 +1,7 @@
 'use strict';
 const { performance } = require('perf_hooks');
 const path = require('path');
-const { Game, parseBoard } = require('./game.js');
+const { Game2, BLACK, WHITE, parseBoard } = require('./game2.js');
 
 /**
  * Ladder evaluation script — run hardcoded ladder positions against an AI agent.
@@ -75,22 +75,17 @@ function matchesMove(s, move) {
   return move.type === 'place' && c.x === move.x && c.y === move.y;
 }
 
-// ── Position builder (mirrors predictmoves.js) ─────────────────────────────
+// ── Position builder ────────────────────────────────────────────────────────
 
 function buildPosition(pos) {
   const { size, stones } = parseBoard(pos.board);
-  const game = new Game(size);
-  const c = size >> 1;
-  game.board.set(c, c, null);
-  game.moveCount        = 0;
-  game.current          = pos.toPlay === '●' ? 'black' : 'white';
-  game.consecutivePasses = 0;
-  game.koFlag           = null;
+  const g = new Game2(size, false);
+  g.current   = pos.toPlay === '●' ? BLACK : WHITE;
+  g.moveCount = 0;
   for (const [x, y, color] of stones) {
-    game.board.set(x, y, color);
+    g._place(y * size + x, color);
   }
-  game.board._rebuildGroups();
-  return game;
+  return g;
 }
 
 // ── Positions ──────────────────────────────────────────────────────────────

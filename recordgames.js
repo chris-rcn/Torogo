@@ -17,7 +17,7 @@
 // Example line for a 7x7 game:
 //   7,dd,ac,cd,...,..,..,
 
-const { Game } = require('./game.js');
+const { Game2, PASS } = require('./game2.js');
 
 const args = process.argv.slice(2);
 const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -36,7 +36,7 @@ const row = y => String.fromCharCode(97 + y);
 let count = 0;
 while (max === 0 || count < max) {
   count++;
-  const g = new Game(size);
+  const g = new Game2(size);
   const parts = [size];
 
   // The constructor always places black at the board centre as move 1.
@@ -46,10 +46,10 @@ while (max === 0 || count < max) {
   while (!g.gameOver) {
     const move = agent(g, budget);
     if (move.type === 'place') {
-      g.placeStone(move.x, move.y);
+      g.play(move.y * size + move.x);
       parts.push(col(move.x) + row(move.y));
     } else {
-      g.pass();
+      g.play(PASS);
       parts.push('..');
     }
   }

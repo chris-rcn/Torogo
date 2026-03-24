@@ -25,7 +25,7 @@ const { performance } = require('perf_hooks');
  */
 
 const path = require('path');
-const { Game } = require('./game.js');
+const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 
 // Boolean flags that take no value.
 const BOOL_FLAGS = new Set(['help', 'verbose']);
@@ -83,9 +83,9 @@ const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
 const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
 function printBoard(game) {
-  console.log(game.board.toAscii(game.lastMove));
-  if (!game.lastMove) {
-    const passer = game.current === 'black' ? 'White' : 'Black';
+  console.log(game.toString());
+  if (game.lastMove === PASS) {
+    const passer = game.current === BLACK ? 'White' : 'Black';
     console.log(passer + ' passed');
   }
   console.log();
@@ -143,28 +143,24 @@ for (let g = 0; g < gameLimit; g++) {
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  const game = new Game(boardSize);
+  const game = new Game2(boardSize);
 
   while (!game.gameOver) {
-    const isBlackTurn = game.current === 'black';
+    const isBlackTurn = game.current === BLACK;
     const policy = isBlackTurn ? black : white;
     const mover  = (isBlackTurn === p1IsBlack) ? 'p1' : 'p2';
     const t0 = performance.now();
     const move = policy(game, budgetMs);
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
-    if (move.type === 'place') {
-      game.placeStone(move.x, move.y);
-    } else {
-      game.pass();
-    }
+    game.play(move.type === 'place' ? move.y * boardSize + move.x : PASS);
     if (verboseBoard) printBoard(game);
   }
 
   const winner = game.calcWinner();
-  if (winner === 'black') {
+  if (winner === BLACK) {
     tally[p1IsBlack ? 'p1' : 'p2']++;
-  } else if (winner === 'white') {
+  } else if (winner === WHITE) {
     tally[p1IsBlack ? 'p2' : 'p1']++;
   }
 

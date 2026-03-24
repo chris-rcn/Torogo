@@ -82,6 +82,7 @@ class Game2 {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.moveCount = 0;
+    this.lastMove = PASS;
 
     if (applyFirstMove) {
       const center = (N >> 1) * N + (N >> 1);
@@ -436,6 +437,7 @@ class Game2 {
       this.current = opp;
       this.ko = PASS;
       this.moveCount++;
+      this.lastMove = PASS;
       return true;
     }
 
@@ -491,8 +493,64 @@ class Game2 {
     this.consecutivePasses = 0;
     this.current = opp;
     this.moveCount++;
+    this.lastMove = idx;
     if (this.moveCount >= 4 * this.N * this.N) this.gameOver = true;
     return true;
+  }
+
+  // ── Liberty query ─────────────────────────────────────────────────────────
+
+  // Returns the liberty count of the group containing idx, plus the first two
+  // liberty indices (lib0, lib1; -1 if absent).  Returns count=0 when idx is
+  // empty or has no group.
+  groupLibs(idx) {
+    const gid = this._gid[idx];
+    if (gid === -1) return { count: 0, lib0: -1, lib1: -1 };
+    const lc = this._ls[gid];
+    if (lc === 0) return { count: 0, lib0: -1, lib1: -1 };
+    const W  = this._W;
+    const lw = this._lw;
+    const lb = gid * W;
+    const cap = this.N * this.N;
+    let lib0 = -1, lib1 = -1, found = 0;
+    for (let wi = 0; wi < W; wi++) {
+      let w = lw[lb + wi];
+      while (w) {
+        const i = wi * 32 + (31 - Math.clz32(w & -w));
+        if (i < cap) {
+          if (found === 0) lib0 = i;
+          else             lib1 = i;
+          if (++found === 2) return { count: lc, lib0, lib1 };
+        }
+        w &= w - 1;
+      }
+    }
+    return { count: lc, lib0, lib1 };
+  }
+
+  // ── Display ───────────────────────────────────────────────────────────────
+
+  // Render the board as a ● ○ · string.  Optional lastMove index marks that
+  // cell with bracket separators: · ·(●)· · — row width is unchanged.
+  toString(lastMove = this.lastMove) {
+    const N = this.N;
+    const cells = this.cells;
+    const markX = (lastMove !== PASS) ? lastMove % N : -1;
+    const markY = (lastMove !== PASS) ? (lastMove / N | 0) : -1;
+    const rows = [];
+    for (let y = 0; y < N; y++) {
+      const mx = (y === markY) ? markX : -1;
+      let row = (mx === 0) ? '(' : ' ';
+      for (let x = 0; x < N; x++) {
+        const c = cells[y * N + x];
+        const ch = c === BLACK ? '●' : c === WHITE ? '○' : '·';
+        if (x > 0) row += (x === mx) ? '(' : (x - 1 === mx) ? ')' : ' ';
+        row += ch;
+      }
+      row += (mx === N - 1) ? ')' : ' ';
+      rows.push(row);
+    }
+    return rows.join('\n');
   }
 
   // ── Clone ─────────────────────────────────────────────────────────────────
@@ -518,6 +576,7 @@ class Game2 {
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
     g.moveCount         = this.moveCount;
+    g.lastMove          = this.lastMove;
     return g;
   }
 
@@ -613,7 +672,24 @@ function agentMoveToIdx(agentMove, N) {
   return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
-const _exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };
+// Parse a ● ○ · board string.  Mark decoration and alphanumeric labels are
+// stripped.  Returns { size, stones } where stones is [[x, y, color], ...]
+// and color is BLACK or WHITE.
+function parseBoard(boardStr) {
+  const rows = boardStr.trim().split('\n')
+    .map(r => r.trim().replace(/[()a-zA-Z0-9]/g, ' ').split(/\s+/).filter(t => t))
+    .filter(row => row.some(t => t === '●' || t === '○' || t === '·'));
+  const size = rows.length;
+  const stones = [];
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      if (rows[y][x] === '●') stones.push([x, y, BLACK]);
+      else if (rows[y][x] === '○') stones.push([x, y, WHITE]);
+    }
+  return { size, stones };
+}
+
+const _exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx, parseBoard };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Game2 = _exports;
 
