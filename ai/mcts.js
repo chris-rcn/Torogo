@@ -11,13 +11,12 @@
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4; // UCT exploration constant
 
 // ── Playout helpers (same as mc.js) ──────────────────────────────────────────
@@ -179,8 +178,7 @@ function getMove(game, timeBudgetMs) {
 
   const root = makeNode(null, null, null);
 
-  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
-  const deadline = performance.now() + budgetMs;
+  const deadline = performance.now() + timeBudgetMs;
 
   while (performance.now() < deadline) {
     const { node, game: simGame } = selectAndExpand(root, game);

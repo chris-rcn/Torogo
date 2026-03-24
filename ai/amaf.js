@@ -16,14 +16,13 @@
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const { performance } = require('perf_hooks');
 const { PASS, BLACK, WHITE } = require('../game2.js');
 const Util = require('../util.js');
 
-const DEFAULT_BUDGET_MS = 500;
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
 const DISCOUNT = Util.envFloat('AMAF_DISCOUNT', 0.5);
@@ -120,8 +119,7 @@ module.exports = function getMove(game, timeBudgetMs) {
   const PASS_IDX = cap;
 
   // Round-robin playouts across candidates until the budget is exhausted.
-  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
-  const deadline = performance.now() + budgetMs;
+  const deadline = performance.now() + timeBudgetMs;
   let cidx = 0, playoutCount = 0;
   while (PLAYOUTS > 0 ? playoutCount < PLAYOUTS : performance.now() < deadline) {
     playoutCount++;

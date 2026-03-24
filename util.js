@@ -38,3 +38,4 @@ const Util = (() => {
 })();
 
 if (typeof module !== 'undefined') module.exports = Util;
+else window.Util = Util;

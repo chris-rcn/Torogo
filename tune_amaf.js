@@ -11,9 +11,9 @@
  * exploration.
  *
  * Usage:
- *   node tune_amaf.js [--size <n>] [--discounts <d,d,...>] [--budget <ms>]
+ *   node tune_amaf.js --size <n> [--discounts <d,d,...>] [--budget <ms>]
  *
- *   --size      Board size (default: 9)
+ *   --size      Board size (required)
  *   --discounts Comma-separated AMAF_DISCOUNT values to test
  *               (default: 0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)
  *   --budget    Time budget per move in ms (default: 500)
@@ -30,7 +30,8 @@ function argVal(name, def) {
   return i !== -1 ? argv[i + 1] : def;
 }
 
-const boardSize       = parseInt(argVal('size', '9'), 10);
+if (!argVal('size', '')) { console.error('--size is required'); process.exit(1); }
+const boardSize       = parseInt(argVal('size', ''), 10);
 const GAMES_PER_ROUND = 2; // 1 game as each colour per round
 const FIXED_OPP_WEIGHT = 0;
 const budgetMs        = argVal('budget', '500');

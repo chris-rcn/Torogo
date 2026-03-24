@@ -15,13 +15,14 @@ const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.error('Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>]');
+  console.error('Usage: node createmovedetails.js [--agent <name>] --budget <ms> --size <n>');
   process.exit(0);
 }
 
 const agentName  = get('--agent',  'rave');
 const budget     = parseInt(get('--budget', '100'), 10);
-const boardSize  = parseInt(get('--size',    '11'), 10);
+if (!get('--size')) { console.error('--size is required'); process.exit(1); }
+const boardSize  = parseInt(get('--size'),    10);
 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }

@@ -9,13 +9,11 @@
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
-
-const DEFAULT_BUDGET_MS = 500;
 
 
 // Lightweight move application for use inside playouts.
@@ -93,8 +91,7 @@ function getMove(game, timeBudgetMs) {
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
   // Round-robin playouts across candidates until the time budget is spent.
-  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
-  const deadline = performance.now() + budgetMs;
+  const deadline = performance.now() + timeBudgetMs;
   let cidx = 0;
   while (performance.now() < deadline) {
     const move = candidates[cidx];

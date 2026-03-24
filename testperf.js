@@ -6,7 +6,8 @@ const { performance } = require('perf_hooks');
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const boardSize = parseInt(get('--size', '9'), 10);
+if (!get('--size')) { console.error('--size is required'); process.exit(1); }
+const boardSize = parseInt(get('--size'), 10);
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
 
 const engine = get('--engine', 'game');

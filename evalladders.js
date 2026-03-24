@@ -11,7 +11,7 @@ const { Game, parseBoard } = require('./game.js');
  *
  * Options:
  *   --agent   <name>   AI policy to evaluate (default: random)
- *   --budget  <ms>     Time budget per move in ms (default: 500)
+ *   --budget  <ms>     Time budget per move in ms (required)
  *   --trials  <n>      Trials per position (default: 10)
  *   --help             Show this help message
  *
@@ -51,7 +51,8 @@ if (opts.help) {
 }
 
 const agentName = opts.agent  || 'random';
-const budgetMs  = parseInt(opts.budget || '500', 10);
+if (!opts.budget) { console.error('--budget is required'); process.exit(1); }
+const budgetMs  = parseInt(opts.budget, 10);
 const trials    = parseInt(opts.trials || '10',  10);
 
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }

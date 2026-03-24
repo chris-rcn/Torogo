@@ -11,7 +11,7 @@
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -22,7 +22,6 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
 const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
@@ -298,8 +297,7 @@ function getMove(game, timeBudgetMs) {
 
   const root = makeNode(null, null, -1, null, game2, N);
 
-  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
-  const deadline = performance.now() + budgetMs;
+  const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
   do {

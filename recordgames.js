@@ -3,9 +3,9 @@
 
 // recordgames.js — play an agent against itself and print a game record per line.
 //
-// Usage: node recordgames.js [--agent rave] [--size 7] [--budget 500] [--max 0]
+// Usage: node recordgames.js --size <n> [--agent rave] [--budget 500] [--max 0]
 //   --agent   ai agent name  (default: rave)
-//   --size    board size     (default: 7)
+//   --size    board size     (required)
 //   --budget  ms per move    (default: 500)
 //   --max     games to generate, 0 = unlimited (default: 0)
 //
@@ -23,7 +23,8 @@ const args = process.argv.slice(2);
 const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
 const agentName = get('--agent',  'rave');
-const size      = parseInt(get('--size',   '7'),   10);
+if (!get('--size')) { console.error('--size is required'); process.exit(1); }
+const size      = parseInt(get('--size'),   10);
 const budget    = parseInt(get('--budget', '500'), 10);
 const max       = parseInt(get('--max',    '0'),   10);
 

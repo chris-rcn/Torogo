@@ -7,7 +7,7 @@
 //   --agent        AI policy name           (default: rave)
 //   --budget       short-budget ms          (default: 100)
 //   --longbudget   long-budget ms           (default: 2× --budget)
-//   --size         board size               (default: 11)
+//   --size         board size               (required)
 //
 // For each position in a self-play game, three short-budget and two long-budget
 // genMove calls are made.  If all three short-budget calls agree on the same
@@ -35,7 +35,8 @@ if (args.includes('--help') || args.includes('-h')) {
 
 const agentName   = get('--agent',       'rave');
 const shortBudget = parseInt(get('--budget',      '100'), 10);
-const boardSize   = parseInt(get('--size',         '11'), 10);
+if (!get('--size')) { console.error('--size is required'); process.exit(1); }
+const boardSize   = parseInt(get('--size'),         10);
 
 if (isNaN(shortBudget) || shortBudget < 1) {
   console.error('--budget must be a positive integer'); process.exit(1);

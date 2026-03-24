@@ -3,16 +3,18 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
 
+(function() {
+
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
- * Priors (ladder + pattern) are computed once at node creation time.
+ * Priors (pattern) are computed once at node creation time.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (default: 500)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -23,47 +25,27 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const DEFAULT_BUDGET_MS = 500;
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
+const RAVE_EQUIV = 300;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 1);
+const PAT_PRIOR_WEIGHT = 1;
 
 // Default weight for patterns absent from the training data.
 const DEFAULT_WEIGHT = 0;
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 5);
+const N_EXPAND = 5;
 
-let patternSelectionRatio;
-
-if (_isNode) {
-  patternSelectionRatio = require('../patternValue.js').weight;
-} else {
-  // Browser: patternHash2 is a global from patterns2.js loaded as a <script>.
-  // Load patterns.csv via fetch and build the ratio table.
-  const _patternHash2 = window.patternHash2;
-  const _table = new Map();
-  fetch('patterns.csv')
-    .then(r => r.text())
-    .then(text => {
-      for (const line of text.trim().split('\n')) {
-        if (!line.trim()) continue;
-        const parts = line.split(',');
-        const hash  = parseInt(parts[0], 10);
-        const ratio = parseFloat(parts[1]);
-        if (!Number.isNaN(hash) && !Number.isNaN(ratio)) _table.set(hash, ratio);
-      }
-    });
-  patternSelectionRatio = function(game2, idx) {
-    const hash = _patternHash2(game2, idx, game2.current);
-    return _table.has(hash) ? _table.get(hash) : DEFAULT_WEIGHT;
-  };
+const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.patternHash2;
+const _patternTable = _isNode ? require('../patterns-data.js') : window.patternTable;
+function patternSelectionRatio(game2, idx) {
+  const hash = _patternHash2(game2, idx, game2.current);
+  return _patternTable.has(hash) ? _patternTable.get(hash) : DEFAULT_WEIGHT;
 }
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
@@ -354,8 +336,7 @@ function getMove(game, timeBudgetMs) {
 
   const root = makeNode(null, null, -1, null, game2, N);
 
-  const budgetMs = timeBudgetMs != null ? timeBudgetMs : DEFAULT_BUDGET_MS;
-  const deadline = performance.now() + budgetMs;
+  const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
   do {
@@ -407,3 +388,6 @@ function getMove(game, timeBudgetMs) {
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();

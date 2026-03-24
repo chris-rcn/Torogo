@@ -6,7 +6,8 @@ const { Game3 } = require('./game3.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
-const N    = parseInt(get('--size', '9'),  10);
+if (!get('--size')) { console.error('--size is required'); process.exit(1); }
+const N    = parseInt(get('--size'),  10);
 const REPS = parseInt(get('--reps', '3000'), 10);
 
 function makePrng(seed) {
