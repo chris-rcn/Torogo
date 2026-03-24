@@ -234,7 +234,6 @@
 </div>
 
 
-<!--These should all be listed in 'sourceFiles' below.-->
 <script src="util.js"></script>
 <script src="game2.js"></script>
 <script src="ladder2.js"></script>
@@ -246,26 +245,10 @@
 <p style="margin-top:36px;font-size:0.9rem;color:#c8c0b0;letter-spacing:0.04em;"><span id="last-modified"></span></p>
 
 <script>
-  (async () => {
-    const sourceFiles = ['index.html', 'util.js', 'game.js', 'ladder2.js', 'patterns2.js', 'patterns-data.js', 'ai/production.js', 'ui.js'];
-    let latest = null;
-    try {
-      const results = await Promise.all(
-        sourceFiles.map(f => fetch(f, { method: 'HEAD' }).catch(() => null))
-      );
-      for (const res of results) {
-        if (!res || !res.ok) continue;
-        const lm = res.headers.get('Last-Modified');
-        if (!lm) continue;
-        const d = new Date(lm);
-        if (!latest || d > latest) latest = d;
-      }
-    } catch (_) {}
-
-    const stamp = new Date(document.lastModified);
-    document.getElementById('last-modified').textContent =
-      stamp.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  })();
+  const stamp = new Date(document.lastModified);
+  document.getElementById('last-modified').textContent =
+    stamp.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 </body>
 </html>
+
