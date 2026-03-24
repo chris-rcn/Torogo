@@ -2,7 +2,7 @@
 
 // ladder2.js — Ladder detection using Game2.
 
-if (typeof require === 'function') { global.PASS = require('./game2.js').PASS; }
+const { PASS } = typeof require === 'function' ? require('./game2.js') : window.Game2;
 
 // Module-level output slots for _readLibs.  Written once, then immediately
 // copied to locals by the caller before any recursive call can overwrite them.

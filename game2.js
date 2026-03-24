@@ -12,6 +12,8 @@
 //   game.cells          Int8Array  (read-only)
 //   game.N              board size
 
+(function() {
+
 const EMPTY = 0, BLACK = 1, WHITE = 2;
 const PASS  = -1;
 const KOMI  = 4.5;
@@ -611,4 +613,8 @@ function agentMoveToIdx(agentMove, N) {
   return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
-if (typeof module !== 'undefined') module.exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };
+const _exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx };
+if (typeof module !== 'undefined') module.exports = _exports;
+else window.Game2 = _exports;
+
+})();

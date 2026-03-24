@@ -22,7 +22,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window;
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const EXPLORATION_C = 1.4;

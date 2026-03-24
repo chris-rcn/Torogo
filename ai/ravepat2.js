@@ -20,7 +20,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-if (_isNode) { const _g2 = require('../game2.js'); global.PASS = _g2.PASS; global.BLACK = _g2.BLACK; global.WHITE = _g2.WHITE; global.Util = require('../util.js'); }
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
