@@ -1,6 +1,8 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not use require/module/process at top level.
 
+(function() {
+
 const { Game2, PASS, BLACK, WHITE, KOMI } = window.Game2;
 
 
@@ -610,3 +612,5 @@ window.addEventListener('resize', () => {
 
 // Boot
 startGame(initialBoardSize);
+
+})();
