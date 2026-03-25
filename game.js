@@ -941,3 +941,4 @@ function parseBoard(boardStr) {
 }
 
 if (typeof module !== 'undefined') module.exports = { Board, Game, DEFAULT_KOMI, KOMI, parseBoard, boardTurnToString };
+
