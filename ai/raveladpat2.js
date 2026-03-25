@@ -366,6 +366,11 @@ function getMove(game, timeBudgetMs) {
   const game2      = game.cells ? game.clone() : game.toGame2();
   const rootPlayer = game2.current;
 
+  // Obvious pass: opponent just passed and we're already winning — end the game.
+  if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
+    return { type: 'pass', info: 'obvious pass: already winning', rootWinRatio: 1 };
+  }
+
   const root = makeNode(null, null, -1, null, game2, N);
 
   const deadline = performance.now() + timeBudgetMs;

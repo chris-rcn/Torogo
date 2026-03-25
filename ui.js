@@ -294,6 +294,7 @@ const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
 let computerBusy = false;
 let computerPassedLast = false;
 let moveNumber = 0;
+let lastRootWinRatio = 0.5;
 
 function logMove(player, detail, info) {
   const num = String(moveNumber).padStart(3);
@@ -354,6 +355,7 @@ function scheduleComputerMove() {
         return;
       }
       const move = getMove(game, UI_BUDGET_MS);
+      if (move.rootWinRatio !== undefined) lastRootWinRatio = move.rootWinRatio;
 
       const applyMove = () => {
         moveNumber++;
@@ -406,11 +408,12 @@ function updateUI() {
   const thinking = !g.gameOver && g.current === BLACK;
 
   // Score bar — always visible, computed every update
-  const t = g.calcTerritory();
+  const t = g.calcScore();
   const blackTotal = t.black;
-  const whiteTotal = t.white + KOMI;
+  const whiteTotal = t.white;
   document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
   document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${KOMI})`;
+  document.getElementById('win-indicator').style.left = (lastRootWinRatio * 100).toFixed(1) + '%';
 
   // Three-section controls row
   const blackMsgEl = document.getElementById('black-msg');
@@ -456,6 +459,7 @@ function updateUI() {
 function startGame(boardSize) {
   computerPassedLast = false;
   moveNumber = 0;
+  lastRootWinRatio = 0.5;
   console.log(`[Game] new game started (${boardSize}×${boardSize})`);
   game = new Game2(boardSize);
   game.lastMove = null;

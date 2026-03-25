@@ -606,7 +606,7 @@ class Game2 {
 
   // Accurate area score via flood-fill of empty regions.
   // Returns { black, white } where white already includes KOMI.
-  calcTerritory() {
+  calcScore() {
     const N      = this.N;
     const cap    = N * N;
     const cells  = this.cells;
@@ -644,7 +644,7 @@ class Game2 {
 
   // Accurate winner using flood-fill territory + komi.  Returns BLACK, WHITE, or null.
   calcWinner() {
-    const sc = this.calcTerritory();
+    const sc = this.calcScore();
     return sc.black > sc.white ? BLACK : sc.white > sc.black ? WHITE : null;
   }
 

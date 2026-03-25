@@ -1,5 +1,11 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
+
 /**
  * Monte Carlo Tree Search (MCTS) policy.
  *
@@ -10,157 +16,152 @@
  *   4. Backpropagate — update wins/visits up to the root
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
+ *   game         - a live Game2 instance (read-only; do not mutate)
  *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
+
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
-const EXPLORATION_C = 1.4; // UCT exploration constant
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 
-// ── Playout helpers (same as mc.js) ──────────────────────────────────────────
+const EXPLORATION_C = 1.4;
 
-function playRandom(game) {
-  const size = game.boardSize;
+// ── Playout helper ────────────────────────────────────────────────────────────
+
+function playRandom(game2) {
+  const N   = game2.N;
+  const cap = N * N;
+  const cells = game2.cells;
+  const nbr   = game2._nbr;
+
   const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (game.board.get(x, y) === null) empty.push([x, y]);
+  for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
 
   const moveLimit = empty.length + 20;
   let moves = 0;
 
-  while (!game.gameOver && moves < moveLimit) {
+  while (!game2.gameOver && moves < moveLimit) {
     let placed = false;
     let end = empty.length;
 
     while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const [x, y] = empty[i];
-      empty[i] = empty[end - 1];
-      empty[end - 1] = [x, y];
+      const ri  = Math.floor(Math.random() * end);
+      const idx = empty[ri];
+      empty[ri] = empty[end - 1];
+      empty[end - 1] = idx;
       end--;
 
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
+      if (game2.isTrueEye(idx)) continue;
+      if (!game2.isLegal(idx))  continue;
 
-      const result = game.placeStone(x, y);
-      if (result) {
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result !== true) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
+      const base = idx * 4;
+      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
+            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
+      game2.play(idx);
+      empty[end] = empty[empty.length - 1];
+      empty.pop();
+
+      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
+          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
+        empty.length = 0;
+        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
       }
-    }
 
-    if (!placed) {
-      game.pass();
+      placed = true;
       moves++;
+      break;
     }
-  }
 
+    if (!placed) { game2.play(PASS); moves++; }
+  }
 }
 
-// ── Tree node ────────────────────────────────────────────────────────────────
+// ── Tree node ─────────────────────────────────────────────────────────────────
 
-function legalMoves(game) {
+// Returns legal non-true-eye moves as { type, x, y } objects, plus pass when
+// the board is half-filled or a consecutive pass has already been played.
+function getLegalMoves(game2) {
+  const N   = game2.N;
+  const cap = N * N;
   const moves = [];
-  for (let y = 0; y < game.boardSize; y++)
-    for (let x = 0; x < game.boardSize; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      if (game.isLegal(x, y)) moves.push({ type: 'place', x, y });
-    }
-  const area = game.boardSize * game.boardSize;
-  if (game.moveCount >= area / 2 || game.consecutivePasses > 0) moves.push({ type: 'pass' });
+  for (let i = 0; i < cap; i++) {
+    if (game2.cells[i] !== 0)  continue;
+    if (game2.isTrueEye(i))    continue;
+    if (game2.isLegal(i))      moves.push({ type: 'place', x: i % N, y: (i / N) | 0 });
+  }
+  if (moves.length < cap / 2 || game2.consecutivePasses > 0) moves.push({ type: 'pass' });
   return moves;
 }
 
 function makeNode(move, parent, mover) {
   return {
-    move,       // move that led to this node (null for root)
-    parent,     // parent node (null for root)
-    mover,      // the player who played `move` (null for root)
+    move,
+    parent,
+    mover,      // player who played `move` to reach this node (null at root)
     children:   [],
-    untried:    null, // lazily populated array of untried moves
-    wins:       0,    // wins from the perspective of `mover`
+    untried:    null,
+    wins:       0,
     visits:     0,
   };
 }
 
-function applyMove(game, move) {
-  if (move.type === 'place') game.placeStone(move.x, move.y);
-  else game.pass();
+function applyMove(game2, move) {
+  if (move.type === 'place') game2.play(move.y * game2.N + move.x);
+  else game2.play(PASS);
 }
 
-// UCT score: win rate + exploration bonus.  The win rate is from the
-// perspective of the player who *made the move into* this node — which is the
-// opponent of the player whose turn it is at the parent.  So during selection
-// at the parent we want the child whose previous-player win rate is highest.
 function uctScore(child, parentVisits) {
   if (child.visits === 0) return Infinity;
-  const winRate = child.wins / child.visits;
-  return winRate + EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / child.visits);
+  return child.wins / child.visits +
+    EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / child.visits);
 }
 
-// ── MCTS core ────────────────────────────────────────────────────────────────
+// ── MCTS core ─────────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame) {
+function selectAndExpand(root, rootGame2) {
   let node = root;
-  const game = rootGame.clone();
+  const game2 = rootGame2.clone();
 
-  // Select: walk down fully-expanded nodes using UCT.
-  while (node.untried !== null && node.untried.length === 0 && node.children.length > 0 && !game.gameOver) {
-    let best = null;
-    let bestScore = -1;
+  while (node.untried !== null && node.untried.length === 0 &&
+         node.children.length > 0 && !game2.gameOver) {
+    let best = null, bestScore = -1;
     for (const child of node.children) {
       const s = uctScore(child, node.visits);
       if (s > bestScore) { bestScore = s; best = child; }
     }
     node = best;
-    applyMove(game, node.move);
+    applyMove(game2, node.move);
   }
 
-  // Expand: if the node has untried moves, add one child.
-  if (!game.gameOver) {
-    if (node.untried === null) node.untried = legalMoves(game);
+  if (!game2.gameOver) {
+    if (node.untried === null) node.untried = getLegalMoves(game2);
     if (node.untried.length > 0) {
       const idx = Math.floor(Math.random() * node.untried.length);
       const move = node.untried[idx];
       node.untried[idx] = node.untried[node.untried.length - 1];
       node.untried.pop();
-      const mover = game.current; // player whose turn it is makes this move
+      const mover = game2.current;
       const child = makeNode(move, node, mover);
       node.children.push(child);
       node = child;
-      applyMove(game, move);
+      applyMove(game2, move);
 
-      if (!game.gameOver && game.consecutivePasses > 0) {
-        const secondPass = makeNode({ type: 'pass' }, node, game.current);
-        node.children.push(secondPass);
-        node = secondPass;
-        applyMove(game, { type: 'pass' });
+      if (!game2.gameOver && game2.consecutivePasses > 0) {
+        game2.play(PASS);
       }
     }
   }
 
-  return { node, game };
+  return { node, game2 };
 }
 
-function simulate(game) {
-  const wasAlreadyOver = game.gameOver;
-  playRandom(game);
-  if (wasAlreadyOver) {
-    return game.calcWinner();
-  }
-  return game.estimateWinner();
+function simulate(game2) {
+  const wasAlreadyOver = game2.gameOver;
+  playRandom(game2);
+  return wasAlreadyOver ? game2.calcWinner() : game2.estimateWinner();
 }
 
 function backpropagate(node, winner) {
@@ -171,32 +172,33 @@ function backpropagate(node, winner) {
   }
 }
 
-// ── Public interface ─────────────────────────────────────────────────────────
+// ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass', info: 'game already over' };
 
+  const game2      = game.cells ? game.clone() : game.toGame2();
+  const rootPlayer = game2.current;
+
+  // Obvious pass: opponent just passed and we're already winning — end the game.
+  if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
+    return { type: 'pass', info: 'obvious pass: already winning' };
+  }
+
   const root = makeNode(null, null, null);
 
   const deadline = performance.now() + timeBudgetMs;
-
   while (performance.now() < deadline) {
-    const { node, game: simGame } = selectAndExpand(root, game);
-    const winner = simulate(simGame);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2);
+    const winner = simulate(simGame2);
     backpropagate(node, winner);
   }
 
-  // Pick the root child with the most visits (most robust choice).
-  let bestChild = null;
-  let bestVisits = -1;
+  let bestChild = null, bestVisits = -1;
   for (const child of root.children) {
-    if (child.visits > bestVisits) {
-      bestVisits = child.visits;
-      bestChild = child;
-    }
+    if (child.visits > bestVisits) { bestVisits = child.visits; bestChild = child; }
   }
 
-  // Root children stats sorted by visits, available to callers that want them.
   const children = root.children
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
@@ -209,3 +211,6 @@ function getMove(game, timeBudgetMs) {
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();

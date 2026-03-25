@@ -2401,7 +2401,7 @@ section('game.js estimateWinner — 1-step neighbour check');
   assert(g.estimateWinner() === 'white', 'estimateWinner: white perimeter → white wins');
 }
 
-section('game2 calcTerritory — flood fill');
+section('game2 calcScore — flood fill');
 {
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   {
@@ -2410,10 +2410,10 @@ section('game2 calcTerritory — flood fill');
     // Clear board, place all black
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
-    const t = g.calcTerritory();
-    assert(t.black === 25,        'game2.calcTerritory: all black → black = 25');
-    assert(t.white === 0 + 4.5,  'game2.calcTerritory: all black → white = 4.5 (komi only)');
-    assert(t.black > t.white,     'game2.calcTerritory: black wins');
+    const t = g.calcScore();
+    assert(t.black === 25,        'game2.calcScore: all black → black = 25');
+    assert(t.white === 0 + 4.5,  'game2.calcScore: all black → white = 4.5 (komi only)');
+    assert(t.black > t.white,     'game2.calcScore: black wins');
   }
   {
     // 3×3 black perimeter, empty centre.  On a toroidal 3×3 board, all cells
@@ -2421,9 +2421,9 @@ section('game2 calcTerritory — flood fill');
     const g = new Game2(3);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 9; i++) if (i !== 4) g.cells[i] = B2;
-    const t = g.calcTerritory();
+    const t = g.calcScore();
     // The connected empty region {4} borders only black → black territory.
-    assert(t.black === 9, 'game2.calcTerritory: 8 black + 1 enclosed empty = 9');
+    assert(t.black === 9, 'game2.calcScore: 8 black + 1 enclosed empty = 9');
   }
 }
 
@@ -2435,8 +2435,8 @@ section('game2 estimateWinner — 1-step neighbour check');
     const g = new Game2(5);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
-    const tc = g.calcTerritory();
-    assert(tc.black > tc.white,       'game2.calcTerritory: all-black → black wins');
+    const tc = g.calcScore();
+    assert(tc.black > tc.white,       'game2.calcScore: all-black → black wins');
     assert(g.estimateWinner() === B2, 'game2.estimateWinner: all-black → black wins');
   }
   {
@@ -2446,8 +2446,8 @@ section('game2 estimateWinner — 1-step neighbour check');
     for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
       if (y === 0 || y === 4 || x === 0 || x === 4) g.cells[y * 5 + x] = W2;
     }
-    const tc = g.calcTerritory();
-    assert(tc.white > tc.black,        'game2.calcTerritory: white perimeter → white wins');
+    const tc = g.calcScore();
+    assert(tc.white > tc.black,        'game2.calcScore: white perimeter → white wins');
     assert(g.estimateWinner() === W2,  'game2.estimateWinner: white perimeter → white wins');
   }
   {
@@ -2458,7 +2458,7 @@ section('game2 estimateWinner — 1-step neighbour check');
   }
 }
 
-section('calcTerritory winner and estimateWinner agree after random playouts');
+section('calcScore winner and estimateWinner agree after random playouts');
 {
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   let agree = 0, disagree = 0;
@@ -2472,13 +2472,13 @@ section('calcTerritory winner and estimateWinner agree after random playouts');
         g.play(cands[Math.floor(Math.random() * cands.length)]);
       }
     }
-    const tc = g.calcTerritory();
+    const tc = g.calcScore();
     const winC = tc.black > tc.white ? B2 : tc.white > tc.black ? W2 : null;
     const winE = g.estimateWinner();
     if (winC === winE) agree++; else disagree++;
   }
   console.log(`  Agree on winner: ${agree}/200, disagree: ${disagree}`);
-  assert(disagree <= 10, 'calcTerritory and estimateWinner agree on winner in ≥95% of games');
+  assert(disagree <= 10, 'calcScore and estimateWinner agree on winner in ≥95% of games');
 }
 
 // ─── patterns12.js ───────────────────────────────────────────────────────────
@@ -2607,6 +2607,30 @@ section('calcTerritory winner and estimateWinner agree after random playouts');
       assert(result[i].idx === indices[i], `result[${i}].idx matches input index`);
     }
   }
+}
+
+// ─── RAVE vs passer ──────────────────────────────────────────────────────────
+
+section('RAVE vs passer: game ends quickly');
+{
+  // Passer always passes; after passer's first pass RAVE sees consecutivePasses=1
+  // and the obvious-pass check fires immediately (already winning), so the game
+  // ends in just a few moves.
+  const raveAgent = require('./ai/rave.js');
+  const passerAgent = require('./ai/passer.js');
+  const N = 7;
+  const g = new Game2(N);
+  let moves = 0;
+  while (!g.gameOver && moves < 4 * N * N) {
+    const move = g.current === BLACK ? raveAgent(g, 100) : passerAgent(g, 100);
+    const idx = typeof move === 'number' ? move
+      : move.type === 'pass' ? PASS
+      : move.x + move.y * N;
+    g.play(idx);
+    moves++;
+  }
+  assert(g.gameOver, `rave vs passer: game terminated (moves=${moves})`);
+  assert(moves <= 10, `rave vs passer: ended quickly (moves=${moves})`);
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

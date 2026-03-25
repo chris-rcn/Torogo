@@ -1,5 +1,11 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
+
 /**
  * Monte Carlo policy.
  *
@@ -8,121 +14,108 @@
  * the highest win ratio is returned.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
+ *   game         - a live Game2 instance (read-only; do not mutate)
  *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
+
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 
-// Lightweight move application for use inside playouts.
-// Precondition: (x, y) has at least one empty orthogonal neighbour, which
-function playRandom(game) {
-  const size = game.boardSize;
+function playRandom(game2) {
+  const N   = game2.N;
+  const cap = N * N;
+  const cells = game2.cells;
+  const nbr   = game2._nbr;
 
-  // Build the initial list of empty cells once.
   const empty = [];
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (game.board.get(x, y) === null) empty.push([x, y]);
+  for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
 
   const moveLimit = empty.length + 20;
   let moves = 0;
 
-  while (!game.gameOver && moves < moveLimit) {
+  while (!game2.gameOver && moves < moveLimit) {
     let placed = false;
     let end = empty.length;
 
     while (end > 0) {
-      const i = Math.floor(Math.random() * end);
-      const [x, y] = empty[i];
-
-      empty[i] = empty[end - 1];
-      empty[end - 1] = [x, y];
+      const ri  = Math.floor(Math.random() * end);
+      const idx = empty[ri];
+      empty[ri] = empty[end - 1];
+      empty[end - 1] = idx;
       end--;
 
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
+      if (game2.isTrueEye(idx)) continue;
+      if (!game2.isLegal(idx))  continue;
 
-      const result = game.placeStone(x, y);
-      if (result) {
-        empty[end] = empty[empty.length - 1];
-        empty.pop();
-        if (result !== true) {
-          empty.length = 0;
-          for (let ey = 0; ey < size; ey++)
-            for (let ex = 0; ex < size; ex++)
-              if (game.board.get(ex, ey) === null) empty.push([ex, ey]);
-        }
-        placed = true;
-        moves++;
-        break;
+      const base = idx * 4;
+      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
+            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
+      game2.play(idx);
+      empty[end] = empty[empty.length - 1];
+      empty.pop();
+
+      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
+          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
+        empty.length = 0;
+        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
       }
-      // Illegal move (Ko or suicide): element stays at index `end` and will
-      // be reconsidered in a future turn.
-    }
 
-    if (!placed) {
-      game.pass();
+      placed = true;
       moves++;
+      break;
     }
-  }
 
+    if (!placed) { game2.play(PASS); moves++; }
+  }
 }
 
 function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
-  const player = game.current;
+  const game2  = game.cells ? game.clone() : game.toGame2();
+  const N      = game2.N;
+  const cap    = N * N;
+  const player = game2.current;
 
-  // Build list of legal candidate moves.
   const candidates = [];
-  for (let y = 0; y < game.boardSize; y++) {
-    for (let x = 0; x < game.boardSize; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (game.board.classifyEmpty(x, y, game.current).isTrueEye) continue;
-      if (game.isLegal(x, y)) candidates.push({ type: 'place', x, y });
-    }
+  for (let i = 0; i < cap; i++) {
+    if (game2.cells[i] !== 0)   continue;
+    if (game2.isTrueEye(i))     continue;
+    if (game2.isLegal(i))       candidates.push(i);
   }
-  // Pass is always legal.
-  candidates.push({ type: 'pass' });
+  candidates.push(PASS);
 
-  // Per-candidate playout statistics.
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
-  // Round-robin playouts across candidates until the time budget is spent.
   const deadline = performance.now() + timeBudgetMs;
   let cidx = 0;
   while (performance.now() < deadline) {
-    const move = candidates[cidx];
-    const clone = game.clone();
-    if (move.type === 'place') {
-      clone.placeStone(move.x, move.y);
-    } else {
-      clone.pass();
-    }
+    const clone = game2.clone();
+    clone.play(candidates[cidx]);
     playRandom(clone);
 
-    const winner = clone.estimateWinner();
-
     stats[cidx].plays++;
-    if (winner === player) stats[cidx].wins++;
+    if (clone.estimateWinner() === player) stats[cidx].wins++;
 
     cidx = (cidx + 1) % candidates.length;
   }
 
-  // Select the candidate with the highest win ratio.
-  let bestIdx = 0;
-  let bestRatio = -1;
+  let bestIdx = 0, bestRatio = -1;
   for (let i = 0; i < candidates.length; i++) {
     const ratio = stats[i].plays > 0 ? stats[i].wins / stats[i].plays : 0;
-    if (ratio > bestRatio) {
-      bestRatio = ratio;
-      bestIdx = i;
-    }
+    if (ratio > bestRatio) { bestRatio = ratio; bestIdx = i; }
   }
 
-  return candidates[bestIdx];
+  const best = candidates[bestIdx];
+  return best === PASS ? { type: 'pass' }
+                       : { type: 'place', x: best % N, y: (best / N) | 0 };
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();
