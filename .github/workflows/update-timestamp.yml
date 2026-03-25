@@ -3,11 +3,6 @@ name: Update index.html Timestamp
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - '*.html'
-      # Add whatever paths should trigger an update
 
 jobs:
   update-timestamp:
