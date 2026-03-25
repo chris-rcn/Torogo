@@ -1,0 +1,32 @@
+name: Update index.html Timestamp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - '*.html'
+      # Add whatever paths should trigger an update
+
+jobs:
+  update-timestamp:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp timestamp into index.html
+        run: |
+          # Remove any previous timestamp line, then append a fresh one
+          sed -i '/<!-- last-updated:/d' index.html
+          echo "<!-- last-updated: $(date -u) -->" >> index.html
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "chore: update timestamp [skip ci]" || echo "No changes"
+          git push
