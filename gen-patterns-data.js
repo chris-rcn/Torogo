@@ -15,7 +15,7 @@ function flag(name) {
 }
 
 const inputFile     = flag('--file');
-const minEncounters = parseInt(flag('--min-encounters') ?? '1', 10);
+const minEncounters = parseInt(flag('--min-encounters') ?? '2', 10);
 
 if (!inputFile) {
   console.error('Usage: node gen-patterns-data.js --file <patterns.csv> [--min-encounters <n>]');

@@ -1,46 +1,52 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
+
 /**
  * Random-move policy.
  *
- * Picks a uniformly random legal move, skipping moves that would fill a
- * single-point true eye for the current player.  Falls back to pass when no
- * such move exists.
+ * Picks a uniformly random legal non-true-eye move.
+ * Falls back to pass when no such move exists.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
+ *   game         - a live Game2 instance (read-only; do not mutate)
  *   timeBudgetMs - ignored (always fast)
- *
  */
 
-module.exports = function getMove(game, _timeBudgetMs) {
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const { PASS } = _isNode ? require('../game2.js') : window.Game2;
+
+function getMove(game, _timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
-  const N = game.boardSize;
-  const color = game.current;
-  const board = game.board;
+  const N   = game.N;
+  const cap = N * N;
 
-  // Collect empty, non-true-eye cells using a single classifyEmpty call each.
+  // Collect legal non-true-eye moves.
   const candidates = [];
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      if (board.get(x, y) !== null) continue;
-      const info = board.classifyEmpty(x, y, color);
-      if (info.isTrueEye) continue;
-      candidates.push([x, y, info.hasEmptyNeighbor]);
-    }
+  for (let i = 0; i < cap; i++) {
+    if (game.cells[i] !== 0) continue;
+    if (game.isTrueEye(i)) continue;
+    if (game.isLegal(i)) candidates.push(i);
   }
 
-  // Pick candidates in random order using swap-with-last-and-pop.
+  // Pick uniformly at random using swap-with-last-and-pop.
   while (candidates.length > 0) {
-    const i = Math.floor(Math.random() * candidates.length);
-    const [x, y, hasEmptyNeighbor] = candidates[i];
-    candidates[i] = candidates[candidates.length - 1];
+    const ri = Math.floor(Math.random() * candidates.length);
+    const idx = candidates[ri];
+    candidates[ri] = candidates[candidates.length - 1];
     candidates.pop();
-
-    if (hasEmptyNeighbor) return { type: 'place', x, y };
-    if (game.isLegal(x, y)) return { type: 'place', x, y };
+    return { type: 'place', x: idx % N, y: (idx / N) | 0 };
   }
 
   return { type: 'pass' };
-};
+}
+
+if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();

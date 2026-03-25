@@ -1058,15 +1058,24 @@ section('toGame2 basic state');
   assert(g2.ko === PASS,                  'toGame2: ko (no ko)');
 }
 
+// Play a random legal non-true-eye move on a legacy Game instance.
+function randomLegacyMove(g, N) {
+  const color = g.current;
+  const cands = [];
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++)
+      if (g.board.get(x, y) === null && g.isLegal(x, y) && !g.board.isTrueEye(x, y, color))
+        cands.push([x, y]);
+  if (cands.length === 0) return g.pass();
+  const [x, y] = cands[Math.floor(Math.random() * cands.length)];
+  g.placeStone(x, y);
+}
+
 section('toGame2 board cells match');
 {
   const N = 7;
-  const random = require('./ai/random.js');
   const g1 = new Game(N);
-  for (let i = 0; i < 15 && !g1.gameOver; i++) {
-    const m = random(g1);
-    if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
-  }
+  for (let i = 0; i < 15 && !g1.gameOver; i++) randomLegacyMove(g1, N);
   const g2 = g1.toGame2();
   let match = true;
   for (let y = 0; y < N; y++) {
@@ -1082,12 +1091,8 @@ section('toGame2 board cells match');
 section('toGame2 isLegal and isTrueEye match');
 {
   const N = 7;
-  const random = require('./ai/random.js');
   const g1 = new Game(N);
-  for (let i = 0; i < 20 && !g1.gameOver; i++) {
-    const m = random(g1);
-    if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
-  }
+  for (let i = 0; i < 20 && !g1.gameOver; i++) randomLegacyMove(g1, N);
   const g2 = g1.toGame2();
   let match = true;
   for (let y = 0; y < N; y++) {
@@ -1137,12 +1142,8 @@ section('toGame2 gameOver and consecutivePasses transferred');
 section('toGame2 result is playable');
 {
   const N = 7;
-  const random = require('./ai/random.js');
   const g1 = new Game(N);
-  for (let i = 0; i < 10 && !g1.gameOver; i++) {
-    const m = random(g1);
-    if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
-  }
+  for (let i = 0; i < 10 && !g1.gameOver; i++) randomLegacyMove(g1, N);
   const g2 = g1.toGame2();
   // Play out the rest on game2 and verify it doesn't crash or loop
   let steps = 0;
@@ -1164,16 +1165,12 @@ section('toGame2 result is playable');
 section('toGame2 consistency across 20 mid-game positions');
 {
   const N = 7;
-  const random = require('./ai/random.js');
   let allMatch = true;
 
   for (let trial = 0; trial < 20; trial++) {
     const g1 = new Game(N);
     const steps = 5 + Math.floor(Math.random() * 20);
-    for (let i = 0; i < steps && !g1.gameOver; i++) {
-      const m = random(g1);
-      if (m.type === 'place') g1.placeStone(m.x, m.y); else g1.pass();
-    }
+    for (let i = 0; i < steps && !g1.gameOver; i++) randomLegacyMove(g1, N);
     if (g1.gameOver) continue;
 
     const g2 = g1.toGame2();
@@ -2482,6 +2479,134 @@ section('calcTerritory winner and estimateWinner agree after random playouts');
   }
   console.log(`  Agree on winner: ${agree}/200, disagree: ${disagree}`);
   assert(disagree <= 10, 'calcTerritory and estimateWinner agree on winner in ≥95% of games');
+}
+
+// ─── patterns12.js ───────────────────────────────────────────────────────────
+
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const { patternHashes2 } = require('./patterns12.js');
+
+  section('patterns12: patternHashes2 is deterministic');
+  {
+    const N = 9, center = 4 * N + 4;
+    const g = new Game2(N, false);
+    g.cells[3 * N + 4] = BLACK;
+    g.cells[4 * N + 5] = WHITE;
+    const h1 = patternHashes2(g, [center])[0].pHash;
+    const h2 = patternHashes2(g, [center])[0].pHash;
+    assert(h1 === h2, 'patternHashes2 returns same hash on repeated calls');
+    assert(typeof h1 === 'number' && h1 >= 0, 'pHash is a non-negative number');
+  }
+
+  section('patterns12: 4 cardinal arm positions hash the same');
+  {
+    // A stone at NN/EE/SS/WW (distance 2) should all hash the same.
+    const N = 9, center = 4 * N + 4;
+    const arms = [2*N+4, 4*N+6, 6*N+4, 4*N+2]; // NN, EE, SS, WW
+    const hashes = arms.map(stone => {
+      const g = new Game2(N, false);
+      g.cells[stone] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 4 arm positions hash the same (${hashes})`);
+  }
+
+  section('patterns12: arm cell hashes differently from adjacent cardinal');
+  {
+    const N = 9, center = 4 * N + 4;
+    const gArm  = new Game2(N, false); gArm.cells[2*N+4]  = BLACK; // NN (arm)
+    const gAdj  = new Game2(N, false); gAdj.cells[3*N+4]  = BLACK; // N  (adjacent)
+    const hArm  = patternHashes2(gArm,  [center])[0].pHash;
+    const hAdj  = patternHashes2(gAdj,  [center])[0].pHash;
+    assert(hArm !== hAdj, 'arm (distance-2) and adjacent (distance-1) cardinal positions hash differently');
+  }
+
+  section('patterns12: 4 cardinal positions in 3×3 hash the same');
+  {
+    const N = 9, center = 4 * N + 4;
+    const cardinals = [3*N+4, 4*N+5, 5*N+4, 4*N+3]; // N, E, S, W
+    const hashes = cardinals.map(stone => {
+      const g = new Game2(N, false);
+      g.cells[stone] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 4 cardinal positions hash the same (${hashes})`);
+  }
+
+  section('patterns12: 4 diagonal positions hash the same');
+  {
+    const N = 9, center = 4 * N + 4;
+    const diagonals = [3*N+3, 3*N+5, 5*N+5, 5*N+3]; // NW, NE, SE, SW
+    const hashes = diagonals.map(stone => {
+      const g = new Game2(N, false);
+      g.cells[stone] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 4 diagonal positions hash the same (${hashes})`);
+  }
+
+  section('patterns12: cardinal and diagonal positions in 3×3 hash differently');
+  {
+    const N = 9, center = 4 * N + 4;
+    const gCard = new Game2(N, false); gCard.cells[3*N+4] = BLACK; // N
+    const gDiag = new Game2(N, false); gDiag.cells[3*N+3] = BLACK; // NW
+    const hCard = patternHashes2(gCard, [center])[0].pHash;
+    const hDiag = patternHashes2(gDiag, [center])[0].pHash;
+    assert(hCard !== hDiag, 'cardinal and diagonal single-stone patterns hash differently');
+  }
+
+  section('patterns12: all 8 D4 orientations of arm+diagonal pattern hash the same');
+  {
+    // Pattern: one stone in arm position, one stone in adjacent diagonal.
+    // NN+NE and all 7 D4 images must produce the same hash.
+    const N = 9, center = 4 * N + 4;
+    // (arm, diag) pairs for all 8 orientations:
+    //   NN+NE, EE+SE, SS+SW, WW+NW, NN+NW, SS+SE, WW+SW, EE+NE
+    const orientations = [
+      [2*N+4, 3*N+5], // NN + NE
+      [4*N+6, 5*N+5], // EE + SE
+      [6*N+4, 5*N+3], // SS + SW
+      [4*N+2, 3*N+3], // WW + NW
+      [2*N+4, 3*N+3], // NN + NW
+      [6*N+4, 5*N+5], // SS + SE
+      [4*N+2, 5*N+3], // WW + SW
+      [4*N+6, 3*N+5], // EE + NE
+    ];
+    const hashes = orientations.map(pair => {
+      const g = new Game2(N, false);
+      for (const idx of pair) g.cells[idx] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 8 D4 orientations of arm+diagonal pattern hash the same (${hashes})`);
+  }
+
+  section('patterns12: mover vs opponent stone hash differently');
+  {
+    const N = 9, center = 4 * N + 4, stone = 2*N+4; // arm NN
+    const gMover = new Game2(N, false); gMover.cells[stone] = BLACK;
+    const gOpp   = new Game2(N, false); gOpp.cells[stone]   = WHITE;
+    const hMover = patternHashes2(gMover, [center])[0].pHash;
+    const hOpp   = patternHashes2(gOpp,   [center])[0].pHash;
+    assert(hMover !== hOpp, 'mover stone and opponent stone in arm position hash differently');
+  }
+
+  section('patterns12: returns results in index order');
+  {
+    const N = 9;
+    const g = new Game2(N, false);
+    g.cells[3*N+4] = BLACK;
+    const indices = [4*N+3, 4*N+4, 4*N+5];
+    const result = patternHashes2(g, indices);
+    assert(result.length === 3, 'result length matches indices length');
+    for (let i = 0; i < indices.length; i++) {
+      assert(result[i].idx === indices[i], `result[${i}].idx matches input index`);
+    }
+  }
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

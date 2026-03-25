@@ -7,15 +7,10 @@
 (function () {
 
 /**
- * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
+ * RAVE (Rapid Action Value Estimation) MCTS policy.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
- * Priors (ladder + pattern) are computed once at node creation time.
- *
- * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -27,21 +22,15 @@ const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const EXPLORATION_C = 1.4;
+
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = 300;
+const RAVE_EQUIV = 5000;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
-// Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = 1;
-
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = 3;
-const PAT_DATA = 'patdata.js';
-
-const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
-const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -153,29 +142,6 @@ function makeNode(move, parent, ci, mover, game2, N) {
   const raveWins    = new Float32Array(N * N).fill(0.01);
   const raveVisits  = new Float32Array(N * N).fill(0.02);
 
-  // Per-move prior bonuses, kept separate from RAVE so they never dilute
-  // playout statistics.  Applied as priorBonus[move] / (1 + child.visits).
-  const priorBonus  = new Float32Array(N * N);
-
-  // Pattern priors — max-normalised, applied to non-PASS moves only.
-  // norm_ratio ∈ [0,1]; centred at 0.5 so the best pattern gets +0.5*W and
-  // the worst gets -0.5*W relative to an unrated move.  PAT_PRIOR_WEIGHT
-  // controls the overall scale (0 = disabled).
-  if (PAT_PRIOR_WEIGHT > 0) {
-    if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
-    if (movesArr.length > 0) {
-      const hashes = _patternHashes2(game2, movesArr);
-      const ratios = hashes.map(({ pHash }) => _patternTable.get(pHash));
-      const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
-      const norm   = maxR > 0 ? 1 / maxR : 0;
-      for (let k = 0; k < movesArr.length; k++) {
-        if (ratios[k] !== undefined) {
-          priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
-        }
-      }
-    }
-  }
-
   return {
     move,
     parent,
@@ -191,30 +157,29 @@ function makeNode(move, parent, ci, mover, game2, N) {
     visits,  // Float32Array(M) — playout visits per child
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
-    raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; updated by rollouts
-    priorBonus,   // Float32Array(N*N) — ladder prior bonuses (separate from RAVE)
+    raveVisits
   };
 }
 
-// RAVE-blended UCT score for child index i of node.
-// Children with no real playout visits (cv === 0) get a large bonus so they
-// are always preferred over visited children.  RAVE (seeded with pattern
-// priors) ranks them within the unvisited tier.
-// A separate priorBonus term decays as bonus/(1+realV), so ladder priors
-// guide early exploration without ever diluting the RAVE statistics.
+// RAVE-blended UCT score for child index i of node.                                                                                                                                                         
+// Children with no real playout visits (cv === 0) get a large bonus so they                                                                                                                                 
+// are always preferred over visited children.  RAVE (seeded with pattern                                                                                                                                    
+// priors) ranks them within the unvisited tier.                                                                                                                                                             
+// A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
+// guide early exploration without ever diluting the RAVE statistics.                                                                
 function raveScore(moveIdx, node) {
   const move   = node.legalMoves[moveIdx];
+  const realW  = node.wins[moveIdx];
   const realV  = node.visits[moveIdx];
-  const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
-  const prior  = move === PASS ? -PAT_PRIOR_WEIGHT : node.priorBonus[move];
+  const raveW  = move === PASS ? 0 : node.raveWins[move];
+  const raveV  = move === PASS ? 1 : node.raveVisits[move];
+  const raveWR = raveW / raveV;
+  const wr = (realW + raveWR * RAVE_EQUIV) / (realV + RAVE_EQUIV);
   if (realV < 1) {
-    return 10 + raveWR + prior + 0.001 * Math.random();
+    return 10 + wr + 0.001 * Math.random();
   }
-  const realWR = node.wins[moveIdx] / realV;
-  const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
   return 0.001 * Math.random() +
-    (1 - beta) * realWR + beta * raveWR +
-    prior / realV +
+    wr +
     EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
@@ -284,6 +249,17 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     return n.mover === null ? rootPlayer : (n.mover === BLACK ? WHITE : BLACK);
   }
 
+  function updateRave(node, won, played) {
+    const invPlayedCount = 1 / (1 + played.length)
+    let weight = 1;
+    for (let k = 0; k < played.length; k++) {
+      const move = played[k];
+      node.raveVisits[move] += weight;
+      node.raveWins[move] += won * weight;
+      weight -= invPlayedCount;
+    }
+  }
+
   // Update the unpromoted leaf child stats (if we stopped before descending).
   // Also update RAVE at this node so root's RAVE is populated even when no
   // deeper promoted nodes exist (e.g. N_EXPAND=9999).
@@ -296,10 +272,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     node.totalVisits++;
 
     const played = chooser === BLACK ? blackPlayed : whitePlayed;
-    for (let k = 0; k < played.length; k++) {
-      node.raveVisits[played[k]]++;
-      node.raveWins[played[k]] += won;
-    }
+    updateRave(node, won, played);
   }
 
   // Walk up the tree, updating each parent's child arrays and RAVE arrays.
@@ -314,10 +287,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     const chooser = childMover(node.parent);
     const played  = chooser === BLACK ? blackPlayed : whitePlayed;
     const rWon    = winner === chooser ? 1 : 0;
-    for (let k = 0; k < played.length; k++) {
-      node.parent.raveVisits[played[k]]++;
-      node.parent.raveWins[played[k]] += rWon;
-    }
+    updateRave(node.parent, rWon, played);
 
     node = node.parent;
   }

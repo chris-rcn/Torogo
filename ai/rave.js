@@ -1,17 +1,16 @@
 'use strict';
 
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
 
+(function () {
+
 /**
- * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
+ * RAVE (Rapid Action Value Estimation) MCTS policy.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
- *
- * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
- *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -22,18 +21,16 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const EXPLORATION_C = 1.4;
+const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 1.4);
+
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
 const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
-// Default weight for patterns absent from the training data.
-const DEFAULT_WEIGHT = 0;
-
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 5);
+const N_EXPAND = Util.envInt('N_EXPAND', 3);
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -160,24 +157,29 @@ function makeNode(move, parent, ci, mover, game2, N) {
     visits,  // Float32Array(M) — playout visits per child
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
-    raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; updated by rollouts
+    raveVisits
   };
 }
 
-// RAVE-blended UCT score for child index i of node.
-// Children with no real playout visits (cv === 0) get a large bonus so they
-// are always preferred over visited children.  RAVE ranks them within the unvisited tier.
+// RAVE-blended UCT score for child index i of node.                                                                                                                                                         
+// Children with no real playout visits (cv === 0) get a large bonus so they                                                                                                                                 
+// are always preferred over visited children.  RAVE (seeded with pattern                                                                                                                                    
+// priors) ranks them within the unvisited tier.                                                                                                                                                             
+// A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
+// guide early exploration without ever diluting the RAVE statistics.                                                                
 function raveScore(moveIdx, node) {
   const move   = node.legalMoves[moveIdx];
+  const realW  = node.wins[moveIdx];
   const realV  = node.visits[moveIdx];
-  const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
+  const raveW  = move === PASS ? 0 : node.raveWins[move];
+  const raveV  = move === PASS ? 1 : node.raveVisits[move];
+  const raveWR = raveW / raveV;
+  const wr = (realW + raveWR * RAVE_EQUIV) / (realV + RAVE_EQUIV);
   if (realV < 1) {
-    return 10 + raveWR + 0.001 * Math.random();
+    return 10 + wr + 0.001 * Math.random();
   }
-  const realWR = node.wins[moveIdx] / realV;
-  const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
   return 0.001 * Math.random() +
-    (1 - beta) * realWR + beta * raveWR +
+    wr +
     EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
@@ -247,6 +249,17 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     return n.mover === null ? rootPlayer : (n.mover === BLACK ? WHITE : BLACK);
   }
 
+  function updateRave(node, won, played) {
+    const invPlayedCount = 1 / (1 + played.length)
+    let weight = 1;
+    for (let k = 0; k < played.length; k++) {
+      const move = played[k];
+      node.raveVisits[move] += weight;
+      node.raveWins[move] += won * weight;
+      weight -= invPlayedCount;
+    }
+  }
+
   // Update the unpromoted leaf child stats (if we stopped before descending).
   // Also update RAVE at this node so root's RAVE is populated even when no
   // deeper promoted nodes exist (e.g. N_EXPAND=9999).
@@ -259,10 +272,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     node.totalVisits++;
 
     const played = chooser === BLACK ? blackPlayed : whitePlayed;
-    for (let k = 0; k < played.length; k++) {
-      node.raveVisits[played[k]]++;
-      node.raveWins[played[k]] += won;
-    }
+    updateRave(node, won, played);
   }
 
   // Walk up the tree, updating each parent's child arrays and RAVE arrays.
@@ -277,10 +287,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     const chooser = childMover(node.parent);
     const played  = chooser === BLACK ? blackPlayed : whitePlayed;
     const rWon    = winner === chooser ? 1 : 0;
-    for (let k = 0; k < played.length; k++) {
-      node.parent.raveVisits[played[k]]++;
-      node.parent.raveWins[played[k]] += rWon;
-    }
+    updateRave(node.parent, rWon, played);
 
     node = node.parent;
   }
@@ -349,3 +356,6 @@ function getMove(game, timeBudgetMs) {
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();

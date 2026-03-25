@@ -35,14 +35,14 @@ const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 0);
+const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 1);
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 3);
 
 // Whether to apply ladder priors.
 const LADDER = Util.envStr('LADDER', '1') !== '0';
-const PAT_DATA = Util.envStr('PAT_DATA', 'patterns-data.js');
+const PAT_DATA = Util.envStr('PAT_DATA', 'patdata.js');
 
 const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
 const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
@@ -165,14 +165,14 @@ function makeNode(move, parent, ci, mover, game2, N) {
 
   if (LADDER) {
     for (const { gid, color, status } of ladderStatuses) {
-      const groupSize = game2._ss[gid];
+      const groupSizeM1 = game2._ss[gid] - 1;
       const defending = color === game2.current;                                                                                                                                                     
       if (status.moverSucceeds) {
         let bonus;  // Applies to urgent moves only.
         if (defending) {                                                                                                                                                                         
-          bonus = 0 + 0.1 * groupSize;  // Do save the critical group.
+          bonus = 0 + 0.1 * groupSizeM1;  // Do save the critical group.
         } else {                                                                                                                                                                                 
-          bonus = 0 + 0.1 * groupSize;  // Do kill the critical group.
+          bonus = 0 + 0.1 * groupSizeM1;  // Do kill the critical group.
         }                                                                                        
         for (const lib of status.urgentLibs) {
           priorBonus[lib] += bonus;
@@ -180,10 +180,10 @@ function makeNode(move, parent, ci, mover, game2, N) {
       } else {
         let penalty;                                                                                                                                                                             
         if (defending) {                                                                                                                                                                         
-          penalty = 0 + 0.1 * groupSize;  // Don't extend doomed group.
+          penalty = 0 + 0.4 * groupSizeM1;  // Don't extend doomed group.
         } else {                                                                                                                                                                                 
-          penalty = 0 + 0.1 * groupSize;  // Don't chase escaping group.
-        }                                                                                        
+          penalty = 0 + 0.4 * groupSizeM1;  // Don't chase escaping group.
+        }
         for (const li of status.libs) {
           priorBonus[li] -= penalty;
         }

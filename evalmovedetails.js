@@ -88,7 +88,9 @@ for (let i = 0; i < lines.length; i++) {
   const agentStr  = coordStr(agentMoveToIdx(agentMove, boardSize), boardSize);
 
   const topCand   = candidates[0];
-  const agentCand = candidates.find(c => c.m === agentStr);
+  const _found = candidates.find(c => c.m === agentStr);
+  const _last  = candidates.findLast(c => c.kwr !== undefined);
+  const agentCand = (_found?.kwr !== undefined) ? _found : _last;
 
   const topWr   = topCand.kwr / 1000;
   const agentWr = agentCand.kwr / 1000;
