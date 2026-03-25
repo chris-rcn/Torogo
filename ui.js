@@ -413,7 +413,7 @@ function updateUI() {
   const whiteTotal = t.white;
   document.getElementById('black-score-display').textContent = `Black: ${blackTotal}`;
   document.getElementById('white-score-display').textContent = `White: ${whiteTotal} (komi=${KOMI})`;
-  document.getElementById('win-indicator').style.left = (lastRootWinRatio * 100).toFixed(1) + '%';
+  document.getElementById('win-indicator').style.left = ((1 - lastRootWinRatio) * 100).toFixed(1) + '%';
 
   // Three-section controls row
   const blackMsgEl = document.getElementById('black-msg');

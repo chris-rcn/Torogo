@@ -609,7 +609,7 @@ section('Board serialize/parse round-trip');
 // ─── Pattern symmetry ────────────────────────────────────────────────────────
 
 // Helpers shared by all pattern-symmetry sections.
-const { patternHash2 } = require('./patterns2.js');
+const { patternHash2 } = require('./pattern9.js');
 const { BLACK: _BLACK, WHITE: _WHITE } = require('./game2.js');
 
 // D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
@@ -2154,13 +2154,13 @@ section('Game3 random play/undo stress test');
 }
 
 
-// ─── patterns2.js ────────────────────────────────────────────────────────────
+// ─── pattern9.js ────────────────────────────────────────────────────────────
 
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const { patternHash2, patternHashes2 } = require('./patterns2.js');
+  const { patternHash2, patternHashes2 } = require('./pattern9.js');
 
-  section('patterns2: patternHash2 is deterministic');
+  section('pattern9: patternHash2 is deterministic');
   {
     const g = new Game(9);
     g.placeStone(4, 3);
@@ -2172,7 +2172,7 @@ section('Game3 random play/undo stress test');
     assert(typeof h1 === 'number' && h1 >= 0, 'hash is a non-negative number');
   }
 
-  section('patterns2: patternHash2 distinguishes different patterns');
+  section('pattern9: patternHash2 distinguishes different patterns');
   {
     // Empty cell surrounded only by friendly stones vs. only by enemy stones.
     const N = 5;
@@ -2194,7 +2194,7 @@ section('Game3 random play/undo stress test');
     assert(hEmpty !== hWithFriend, 'empty neighbourhood hash differs from neighbourhood with a friend');
   }
 
-  section('patterns2: patternHash2 is rotation/reflection invariant');
+  section('pattern9: patternHash2 is rotation/reflection invariant');
   {
     // Place a single black stone at different rotations of the same relative
     // position from the center of a 7×7 board; the hash of the empty center
@@ -2217,7 +2217,7 @@ section('Game3 random play/undo stress test');
     assert(allSame, `center hash is same regardless of which cardinal neighbour has a stone (${hashes.join(',')})`);
   }
 
-  section('patterns2: patternHashes2 is deterministic');
+  section('pattern9: patternHashes2 is deterministic');
   {
     const N = 9, center = 4 * N + 4;
     const g = new Game2(N, false);
@@ -2229,7 +2229,7 @@ section('Game3 random play/undo stress test');
     assert(typeof h1 === 'number' && h1 >= 0, 'pHash is a non-negative number');
   }
 
-  section('patterns2: patternHashes2 rotation invariance — 4 cardinal positions');
+  section('pattern9: patternHashes2 rotation invariance — 4 cardinal positions');
   {
     // A single mover stone placed N/E/S/W of center should all hash the same.
     const N = 9, center = 4 * N + 4;
@@ -2243,7 +2243,7 @@ section('Game3 random play/undo stress test');
       `all 4 cardinal positions hash the same (${hashes})`);
   }
 
-  section('patterns2: patternHashes2 rotation invariance — 4 diagonal positions');
+  section('pattern9: patternHashes2 rotation invariance — 4 diagonal positions');
   {
     // A single mover stone placed NW/NE/SE/SW of center should all hash the same.
     const N = 9, center = 4 * N + 4;
@@ -2257,7 +2257,7 @@ section('Game3 random play/undo stress test');
       `all 4 diagonal positions hash the same (${hashes})`);
   }
 
-  section('patterns2: patternHashes2 distinguishes cardinal from diagonal');
+  section('pattern9: patternHashes2 distinguishes cardinal from diagonal');
   {
     const N = 9, center = 4 * N + 4;
     const gCard = new Game2(N, false); gCard.cells[3*N+4] = BLACK; // N
@@ -2267,7 +2267,7 @@ section('Game3 random play/undo stress test');
     assert(hCard !== hDiag, 'cardinal and diagonal single-stone patterns hash differently');
   }
 
-  section('patterns2: patternHashes2 all 8 orientations of an asymmetric pattern');
+  section('pattern9: patternHashes2 all 8 orientations of an asymmetric pattern');
   {
     // L-shape: two mover stones at adjacent positions (N+NE) and all 7 rotations/reflections.
     // Each pair is a distinct D4 image of the same pattern.
@@ -2291,7 +2291,7 @@ section('Game3 random play/undo stress test');
       `all 8 orientations of L-shape hash the same (${hashes})`);
   }
 
-  section('patterns2: patternHashes2 mover vs opponent stone hash differently');
+  section('pattern9: patternHashes2 mover vs opponent stone hash differently');
   {
     const N = 9, center = 4 * N + 4, stone = 3*N+4; // stone north of center
     const gMover = new Game2(N, false); gMover.cells[stone] = BLACK; // BLACK = current = mover
@@ -2301,7 +2301,7 @@ section('Game3 random play/undo stress test');
     assert(hMover !== hOpp, 'mover stone and opponent stone hash differently');
   }
 
-  section('patterns2: patternHashes2 returns results in index order');
+  section('pattern9: patternHashes2 returns results in index order');
   {
     const N = 9;
     const g = new Game2(N, false);
@@ -2481,13 +2481,13 @@ section('calcScore winner and estimateWinner agree after random playouts');
   assert(disagree <= 10, 'calcScore and estimateWinner agree on winner in ≥95% of games');
 }
 
-// ─── patterns12.js ───────────────────────────────────────────────────────────
+// ─── pattern12.js ───────────────────────────────────────────────────────────
 
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const { patternHashes2 } = require('./patterns12.js');
+  const { patternHashes2 } = require('./pattern12.js');
 
-  section('patterns12: patternHashes2 is deterministic');
+  section('pattern12: patternHashes2 is deterministic');
   {
     const N = 9, center = 4 * N + 4;
     const g = new Game2(N, false);
@@ -2499,7 +2499,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
     assert(typeof h1 === 'number' && h1 >= 0, 'pHash is a non-negative number');
   }
 
-  section('patterns12: 4 cardinal arm positions hash the same');
+  section('pattern12: 4 cardinal arm positions hash the same');
   {
     // A stone at NN/EE/SS/WW (distance 2) should all hash the same.
     const N = 9, center = 4 * N + 4;
@@ -2513,7 +2513,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
       `all 4 arm positions hash the same (${hashes})`);
   }
 
-  section('patterns12: arm cell hashes differently from adjacent cardinal');
+  section('pattern12: arm cell hashes differently from adjacent cardinal');
   {
     const N = 9, center = 4 * N + 4;
     const gArm  = new Game2(N, false); gArm.cells[2*N+4]  = BLACK; // NN (arm)
@@ -2523,7 +2523,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
     assert(hArm !== hAdj, 'arm (distance-2) and adjacent (distance-1) cardinal positions hash differently');
   }
 
-  section('patterns12: 4 cardinal positions in 3×3 hash the same');
+  section('pattern12: 4 cardinal positions in 3×3 hash the same');
   {
     const N = 9, center = 4 * N + 4;
     const cardinals = [3*N+4, 4*N+5, 5*N+4, 4*N+3]; // N, E, S, W
@@ -2536,7 +2536,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
       `all 4 cardinal positions hash the same (${hashes})`);
   }
 
-  section('patterns12: 4 diagonal positions hash the same');
+  section('pattern12: 4 diagonal positions hash the same');
   {
     const N = 9, center = 4 * N + 4;
     const diagonals = [3*N+3, 3*N+5, 5*N+5, 5*N+3]; // NW, NE, SE, SW
@@ -2549,7 +2549,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
       `all 4 diagonal positions hash the same (${hashes})`);
   }
 
-  section('patterns12: cardinal and diagonal positions in 3×3 hash differently');
+  section('pattern12: cardinal and diagonal positions in 3×3 hash differently');
   {
     const N = 9, center = 4 * N + 4;
     const gCard = new Game2(N, false); gCard.cells[3*N+4] = BLACK; // N
@@ -2559,7 +2559,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
     assert(hCard !== hDiag, 'cardinal and diagonal single-stone patterns hash differently');
   }
 
-  section('patterns12: all 8 D4 orientations of arm+diagonal pattern hash the same');
+  section('pattern12: all 8 D4 orientations of arm+diagonal pattern hash the same');
   {
     // Pattern: one stone in arm position, one stone in adjacent diagonal.
     // NN+NE and all 7 D4 images must produce the same hash.
@@ -2585,7 +2585,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
       `all 8 D4 orientations of arm+diagonal pattern hash the same (${hashes})`);
   }
 
-  section('patterns12: mover vs opponent stone hash differently');
+  section('pattern12: mover vs opponent stone hash differently');
   {
     const N = 9, center = 4 * N + 4, stone = 2*N+4; // arm NN
     const gMover = new Game2(N, false); gMover.cells[stone] = BLACK;
@@ -2595,7 +2595,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
     assert(hMover !== hOpp, 'mover stone and opponent stone in arm position hash differently');
   }
 
-  section('patterns12: returns results in index order');
+  section('pattern12: returns results in index order');
   {
     const N = 9;
     const g = new Game2(N, false);

@@ -40,7 +40,7 @@ const PAT_PRIOR_WEIGHT = 1;
 const N_EXPAND = 3;
 const PAT_DATA = 'patdata.js';
 
-const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
+const _patternHashes2 = _isNode ? require('../pattern9.js').patternHashes2 : window.Pattern9.patternHashes2;
 const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────

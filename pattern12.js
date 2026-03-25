@@ -110,6 +110,6 @@ function patternHashes2(game2, indices, ladderStatuses) {
 
 const _exports = { patternHashes2 };
 if (typeof module !== 'undefined') module.exports = _exports;
-else window.Patterns12 = _exports;
+else window.Pattern12 = _exports;
 
 })();

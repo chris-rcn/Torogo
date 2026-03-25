@@ -21,13 +21,12 @@ if (args.includes('--help') || args.includes('-h')) {
 }
 
 const agentName = get('--agent');
-const budgetMs  = parseInt(get('--budget'), 10);
+const budgetMs  = parseInt(get('--budget', 2000), 10);
 const filePath  = get('--file');
 const verbose   = args.includes('--verbose');
 
 if (!filePath)              { console.error('--file is required'); process.exit(1); }
 if (!agentName)             { console.error('--agent is required'); process.exit(1); }
-if (!get('--budget'))               { console.error('--budget is required'); process.exit(1); }
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));

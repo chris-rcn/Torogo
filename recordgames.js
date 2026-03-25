@@ -22,10 +22,9 @@ const { Game2, PASS } = require('./game2.js');
 const args = process.argv.slice(2);
 const get = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const agentName = get('--agent',  'rave');
-if (!get('--size')) { console.error('--size is required'); process.exit(1); }
-const size      = parseInt(get('--size'),   10);
-const budget    = parseInt(get('--budget', '500'), 10);
+const agentName = get('--agent',  'production');
+const size      = parseInt(get('--size', 13),   10);
+const budget    = parseInt(get('--budget', '2000'), 10);
 const max       = parseInt(get('--max',    '0'),   10);
 
 const agent = require(`./ai/${agentName}.js`);

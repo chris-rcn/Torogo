@@ -19,10 +19,9 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-const agentName  = get('--agent',  'rave');
-const budget     = parseInt(get('--budget', '100'), 10);
-if (!get('--size')) { console.error('--size is required'); process.exit(1); }
-const boardSize  = parseInt(get('--size'),    10);
+const agentName  = get('--agent',  'production');
+const budget     = parseInt(get('--budget', '2000'), 10);
+const boardSize  = parseInt(get('--size', 13),    10);
 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }

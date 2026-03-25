@@ -10,8 +10,5 @@ Integrate ladder results into patterns.
 
 Pollute the global namespace less.
 
-UI slider bar for score.  
-Remove points value?
-
-Linear fade rave experience
+Generate new game/move datasets.
 

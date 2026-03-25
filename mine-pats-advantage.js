@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
-const { patternHashes2 } = require('./patterns2.js');
+const { patternHashes2 } = require('./pattern9.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };

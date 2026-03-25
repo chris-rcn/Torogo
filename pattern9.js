@@ -1,6 +1,6 @@
 'use strict';
 
-// patterns2.js — pattern recognition helpers for Game2 (integer-move engine).
+// pattern9.js — pattern recognition helpers for Game2 (integer-move engine).
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; ladder2.js must be loaded before this file.
 
@@ -80,31 +80,32 @@ function patternHashes2(game2, indices, ladderStatuses) {
   const cap   = N * N;
   const cells = game2.cells;
   const mover = game2.current;
-  const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
 
-  const moverSucceeds = new Int8Array(cap);
-  const urgent = new Int8Array(cap);
-  const wasted = new Int8Array(cap);
-  for (const { gid, color, status } of statuses) {
-    if (status.moverSucceeds) {
-      const urgencyFlag = status.urgentLibs.length > 0 ? 1 : 2;
-      for (const stone of game2.groupStones(gid)) {
-        moverSucceeds[stone] = urgencyFlag;
-      }
-      for (const lib of status.urgentLibs) {
-        urgent[lib]++;
-      }
-    } else {
-      for (const lib of status.libs) {
-        wasted[lib]++;
-      }
-    }
-  }
+//  const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
+//  const moverSucceeds = new Int8Array(cap);
+//  const urgent = new Int8Array(cap);
+//  const wasted = new Int8Array(cap);
+//  for (const { gid, color, status } of statuses) {
+//    if (status.moverSucceeds) {
+//      const urgencyFlag = status.urgentLibs.length > 0 ? 1 : 2;
+//      for (const stone of game2.groupStones(gid)) {
+//        moverSucceeds[stone] = urgencyFlag;
+//      }
+//      for (const lib of status.urgentLibs) {
+//        urgent[lib]++;
+//      }
+//    } else {
+//      for (const lib of status.libs) {
+//        wasted[lib]++;
+//      }
+//    }
+//  }
+
   const relativeColor = c => c === 0 ? 0 : (c === game2.current ? 1 : 2);
   const cellHash = new Int32Array(cap);
   for (let i = 0; i < cap; i++) {
-//    cellHash[i] = colorZ[relativeColor(cells[i])];
-    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]];
+    cellHash[i] = colorZ[relativeColor(cells[i])];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]];
 //    cellHash[i] = colorZ[relativeColor(cells[i])] ^ urgentZ[urgent[i]];
 //    cellHash[i] = colorZ[relativeColor(cells[i])] ^ wastedZ[wasted[i]];
 //    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]] ^ urgentZ[urgent[i]];
@@ -138,6 +139,6 @@ function patternHashes2(game2, indices, ladderStatuses) {
 
 const _exports = { patternHash2, patternHashes2 };
 if (typeof module !== 'undefined') module.exports = _exports;
-else window.Patterns2 = _exports;
+else window.Pattern9 = _exports;
 
 })();
