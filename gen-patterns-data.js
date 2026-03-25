@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// gen-patterns-data.js — generate patterns-data.js from a patterns CSV file.
-//
 // Usage:
-//   node gen-patterns-data.js --file <path/to/patterns.csv> > patterns-data.js
+//   node gen-patterns-data.js --file <path/to/patterns.csv> > patdata.js
 
 const fs   = require('fs');
 const path = require('path');
@@ -16,10 +14,11 @@ function flag(name) {
   return i !== -1 ? args[i + 1] : null;
 }
 
-const inputFile = flag('--file');
+const inputFile     = flag('--file');
+const minEncounters = parseInt(flag('--min-encounters') ?? '1', 10);
 
 if (!inputFile) {
-  console.error('Usage: node gen-patterns-data.js --file <patterns.csv>');
+  console.error('Usage: node gen-patterns-data.js --file <patterns.csv> [--min-encounters <n>]');
   process.exit(1);
 }
 
@@ -27,10 +26,12 @@ const lines = fs.readFileSync(inputFile, 'utf8').trim().split('\n');
 const entries = [];
 for (const line of lines) {
   if (!line.trim()) continue;
-  const [rawHash, rawRatio] = line.split(',');
-  const hash  = parseInt(rawHash, 10);
+  const [rawHash, rawRatio, rawCount] = line.split(',');
+  const hash  = parseInt(rawHash,  10);
   const ratio = parseFloat(rawRatio);
-  if (!Number.isNaN(hash) && !Number.isNaN(ratio)) entries.push([hash, ratio]);
+  const count = parseInt(rawCount, 10);
+  if (count >= minEncounters)
+    entries.push([hash, ratio]);
 }
 
 const body = entries.map(([h, r]) => `[${h},${r}]`).join(',');

@@ -499,7 +499,28 @@ class Game2 {
     return true;
   }
 
-  // ── Liberty query ─────────────────────────────────────────────────────────
+  // ── Stone / liberty queries ───────────────────────────────────────────────
+
+  // Returns an array of flat cell indices for every stone in the group with
+  // the given gid.
+  groupStones(gid) {
+    const W   = this._W;
+    const sw  = this._sw;
+    const cap = this.N * this.N;
+    const wb  = gid * W;
+    const out = [];
+    for (let wi = 0; wi < W; wi++) {
+      let w = sw[wb + wi];
+      while (w) {
+        const i = wi * 32 + (31 - Math.clz32(w & -w));
+        if (i < cap) out.push(i);
+        w &= w - 1;
+      }
+    }
+    return out;
+  }
+
+
 
   // Returns the liberty count of the group containing idx, plus the first two
   // liberty indices (lib0, lib1; -1 if absent).  Returns count=0 when idx is

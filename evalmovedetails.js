@@ -44,6 +44,30 @@ const startTime = performance.now();
 
 let gapSqSum = 0;
 
+let printPeriodMs  = 1000;
+let lastPrintTime  = startTime;
+let lastPrintCount = 0;
+
+const wCount = String(lines.length).length;
+
+function printStats(count) {
+  const elapsedMs = performance.now() - startTime;
+  const elapsed   = (elapsedMs / 1000).toFixed(1);
+  const tMoveMs   = (elapsedMs / count).toFixed(1);
+  const rmsErr    = Math.sqrt(gapSqSum / count);
+  console.log(`N=${String(count).padStart(wCount)} rmsErr=${rmsErr.toFixed(4)} elapsed=${elapsed}s tMoveMs=${tMoveMs} agent=${agentName}`);
+}
+
+function maybePrint(count) {
+  const now = performance.now();
+  if (now - lastPrintTime < printPeriodMs) return;
+  if (count === lastPrintCount) return;
+  lastPrintTime  = now;
+  lastPrintCount = count;
+  printStats(count);
+  printPeriodMs  = Math.round(printPeriodMs * 1.5);
+}
+
 if (verbose) {
   console.log(
     `${'hist'.padStart(4)}  ` +
@@ -74,6 +98,7 @@ for (let i = 0; i < lines.length; i++) {
   const fmtGap = g => g.toFixed(3);
 
   gapSqSum += gap * gap;
+  maybePrint(i + 1);
 
   if (verbose) console.log(
     `${String(history.length).padStart(4)}  ` +
@@ -83,9 +108,5 @@ for (let i = 0; i < lines.length; i++) {
   );
 }
 
-const gapRms = Math.sqrt(gapSqSum / lines.length);
-const elapsedMs = performance.now() - startTime;
-const elapsed = (elapsedMs / 1000).toFixed(1);
-const tMoveMs = (elapsedMs / lines.length).toFixed(1);
-console.log(`positions: ${lines.length}  elapsed: ${elapsed}s  tMoveMs: ${tMoveMs}  gapRms: ${gapRms.toFixed(4)}  agent: ${agentName}`);
+printStats(lines.length);
 

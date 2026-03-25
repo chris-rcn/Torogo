@@ -34,22 +34,15 @@ const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Total virtual visits contributed by the pattern prior across all children.
 const PAT_PRIOR_WEIGHT = Util.envFloat('PAT_PRIOR_WEIGHT', 0);
 
-// Default weight for patterns absent from the training data.
-const DEFAULT_WEIGHT = 0;
-
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 5);
+const N_EXPAND = Util.envInt('N_EXPAND', 3);
 
 // Whether to apply ladder priors.
 const LADDER = Util.envStr('LADDER', '1') !== '0';
 const PAT_DATA = Util.envStr('PAT_DATA', 'patterns-data.js');
 
-const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.Patterns2.patternHash2;
+const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
 const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
-function patternSelectionRatio(game2, idx) {
-  const hash = _patternHash2(game2, idx, game2.current);
-  return _patternTable.get(hash) ?? DEFAULT_WEIGHT;
-}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -165,8 +158,10 @@ function makeNode(move, parent, ci, mover, game2, N) {
   // playout statistics.  Applied as priorBonus[move] / (1 + child.visits).
   const priorBonus  = new Float32Array(N * N);
 
+  const ladderStatuses = getAllLadderStatuses(game2);
+
   if (LADDER) {
-    for (const { gid, color, status } of getAllLadderStatuses(game2)) {
+    for (const { gid, color, status } of ladderStatuses) {
       const groupSize = game2._ss[gid];
       const defending = color === game2.current;                                                                                                                                                     
       if (status.moverSucceeds) {
@@ -200,11 +195,14 @@ function makeNode(move, parent, ci, mover, game2, N) {
   if (PAT_PRIOR_WEIGHT > 0) {
     if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
     if (movesArr.length > 0) {
-      const ratios = movesArr.map(m => patternSelectionRatio(game2, m));
+      const hashes = _patternHashes2(game2, movesArr, ladderStatuses);
+      const ratios = hashes.map(({ pHash }) => _patternTable.get(pHash));
       const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
       const norm   = maxR > 0 ? 1 / maxR : 0;
       for (let k = 0; k < movesArr.length; k++) {
-        priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
+        if (ratios[k] !== undefined) {
+          priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
+        }
       }
     }
   }
@@ -239,7 +237,7 @@ function raveScore(moveIdx, node) {
   const move   = node.legalMoves[moveIdx];
   const realV  = node.visits[moveIdx];
   const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
-  const prior  = move === PASS ? 0 : node.priorBonus[move];
+  const prior  = move === PASS ? -PAT_PRIOR_WEIGHT : node.priorBonus[move];
   if (realV < 1) {
     return 10 + raveWR + prior + 0.001 * Math.random();
   }

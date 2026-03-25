@@ -24,9 +24,10 @@ function makeZobrist(seed, size) {
 // Size 9*3, indexed [pos*3 + cellCode].
 // cellCode 0 = empty, cellCode 1 = mover stone, 2 = opponent stone.
 const ZOBRIST = makeZobrist(0x12345678, 9 * 3);
-
-// XOR'd into the final hash when the ladder flag is urgent (ladderFlag > 1).
-const LADDER_ZOBRIST = makeZobrist(874245861, 5);
+const colorZ = makeZobrist(675425835, 3);
+const moverSucceedsZ = makeZobrist(763158854, 3);
+const urgentZ = makeZobrist(936265824, 5);
+const wastedZ = makeZobrist(785247856, 5);
 
 // The 8 symmetries of the square (dihedral group D4) as index permutations.
 const SYMMETRY_PERMS = [
@@ -54,10 +55,10 @@ function patternHash2(game2, idx, mover) {
   const cW =  (x - 1 + N) % N,       c0 = x,      cE =  (x + 1) % N;
 
   const cc = new Uint8Array(9);
-  const encode = c => c === 0 ? 0 : c === mover ? 1 : 2;
-  cc[0] = encode(cells[rN + cW]); cc[1] = encode(cells[rN + c0]); cc[2] = encode(cells[rN + cE]);
-  cc[3] = encode(cells[r0 + cW]); cc[4] = encode(cells[r0 + c0]); cc[5] = encode(cells[r0 + cE]);
-  cc[6] = encode(cells[rS + cW]); cc[7] = encode(cells[rS + c0]); cc[8] = encode(cells[rS + cE]);
+  const relativeColor = c => c === 0 ? 0 : c === mover ? 1 : 2;
+  cc[0] = relativeColor(cells[rN + cW]); cc[1] = relativeColor(cells[rN + c0]); cc[2] = relativeColor(cells[rN + cE]);
+  cc[3] = relativeColor(cells[r0 + cW]); cc[4] = relativeColor(cells[r0 + c0]); cc[5] = relativeColor(cells[r0 + cE]);
+  cc[6] = relativeColor(cells[rS + cW]); cc[7] = relativeColor(cells[rS + c0]); cc[8] = relativeColor(cells[rS + cE]);
 
   // Try all 8 symmetry transforms; keep the minimum Zobrist hash.
   let minHash = 0xFFFFFFFF;
@@ -77,23 +78,62 @@ function patternHash2(game2, idx, mover) {
 function patternHashes2(game2, indices, ladderStatuses) {
   const N     = game2.N;
   const cap   = N * N;
+  const cells = game2.cells;
   const mover = game2.current;
-
-  const ladderFlag = new Int32Array(cap);
   const statuses   = ladderStatuses ?? getAllLadderStatuses(game2);
 
-  // TODO: Ladder information that we want to include in the pattern:
-  // On each stone in a group:
-  // - Whether the group can reach 3 libs when the current player moves first.
-  // - Whether the group can reach 3 libs when the opponent player moves first.
-  // On open vertexes:
-  // - Whether the move is urgent for a neighbor group.
-
-  return indices.map(idx => {
-    const hash = patternHash2(game2, idx, mover);
-    const center = LADDER_ZOBRIST[ladderFlag[idx]];
-    return { idx, pHash: hash ^ center };
-  });
+  const moverSucceeds = new Int8Array(cap);
+  const urgent = new Int8Array(cap);
+  const wasted = new Int8Array(cap);
+  for (const { gid, color, status } of statuses) {
+    if (status.moverSucceeds) {
+      const urgencyFlag = status.urgentLibs.length > 0 ? 1 : 2;
+      for (const stone of game2.groupStones(gid)) {
+        moverSucceeds[stone] = urgencyFlag;
+      }
+      for (const lib of status.urgentLibs) {
+        urgent[lib]++;
+      }
+    } else {
+      for (const lib of status.libs) {
+        wasted[lib]++;
+      }
+    }
+  }
+  const relativeColor = c => c === 0 ? 0 : (c === game2.current ? 1 : 2);
+  const cellHash = new Int32Array(cap);
+  for (let i = 0; i < cap; i++) {
+//    cellHash[i] = colorZ[relativeColor(cells[i])];
+    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ urgentZ[urgent[i]];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ wastedZ[wasted[i]];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]] ^ urgentZ[urgent[i]];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]] ^ wastedZ[wasted[i]];
+//    cellHash[i] = colorZ[relativeColor(cells[i])] ^ moverSucceedsZ[moverSucceeds[i]] ^ urgentZ[urgent[i]] ^ wastedZ[wasted[i]];
+  }
+  const result = [];
+  for (let idx of indices) {
+    const x = idx % N;
+    const y = (idx / N) | 0;
+    const rN = ((y - 1 + N) % N) * N,  r0 = y * N,  rS = ((y + 1) % N) * N;
+    const cW =  (x - 1 + N) % N,       c0 = x,      cE =  (x + 1) % N;
+    const region = new Int32Array(9);
+    region[0] = cellHash[rN + cW]; region[1] = cellHash[rN + c0]; region[2] = cellHash[rN + cE];
+    region[3] = cellHash[r0 + cW]; region[4] = cellHash[r0 + c0]; region[5] = cellHash[r0 + cE];
+    region[6] = cellHash[rS + cW]; region[7] = cellHash[rS + c0]; region[8] = cellHash[rS + cE];
+    // Try all 8 symmetry transforms; keep the minimum hash.
+    let pHash = 0xFFFFFFFF;
+    for (const perm of SYMMETRY_PERMS) {
+      let h = 0;
+      for (let k = 0; k < 9; k++) {
+        h = (h<<3) ^ region[perm[k]];
+      }
+      h = h >>> 0;  // treat as unsigned uint32
+      if (h < pHash) pHash = h;
+    }
+    result.push({ idx, pHash });
+  }
+  return result;
 }
 
 const _exports = { patternHash2, patternHashes2 };

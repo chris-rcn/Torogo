@@ -2,7 +2,6 @@
 'use strict';
 
 // minepatterns2.js — mine 3×3 pattern statistics from recorded games.
-// Like minepatterns.js but uses Game2 and patternHash2 for speed.
 //
 // Usage: node minepatterns2.js --file <path>
 //   --file    path to game records produced by recordgames.js (required)
@@ -11,8 +10,8 @@
 //   <hash>,<selection_ratio>,<seen_count>
 
 const fs = require('fs');
-const { Game2, WHITE } = require('./game2.js');
-const { patternHash2 } = require('./patterns2.js');
+const { Game2, BLACK, WHITE } = require('./game2.js');
+const { patternHashes2 } = require('./patterns2.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -26,7 +25,7 @@ if (!file) {
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
 
-// Map from patternHash2 → { seen: number, selected: number }
+// Map from pHash → { seen: number, selected: number }
 const stats = new Map();
 
 function bump(hash, selected) {
@@ -39,16 +38,31 @@ function bump(hash, selected) {
 for (let gi = 0; gi < lines.length; gi++) {
   const fields = lines[gi].split(',');
   const size   = parseInt(fields[0], 10);
-  const moves  = fields.slice(1);
   const N      = size;
   const cap    = N * N;
 
+  const lastField = fields[fields.length - 1];
+  const hasWinner = lastField === 'b' || lastField === 'w';
+  const moves     = hasWinner ? fields.slice(1, -1) : fields.slice(1);
+
+  // Use the pre-computed winner if present; otherwise replay pass 1 to compute it.
+  let winner;
+  if (hasWinner) {
+    winner = lastField === 'b' ? BLACK : WHITE;
+  } else {
+    const g = new Game2(size);
+    for (let mi = 1; mi < moves.length; mi++) {
+      const token = moves[mi];
+      if (token === '..') { g.play(-1); continue; }
+      const mx = token.charCodeAt(0) - 97;
+      const my = token.charCodeAt(1) - 97;
+      g.play(my * N + mx);
+    }
+    winner = g.calcWinner();
+  }
+
+  // Pass 2: replay and extract patterns for winner's moves only.
   const g = new Game2(size);
-
-  // Collect per-move data; defer bumping until the winner is known.
-  const gameMoves = [];
-
-  // moves[0] is already placed by the constructor; process from moves[1] onward.
   for (let mi = 1; mi < moves.length; mi++) {
     const token = moves[mi];
     if (token === '..') { g.play(-1); continue; }
@@ -56,36 +70,31 @@ for (let gi = 0; gi < lines.length; gi++) {
     const color = g.current;
     const mx    = token.charCodeAt(0) - 97;
     const my    = token.charCodeAt(1) - 97;
-    const midx  = my * N + mx;
+    const selected = my * N + mx;
 
-    // Enumerate all legal non-true-eye candidates (excluding the selected move).
-    const others = [];
-    for (let i = 0; i < cap; i++) {
-      if (i === midx) continue;
-      if (g.cells[i] !== 0) continue;
-      if (g.isTrueEye(i)) continue;
-      if (!g.isLegal(i)) continue;
-      others.push(patternHash2(g, i, color));
+    if (color === winner) {
+      if (g.cells[selected] !== 0)
+        process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is occupied\n`);
+      else if (g.isTrueEye(selected))
+        process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is a true eye\n`);
+      else if (!g.isLegal(selected))
+        process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is illegal\n`);
+
+      const nonSelected = [];
+      for (let i = 0; i < cap; i++) {
+        if (i === selected) continue;
+        if (g.cells[i] !== 0) continue;
+        if (g.isTrueEye(i)) continue;
+        if (!g.isLegal(i)) continue;
+        nonSelected.push(i);
+      }
+
+      const hashes = patternHashes2(g, [selected, ...nonSelected]);
+      bump(hashes[0].pHash, true);
+      for (let i = 1; i < hashes.length; i++) bump(hashes[i].pHash, false);
     }
 
-    if (g.cells[midx] !== 0)
-      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is occupied\n`);
-    else if (g.isTrueEye(midx))
-      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is a true eye\n`);
-    else if (!g.isLegal(midx))
-      process.stderr.write(`WARNING: game ${gi + 1} move ${mi + 1}: selected move ${token} is illegal\n`);
-
-    const selHash = patternHash2(g, midx, color);
-    gameMoves.push({ color, selHash, others });
-
-    g.play(midx);
-  }
-
-  const winner = g.calcWinner();
-
-  for (const { turn, selectedMoveHash, others } of gameMoves) {
-    bump(selectedMoveHash, true);
-    for (const otherMove of others) bump(otherMove, false);
+    g.play(selected);
   }
 }
 

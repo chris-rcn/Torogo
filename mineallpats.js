@@ -1,12 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-// minepatternsB2.js — mine 3×3 pattern value statistics from createmovedetails output.
-// Like minepatternsB.js but uses Game2 and patternHash2 for speed.
-//
-// Usage: node minepatternsB2.js --file <path>
-//   --file  path to newline-delimited JSON produced by createmovedetails.js (required)
-//
 // For every position in the input file, for every legal non-true-eye candidate
 // move (excluding pass), the pattern value sample is computed as:
 //
@@ -19,7 +13,7 @@
 
 const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
-const { patternHash2 } = require('./patterns2.js');
+const { patternHashes2 } = require('./patterns2.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -33,7 +27,7 @@ if (!file) {
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
 
-// Map from patternHash2 → { sum: number, count: number }
+// Map from patternHashes2 → { sum: number, count: number }
 const stats = new Map();
 
 function addSample(hash, value) {
@@ -68,18 +62,19 @@ for (const line of lines) {
     game.play(parseMove(m, boardSize));
   }
 
-  // Record a sample for every non-pass, non-true-eye candidate.
+  // Collect valid candidates, then batch-hash them.
+  const valid = [];
   for (const raw of candidates) {
     const c = normalise(raw);
-    if (c.m === 'pass') continue;
-    if (c.kwr == null) continue;
-
+    if (c.m === 'pass' || c.kwr == null) continue;
     const idx = parseMove(c.m, boardSize);
     if (game.isTrueEye(idx)) continue;
+    valid.push({ idx, value: (c.kwr - passKwr) / 1000 });
+  }
 
-    const hash  = patternHash2(game, idx, game.current);
-    const value = (c.kwr - passKwr) / 1000;
-    addSample(hash, value);
+  const hashes = patternHashes2(game, valid.map(c => c.idx));
+  for (let i = 0; i < hashes.length; i++) {
+    addSample(hashes[i].pHash, valid[i].value);
   }
 }
 

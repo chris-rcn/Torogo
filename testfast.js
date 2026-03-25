@@ -1345,6 +1345,79 @@ section('Game2.clone: gameOver propagates correctly');
   assert(c.consecutivePasses === g.consecutivePasses, 'clone inherits consecutivePasses');
 }
 
+// ─── Game2.groupStones ───────────────────────────────────────────────────────
+
+section('Game2.groupStones: single stone');
+{
+  const { Game2, BLACK } = require('./game2.js');
+  const N = 9, g = new Game2(N);
+  const idx = 4 * N + 4; // center (placed by constructor)
+  const gid = g._gid[idx];
+  const stones = g.groupStones(gid);
+  assert(stones.length === 1, 'single stone group has 1 stone');
+  assert(stones[0] === idx, 'the stone is at the correct index');
+}
+
+section('Game2.groupStones: connected group');
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const N = 9, g = new Game2(N);
+  // Constructor places BLACK at center (4,4). Play WHITE somewhere far away,
+  // then extend the BLACK group by playing at (4,5) and (4,3).
+  g.play(0);           // WHITE at (0,0)
+  g.play(4 * N + 5);   // BLACK at (4,5)
+  g.play(0 * N + 1);   // WHITE at (1,0)
+  g.play(4 * N + 3);   // BLACK at (4,3)
+  const gid = g._gid[4 * N + 4];
+  const stones = g.groupStones(gid);
+  const stoneSet = new Set(stones);
+  assert(stones.length === 3, 'connected group has 3 stones');
+  assert(stoneSet.has(4 * N + 4), 'contains (4,4)');
+  assert(stoneSet.has(4 * N + 5), 'contains (4,5)');
+  assert(stoneSet.has(4 * N + 3), 'contains (4,3)');
+}
+
+section('Game2.groupStones: count matches _ss');
+{
+  const { Game2 } = require('./game2.js');
+  const N = 9, g = new Game2(N);
+  g.play(0); g.play(4 * N + 5); g.play(0 * N + 1); g.play(4 * N + 3);
+  // Check every occupied cell's group.
+  const cap = N * N;
+  const checked = new Set();
+  for (let i = 0; i < cap; i++) {
+    if (g.cells[i] === 0) continue;
+    const gid = g._gid[i];
+    if (checked.has(gid)) continue;
+    checked.add(gid);
+    const stones = g.groupStones(gid);
+    assert(stones.length === g._ss[gid], `groupStones length matches _ss for gid ${gid}`);
+    for (const s of stones) {
+      assert(g._gid[s] === gid, `each returned stone belongs to the group`);
+      assert(g.cells[s] !== 0, `each returned stone is occupied`);
+    }
+  }
+}
+
+section('Game2.groupStones: all stones belong to the correct color');
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const N = 9, g = new Game2(N);
+  g.play(0); g.play(4 * N + 5); g.play(0 * N + 1); g.play(4 * N + 3);
+  const cap = N * N;
+  const seen = new Set();
+  for (let i = 0; i < cap; i++) {
+    if (g.cells[i] === 0) continue;
+    const gid = g._gid[i];
+    if (seen.has(gid)) continue;
+    seen.add(gid);
+    const color = g.cells[i];
+    for (const s of g.groupStones(gid)) {
+      assert(g.cells[s] === color, 'all stones in group share the same color');
+    }
+  }
+}
+
 // ─── getLadderStatus2 ────────────────────────────────────────────────────────
 // stoneIdx = y * N + x.
 
@@ -2145,6 +2218,103 @@ section('Game3 random play/undo stress test');
     });
     const allSame = hashes.every(h => h === hashes[0]);
     assert(allSame, `center hash is same regardless of which cardinal neighbour has a stone (${hashes.join(',')})`);
+  }
+
+  section('patterns2: patternHashes2 is deterministic');
+  {
+    const N = 9, center = 4 * N + 4;
+    const g = new Game2(N, false);
+    g.cells[3 * N + 4] = BLACK;
+    g.cells[4 * N + 5] = WHITE;
+    const h1 = patternHashes2(g, [center])[0].pHash;
+    const h2 = patternHashes2(g, [center])[0].pHash;
+    assert(h1 === h2, 'patternHashes2 returns same hash on repeated calls');
+    assert(typeof h1 === 'number' && h1 >= 0, 'pHash is a non-negative number');
+  }
+
+  section('patterns2: patternHashes2 rotation invariance — 4 cardinal positions');
+  {
+    // A single mover stone placed N/E/S/W of center should all hash the same.
+    const N = 9, center = 4 * N + 4;
+    const cardinals = [3*N+4, 4*N+5, 5*N+4, 4*N+3]; // N, E, S, W
+    const hashes = cardinals.map(stone => {
+      const g = new Game2(N, false);
+      g.cells[stone] = BLACK; // BLACK === game2.current, so encoded as mover
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 4 cardinal positions hash the same (${hashes})`);
+  }
+
+  section('patterns2: patternHashes2 rotation invariance — 4 diagonal positions');
+  {
+    // A single mover stone placed NW/NE/SE/SW of center should all hash the same.
+    const N = 9, center = 4 * N + 4;
+    const diagonals = [3*N+3, 3*N+5, 5*N+5, 5*N+3]; // NW, NE, SE, SW
+    const hashes = diagonals.map(stone => {
+      const g = new Game2(N, false);
+      g.cells[stone] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 4 diagonal positions hash the same (${hashes})`);
+  }
+
+  section('patterns2: patternHashes2 distinguishes cardinal from diagonal');
+  {
+    const N = 9, center = 4 * N + 4;
+    const gCard = new Game2(N, false); gCard.cells[3*N+4] = BLACK; // N
+    const gDiag = new Game2(N, false); gDiag.cells[3*N+3] = BLACK; // NW
+    const hCard = patternHashes2(gCard, [center])[0].pHash;
+    const hDiag = patternHashes2(gDiag, [center])[0].pHash;
+    assert(hCard !== hDiag, 'cardinal and diagonal single-stone patterns hash differently');
+  }
+
+  section('patterns2: patternHashes2 all 8 orientations of an asymmetric pattern');
+  {
+    // L-shape: two mover stones at adjacent positions (N+NE) and all 7 rotations/reflections.
+    // Each pair is a distinct D4 image of the same pattern.
+    const N = 9, center = 4 * N + 4;
+    const orientations = [
+      [3*N+4, 3*N+5], // N  + NE  (identity)
+      [4*N+5, 5*N+5], // E  + SE  (90° CW)
+      [5*N+4, 5*N+3], // S  + SW  (180°)
+      [4*N+3, 3*N+3], // W  + NW  (270° CW)
+      [3*N+4, 3*N+3], // N  + NW  (reflect horizontal)
+      [5*N+4, 5*N+5], // S  + SE  (reflect vertical)
+      [4*N+3, 5*N+3], // W  + SW  (reflect main diagonal)
+      [4*N+5, 3*N+5], // E  + NE  (reflect anti-diagonal)
+    ];
+    const hashes = orientations.map(pair => {
+      const g = new Game2(N, false);
+      for (const idx of pair) g.cells[idx] = BLACK;
+      return patternHashes2(g, [center])[0].pHash;
+    });
+    assert(hashes.every(h => h === hashes[0]),
+      `all 8 orientations of L-shape hash the same (${hashes})`);
+  }
+
+  section('patterns2: patternHashes2 mover vs opponent stone hash differently');
+  {
+    const N = 9, center = 4 * N + 4, stone = 3*N+4; // stone north of center
+    const gMover = new Game2(N, false); gMover.cells[stone] = BLACK; // BLACK = current = mover
+    const gOpp   = new Game2(N, false); gOpp.cells[stone]   = WHITE; // WHITE = opponent
+    const hMover = patternHashes2(gMover, [center])[0].pHash;
+    const hOpp   = patternHashes2(gOpp,   [center])[0].pHash;
+    assert(hMover !== hOpp, 'mover stone and opponent stone hash differently');
+  }
+
+  section('patterns2: patternHashes2 returns results in index order');
+  {
+    const N = 9;
+    const g = new Game2(N, false);
+    g.cells[3*N+4] = BLACK;
+    const indices = [4*N+3, 4*N+4, 4*N+5];
+    const result = patternHashes2(g, indices);
+    assert(result.length === 3, 'result length matches indices length');
+    for (let i = 0; i < indices.length; i++) {
+      assert(result[i].idx === indices[i], `result[${i}].idx matches input index`);
+    }
   }
 
 }

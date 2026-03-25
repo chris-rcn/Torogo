@@ -3,14 +3,12 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
 
-(function() {
-
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
- * Priors (pattern) are computed once at node creation time.
+ * Priors (ladder + pattern) are computed once at node creation time.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
@@ -35,18 +33,12 @@ const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Total virtual visits contributed by the pattern prior across all children.
 const PAT_PRIOR_WEIGHT = 1;
 
-// Default weight for patterns absent from the training data.
-const DEFAULT_WEIGHT = 0;
-
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = 5;
+const N_EXPAND = 3;
+const PAT_DATA = 'patdata.js';
 
-const _patternHash2 = _isNode ? require('../patterns2.js').patternHash2 : window.Patterns2.patternHash2;
-const _patternTable = _isNode ? require('../patterns-data.js') : window.patternTable;
-function patternSelectionRatio(game2, idx) {
-  const hash = _patternHash2(game2, idx, game2.current);
-  return _patternTable.get(hash) ?? DEFAULT_WEIGHT;
-}
+const _patternHashes2 = _isNode ? require('../patterns2.js').patternHashes2 : window.Patterns2.patternHashes2;
+const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -169,11 +161,14 @@ function makeNode(move, parent, ci, mover, game2, N) {
   if (PAT_PRIOR_WEIGHT > 0) {
     if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
     if (movesArr.length > 0) {
-      const ratios = movesArr.map(m => patternSelectionRatio(game2, m));
+      const hashes = _patternHashes2(game2, movesArr);
+      const ratios = hashes.map(({ pHash }) => _patternTable.get(pHash));
       const maxR   = ratios.reduce((mx, r) => r > mx ? r : mx, 0);
       const norm   = maxR > 0 ? 1 / maxR : 0;
       for (let k = 0; k < movesArr.length; k++) {
-        priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
+        if (ratios[k] !== undefined) {
+          priorBonus[movesArr[k]] += (ratios[k] * norm - 0.5) * PAT_PRIOR_WEIGHT;
+        }
       }
     }
   }
@@ -208,7 +203,7 @@ function raveScore(moveIdx, node) {
   const move   = node.legalMoves[moveIdx];
   const realV  = node.visits[moveIdx];
   const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
-  const prior  = move === PASS ? 0 : node.priorBonus[move];
+  const prior  = move === PASS ? -PAT_PRIOR_WEIGHT : node.priorBonus[move];
   if (realV < 1) {
     return 10 + raveWR + prior + 0.001 * Math.random();
   }
@@ -388,6 +383,3 @@ function getMove(game, timeBudgetMs) {
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
-else window.getMove = getMove;
-
-})();
