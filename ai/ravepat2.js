@@ -1,7 +1,10 @@
 'use strict';
 
 // BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
 // Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
 
 /**
  * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
@@ -383,3 +386,6 @@ function getMove(game, timeBudgetMs) {
 }
 
 if (typeof module !== 'undefined') module.exports = getMove;
+else window.getMove = getMove;
+
+})();
