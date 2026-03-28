@@ -23,11 +23,14 @@ function makeZobrist(seed, size) {
 
 // Size 9*3, indexed [pos*3 + cellCode].
 // cellCode 0 = empty, cellCode 1 = mover stone, 2 = opponent stone.
-const ZOBRIST = makeZobrist(0x12345678, 9 * 3);
+const ZOBRIST = makeZobrist(259752658, 9 * 3);
 const colorZ = makeZobrist(675425835, 3);
 const moverSucceedsZ = makeZobrist(763158854, 3);
 const urgentZ = makeZobrist(936265824, 5);
 const wastedZ = makeZobrist(785247856, 5);
+// Center-cell atari flags: an orthogonally adjacent friendly/enemy group has exactly 1 liberty.
+const friendAtariZ = makeZobrist(966278351, 2);
+const enemyAtariZ  = makeZobrist(179872158, 2);
 
 // The 8 symmetries of the square (dihedral group D4) as index permutations.
 const SYMMETRY_PERMS = [
@@ -60,6 +63,23 @@ function patternHash2(game2, idx, mover) {
   cc[3] = relativeColor(cells[r0 + cW]); cc[4] = relativeColor(cells[r0 + c0]); cc[5] = relativeColor(cells[r0 + cE]);
   cc[6] = relativeColor(cells[rS + cW]); cc[7] = relativeColor(cells[rS + c0]); cc[8] = relativeColor(cells[rS + cE]);
 
+  // Adjacent-to-center atari flags (D4-invariant: center and its 4 neighbors are preserved).
+  let friendAtari = 0, enemyAtari = 0;
+  const nbr4 = game2._nbr;
+  const gids = game2._gid;
+  const ls   = game2._ls;
+  const base = idx * 4;
+  for (let d = 0; d < 4; d++) {
+    const nb = nbr4[base + d];
+    const nc = cells[nb];
+    if (nc === 0) continue;
+    if (ls[gids[nb]] === 1) {
+      if (nc === mover) friendAtari = 1;
+      else              enemyAtari  = 1;
+    }
+  }
+  const atariZ = friendAtariZ[friendAtari] ^ enemyAtariZ[enemyAtari];
+
   // Try all 8 symmetry transforms; keep the minimum Zobrist hash.
   let minHash = 0xFFFFFFFF;
   for (const perm of SYMMETRY_PERMS) {
@@ -67,7 +87,7 @@ function patternHash2(game2, idx, mover) {
     for (let k = 0; k < 9; k++) {
       h ^= ZOBRIST[k * 3 + cc[perm[k]]];
     }
-    h = h >>> 0;  // treat as unsigned uint32
+    h = (h ^ atariZ) >>> 0;  // treat as unsigned uint32
     if (h < minHash) minHash = h;
   }
   return minHash;

@@ -6,7 +6,9 @@
 //   new Game2(size)
 //   game.play(move)     → true/false
 //   game.isLegal(move)  → boolean (non-mutating)
-//   game.isTrueEye(idx) → boolean for game.current
+//   game.isTrueEye(idx)       → boolean for game.current
+//   game.randomLegalMove()    → idx or PASS  (uniform random non-eye legal move)
+//   game.emptyCount     number of empty cells (updated incrementally)
 //   game.gameOver       boolean
 //   game.current        BLACK | WHITE
 //   game.cells          Int8Array  (read-only)
@@ -84,6 +86,7 @@ class Game2 {
     this.gameOver = false;
     this.moveCount = 0;
     this.lastMove = PASS;
+    this.emptyCount = N * N;
 
     if (applyFirstMove) {
       const center = (N >> 1) * N + (N >> 1);
@@ -110,6 +113,7 @@ class Game2 {
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.moveCount = 0;
+    this.emptyCount = this.N * this.N;
     const center = (this.N >> 1) * this.N + (this.N >> 1);
     this._place(center, BLACK);
     this.current   = WHITE;
@@ -130,6 +134,7 @@ class Game2 {
     const ss     = this._ss;
 
     cells[idx] = color;
+    this.emptyCount--;
 
     // Remove idx from liberties of adjacent groups
     let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
@@ -280,6 +285,7 @@ class Game2 {
         w &= w - 1;
       }
     }
+    this.emptyCount += count;
     return count;
   }
 
@@ -428,7 +434,11 @@ class Game2 {
   // ── Main move interface ────────────────────────────────────────────────────
 
   play(idx) {
-    if (this.gameOver) return false;
+    return this.playInfo(idx).success;
+  }
+
+  playInfo(idx) {
+    if (this.gameOver) return { success: false };
     const color = this.current;
     const opp   = 3 - color;
 
@@ -439,10 +449,10 @@ class Game2 {
       this.ko = PASS;
       this.moveCount++;
       this.lastMove = PASS;
-      return true;
+      return { success: true };
     }
 
-    if (!this.isLegal(idx)) return false;
+    if (!this.isLegal(idx)) return { success: false };
 
     this._place(idx, color);
 
@@ -496,7 +506,7 @@ class Game2 {
     this.moveCount++;
     this.lastMove = idx;
     if (this.moveCount >= 4 * this.N * this.N) this.gameOver = true;
-    return true;
+    return { capturedCount, success: true };
   }
 
   // ── Stone / liberty queries ───────────────────────────────────────────────
@@ -552,21 +562,34 @@ class Game2 {
 
   // ── Display ───────────────────────────────────────────────────────────────
 
-  // Render the board as a ● ○ · string.  Optional lastMove index marks that
+  // Render the board as a ● ○ · string.  Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
-  toString(lastMove = this.lastMove) {
+  toString(markIdx = this.lastMove, { centerAt = null } = {}) {
     const N = this.N;
     const cells = this.cells;
-    const markX = (lastMove !== PASS) ? lastMove % N : -1;
-    const markY = (lastMove !== PASS) ? (lastMove / N | 0) : -1;
+    const markX = (markIdx !== PASS) ? markIdx % N : -1;
+    const markY = (markIdx !== PASS) ? (markIdx / N | 0) : -1;
+
+    const half = (N / 2) | 0;
+    const x0 = (centerAt !== null && centerAt !== PASS)
+      ? ((centerAt % N) - half + N) % N : 0;
+    const y0 = (centerAt !== null && centerAt !== PASS)
+      ? (((centerAt / N) | 0) - half + N) % N : 0;
+
+    // Convert board-space mark to display-space coordinates.
+    const dmx = markX >= 0 ? (markX - x0 + N) % N : -1;
+    const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
+
     const rows = [];
-    for (let y = 0; y < N; y++) {
-      const mx = (y === markY) ? markX : -1;
+    for (let dy = 0; dy < N; dy++) {
+      const by = (y0 + dy) % N;
+      const mx = (dy === dmy) ? dmx : -1;
       let row = (mx === 0) ? '(' : ' ';
-      for (let x = 0; x < N; x++) {
-        const c = cells[y * N + x];
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const c = cells[by * N + bx];
         const ch = c === BLACK ? '●' : c === WHITE ? '○' : '·';
-        if (x > 0) row += (x === mx) ? '(' : (x - 1 === mx) ? ')' : ' ';
+        if (dx > 0) row += (dx === mx) ? '(' : (dx - 1 === mx) ? ')' : ' ';
         row += ch;
       }
       row += (mx === N - 1) ? ')' : ' ';
@@ -599,6 +622,7 @@ class Game2 {
     g.gameOver          = this.gameOver;
     g.moveCount         = this.moveCount;
     g.lastMove          = this.lastMove;
+    g.emptyCount        = this.emptyCount;
     return g;
   }
 
@@ -646,6 +670,30 @@ class Game2 {
   calcWinner() {
     const sc = this.calcScore();
     return sc.black > sc.white ? BLACK : sc.white > sc.black ? WHITE : null;
+  }
+
+  // Returns a uniform random legal non-true-eye move, or PASS if none exists.
+  // Fast path: try up to 10 random cells.  Fallback: collect all empty cells
+  // then incrementally shuffle (Fisher-Yates) until a valid move is found.
+  randomLegalMove() {
+    const cap   = this.N * this.N;
+
+    // Fast path: try random cells.
+    for (let i = 0; i < 15; i++) {
+      const idx = Math.floor(Math.random() * cap);
+      if (this.isLegal(idx) && !this.isTrueEye(idx)) return idx;
+    }
+
+    // Fallback: collect empty cells, incrementally shuffle, test each.
+    const empty = [];
+    for (let i = 0; i < cap; i++) if (this.cells[i] === 0) empty.push(i);
+    for (let end = empty.length - 1; end >= 0; end--) {
+      const ri  = Math.floor(Math.random() * (end + 1));
+      const idx = empty[ri];
+      if (this.isLegal(idx) && !this.isTrueEye(idx)) return idx;
+      empty[ri] = empty[end];
+    }
+    return PASS;
   }
 
   // Fast 1-step area estimate.  Returns 'black', 'white', or null.

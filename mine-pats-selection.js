@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 const { Game2, BLACK, WHITE } = require('./game2.js');
-const { patternHashes2 } = require('./pattern12.js');
+const { patternHashes2 } = require('./pattern9.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };

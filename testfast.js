@@ -286,7 +286,7 @@ section('Game clone');
 
 section('Clone divergence (independent futures)');
 {
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   let ok = true;
 
   for (let trial = 0; trial < 10; trial++) {
@@ -344,7 +344,7 @@ section('Territory calculation');
 
 section('Territory scoring makes sense');
 {
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   let ok = true;
 
   for (let i = 0; i < 10; i++) {
@@ -419,8 +419,8 @@ section('Move count auto-end');
 
 section('Random vs random roughly even (5x5, 20 games)');
 {
-  const p1 = require('./ai/random.js');
-  const p2 = require('./ai/random.js');
+  const { getMove: p1 } = require('./ai/random.js');
+  const { getMove: p2 } = require('./ai/random.js');
   let p1Wins = 0, p2Wins = 0;
 
   for (let i = 0; i < 20; i++) {
@@ -448,7 +448,7 @@ section('Random vs random roughly even (5x5, 20 games)');
 
 section('Random agent');
 {
-  const randomAgent = require('./ai/random.js');
+  const { getMove: randomAgent } = require('./ai/random.js');
   const g = new Game(7);
   const move = randomAgent(g);
   assert(move.type === 'place' || move.type === 'pass', 'random returns valid move type');
@@ -468,7 +468,7 @@ section('Random agent');
 
 section('MC agent');
 {
-  const mc = require('./ai/mc.js');
+  const { getMove: mc } = require('./ai/mc.js');
   const g = new Game(7);
   const move = mc(g, 50); // very short budget
   assert(move.type === 'place' || move.type === 'pass', 'mc returns valid move');
@@ -483,7 +483,7 @@ section('MC agent');
 
 section('MCTS agent');
 {
-  const mcts = require('./ai/mcts.js');
+  const { getMove: mcts } = require('./ai/mcts.js');
   const g = new Game(7);
   const move = mcts(g, 50);
   assert(move.type === 'place' || move.type === 'pass', 'mcts returns valid move');
@@ -497,7 +497,7 @@ section('MCTS agent');
 
 section('AMAF agent');
 {
-  const amaf = require('./ai/amaf.js');
+  const { getMove: amaf } = require('./ai/amaf.js');
   const g = new Game(7);
   const move = amaf(g, 50);
   assert(move.type === 'place' || move.type === 'pass', 'amaf returns valid move');
@@ -518,7 +518,7 @@ section('Group tracker verification');
   let ok = true;
   try {
     for (let i = 0; i < 20; i++) {
-      const random = require('./ai/random.js');
+      const { getMove: random } = require('./ai/random.js');
       const move = random(g);
       if (move.type === 'place') g.placeStone(move.x, move.y);
       else g.pass();
@@ -537,7 +537,7 @@ section('Group tracker verification');
 section('classifyEmpty matches isTrueEye on random board');
 {
   const g = new Game(7);
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   // Play some random moves
   for (let i = 0; i < 15 && !g.gameOver; i++) {
     const move = random(g);
@@ -588,7 +588,7 @@ section('Board serialize/parse round-trip');
 {
   const { parseBoard, boardTurnToString } = require('./game.js');
   const g = new Game(7);
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   for (let i = 0; i < 10 && !g.gameOver; i++) {
     const move = random(g);
     if (move.type === 'place') g.placeStone(move.x, move.y);
@@ -2616,8 +2616,8 @@ section('RAVE vs passer: game ends quickly');
   // Passer always passes; after passer's first pass RAVE sees consecutivePasses=1
   // and the obvious-pass check fires immediately (already winning), so the game
   // ends in just a few moves.
-  const raveAgent = require('./ai/rave.js');
-  const passerAgent = require('./ai/passer.js');
+  const { getMove: raveAgent } = require('./ai/rave.js');
+  const { getMove: passerAgent } = require('./ai/passer.js');
   const N = 7;
   const g = new Game2(N);
   let moves = 0;
@@ -2631,6 +2631,56 @@ section('RAVE vs passer: game ends quickly');
   }
   assert(g.gameOver, `rave vs passer: game terminated (moves=${moves})`);
   assert(moves <= 10, `rave vs passer: ended quickly (moves=${moves})`);
+}
+
+// ─── Game2.toString centerAt ─────────────────────────────────────────────────
+
+section('toString centerAt: no centerAt matches default output');
+{
+  const { Game2, BLACK, WHITE } = require('./game2.js');
+  const g = new Game2(5);
+  g.cells[2*5+3] = BLACK;
+  g.cells[1*5+1] = WHITE;
+  assert(g.toString() === g.toString(g.lastMove, {}), 'no centerAt matches default');
+}
+
+section('toString centerAt: mark appears at correct display position');
+{
+  const { Game2, BLACK, PASS } = require('./game2.js');
+  const N = 5;
+  const g = new Game2(N, false);
+  // Place a stone and use its index as both lastMove and centerAt.
+  const idx = 2*N+2; // centre cell (2,2)
+  g.cells[idx] = BLACK;
+  const out = g.toString(idx, { centerAt: idx });
+  const rows = out.split('\n');
+  // The mark '(' must appear somewhere in the output.
+  assert(out.includes('('), 'mark parenthesis present');
+  assert(rows.length === N, `output has ${N} rows`);
+}
+
+section('toString centerAt: wraps toroidally — corner cell centered splits board');
+{
+  const { Game2, BLACK } = require('./game2.js');
+  const N = 5;
+  const g = new Game2(N, false);
+  // Mark the top-left corner (0,0) and center on it.
+  // With half=(5/2|0)=2, x0=(0-2+5)%5=3, y0=(0-2+5)%5=3.
+  // Display columns: 3,4,0,1,2 — the board wraps.
+  const idx = 0;
+  g.cells[idx] = BLACK;
+  const out    = g.toString(idx, { centerAt: idx });
+  const noWrap = g.toString(idx);
+  assert(out !== noWrap, 'centered on corner differs from default view');
+  assert(out.includes('('), 'mark still present after wrap');
+}
+
+section('toString centerAt: PASS centerAt leaves view unchanged');
+{
+  const { Game2, PASS } = require('./game2.js');
+  const g = new Game2(5);
+  const def = g.toString();
+  assert(g.toString(PASS, { centerAt: PASS }) === def, 'PASS centerAt = default view');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

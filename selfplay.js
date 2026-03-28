@@ -79,8 +79,8 @@ if (!Number.isInteger(boardSize)) {
   process.exit(1);
 }
 
-const p1 = require(path.join(__dirname, 'ai', p1Name + '.js'));
-const p2 = require(path.join(__dirname, 'ai', p2Name + '.js'));
+const { getMove: p1 } = require(path.join(__dirname, 'ai', p1Name + '.js'));
+const { getMove: p2 } = require(path.join(__dirname, 'ai', p2Name + '.js'));
 
 function printBoard(game) {
   console.log(game.toString());
@@ -153,7 +153,11 @@ for (let g = 0; g < gameLimit; g++) {
     const move = policy(game, budgetMs);
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
-    game.play(move.type === 'place' ? move.y * boardSize + move.x : PASS);
+    const idx = move.type === 'place' ? move.y * boardSize + move.x : PASS;
+    if (!game.play(idx)) {
+      console.error(`Illegal move from ${mover} (${p1IsBlack ? p1Name : p2Name}): ${JSON.stringify(move)}`);
+      process.exit(1);
+    }
     if (verboseBoard) printBoard(game);
   }
 

@@ -92,7 +92,7 @@ function playTracked(game2, trackColor) {
   return { winner: game2.estimateWinner(), played, oppPlayed };
 }
 
-module.exports = function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
   const game2  = game.cells ? game.clone() : game.toGame2();
@@ -219,4 +219,6 @@ module.exports = function getMove(game, timeBudgetMs) {
   return best === PASS
     ? { type: 'pass' }
     : { type: 'place', x: best % N, y: (best / N) | 0 };
-};
+}
+
+module.exports = { getMove };

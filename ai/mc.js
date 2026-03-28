@@ -115,7 +115,7 @@ function getMove(game, timeBudgetMs) {
                        : { type: 'place', x: best % N, y: (best / N) | 0 };
 }
 
-if (typeof module !== 'undefined') module.exports = getMove;
+if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;
 
 })();

@@ -51,7 +51,7 @@ function runMatch(p1Name, p2Name, games, size, budget) {
 // ─── classifyEmpty consistency across many board states ──────────────────────
 
 section('classifyEmpty vs isTrueEye consistency (100 random positions)', () => {
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   let mismatches = 0;
 
   for (let trial = 0; trial < 100; trial++) {
@@ -89,7 +89,7 @@ section('Group tracker verification under stress (5 games)', () => {
   const oldRatio = Board.verifyGroupRatio;
   Board.verifyGroupRatio = 1; // verify every single captureGroups call
 
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   let ok = true;
 
   for (let i = 0; i < 5; i++) {
@@ -112,7 +112,7 @@ section('Group tracker verification under stress (5 games)', () => {
 // ─── Playout performance ─────────────────────────────────────────────────────
 
 section('MC playout throughput (7x7)', () => {
-  const mc = require('./ai/mc.js');
+  const { getMove: mc } = require('./ai/mc.js');
   const g = new Game(7);
   const budgetMs = 200;
   const t0 = performance.now();
@@ -124,7 +124,7 @@ section('MC playout throughput (7x7)', () => {
 });
 
 section('MCTS playout throughput (7x7)', () => {
-  const mcts = require('./ai/mcts.js');
+  const { getMove: mcts } = require('./ai/mcts.js');
   const g = new Game(7);
   const budgetMs = 200;
   const t0 = performance.now();
@@ -138,8 +138,8 @@ section('MCTS playout throughput (7x7)', () => {
 // ─── Winning agent passes after opponent passes ───────────────────────────────
 
 section('Winning agent passes after opponent passes (7x7)', () => {
-  const rave = require('./ai/rave.js');
-  const mcts = require('./ai/mcts.js');
+  const { getMove: rave } = require('./ai/rave.js');
+  const { getMove: mcts } = require('./ai/mcts.js');
 
   // Hardcoded 7x7 position (found by playing area/2 random alternating moves
   // then 4 rave moves for white with random black responses).

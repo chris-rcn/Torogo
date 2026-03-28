@@ -26,8 +26,10 @@ const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const Util = _isNode ? require('../util.js') : window.Util;
 
 const EXPLORATION_C = 1.4;
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);  // overrides time budget when non-zero
 
 // ── Playout helper ────────────────────────────────────────────────────────────
 
@@ -103,7 +105,7 @@ function makeNode(move, parent, mover) {
     mover,      // player who played `move` to reach this node (null at root)
     children:   [],
     untried:    null,
-    wins:       0,
+    score:      0,  // cumulative territory from mover's perspective, normalized to [0,1]
     visits:     0,
   };
 }
@@ -115,7 +117,7 @@ function applyMove(game2, move) {
 
 function uctScore(child, parentVisits) {
   if (child.visits === 0) return Infinity;
-  return child.wins / child.visits +
+  return child.score / child.visits +
     EXPLORATION_C * Math.sqrt(Math.log(parentVisits) / child.visits);
 }
 
@@ -159,15 +161,17 @@ function selectAndExpand(root, rootGame2) {
 }
 
 function simulate(game2) {
-  const wasAlreadyOver = game2.gameOver;
   playRandom(game2);
-  return wasAlreadyOver ? game2.calcWinner() : game2.estimateWinner();
+  const score = game2.calcScore();
+  return score.black / (score.black + score.white);
 }
 
-function backpropagate(node, winner) {
+function backpropagate(node, blackScore) {
   while (node !== null) {
     node.visits++;
-    if (node.mover !== null && winner === node.mover) node.wins++;
+    if (node.mover !== null) {
+      node.score += node.mover === BLACK ? blackScore : (1 - blackScore);
+    }
     node = node.parent;
   }
 }
@@ -188,11 +192,13 @@ function getMove(game, timeBudgetMs) {
   const root = makeNode(null, null, null);
 
   const deadline = performance.now() + timeBudgetMs;
-  while (performance.now() < deadline) {
+  let playoutCount = 0;
+  do {
+    playoutCount++;
     const { node, game2: simGame2 } = selectAndExpand(root, game2);
     const winner = simulate(simGame2);
     backpropagate(node, winner);
-  }
+  } while (PLAYOUTS > 0 ? playoutCount < PLAYOUTS : performance.now() < deadline);
 
   let bestChild = null, bestVisits = -1;
   for (const child of root.children) {
@@ -200,13 +206,24 @@ function getMove(game, timeBudgetMs) {
   }
 
   const children = root.children
-    .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
+    .map(c => ({ move: c.move, visits: c.visits, score: c.score }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
-  if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
-  const result = { ...bestChild.move, children };
-  result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
+  // Weighted average territory from rootPlayer's perspective across all children.
+  let totalScore = 0, totalVisits = 0;
+  for (const child of root.children) { totalScore += child.score; totalVisits += child.visits; }
+  const avgRootScore = totalVisits > 0 ? totalScore / totalVisits : 0.5;
+  const blackTerritory = rootPlayer === BLACK
+    ? avgRootScore * game2.N * game2.N
+    : (1 - avgRootScore) * game2.N * game2.N;
+
+  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children, blackTerritory };
+  const avgScore = bestChild.score / bestChild.visits;
+  if (avgScore < 0.5 && game.moveCount >= game2.N * game2.N / 2) {
+    return { type: 'pass', info: 'no winning line found', children, blackTerritory };
+  }
+  const result = { ...bestChild.move, children, blackTerritory };
+  result.info = `avg territory: ${blackTerritory.toFixed(1)}/${game2.N * game2.N}`;
   return result;
 }
 

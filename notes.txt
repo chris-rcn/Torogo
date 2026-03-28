@@ -1,14 +1,21 @@
 WASM?  C?
 
-Determine good ladder priors.
-Copy to each class.
-Test raveladpat.
+Finish migrating to Game2.
+Everything is still returning { type, x, y } from getMove.
 
-Finish the migration to game2.
+Ladder priors in tree: failed
+Pattern priors in tree: failed
+Pattern priors in playouts: failed
+Rave-influenced playouts: failed
 
-Integrate ladder results into patterns.
+Opening book
 
-Pollute the global namespace less.
+Unify move notation in files.  Use A1 or AA ?
 
-Generate new game/move datasets.
+Reference
+PLAYOUTS=1000 node evalmovedetails.js --file movedetails_20230325.tmp --agent rave
+N=3302 rmsErr=0.0249 elapsed=283.5s tMoveMs=85.9 agent=rave                                                                                                                                                     │
+
+
+RAVE_GUIDED=0.5 PLAYOUTS=1000 node evalmovedetails.js --file movedetails_20230325.tmp --agent rave-rplayouts  # 
 

@@ -50,7 +50,7 @@ if (engine === 'game2' || engine === 'game3') {
   };
 } else {
   const { Game } = require('./game.js');
-  const random = require('./ai/random.js');
+  const { getMove: random } = require('./ai/random.js');
   playGame = function () {
     const game = new Game(boardSize);
     while (!game.gameOver) {

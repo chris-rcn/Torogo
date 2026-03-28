@@ -46,7 +46,7 @@ function getMove(game, _timeBudgetMs) {
   return { type: 'pass' };
 }
 
-if (typeof module !== 'undefined') module.exports = getMove;
+if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;
 
 })();

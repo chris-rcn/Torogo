@@ -21,7 +21,7 @@ function getMove(game, timeBudgetMs) {
   return PASS;
 }
 
-if (typeof module !== 'undefined') module.exports = getMove;
+if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;
 
 })();

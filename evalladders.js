@@ -58,7 +58,7 @@ const trials    = parseInt(opts.trials || '10',  10);
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(trials)   || trials   < 1) { console.error('--trials must be a positive integer'); process.exit(1); }
 
-const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
+const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 // ── Coordinate helpers ─────────────────────────────────────────────────────
 

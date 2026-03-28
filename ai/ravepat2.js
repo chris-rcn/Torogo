@@ -29,10 +29,10 @@ const Util = _isNode ? require('../util.js') : window.Util;
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 1.4);
 
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 300);
+const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 0);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PRIOR_EQUIV = Util.envFloat('PRIOR_EQUIV', 100);
+const PATTERN_EQUIV = Util.envFloat('PATTERN_EQUIV', 0);
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
@@ -156,12 +156,12 @@ function makeNode(move, parent, ci, mover, game2, N) {
 
   // Per-move prior win-rate estimate in [0, 1]: 0.5 = unrated neutral,
   // 1.0 = best known pattern, ~0.0 = worst known pattern.
-  const priorBonus  = new Float32Array(N * N);
+  const prior  = new Float32Array(N * N);
 
   // Pattern priors — max-normalised to [0, 1], applied to non-PASS moves only.
-  // Unrated moves default to 0.5 (neutral).  PRIOR_EQUIV controls how many
+  // Unrated moves default to 0.5 (neutral).  PATTERN_EQUIV controls how many
   // virtual visits the prior contributes (0 = disabled).
-  if (PRIOR_EQUIV > 0) {
+  if (PATTERN_EQUIV > 0) {
     if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
     if (movesArr.length > 0) {
       const hashes = _patternHashes2(game2, movesArr);
@@ -170,9 +170,9 @@ function makeNode(move, parent, ci, mover, game2, N) {
       const norm   = maxR > 0 ? 1 / maxR : 0;
       for (let k = 0; k < movesArr.length; k++) {
         if (ratios[k] === undefined) {
-          priorBonus[movesArr[k]] = 0.5;
+          prior[movesArr[k]] = 0.5;
         } else {
-          priorBonus[movesArr[k]] = ratios[k] * norm;
+          prior[movesArr[k]] = ratios[k] * norm;
         }
       }
     }
@@ -194,7 +194,7 @@ function makeNode(move, parent, ci, mover, game2, N) {
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
     raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; updated by rollouts
-    priorBonus,   // Float32Array(N*N) — ladder prior bonuses (separate from RAVE)
+    prior,     // Float32Array(N*N) — pattern prior bonuses (separate from RAVE)
   };
 }
 
@@ -202,23 +202,33 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // Children with no real playout visits (cv === 0) get a large bonus so they                                                                                                                                 
 // are always preferred over visited children.  RAVE (seeded with pattern                                                                                                                                    
 // priors) ranks them within the unvisited tier.                                                                                                                                                             
-// A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
+// A separate prior term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
-function raveScore(moveIdx, node) {
-  const move   = node.legalMoves[moveIdx];
-  const realW  = node.wins[moveIdx];
-  const realV  = node.visits[moveIdx];
+function ucbScore(moveIdx, node) {
+  const move  = node.legalMoves[moveIdx];
+
+  // Prior
+  const priorWR = move === PASS ? 0 : node.prior[move];
+
+  // RAVE
   const raveW  = move === PASS ? 0 : node.raveWins[move];
   const raveV  = move === PASS ? 1 : node.raveVisits[move];
   const raveWR = raveW / raveV;
-  const priorWR  = move === PASS ? 0 : node.priorBonus[move]; // priorBonus range is [0, 1].
-  const wr = (realW + raveWR * RAVE_EQUIV + priorWR * PRIOR_EQUIV) / (realV + RAVE_EQUIV + PRIOR_EQUIV);
+
+  // Real
+  const realW = node.wins[moveIdx];
+  const realV = node.visits[moveIdx];
+  const realWR = realW / realV;
+
+  // Combined win ratio
+  const wr = (priorWR * PATTERN_EQUIV + raveWR * RAVE_EQUIV + realWR * realV)
+           / (          PATTERN_EQUIV +        + RAVE_EQUIV +          realV);
+
+  const scoreBase = wr + 0.001 * Math.random();
   if (realV < 1) {
-    return 10 + wr + 0.001 * Math.random();
+    return scoreBase + 10;
   }
-  return 0.001 * Math.random() +
-    wr +
-    EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
+  return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
@@ -234,7 +244,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = raveScore(i, node);
+      const s = ucbScore(i, node);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -362,9 +372,9 @@ function getMove(game, timeBudgetMs) {
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && raveScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root) > bestScore)) {
       bestVisits = cv;
-      bestScore  = raveScore(i, root);
+      bestScore  = ucbScore(i, root);
       bestIdx    = i;
     }
   }
@@ -398,7 +408,7 @@ function getMove(game, timeBudgetMs) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = getMove;
+if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;
 
 })();

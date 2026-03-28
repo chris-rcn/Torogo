@@ -26,7 +26,7 @@ const boardSize  = parseInt(get('--size', 13),    10);
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
 
-const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
+const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 const SKIP = 21;
 

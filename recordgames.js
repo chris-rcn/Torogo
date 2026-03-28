@@ -27,7 +27,7 @@ const size      = parseInt(get('--size', 13),   10);
 const budget    = parseInt(get('--budget', '2000'), 10);
 const max       = parseInt(get('--max',    '0'),   10);
 
-const agent = require(`./ai/${agentName}.js`);
+const { getMove: agent } = require(`./ai/${agentName}.js`);
 
 const col = x => String.fromCharCode(97 + x);
 const row = y => String.fromCharCode(97 + y);
