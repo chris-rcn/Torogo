@@ -18,7 +18,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const { PASS } = _isNode ? require('../game2.js') : window.Game2;
 
 function getMove(game, timeBudgetMs) {
-  return PASS;
+  return { type: 'pass', move: PASS };
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove };

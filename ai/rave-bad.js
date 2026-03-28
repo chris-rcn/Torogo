@@ -210,7 +210,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass', info: 'game already over' };
+  if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
   const game2      = game.cells ? game.clone() : game.toGame2();
@@ -218,7 +218,7 @@ function getMove(game, timeBudgetMs) {
 
 
   const root = makeNode(null, null, -1, null, game2, N, false);
-  if (root.legalMoves.length === 0) return { type: 'pass', info: 'no non-pass moves' };
+  if (root.legalMoves.length === 0) return { type: 'pass', move: PASS, info: 'no non-pass moves' };
 
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
@@ -260,8 +260,8 @@ function getMove(game, timeBudgetMs) {
   const cv = root.visits[bestIdx];
   const bestWinRatio = cv > 0 ? root.wins[bestIdx] / cv : 0.5;
 
-  const result = m === PASS ? { type: 'pass', children, rootWinRatio }
-                            : { type: 'place', x: m % N, y: (m / N) | 0, children, rootWinRatio };
+  const result = m === PASS ? { type: 'pass', move: PASS, children, rootWinRatio }
+                            : { type: 'place', move: m, x: m % N, y: (m / N) | 0, children, rootWinRatio };
   result.info = `win likelihood: ${bestWinRatio.toFixed(3)}`;
 return result;
 }

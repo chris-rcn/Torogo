@@ -74,7 +74,7 @@ function playRandom(game2) {
 }
 
 function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass' };
+  if (game.gameOver) return { type: 'pass', move: PASS };
 
   const game2  = game.cells ? game.clone() : game.toGame2();
   const N      = game2.N;
@@ -111,8 +111,8 @@ function getMove(game, timeBudgetMs) {
   }
 
   const best = candidates[bestIdx];
-  return best === PASS ? { type: 'pass' }
-                       : { type: 'place', x: best % N, y: (best / N) | 0 };
+  return best === PASS ? { type: 'pass', move: PASS }
+                       : { type: 'place', move: best, x: best % N, y: (best / N) | 0 };
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove };

@@ -1,7 +1,9 @@
 WASM?  C?
 
 Finish migrating to Game2.
-Everything is still returning { type, x, y } from getMove.
+Everything is still returning { type, x, y, move } from getMove.
+Need to change getMove() consumers to use result.move.
+Then remove the type,x,y from the agent result objects.
 
 Ladder priors in tree: failed
 Pattern priors in tree: failed

@@ -90,9 +90,9 @@ function getLegalMoves(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== 0)  continue;
     if (game2.isTrueEye(i))    continue;
-    if (game2.isLegal(i))      moves.push({ type: 'place', x: i % N, y: (i / N) | 0 });
+    if (game2.isLegal(i))      moves.push({ type: 'place', move: i, x: i % N, y: (i / N) | 0 });
   }
-  if (moves.length < cap / 2 || game2.consecutivePasses > 0) moves.push({ type: 'pass' });
+  if (moves.length < cap / 2 || game2.consecutivePasses > 0) moves.push({ type: 'pass', move: PASS });
   return moves;
 }
 
@@ -175,14 +175,14 @@ function backpropagate(node, winner) {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass', info: 'game already over' };
+  if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const game2      = game.cells ? game.clone() : game.toGame2();
   const rootPlayer = game2.current;
 
   // Obvious pass: opponent just passed and we're already winning — end the game.
   if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
-    return { type: 'pass', info: 'obvious pass: already winning' };
+    return { type: 'pass', move: PASS, info: 'obvious pass: already winning' };
   }
 
   const root = makeNode(null, null, null);
@@ -203,8 +203,8 @@ function getMove(game, timeBudgetMs) {
     .map(c => ({ move: c.move, visits: c.visits, wins: c.wins }))
     .sort((a, b) => b.visits - a.visits);
 
-  if (!bestChild) return { type: 'pass', info: 'no simulations completed', children };
-  if (bestChild.wins === 0) return { type: 'pass', info: 'no winning line found', children };
+  if (!bestChild) return { type: 'pass', move: PASS, info: 'no simulations completed', children };
+  if (bestChild.wins === 0) return { type: 'pass', move: PASS, info: 'no winning line found', children };
   const result = { ...bestChild.move, children };
   result.info = `win likelihood: ${(bestChild.wins / bestChild.visits).toFixed(3)}`;
   return result;

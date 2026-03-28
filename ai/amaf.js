@@ -93,7 +93,7 @@ function playTracked(game2, trackColor) {
 }
 
 function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass' };
+  if (game.gameOver) return { type: 'pass', move: PASS };
 
   const game2  = game.cells ? game.clone() : game.toGame2();
   const player = game2.current;
@@ -177,7 +177,7 @@ function getMove(game, timeBudgetMs) {
   }
 
   // If every playout is a loss, pass — no move can help.
-  if (bestRatio === 0) return { type: 'pass' };
+  if (bestRatio === 0) return { type: 'pass', move: PASS };
 
   // Prefer pass when it ties for best ratio.
   if (plays[PASS_IDX] > 0 && wins[PASS_IDX] / plays[PASS_IDX] === bestRatio) {
@@ -218,7 +218,7 @@ function getMove(game, timeBudgetMs) {
   const best = candidates[bestIdx];
   return best === PASS
     ? { type: 'pass' }
-    : { type: 'place', x: best % N, y: (best / N) | 0 };
+    : { type: 'place', move: best, x: best % N, y: (best / N) | 0 };
 }
 
 module.exports = { getMove };

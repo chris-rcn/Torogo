@@ -21,7 +21,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const { PASS } = _isNode ? require('../game2.js') : window.Game2;
 
 function getMove(game, _timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass' };
+  if (game.gameOver) return { type: 'pass', move: PASS };
 
   const N   = game.N;
   const cap = N * N;
@@ -40,10 +40,10 @@ function getMove(game, _timeBudgetMs) {
     const idx = candidates[ri];
     candidates[ri] = candidates[candidates.length - 1];
     candidates.pop();
-    return { type: 'place', x: idx % N, y: (idx / N) | 0 };
+    return { type: 'place', move: idx, x: idx % N, y: (idx / N) | 0 };
   }
 
-  return { type: 'pass' };
+  return { type: 'pass', move: PASS };
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove };
