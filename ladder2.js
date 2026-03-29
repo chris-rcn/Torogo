@@ -9,7 +9,7 @@ const { PASS } = typeof require === 'function' ? require('./game2.js') : window.
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
 // attacker play.
 function _canReach3Libs(game2, idx) {
-  const { count: lc, lib0, lib1 } = game2.groupLibs(idx);
+  const { count: lc, lib0, lib1 } = game2.groupLibs2(idx);
   if (lc >= 3) return true;
   if (lc === 0) return false;
 
@@ -33,7 +33,7 @@ function _canReach3Libs(game2, idx) {
     const g = game2.clone();
     if (!g.play(libIdx)) continue;        // illegal for attacker — skip
     if (g.cells[idx] === 0) return false; // captured immediately
-    const afterLc = g.groupLibs(idx).count;
+    const afterLc = g.groupLibs2(idx).count;
     if (afterLc === 0) return false;
     if (afterLc === 1 && !_canReach3Libs(g, idx)) return false;
   }
@@ -41,10 +41,11 @@ function _canReach3Libs(game2, idx) {
   return true;
 }
 
-// getAllLadderStatuses(game2) — run getLadderStatus2 on every group with 1 or 2
-// liberties and return an array of { gid, color, status } objects,
-// one per group (groups with 0 or 3+ liberties are skipped).
-function getAllLadderStatuses(game2) {
+// getAllLadderStatuses(game2, minChainSize) — run getLadderStatus2 on every
+// group with 1 or 2 liberties and return an array of { gid, color, status }
+// objects, one per group (groups with 0 or 3+ liberties are skipped).
+// minChainSize: skip groups smaller than this (default 1).
+function getAllLadderStatuses(game2, minChainSize = 1) {
   const cap  = game2.N * game2.N;
   const results = [];
   const visited = new Set();
@@ -53,7 +54,8 @@ function getAllLadderStatuses(game2) {
     const gid = game2._gid[i];
     if (visited.has(gid)) continue;
     visited.add(gid);
-    const { count: lc } = game2.groupLibs(i);
+    if (game2.groupSize(gid) < minChainSize) continue;
+    const { count: lc } = game2.groupLibs2(i);
     if (lc === 0 || lc > 2) continue;
     const status = getLadderStatus2(game2, i);
     results.push({ gid, color: game2.cells[i], status });
@@ -68,7 +70,7 @@ function getAllLadderStatuses(game2) {
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
 function getLadderStatus2(game2, stoneIdx) {
-  const { count: lc, lib0, lib1 } = game2.groupLibs(stoneIdx);
+  const { count: lc, lib0, lib1 } = game2.groupLibs2(stoneIdx);
   if (lc < 1 || lc > 2) {
     const N = game2.N;
     console.warn(`getLadderStatus2: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);

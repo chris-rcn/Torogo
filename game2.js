@@ -297,8 +297,10 @@ class Game2 {
   groupSize(gid)          { return this._ss[gid]; }
   /** Number of liberties of group gid. */
   groupLibertyCount(gid)  { return this._ls[gid]; }
-  /** Liberty indices of group gid as an Int32Array. */
-  groupLibs(gid) {
+  /** All liberty indices of the group containing stone at idx, as an Int32Array. */
+  groupLibs(idx) {
+    const gid = this._gid[idx];
+    if (gid === -1) return new Int32Array(0);
     const lc  = this._ls[gid];
     const out = new Int32Array(lc);
     const cap = this.N * this.N;
@@ -535,7 +537,7 @@ class Game2 {
   // Returns the liberty count of the group containing idx, plus the first two
   // liberty indices (lib0, lib1; -1 if absent).  Returns count=0 when idx is
   // empty or has no group.
-  groupLibs(idx) {
+  groupLibs2(idx) {
     const gid = this._gid[idx];
     if (gid === -1) return { count: 0, lib0: -1, lib1: -1 };
     const lc = this._ls[gid];

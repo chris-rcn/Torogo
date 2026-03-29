@@ -7,10 +7,15 @@
 (function () {
 
 /**
- * RAVE (Rapid Action Value Estimation) MCTS policy.
+ * RAVE (Rapid Action Value Estimation) MCTS policy with ladder + pattern priors.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
+ * Priors (ladder + pattern) are computed once at node creation time.
+ *
+ * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
+ *   game         - a live Game instance (read-only; do not mutate)
+ *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -24,17 +29,25 @@ const Util = _isNode ? require('../util.js') : window.Util;
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 2000);
+const RAVE_EQUIV   = Util.envFloat('RAVE_EQUIV',   2000);
+const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
+
+// Total virtual visits contributed by the pattern prior across all children.
+const PATTERN_EQUIV = Util.envFloat('PATTERN_EQUIV', 100);
+
+// Half-life for count-based confidence: confidence = count / (count + k).
+// Only used when the pattern table stores [ratio, count] pairs.
+const PATTERN_CONF_K = Util.envFloat('PATTERN_CONF_K', 20);
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 3);
+const PAT_DATA = Util.envStr('PAT_DATA', 'patdata.js');
 
-// Fraction of parent RAVE stats inherited by a newly created child node.
-// Must be < 1 to prevent unbounded growth down the tree.
-const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
+const getPatternHashes = _isNode ? require('../pattern1.js').getPatternHashes : window.Pattern1.getPatternHashes;
+const patternTable = _isNode ? require(require('path').join(__dirname, '..', PAT_DATA)) : window.patternTable;
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
@@ -95,17 +108,17 @@ function getLegalMoves(game2) {
 // `ci`    is this node's index in parent.children / parent.child* arrays (-1 for root).
 // `mover` is the player who played `move` (null at root).
 // Priors (ladder + pattern) are computed eagerly from the current game state.
-function makeNode(move, parent, ci, mover, game2, N) {
+function makeNode(move, parent, ci, mover, game2, N, table) {
   const movesArr = getLegalMoves(game2);
   const M = movesArr.length;
-  const area = N * N;
 
   const legalMoves = new Int32Array(M);
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
-  const children   = new Array(M).fill(null);
-  const wins       = new Float32Array(M).fill(0.001);
-  const visits     = new Float32Array(M).fill(0.002);
+  const area     = N * N;
+  const children = new Array(M).fill(null);
+  const wins     = new Float32Array(M).fill(0.001);
+  const visits   = new Float32Array(M).fill(0.002);
   const raveWins   = new Float32Array(area);
   const raveVisits = new Float32Array(area);
 
@@ -117,6 +130,30 @@ function makeNode(move, parent, ci, mover, game2, N) {
     for (let m = 0; m < area; m++) {
       raveWins[m]   = RAVE_INHERIT * gparent.raveWins[m];
       raveVisits[m] = RAVE_INHERIT * gparent.raveVisits[m];
+    }
+  }
+
+  // Per-move prior win-rate in [0, 1] and confidence in [0, 1].
+  // priorConf scales PATTERN_EQUIV: unrated moves contribute 0 virtual visits.
+  const prior     = new Float32Array(N * N);
+  const priorConf = new Float32Array(N * N);
+
+  // Pattern priors — pairwise win-rate ratio used directly, applied to non-PASS moves only.
+  // Table values are [ratio, count] pairs; confidence = count/(count+k) scales
+  // the effective PATTERN_EQUIV for each move.
+  if (PATTERN_EQUIV > 0) {
+    if (movesArr[movesArr.length - 1] === PASS) movesArr.pop();
+    if (movesArr.length > 0) {
+      const hashes  = getPatternHashes(game2, movesArr);
+      const entries = hashes.map(({ hash }) => table.get(hash));
+      for (let k = 0; k < movesArr.length; k++) {
+        const e = entries[k];
+        if (e !== undefined) {
+          const count = e[1];
+          prior[movesArr[k]]     = e[0];
+          priorConf[movesArr[k]] = count / (count + PATTERN_CONF_K);
+        }
+      }
     }
   }
 
@@ -135,7 +172,9 @@ function makeNode(move, parent, ci, mover, game2, N) {
     visits,  // Float32Array(M) — playout visits per child
 
     raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
-    raveVisits
+    raveVisits,   // Float32Array(N*N) — RAVE visits indexed by cell; updated by rollouts
+    prior,        // Float32Array(N*N) — pattern prior win-rate (normalised ratio)
+    priorConf,    // Float32Array(N*N) — pattern confidence; scales PATTERN_EQUIV
   };
 }
 
@@ -143,23 +182,28 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // Children with no real playout visits (cv === 0) get a large bonus so they                                                                                                                                 
 // are always preferred over visited children.  RAVE (seeded with pattern                                                                                                                                    
 // priors) ranks them within the unvisited tier.                                                                                                                                                             
-// A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
+// A separate prior term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
-
 function ucbScore(moveIdx, node) {
   const move  = node.legalMoves[moveIdx];
 
+  // Prior
+  const priorWR    = move === PASS ? 0 : node.prior[move];
+  const patEquiv   = move === PASS ? 0 : node.priorConf[move] * PATTERN_EQUIV;
+
   // RAVE
-  const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
+  const raveW  = move === PASS ? 0 : node.raveWins[move];
+  const raveV  = move === PASS ? 1 : node.raveVisits[move];
+  const raveWR = raveW / raveV;
 
   // Real
-  const realW = node.wins[moveIdx];
-  const realV = node.visits[moveIdx];
+  const realW  = node.wins[moveIdx];
+  const realV  = node.visits[moveIdx];
   const realWR = realW / realV;
 
   // Combined win ratio
-  const wr = (raveWR * RAVE_EQUIV + realWR * realV)
-           / (       + RAVE_EQUIV +          realV);
+  const wr = (priorWR * patEquiv + raveWR * RAVE_EQUIV + realWR * realV)
+           / (          patEquiv +        + RAVE_EQUIV +          realV);
 
   const scoreBase = wr + 0.001 * Math.random();
   return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / (1 + realV));
@@ -167,7 +211,7 @@ function ucbScore(moveIdx, node) {
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, table) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -190,7 +234,7 @@ function selectAndExpand(root, rootGame2, N) {
     // its children all have cv=0 < N_EXPAND, so the leaf case fires next iteration
     // (exactly one makeNode per playout, same as rave2's one-expansion-per-playout).
     if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
-      node.children[best] = makeNode(node.legalMoves[best], node, best, mover, game2, N);
+      node.children[best] = makeNode(node.legalMoves[best], node, best, mover, game2, N, table);
     }
 
     // After a pass, always force a second pass so the playout scores the current
@@ -277,7 +321,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMoveWith(game, timeBudgetMs, table) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -289,14 +333,14 @@ function getMove(game, timeBudgetMs) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
-  const root = makeNode(null, null, -1, null, game2, N);
+  const root = makeNode(null, null, -1, null, game2, N, table);
 
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, table);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
@@ -342,7 +386,13 @@ function getMove(game, timeBudgetMs) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { getMove };
+function getMove(game, timeBudgetMs) { return getMoveWith(game, timeBudgetMs, patternTable); }
+
+function makeGetMove(table) {
+  return (game, timeBudgetMs) => getMoveWith(game, timeBudgetMs, table);
+}
+
+if (typeof module !== 'undefined') module.exports = { getMove, makeGetMove };
 else window.getMove = getMove;
 
 })();

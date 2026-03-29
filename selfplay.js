@@ -71,8 +71,7 @@ const p1Name    = opts.p1   || 'random';
 const p2Name    = opts.p2   || 'random';
 if (!opts.size) { console.error('--size is required'); process.exit(1); }
 const boardSize = parseInt(opts.size, 10);
-if (!opts.budget) { console.error('--budget is required'); process.exit(1); }
-const budgetMs  = parseInt(opts.budget, 10);
+const budgetMs  = parseInt(opts.budget || '1', 10);
 
 if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');

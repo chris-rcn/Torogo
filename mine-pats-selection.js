@@ -7,11 +7,11 @@
 //   --file    path to game records produced by recordgames.js (required)
 //
 // Output: one line per observed pattern hash:
-//   <hash>,<selection_ratio>,<seen_count>
+//   <hash>,<seen>,<selected>,<selectedWeightSum>
 
 const fs = require('fs');
 const { Game2, BLACK, WHITE } = require('./game2.js');
-const { patternHashes2 } = require('./pattern9.js');
+const { getPatternHashes } = require('./pattern1.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -19,23 +19,30 @@ const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? ar
 const file = get('--file', null);
 
 if (!file) {
-  console.error('Usage: node minepatterns2.js --file <path>');
+  console.error('Usage: node mine-pats-selection.js --file <path>');
   process.exit(1);
 }
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(l => l.trim());
 
-// Map from pHash → { seen: number, selected: number }
+// Map from hash → { seen: number, selected: number }
 const stats = new Map();
 
-function bump(hash, selected) {
+function bump(hash, isSelected, nCandidates) {
   let s = stats.get(hash);
-  if (!s) { s = { seen: 0, selected: 0 }; stats.set(hash, s); }
+  if (!s) { s = { seen: 0, selected: 0, selectedWeightSum: 0 }; stats.set(hash, s); }
   s.seen++;
-  if (selected) s.selected++;
+  if (isSelected) {
+    s.selected++;
+    s.selectedWeightSum += nCandidates - 1;
+  }
 }
 
+const total = lines.length;
+let lastPct = -1;
 for (let gi = 0; gi < lines.length; gi++) {
+  const pct = Math.floor(gi / total * 100);
+  if (pct !== lastPct) { lastPct = pct; process.stderr.write(`\r${pct}%  ${stats.size} patterns`); }
   const fields = lines[gi].split(',');
   const size   = parseInt(fields[0], 10);
   const N      = size;
@@ -89,16 +96,19 @@ for (let gi = 0; gi < lines.length; gi++) {
         nonSelected.push(i);
       }
 
-      const hashes = patternHashes2(g, [selected, ...nonSelected]);
-      bump(hashes[0].pHash, true);
-      for (let i = 1; i < hashes.length; i++) bump(hashes[i].pHash, false);
+      const nCandidates = nonSelected.length + 1;
+      const hashes = getPatternHashes(g, [selected, ...nonSelected]);
+      bump(hashes[0].hash, true, nCandidates);
+      for (let i = 1; i < hashes.length; i++) bump(hashes[i].hash, false, nCandidates);
     }
 
     g.play(selected);
   }
 }
 
-// Output: hash,ratio,seen
-for (const [hash, { seen, selected }] of stats) {
-  console.log(`${hash},${(selected / seen).toFixed(6)},${seen}`);
+process.stderr.write(`\r100%  ${stats.size} patterns\n`);
+
+// Output: hash,seen,selected,selectedWeightSum
+for (const [hash, { seen, selected, selectedWeightSum }] of stats) {
+  console.log(`${hash},${seen},${selected},${selectedWeightSum}`);
 }

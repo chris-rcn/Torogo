@@ -2683,6 +2683,197 @@ section('toString centerAt: PASS centerAt leaves view unchanged');
   assert(g.toString(PASS, { centerAt: PASS }) === def, 'PASS centerAt = default view');
 }
 
+// ─── Opening book ─────────────────────────────────────────────────────────────
+
+section('book: applyTransform identity');
+{
+  const { applyTransform } = require('./book.js');
+  const N = 9;
+  assert(JSON.stringify(applyTransform(0, 3, 5, N)) === '[3,5]', 'identity leaves coords unchanged');
+}
+
+section('book: applyTransform rotate90CCW then rotate270CCW = identity');
+{
+  const { applyTransform } = require('./book.js');
+  const N = 9;
+  for (let x = 0; x < N; x++) {
+    for (let y = 0; y < N; y++) {
+      const [x1, y1] = applyTransform(1, x, y, N);   // rot90CCW
+      const [x2, y2] = applyTransform(3, x1, y1, N); // rot270CCW (inverse)
+      if (x2 !== x || y2 !== y) {
+        assert(false, `rot90+rot270 not identity at (${x},${y})`);
+      }
+    }
+  }
+  assert(true, 'rot90CCW followed by rot270CCW = identity for all cells');
+}
+
+section('book: all 8 transforms are distinct on a non-symmetric board');
+{
+  const { applyTransform } = require('./book.js');
+  // Use a board with one stone at a non-symmetric position.
+  const N = 7;
+  const x = 1, y = 2;
+  const results = new Set();
+  for (let t = 0; t < 8; t++) {
+    const [tx, ty] = applyTransform(t, x, y, N);
+    results.add(`${tx},${ty}`);
+  }
+  assert(results.size === 8, `all 8 D4 transforms distinct: got ${results.size}`);
+}
+
+section('book: canonicalHash is stable across calls');
+{
+  const { canonicalHash } = require('./book.js');
+  const { Game2 } = require('./game2.js');
+  const g = new Game2(7);
+  const { hash: h1 } = canonicalHash(g.cells, g.N);
+  const { hash: h2 } = canonicalHash(g.cells, g.N);
+  assert(h1 === h2, 'canonicalHash is deterministic');
+}
+
+section('book: symmetric board has same canonical hash for all D4 transforms');
+{
+  const { canonicalHash, applyTransform } = require('./book.js');
+  // Build a fully symmetric board: only the center stone (placed by Game2 constructor).
+  const { Game2 } = require('./game2.js');
+  const N = 7;
+  const g = new Game2(N);
+  // The center stone is symmetric under all D4 transforms.
+  // Generate all 8 "rotated" cell arrays and verify same canonical hash.
+  const { hash: hBase } = canonicalHash(g.cells, N);
+  let allSame = true;
+  for (let t = 0; t < 8; t++) {
+    const rotated = new Int8Array(N * N);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = g.cells[y * N + x];
+        if (c === 0) continue;
+        const [tx, ty] = applyTransform(t, x, y, N);
+        rotated[ty * N + tx] = c;
+      }
+    }
+    const { hash: ht } = canonicalHash(rotated, N);
+    if (ht !== hBase) allSame = false;
+  }
+  assert(allSame, 'all D4 rotations of a symmetric board share the same canonical hash');
+}
+
+section('book: D4-equivalent moves at symmetric position share the same count');
+{
+  const { addToBook, applyTransform } = require('./book.js');
+  const { Game2 } = require('./game2.js');
+  const N = 9;
+  // The root position (center stone only) is fully symmetric under all 8 D4 transforms.
+  // Adding D4-equivalent moves should all increment the same canonical entry.
+  const book = new Map(); book.minEmptyCount = Infinity;
+  const g = new Game2(N);
+  const mx = 1, my = 2;
+  const baseMove = my * N + mx;
+
+  // Add all 8 D4-equivalent moves separately.
+  for (let t = 0; t < 8; t++) {
+    const [tx, ty] = applyTransform(t, mx, my, N);
+    addToBook(book, g, ty * N + tx);
+  }
+
+  // There should be exactly 1 canonical entry (all 8 are equivalent).
+  const rootEntry = [...book.values()][0];
+  assert(rootEntry && rootEntry.size === 1,
+    `all 8 D4-equivalent moves merged into 1 canonical entry, got ${rootEntry ? rootEntry.size : 'no entry'}`);
+  const [[, count]] = [...rootEntry.entries()];
+  assert(count === 8, `canonical entry has count 8, got ${count}`);
+}
+
+section('book: addToBook / lookupBook basic');
+{
+  const { addToBook, lookupBook } = require('./book.js');
+  const { Game2, PASS } = require('./game2.js');
+  const N = 7;
+  const book = new Map(); book.minEmptyCount = Infinity;
+  const g = new Game2(N);
+  assert(lookupBook(book, g) === null, 'unknown position returns null');
+  // Add the same move 5 times.
+  const moveIdx = 1 * N + 2;  // (2, 1) flat index
+  for (let i = 0; i < 5; i++) addToBook(book, g, moveIdx);
+  const result = lookupBook(book, g);
+  assert(result !== null, 'lookupBook returns a move');
+  assert(result.type === 'place', 'book move is a place');
+}
+
+section('book: lookupBook returns same move for all D4-equivalent positions');
+{
+  const { addToBook, lookupBook, applyTransform } = require('./book.js');
+  const { Game2 } = require('./game2.js');
+  const N = 7;
+
+  // Base position: black at center (3,3), white at (2,1) — genuinely asymmetric.
+  // Record: from this position, the move (4,3) was selected 10 times.
+  const baseCells = new Int8Array(N * N);
+  baseCells[3 * N + 3] = 1;  // BLACK at center
+  baseCells[1 * N + 2] = 2;  // WHITE at (2,1)
+  const moveX = 4, moveY = 3;
+  const moveIdx = moveY * N + moveX;
+
+  const book = new Map(); book.minEmptyCount = Infinity;
+  const gBase = new Game2(N, false);
+  gBase.cells.set(baseCells);
+  for (let i = 0; i < 10; i++) addToBook(book, gBase, moveIdx);
+
+  // For each D4 transform t: rotate the base cells and verify lookupBook returns
+  // the correspondingly rotated move.
+  for (let t = 0; t < 8; t++) {
+    const rotCells = new Int8Array(N * N);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const c = baseCells[y * N + x];
+        if (c === 0) continue;
+        const [tx, ty] = applyTransform(t, x, y, N);
+        rotCells[ty * N + tx] = c;
+      }
+    }
+
+    const gRot = new Game2(N, false);
+    gRot.cells.set(rotCells);
+
+    const res = lookupBook(book, gRot);
+    const [expX, expY] = applyTransform(t, moveX, moveY, N);
+
+    assert(res !== null && res.type === 'place',
+      `t=${t}: lookupBook returns a place move`);
+    if (res && res.type === 'place') {
+      assert(res.x === expX && res.y === expY,
+        `t=${t}: got (${res.x},${res.y}), expected (${expX},${expY})`);
+    }
+  }
+}
+
+section('book: serializeBook / deserializeBook round-trip');
+{
+  const { addToBook, serializeBook, deserializeBook, lookupBook } = require('./book.js');
+  const { Game2 } = require('./game2.js');
+  const N = 7;
+  const book = new Map(); book.minEmptyCount = Infinity;
+  const g = new Game2(N);
+  const moveIdx = 2 * N + 1;  // (1, 2)
+  for (let i = 0; i < 6; i++) addToBook(book, g, moveIdx);
+  const js = serializeBook(book);
+  // Extract the BookData object from the generated JS (simulate what require() does).
+  const BookData = JSON.parse(js.slice(js.indexOf('= ') + 2, js.indexOf(';\n')));
+  const book2 = deserializeBook(BookData);
+
+  // Verify the two books have identical entries.
+  assert(book.size === book2.size, 'round-trip: same number of positions');
+  for (const [hash, entry] of book) {
+    const entry2 = book2.get(hash);
+    assert(entry2 !== undefined, 'round-trip: same hashes');
+    assert(entry.size === entry2.size, 'round-trip: same number of moves per position');
+    for (const [move, count] of entry) {
+      assert(entry2.get(move) === count, 'round-trip: same counts');
+    }
+  }
+}
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 
 console.log(`\n═══════════════════════`);

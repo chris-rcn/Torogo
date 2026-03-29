@@ -14,10 +14,46 @@ Opening book
 
 Unify move notation in files.  Use A1 or AA ?
 
-Reference
-PLAYOUTS=1000 node evalmovedetails.js --file movedetails_20230325.tmp --agent rave
-N=3302 rmsErr=0.0249 elapsed=283.5s tMoveMs=85.9 agent=rave                                                                                                                                                     │
+
+time node mine-pats-selection.js --file games.tmp > out/patdata-selection.tmp
+node gen-patterns-data.js --file out/patdata-selection.tmp --confidence > out/patdata-selection.js
+
+PATTERN_EQUIV=2 PAT_DATA=out/patdata-selection.js PLAYOUTS=1000 node evalmovedetails.js --file movedetails_20230325.tmp --agent ravepat
 
 
-RAVE_GUIDED=0.5 PLAYOUTS=1000 node evalmovedetails.js --file movedetails_20230325.tmp --agent rave-rplayouts  # 
+PATTERN_EQUIV=50 PLAYOUTS=500 node learn-patterns.js --size 7 --budget 1  
+    1279     319      50.6%          4    3198.0s  # minChain=2 maxStones=1 killUrg saveUrg
+     852     213      50.5%         41    2454.6s  # minChain=2 maxStones=1 killUrg saveUrg friend enemy
+    1279     319      53.1%          4    3251.3s  # minChain=2 maxStones=2 killUrg saveUrg
+     852     213      57.9%          4    3219.6s  # minChain=1 maxStones=1 killUrg saveUrg
+    1279     319      59.4%         11    3116.8s  # minChain=2 maxStones=1 killUrg saveUrg killWaste saveWaste
+
+PATTERN_EQUIV=50 PLAYOUTS=500 node learn-patterns.js --size 7 --budget 1
+    710      56.3%         12    1375.2s  # minChain=1 maxStones=1 killUrg saveUrg killWaste saveWaste
+    710      56.6%         38    1464.7s  # minChain=1 maxStones=1 killUrg saveUrg killWaste saveWaste enemy
+    710      58.6%         39    1376.1s  # minChain=1 maxStones=1 killUrg saveUrg killWaste saveWaste open
+    710      60.6%         40    1332.7s  # minChain=1 maxStones=2 killUrg saveUrg killWaste saveWaste
+    710      63.1%         37    1351.3s  # minChain=1 maxStones=1 killUrg saveUrg killWaste saveWaste friend
+
+PATTERN_EQUIV=50 PLAYOUTS=1000 node learn-patterns.js --size 9 --budget 1
+  # minChain=1 maxStones=2 killUrg saveUrg killWaste saveWaste 
+  # minChain=1 maxStones=2 killUrg saveUrg killWaste saveWaste friend
+  # minChain=1 maxStones=2 killUrg saveUrg killWaste saveWaste enemy
+  # minChain=1 maxStones=2 killUrg saveUrg killWaste saveWaste open
+
+./mine-and-test.sh # gameCount=6000, PLAYOUTS=2000 PATTERN_EQUIV=50 size=9
+./mine-and-test.sh 1  # maxStones=1 enemy  #   1623  22607.4s   63.3%   120.40   193.58, pats=38
+./mine-and-test.sh 2  # maxStones=2 enemy  #   1633  22630.4s   63.9%   119.02   193.03, pats=119
+./mine-and-test.sh 3  # maxStones=3 enemy  #   1649  22648.4s   64.2%   118.71   192.11, pats=224
+./mine-and-test.sh 4  # maxStones=4 enemy  #   1626  22610.8s   63.0%   119.77   194.66, pats=336
+./mine-and-test.sh 5  # maxStones=5 enemy  #   1632  22627.2s   65.9%   119.61   193.74, pats=441
+./mine-and-test.sh 6  # maxStones=6 enemy  #   1623  22617.7s   64.0%   118.86   194.84, pats=536
+
+./mine-and-test.sh # gameCount=6700, PLAYOUTS=2000 PATTERN_EQUIV=50 size=9
+./mine-and-test.sh  # maxStones=1 enemy friend, pats=786  
+./mine-and-test.sh  # maxStones=5 enemy open,   pats=796  
+./mine-and-test.sh  # maxStones=5,              pats=195  
+./mine-and-test.sh  # maxStones=6,              pats=249
+./mine-and-test.sh  # maxStones=7,              pats=299
+./mine-and-test.sh  # maxStones=8,              pats=
 
