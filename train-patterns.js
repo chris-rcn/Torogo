@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-patterns.js — learn pattern weights via logistic TD(2).
+// train-patterns.js — learn pattern weights via logistic TD(2) self-play.
 //
 // Value function (absolute, P(BLACK wins)):
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
@@ -12,20 +12,27 @@
 //          = 1 / 0.5 / 0  for terminal            [BLACK wins / draw / WHITE wins]
 //
 //   Targets are absolute (P(BLACK wins)), independent of current player.
-//   This keeps terminal updates consistent when both final PASS states
-//   share the same board position — they receive the same target and
-//   reinforce each other rather than cancelling.
+//   Both PASS states at game end share the same board and receive the same
+//   target, so they reinforce each other rather than cancelling.
 //
-// Move selection — full-width single-ply search:
-//   Policy player: BLACK maximises V(s'), WHITE minimises V(s').
-//   Reference opponent: uniform-random legal non-eye move.
+// Training: pure self-play — both colours use the pattern policy.
+//   BLACK: maximise V(s')   WHITE: minimise V(s')  (full-width single-ply)
+//
+// Evaluation: play eval games against a configurable reference agent to
+//   measure how much the policy has improved.  Eval games do not update weights.
 //
 // Features: pattern1 + pattern2 + pattern3 (maxLibs = 1), all cells.
 //
+// Status is printed at an exponentially increasing interval (× 1.5 each time).
+//
 // Usage:
-//   node train-patterns.js [--size 9] [--games 2000] [--save weights.json]
-//                          [--load weights.json]  [--log 200]
+//   node train-patterns.js [--size 9] [--save weights.json]
+//                          [--load weights.json] [--eval random]
+//                          [--eval-games 40]
+//
+// Runs indefinitely (Ctrl-C to stop).  Weights are saved at every print.
 
+const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 const { pattern1, pattern2, pattern3 } = require('./patterns.js');
 const fs = require('fs');
@@ -33,7 +40,7 @@ const fs = require('fs');
 // ── Hyperparameters ───────────────────────────────────────────────────────────
 
 const LR       = 0.3;   // learning rate
-const MAX_LIBS = 1;     // liberty cap (1 = presence/absence only, no liberty count)
+const MAX_LIBS = 1;     // liberty cap (1 = stone presence only, no liberty count)
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
@@ -89,16 +96,14 @@ function tdUpdate(features, v, target) {
   for (const f of features) addW(f.key, step * f.polarity);
 }
 
-// ── Move selection ────────────────────────────────────────────────────────────
+// ── Policy move selection (full-width single-ply) ─────────────────────────────
 
-// Full-width single-ply search using absolute V = P(BLACK wins).
-//   BLACK to move: maximise V(s') over all resulting states.
-//   WHITE to move: minimise V(s') over all resulting states.
+// Uses absolute V = P(BLACK wins):
+//   BLACK to move: maximise V(s')   WHITE to move: minimise V(s')
 function pickMovePolicy(game) {
   const cap     = game.N * game.N;
   const isBlack = game.current === BLACK;
 
-  // Evaluate a candidate move and return the resulting absolute value.
   function scoreMove(idx) {
     const g = game.clone();
     g.play(idx);
@@ -118,74 +123,86 @@ function pickMovePolicy(game) {
     if (isBetter(s)) { bestScore = s; bestIdx = i; }
   }
 
-  // Consider PASS: override bestIdx only when PASS is strictly better.
   if (isBetter(scoreMove(PASS))) bestIdx = PASS;
 
   return bestIdx;
 }
 
-// Uniform-random reference opponent (non-eye legal moves or PASS).
-function pickMoveRandom(game) {
-  const m = game.randomLegalMove();
-  return m !== undefined ? m : PASS;
-}
+// ── Self-play training game ───────────────────────────────────────────────────
 
-// ── Play one game ─────────────────────────────────────────────────────────────
-
-// policyIsBlack: true  → BLACK uses policy, WHITE uses random.
-//                false → WHITE uses policy, BLACK uses random.
-// Returns trajectory [{features, v}] and the winner.
-function playGame(N, policyIsBlack) {
-  const game     = new Game2(N, false);   // empty board, BLACK moves first
-  const maxMoves = N * N * 4;            // safety cap
-  const traj     = [];                   // [{features, v}]
+// Both colours use the policy.  Apply 2-step logistic TD after the game.
+// All targets are absolute (P(BLACK wins)).
+function trainGame(N) {
+  const game     = new Game2(N, false);
+  const maxMoves = N * N * 4;
+  const traj     = [];   // [{features, v}]
 
   while (!game.gameOver && traj.length < maxMoves) {
     const features = extractFeatures(game);
     const v        = valueOf(features);
     traj.push({ features, v });
-
-    const usePolicy = (game.current === BLACK) === policyIsBlack;
-    game.play(usePolicy ? pickMovePolicy(game) : pickMoveRandom(game));
+    game.play(pickMovePolicy(game));
   }
 
-  return { traj, winner: game.calcWinner() };
-}
-
-// ── Train on one game ─────────────────────────────────────────────────────────
-
-// Apply 2-step logistic TD updates.  All targets are absolute (P(BLACK wins)).
-// V values in traj[] were computed with weights frozen at game start (batch TD).
-function trainGame(N, policyIsBlack) {
-  const { traj, winner } = playGame(N, policyIsBlack);
-  const T = traj.length;
-
-  // Absolute terminal outcome.
-  const outcome = winner === BLACK ? 1 : winner === WHITE ? 0 : 0.5;
+  const T       = traj.length;
+  const outcome = absoluteOutcome(game);
 
   for (let t = 0; t < T; t++) {
     const { features, v } = traj[t];
-
-    // Bootstrap 2 steps ahead (same-player parity preserved); fall back to
-    // actual outcome when fewer than 2 steps remain.
     const target = (t + 2 < T) ? traj[t + 2].v : outcome;
-
     tdUpdate(features, v, target);
   }
 
-  return winner;
+  return game.calcWinner();
+}
+
+// ── Evaluation against a reference agent ─────────────────────────────────────
+
+// Play nGames of policy vs agent, alternating colours.
+// Returns { policyWins, agentWins, draws, winRate }.
+function evalVsAgent(N, agentGetMove, nGames) {
+  let policyWins = 0, agentWins = 0, draws = 0;
+
+  for (let g = 0; g < nGames; g++) {
+    const policyIsBlack = (g % 2 === 0);
+    const game     = new Game2(N, false);
+    const maxMoves = N * N * 4;
+    let   moves    = 0;
+
+    while (!game.gameOver && moves++ < maxMoves) {
+      let idx;
+      if ((game.current === BLACK) === policyIsBlack) {
+        idx = pickMovePolicy(game);
+      } else {
+        const mv = agentGetMove(game, 0);
+        idx = mv.move !== undefined ? mv.move : PASS;
+      }
+      game.play(idx);
+    }
+
+    const winner = game.calcWinner();
+    if (winner === null) {
+      draws++;
+    } else if ((winner === BLACK) === policyIsBlack) {
+      policyWins++;
+    } else {
+      agentWins++;
+    }
+  }
+
+  return { policyWins, agentWins, draws, winRate: policyWins / nGames };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
-function saveWeights(path) {
+function saveWeights(savePath) {
   const obj = {};
   for (const [k, v] of weights) obj[String(k)] = v;
-  fs.writeFileSync(path, JSON.stringify(obj));
+  fs.writeFileSync(savePath, JSON.stringify(obj));
 }
 
-function loadWeights(path) {
-  const raw = JSON.parse(fs.readFileSync(path, 'utf8'));
+function loadWeights(loadPath) {
+  const raw = JSON.parse(fs.readFileSync(loadPath, 'utf8'));
   for (const [k, v] of Object.entries(raw)) weights.set(Number(k), v);
 }
 
@@ -204,12 +221,16 @@ function parseArgs() {
   return opts;
 }
 
-const opts      = parseArgs();
-const SIZE      = parseInt(opts.size  || '9',    10);
-const N_GAMES   = parseInt(opts.games || '2000', 10);
-const SAVE_PATH = opts.save || 'pattern-weights.json';
-const LOAD_PATH = opts.load || null;
-const LOG_EVERY = parseInt(opts.log   || '200',  10);
+const opts        = parseArgs();
+const SIZE        = parseInt(opts.size          || '9',      10);
+const SAVE_PATH   = opts.save                   || 'pattern-weights.json';
+const LOAD_PATH   = opts.load                   || null;
+const EVAL_AGENT  = opts.eval                   || 'random';
+const EVAL_GAMES  = parseInt(opts['eval-games'] || '40',     10);
+
+// Load eval agent from ai/ folder.
+const { getMove: evalGetMove } =
+  require(path.join(__dirname, 'ai', EVAL_AGENT + '.js'));
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
@@ -226,36 +247,35 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-console.log(`Training: size=${SIZE}  games=${N_GAMES}  lr=${LR}  maxLibs=${MAX_LIBS}`);
-console.log(`Opponents: policy (single-ply) vs random, alternating colour each game`);
+console.log(`Training: size=${SIZE}  lr=${LR}  maxLibs=${MAX_LIBS}  (runs forever, Ctrl-C to stop)`);
+console.log(`Self-play training, eval vs ${EVAL_AGENT} every (×1.5) games`);
 console.log(`Save → ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 
-let blackWins = 0, whiteWins = 0, draws = 0;
+// Print header.
+console.log(
+  `${'game'.padStart(7)}  ${'weights'.padStart(8)}` +
+  `  ${'policy%'.padStart(7)}  ${'elapsed'.padStart(8)}`
+);
+
 const t0 = Date.now();
+let nextPrint = 1;
+let g = 0;
 
-for (let g = 1; g <= N_GAMES; g++) {
-  // Alternate which colour is the policy player each game.
-  const policyIsBlack = (g % 2 === 1);
-  const winner = trainGame(SIZE, policyIsBlack);
+// Runs indefinitely; Ctrl-C triggers SIGINT handler which saves and exits.
+while (true) {
+  g++;
+  trainGame(SIZE);
 
-  if (winner === BLACK)      blackWins++;
-  else if (winner === WHITE) whiteWins++;
-  else                       draws++;
-
-  if (g % LOG_EVERY === 0 || g === N_GAMES) {
-    const total = blackWins + whiteWins + draws;
-    const bPct  = total ? (100 * blackWins / total).toFixed(1) : '—';
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  if (g >= nextPrint) {
+    const { winRate } = evalVsAgent(SIZE, evalGetMove, EVAL_GAMES);
+    const pct     = (100 * winRate).toFixed(1);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1) + 's';
     console.log(
-      `game ${String(g).padStart(6)} / ${N_GAMES}` +
-      `  weights=${weights.size}` +
-      `  B%=${bPct.padStart(5)}` +
-      `  elapsed=${elapsed}s`
+      `${String(g).padStart(7)}  ${String(weights.size).padStart(8)}` +
+      `  ${(pct + '%').padStart(7)}  ${elapsed.padStart(8)}`
     );
-    blackWins = whiteWins = draws = 0;
+    saveWeights(SAVE_PATH);
+    nextPrint = Math.max(nextPrint + 1, Math.round(nextPrint * 1.5));
   }
 }
-
-saveWeights(SAVE_PATH);
-console.log(`\nDone. Saved ${weights.size} pattern weights → ${SAVE_PATH}`);
