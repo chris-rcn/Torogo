@@ -241,11 +241,6 @@ if (LOAD_PATH) {
   }
 }
 
-process.on('SIGINT', () => {
-  saveWeights(SAVE_PATH);
-  console.log(`\nInterrupted — saved ${weights.size} weights to ${SAVE_PATH}`);
-  process.exit(0);
-});
 
 console.log(`Training: size=${SIZE}  lr=${LR}  maxLibs=${MAX_LIBS}  (runs forever, Ctrl-C to stop)`);
 console.log(`Self-play training, eval vs ${EVAL_AGENT} every (×1.5) games`);
@@ -262,7 +257,7 @@ const t0 = Date.now();
 let nextPrint = 1;
 let g = 0;
 
-// Runs indefinitely; Ctrl-C triggers SIGINT handler which saves and exits.
+// Runs indefinitely; Ctrl-C (SIGINT default) kills the process immediately.
 while (true) {
   g++;
   trainGame(SIZE);
