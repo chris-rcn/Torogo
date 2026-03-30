@@ -38,26 +38,29 @@ const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-// Random playout using Game2.  Records the flat cell indices of every non-pass
-// move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2) {
+// Returns { winner, blackPlayed, whitePlayed }.
+function playTracked(game2, node) {
   const wasAlreadyOver = game2.gameOver;
   const N   = game2.N;
   const cap = N * N;
-  const blackPlayed = [];
-  const whitePlayed = [];
+  // Signed weight per cell: positive = played by BLACK, negative = played by WHITE.
+  // Zero means not yet played.  First play on a cell wins; recaptures are ignored.
+  const played = new Float32Array(cap);
 
   const moveLimit = cap + 20;
+  const weightStep = 1 / cap;
   let moves = 0;
+  let weight = 1.0;
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
+    const raveNode = current !== node.mover ? node : node.parent;
     const idx = game2.randomLegalMove();
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
-    if (current === BLACK) blackPlayed.push(idx);
-    else                    whitePlayed.push(idx);
+    if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
     moves++;
+    weight -= weightStep;
   }
 
   let winner;
@@ -66,7 +69,7 @@ function playTracked(game2) {
   } else {
     winner = game2.estimateWinner();
   }
-  return { winner, blackPlayed, whitePlayed };
+  return { winner, played };
 }
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
@@ -93,9 +96,8 @@ function getLegalMoves(game2) {
 // Create a node for the position reached by `move`.
 // `game2` is the game state AFTER `move` was played (or initial state for root).
 // `ci`    is this node's index in parent.children / parent.child* arrays (-1 for root).
-// `mover` is the player who played `move` (null at root).
 // Priors (ladder + pattern) are computed eagerly from the current game state.
-function makeNode(move, parent, ci, mover, game2, N) {
+function makeNode(move, parent, ci, game2, N) {
   const movesArr = getLegalMoves(game2);
   const M = movesArr.length;
   const area = N * N;
@@ -120,11 +122,13 @@ function makeNode(move, parent, ci, mover, game2, N) {
     }
   }
 
+  const mover = 3 - game2.current;
+
   return {
     move,
     parent,
     ci,           // this node's index in parent.children / parent.child* arrays (-1 for root)
-    mover,        // player who made `move` to reach this node (null at root)
+    mover,        // player who made `move` to reach this node
     totalVisits:  1,  // sum of visits; incremented each playout
     selectedChild: -1,  // set by selectAndExpand; read by backpropagate
 
@@ -182,7 +186,6 @@ function selectAndExpand(root, rootGame2, N) {
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
-    const mover = game2.current;   // player making this move
     game2.play(node.legalMoves[best]);
 
     // Promote child to a full node once it has accumulated enough visits.
@@ -190,7 +193,7 @@ function selectAndExpand(root, rootGame2, N) {
     // its children all have cv=0 < N_EXPAND, so the leaf case fires next iteration
     // (exactly one makeNode per playout, same as rave2's one-expansion-per-playout).
     if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
-      node.children[best] = makeNode(node.legalMoves[best], node, best, mover, game2, N);
+      node.children[best] = makeNode(node.legalMoves[best], node, best, game2, N);
     }
 
     // After a pass, always force a second pass so the playout scores the current
@@ -223,22 +226,29 @@ function selectAndExpand(root, rootGame2, N) {
 // node.selectedChild holds the unpromoted child index that was played last,
 // or -1 if we descended all the way to a promoted node (game already over).
 //
-// childMover(n): the player choosing the next move from node n.
-//   - rootPlayer if n is the root (n.mover === null)
-//   - opponent(n.mover) otherwise
-function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
+// childMover(n): the player choosing the next move from node n = opponent of n.mover.
+function backpropagate(node, winner, played, rootPlayer) {
   function childMover(n) {
-    return n.mover === null ? rootPlayer : (n.mover === BLACK ? WHITE : BLACK);
+    return 3 - n.mover;
   }
 
-  function updateRave(node, won, played) {
-    const invPlayedCount = 1 / (1 + played.length)
-    let weight = 1;
-    for (let k = 0; k < played.length; k++) {
-      const move = played[k];
-      node.raveVisits[move] += weight;
-      node.raveWins[move] += won * weight;
-      weight -= invPlayedCount;
+  function updateRave(node, won, played, chooser) {
+    if (chooser === BLACK) {
+      for (let k = 0; k < played.length; k++) {
+        const weight = played[k];
+        if (weight > 0) {
+          node.raveVisits[k] += weight;
+          node.raveWins[k]   += won * weight;
+        }
+      }
+    } else {
+      for (let k = 0; k < played.length; k++) {
+        const weight = played[k];
+        if (weight < 0) {
+          node.raveVisits[k] -= weight;
+          node.raveWins[k]   -= won * weight;
+        }
+      }
     }
   }
 
@@ -252,25 +262,18 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     node.visits[leafIdx]++;
     node.wins[leafIdx] += won;
     node.totalVisits++;
-
-    const played = chooser === BLACK ? blackPlayed : whitePlayed;
-    updateRave(node, won, played);
+    updateRave(node, won, played, chooser);
   }
 
   // Walk up the tree, updating each parent's child arrays and RAVE arrays.
   while (node.parent !== null) {
-    const ci  = node.ci;   // stored at promotion time — no lookup needed
-    const won = winner === node.mover ? 1 : 0;
+    const ci      = node.ci;   // stored at promotion time — no lookup needed
+    const chooser = childMover(node.parent);
+    const won     = winner === chooser ? 1 : 0;
     node.parent.visits[ci]++;
     node.parent.wins[ci] += won;
     node.parent.totalVisits++;
-
-    // RAVE update at node.parent: credit the parent's chooser's playout moves.
-    const chooser = childMover(node.parent);
-    const played  = chooser === BLACK ? blackPlayed : whitePlayed;
-    const rWon    = winner === chooser ? 1 : 0;
-    updateRave(node.parent, rWon, played);
-
+    updateRave(node.parent, won, played, chooser);
     node = node.parent;
   }
 }
@@ -289,7 +292,7 @@ function getMove(game, timeBudgetMs) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
-  const root = makeNode(null, null, -1, null, game2, N);
+  const root = makeNode(null, null, -1, game2, N);
 
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
@@ -297,8 +300,8 @@ function getMove(game, timeBudgetMs) {
   do {
     playouts++;
     const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
-    backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
+    const { winner, played } = playTracked(simGame2, node);
+    backpropagate(node, winner, played, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
   // Best child: most playout visits; ties broken by RAVE-blended score.

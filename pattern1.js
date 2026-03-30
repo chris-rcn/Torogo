@@ -32,9 +32,6 @@ const killUrgentZ = makeZobrist(936265824, maxStoneCount+1);
 const saveUrgentZ = makeZobrist(785247856, maxStoneCount+1);
 const killWastedZ = makeZobrist(614738291, maxStoneCount+1);
 const saveWastedZ = makeZobrist(492837465, maxStoneCount+1);
-const openZ       = makeZobrist(371829463, 5);
-const friendZ     = makeZobrist(258463719, 5);
-const enemyZ      = makeZobrist(193847261, 5);
 
 function getPatternHashes(game2, indices, ladderStatuses) {
   const N    = game2.N;
@@ -66,24 +63,11 @@ function getPatternHashes(game2, indices, ladderStatuses) {
   const cells = game2.cells;
   const result = [];
   for (let idx of indices) {
-//    const base = idx * 4;
-//    let open = 0;
-//    const friendGids = new Set(), enemyGids = new Set();
-//    for (let i = 0; i < 4; i++) {
-//      const n = game2._nbr[base + i];
-//      const c = cells[n];
-//      if (c === 0) open++; else if (c === mover) friendGids.add(game2._gid[n]); else enemyGids.add(game2._gid[n]);
-//    }
-//    const friend = friendGids.size, enemy = enemyGids.size;
-//
     const hash = 0
       ^ killUrgentZ[Math.min(killUrgent[idx], maxStoneCount)]
       ^ saveUrgentZ[Math.min(saveUrgent[idx], maxStoneCount)]
       ^ killWastedZ[Math.min(killWasted[idx], maxStoneCount)]
       ^ saveWastedZ[Math.min(saveWasted[idx], maxStoneCount)]
-//      ^ friendZ[friend]
-//      ^ enemyZ[enemy]
-//      ^ openZ[open]
     ;
     result.push({ idx, hash });
   }

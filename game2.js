@@ -21,9 +21,9 @@ const PASS  = -1;
 const KOMI  = 4.5;
 
 // Shared neighbor-table cache (same design as game.js)
-const _nbrCache = new Map();
-function _buildNbr(N) {
-  const cached = _nbrCache.get(N);
+const topologyCache = new Map();
+function getTopology(N) {
+  const cached = topologyCache.get(N);
   if (cached !== undefined) return cached;
   const cap = N * N;
   const nbr  = new Int32Array(cap * 4);
@@ -41,8 +41,11 @@ function _buildNbr(N) {
       dnbr[i*4+3] = ((y+1  )%N)*N + (x+1  )%N;
     }
   }
-  const t = { nbr, dnbr };
-  _nbrCache.set(N, t);
+  const allCells = new Int32Array(cap);
+  for (let i = 0; i < cap; i++) allCells[i] = i;
+
+  const t = { nbr, dnbr, allCells };
+  topologyCache.set(N, t);
   return t;
 }
 
@@ -75,10 +78,11 @@ class Game2 {
     this._lw = new Int32Array(MAX_G * W);   // liberty bitset words
     this._ls = new Int32Array(MAX_G);       // liberty size
 
-    const tables = _buildNbr(N);
-    this._nbr  = tables.nbr;
-    this._dnbr = tables.dnbr;
-    this.nbr   = tables.nbr;    // public read-only
+    const tables = getTopology(N);
+    this._nbr     = tables.nbr;
+    this._dnbr    = tables.dnbr;
+    this.nbr      = tables.nbr;      // public read-only
+    this._allCells = tables.allCells; // all cell indices [0..N*N-1], shared across instances
 
     this.current = BLACK;
     this.ko      = PASS;
@@ -297,6 +301,16 @@ class Game2 {
   groupSize(gid)          { return this._ss[gid]; }
   /** Number of liberties of group gid. */
   groupLibertyCount(gid)  { return this._ls[gid]; }
+  /** Blended distance between two board indices: 0.4*manhattan + 0.6*euclidean,
+   *  both computed on the torus. */
+  distance(a, b) {
+    const N = this.N;
+    const ax = a % N, ay = (a / N) | 0;
+    const bx = b % N, by = (b / N) | 0;
+    const dx = Math.min(Math.abs(ax - bx), N - Math.abs(ax - bx));
+    const dy = Math.min(Math.abs(ay - by), N - Math.abs(ay - by));
+    return 0.4 * (dx + dy) + 0.6 * Math.sqrt(dx * dx + dy * dy);
+  }
   /** All liberty indices of the group containing stone at idx, as an Int32Array. */
   groupLibs(idx) {
     const gid = this._gid[idx];
@@ -615,9 +629,10 @@ class Game2 {
     g._ss   = new Int32Array(this._ss);
     g._lw   = new Int32Array(this._lw);
     g._ls   = new Int32Array(this._ls);
-    g._nbr  = this._nbr;   // immutable, share
-    g._dnbr = this._dnbr;  // immutable, share
-    g.nbr   = this._nbr;   // public alias
+    g._nbr      = this._nbr;      // immutable, share
+    g._dnbr     = this._dnbr;     // immutable, share
+    g._allCells = this._allCells; // shared scratch buffer — shuffled in-place by randomLegalMove
+    g.nbr       = this._nbr;      // public alias
     g.current           = this.current;
     g.ko                = this.ko;
     g.consecutivePasses = this.consecutivePasses;
@@ -675,25 +690,19 @@ class Game2 {
   }
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
-  // Fast path: try up to 10 random cells.  Fallback: collect all empty cells
-  // then incrementally shuffle (Fisher-Yates) until a valid move is found.
+  // Fast path: try random cells.  Fallback: incremental Fisher-Yates over
+  // _allCells in-place (no allocation; order on entry is irrelevant).
   randomLegalMove() {
-    const cap   = this.N * this.N;
+    const cap = this._allCells.length;
 
-    // Fast path: try random cells.
-    for (let i = 0; i < 15; i++) {
-      const idx = Math.floor(Math.random() * cap);
-      if (this.isLegal(idx) && !this.isTrueEye(idx)) return idx;
-    }
-
-    // Fallback: collect empty cells, incrementally shuffle, test each.
-    const empty = [];
-    for (let i = 0; i < cap; i++) if (this.cells[i] === 0) empty.push(i);
-    for (let end = empty.length - 1; end >= 0; end--) {
+    // Fallback: shuffle _allCells in-place, test each cell.
+    const allCells = this._allCells;
+    for (let end = cap - 1; end >= 0; end--) {
       const ri  = Math.floor(Math.random() * (end + 1));
-      const idx = empty[ri];
+      const idx = allCells[ri];
       if (this.isLegal(idx) && !this.isTrueEye(idx)) return idx;
-      empty[ri] = empty[end];
+      allCells[ri]  = allCells[end];
+      allCells[end] = idx;
     }
     return PASS;
   }

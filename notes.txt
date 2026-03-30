@@ -5,12 +5,16 @@ Everything is still returning { type, x, y, move } from getMove.
 Need to change getMove() consumers to use result.move.
 Then remove the type,x,y from the agent result objects.
 
-Ladder priors in tree: failed
-Pattern priors in tree: failed
-Pattern priors in playouts: failed
-Rave-influenced playouts: failed
+Ladder priors in tree: failed.
+Pattern priors in tree: failed.
+Pattern priors in playouts: failed.
+Rave-influenced playouts: failed.  Didn't try 
 
 Opening book
+
+
+Why is rave copying the legal moves array?
+
 
 Unify move notation in files.  Use A1 or AA ?
 
@@ -56,4 +60,28 @@ PATTERN_EQUIV=50 PLAYOUTS=1000 node learn-patterns.js --size 9 --budget 1
 ./mine-and-test.sh  # maxStones=6,              pats=249
 ./mine-and-test.sh  # maxStones=7,              pats=299
 ./mine-and-test.sh  # maxStones=8,              pats=
+
+
+
+
+key= 1 [../.O] 1 own, 0 opp
+
+key= 5 [../OX] 1 own, 1 opp  !!
+key=15 [.O/X.] 1 own, 1 opp  !!
+
+key= 4 [../OO] 2 own, 0 opp
+key=12 [.O/O.] 2 own, 0 opp
+
+key=14 [.O/OX] 2 own, 1 opp
+key=16 [.O/XO] 2 own, 1 opp
+
+key=44 [OO/XX] 2 own, 2 opp  !!
+key=52 [OX/XO] 2 own, 2 opp  !!
+
+key=13 [.O/OO] 3 own, 0 opp
+
+key=41 [OO/OX] 3 own, 1 opp
+
+key=40 [OO/OO] 4 own, 0 opp
+
 
