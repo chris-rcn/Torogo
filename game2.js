@@ -418,6 +418,17 @@ class Game2 {
     return true;
   }
 
+  // Returns true if playing at idx (for this.current) would capture at least one opponent stone.
+  isCapture(idx) {
+    const opp = this.current === BLACK ? WHITE : BLACK;
+    const nbr = this._nbr;
+    for (let d = 0; d < 4; d++) {
+      const ni = nbr[idx * 4 + d];
+      if (this.cells[ni] === opp && this._ls[this._gid[ni]] === 1) return true;
+    }
+    return false;
+  }
+
   isTrueEye(idx) {
     const color  = this.current;
     const cells  = this.cells;

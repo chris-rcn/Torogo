@@ -1,98 +1,60 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
+
 /**
  * AMAF (All-Moves-As-First) Monte Carlo policy.
  *
  * For each candidate, run random playouts starting with that move in
- * round-robin order until a total work budget is exhausted (where work per
- * playout = moves played + 10 for per-playout overhead).  Unlike mc.js, every move the current
- * player makes during the playout is credited — not just the opening move.
- * Moves later in the playout receive less credit via an exponential discount,
- * since they are less representative of what playing there "first" would mean.
- *
- * This means a single playout of candidate A also updates the estimates for
- * candidates B, C, … that happen to appear later in the same playout, giving
- * all candidates far more data than mc.js provides.
+ * complete round-robin rounds.  Every move made during a playout is credited
+ * to the corresponding cell with a linearly decaying weight (1.0 → 0), so a
+ * single playout of candidate A also updates estimates for candidates B, C, …
+ * that appear later, giving all candidates far more data than mc.js provides.
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
  *   game         - a live Game instance (read-only; do not mutate)
  *   timeBudgetMs - milliseconds allowed for this decision (required)
  */
 
-const { performance } = require('perf_hooks');
-const { PASS, BLACK, WHITE } = require('../game2.js');
-const Util = require('../util.js');
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
-// Weight decay per subsequent player move.  Override with AMAF_DISCOUNT=<n>.
-const DISCOUNT = Util.envFloat('AMAF_DISCOUNT', 0.5);
+const performance = (typeof window !== 'undefined') ? window.performance
+  : require('perf_hooks').performance;
+
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const Util = _isNode ? require('../util.js') : window.Util;
+
+const PLAYOUTS        = Util.envInt  ('PLAYOUTS', 0);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
 const OPP_MOVE_WEIGHT = Util.envFloat('AMAF_OPP_WEIGHT', 0);
 
-// Random playout using Game2.  Returns the ordered lists of cell indices
-// played by the current player (played) and opponent (oppPlayed) during the
-// playout.  winner is BLACK or WHITE.
-function playTracked(game2, trackColor) {
-  const N     = game2.N;
-  const cap   = N * N;
-  const cells = game2.cells;
-  const nbr   = game2._nbr;
-  const played    = [];  // ordered cell indices for trackColor
-  const oppPlayed = [];  // ordered cell indices for the other color
-
-  const empty = [];
-  for (let i = 0; i < cap; i++) {
-    if (cells[i] === 0) empty.push(i);
-  }
-
-  const moveLimit = empty.length + 20;
-  let moves = 0;
+// Random playout.  Returns { winner, played } where played is a Float32Array
+// of length cap: positive value = played by BLACK, negative = played by WHITE,
+// zero = not played.  Weight decreases linearly from 1.0; first play wins.
+function playTracked(game2) {
+  const cap        = game2.N * game2.N;
+  const played     = new Float32Array(cap);
+  const moveLimit  = cap + 20;
+  const weightStep = 1 / cap;
+  let moves = 0, weight = 1.0;
 
   while (!game2.gameOver && moves < moveLimit) {
-    let placed = false;
-    let end = empty.length;
     const current = game2.current;
-
-    while (end > 0) {
-      const ri  = Math.floor(Math.random() * end);
-      const idx = empty[ri];
-      empty[ri] = empty[end - 1];
-      empty[end - 1] = idx;
-      end--;
-
-      if (game2.isTrueEye(idx)) continue;
-      if (!game2.isLegal(idx))  continue;
-
-      if (current === trackColor) played.push(idx);
-      else                        oppPlayed.push(idx);
-
-      // Snapshot neighbour occupancy to detect captures after play.
-      const base = idx * 4;
-      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
-            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
-      game2.play(idx);
-      empty[end] = empty[empty.length - 1];
-      empty.pop();
-
-      // If any previously occupied neighbour became empty, captures occurred.
-      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
-          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
-        empty.length = 0;
-        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
-      }
-
-      placed = true;
-      moves++;
-      break;
-    }
-
-    if (!placed) { game2.play(PASS); moves++; }
+    const idx     = game2.randomLegalMove();
+    if (idx === PASS) { game2.play(PASS); moves++; continue; }
+    if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
+    game2.play(idx);
+    moves++;
+    weight -= weightStep;
   }
 
-  return { winner: game2.estimateWinner(), played, oppPlayed };
+  return { winner: game2.estimateWinner(), played };
 }
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, playoutLimit = PLAYOUTS) {
   if (game.gameOver) return { type: 'pass', move: PASS };
 
   const game2  = game.cells ? game.clone() : game.toGame2();
@@ -104,58 +66,58 @@ function getMove(game, timeBudgetMs) {
   const candidates = [];
   const cells = game2.cells;
   for (let i = 0; i < cap; i++) {
-    if (cells[i] !== 0) continue;
-    if (game2.isTrueEye(i)) continue;
-    if (game2.isLegal(i)) candidates.push(i);
+    if (game2.isLegal(i) && !game2.isTrueEye(i)) candidates.push(i);
   }
   if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
     candidates.push(PASS);
   }
+  Util.shuffle(candidates);
 
   // AMAF stats indexed by cell (0..N*N-1); pass stored at N*N.
-  // Float64 to accommodate fractional discount weights.
-  const wins  = new Float64Array(cap + 1);
-  const plays = new Float64Array(cap + 1);
+  const wins  = new Float32Array(cap + 1);
+  const plays = new Float32Array(cap + 1);
   const PASS_IDX = cap;
 
-  // Round-robin playouts across candidates until the budget is exhausted.
+  // Run complete rounds (one playout per candidate per round) so every
+  // candidate always has exactly the same number of direct playouts.
+  // Always complete at least one full round before checking the budget.
   const deadline = performance.now() + timeBudgetMs;
-  let cidx = 0, playoutCount = 0;
-  while (PLAYOUTS > 0 ? playoutCount < PLAYOUTS : performance.now() < deadline) {
-    playoutCount++;
-    const move   = candidates[cidx];
-    const clone  = game2.clone();
-    clone.play(move);  // works for both cell indices and PASS (-1)
+  let round = 0, playoutCount = 0;
+  while (true) {
+    if (round > 0 && (playoutLimit > 0 ? playoutCount >= playoutLimit : performance.now() >= deadline)) break;
 
-    const { winner, played, oppPlayed } = playTracked(clone, player);
-    const won = winner === player ? 1 : 0;
+    for (let cidx = 0; cidx < candidates.length; cidx++) {
+      playoutCount++;
+      const move  = candidates[cidx];
+      const clone = game2.clone();
+      clone.play(move);
 
-    // Credit the opening move at full weight (it was played "first").
-    const firstIdx = move === PASS ? PASS_IDX : move;
-    plays[firstIdx] += 1.0;
-    wins[firstIdx]  += won;
+      const { winner, played } = playTracked(clone);
+      const won = winner === player ? 1 : 0;
 
-    // Credit subsequent player moves with exponential discount: the i-th
-    // subsequent move gets weight DISCOUNT^(i+1).  Moves near the end of
-    // the game are the least representative of a "first move" choice.
-    let weight = DISCOUNT;
-    for (const idx of played) {
-      plays[idx] += weight;
-      wins[idx]  += won * weight;
-      weight *= DISCOUNT;
-    }
+      // Credit the opening move at full weight (it was played "first").
+      const firstIdx = move === PASS ? PASS_IDX : move;
+      plays[firstIdx] += 1.0;
+      wins[firstIdx]  += won;
 
-    // Credit opponent moves with inverted outcome, scaled by OPP_MOVE_WEIGHT.
-    if (OPP_MOVE_WEIGHT > 0) {
-      let oppWeight = DISCOUNT * OPP_MOVE_WEIGHT;
-      for (const idx of oppPlayed) {
-        plays[idx] += oppWeight;
-        wins[idx]  += (1 - won) * oppWeight;
-        oppWeight *= DISCOUNT;
+      // Credit playout moves using signed weights from played[].
+      const playerSign = player === BLACK ? 1 : -1;
+      for (let k = 0; k < cap; k++) {
+        const w = played[k];
+        if (w === 0) continue;
+        if (w * playerSign > 0) {
+          const wt = Math.abs(w);
+          plays[k] += wt;
+          wins[k]  += won * wt;
+        } else if (OPP_MOVE_WEIGHT > 0) {
+          const wt = Math.abs(w) * OPP_MOVE_WEIGHT;
+          plays[k] += wt;
+          wins[k]  += (1 - won) * wt;
+        }
       }
+      if (playoutLimit > 0 && playoutCount >= playoutLimit) break;
     }
-
-    cidx = (cidx + 1) % candidates.length;
+    round++;
   }
 
   // Select the candidate with the highest AMAF win ratio; ties broken randomly.
@@ -217,8 +179,11 @@ function getMove(game, timeBudgetMs) {
 
   const best = candidates[bestIdx];
   return best === PASS
-    ? { type: 'pass' }
+    ? { type: 'pass', move: PASS }
     : { type: 'place', move: best, x: best % N, y: (best / N) | 0 };
 }
 
-module.exports = { getMove };
+if (typeof module !== 'undefined') module.exports = { getMove };
+else window.Amaf = { getMove };
+
+})();
