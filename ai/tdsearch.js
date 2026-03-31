@@ -21,21 +21,24 @@ const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 // maxLen must be >= the maximum number of features any position can produce.
 // Upper bound: one 1×1 + one 2×2 + one 1×2 + one 2×1 entry per cell = 4 * cap.
 function makeBuf(cap) {
-  return { keys: new Int32Array(4 * cap), polarities: new Int8Array(4 * cap), n: 0 };
+  return { keys: new Int32Array(4 * cap), n: 0 };
 }
 
 // ── Features ──────────────────────────────────────────────────────────────────
 
 // Fills buf with features for the current board position.
 //
-// Type 1 — 1×1 per stone: key = idx, polarity = +1 (BLACK) / -1 (WHITE).
+// Type 1 — 1×1 per stone: key = idx*2 + (BLACK ? 0 : 1)
+//   range [0, 2*cap)
+// Type 2 — 2×2 anchored at TL=idx:  key = 2*cap  + idx*81 + ternary4
+//   range [2*cap, 83*cap)
+// Type 3 — 1×2 anchored at L=idx:   key = 83*cap + idx*9  + ternary2
+//   range [83*cap, 92*cap)
+// Type 4 — 2×1 anchored at T=idx:   key = 92*cap + idx*9  + ternary2
+//   range [92*cap, 101*cap)
 //
-// All multi-cell windows are color-normalized: if net sum < 0, negate all
-// cell values and set polarity = -1; skip windows with net sum = 0.
-//
-// Type 2 — 2×2 anchored at TL=idx:  key = cap       + idx*81 + ternary4
-// Type 3 — 1×2 anchored at L=idx:   key = 82*cap    + idx*9  + ternary2
-// Type 4 — 2×1 anchored at T=idx:   key = 91*cap    + idx*9  + ternary2
+// Multi-cell ternary: v ∈ {-1,0,+1} encoded as v+1 ∈ {0,1,2}.
+// Windows where all cells are empty (sum = 0 and all v = 0) are skipped.
 function findFeatures(game, buf) {
   const cap   = game.N * game.N;
   const cells = game.cells;
@@ -48,56 +51,29 @@ function findFeatures(game, buf) {
 
     // 1×1
     if (c !== 0) {
-      buf.keys[buf.n]       = idx;
-      buf.polarities[buf.n] = c === BLACK ? 1 : -1;
+      buf.keys[buf.n] = idx * 2 + (c === BLACK ? 0 : 1);
       buf.n++;
     }
 
     const ri = nbr [idx * 4 + 3];  // right
     const di = nbr [idx * 4 + 1];  // down
     const dr = dnbr[idx * 4 + 3];  // down-right
-
-    let v0 = cells[idx] === BLACK ? 1 : cells[idx] !== 0 ? -1 : 0;
-    let v1 = cells[ri]  === BLACK ? 1 : cells[ri]  !== 0 ? -1 : 0;
-    let v2 = cells[di]  === BLACK ? 1 : cells[di]  !== 0 ? -1 : 0;
-    let v3 = cells[dr]  === BLACK ? 1 : cells[dr]  !== 0 ? -1 : 0;
+    const v0 = cells[idx] === BLACK ? 1 : cells[idx] !== 0 ? -1 : 0;
+    const v1 = cells[ri]  === BLACK ? 1 : cells[ri]  !== 0 ? -1 : 0;
+    const v2 = cells[di]  === BLACK ? 1 : cells[di]  !== 0 ? -1 : 0;
+    const v3 = cells[dr]  === BLACK ? 1 : cells[dr]  !== 0 ? -1 : 0;
 
     // 1×2 (horizontal)
-    {
-      const sum = v0 + v1;
-      if (sum !== 0) {
-        let a = v0, b = v1, pol = 1;
-        if (sum < 0) { a = -a; b = -b; pol = -1; }
-        buf.keys[buf.n]       = 82 * cap + idx * 9 + (a + 1) * 3 + (b + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
-    }
-
-    // 2×1 (vertical)
-    {
-      const sum = v0 + v2;
-      if (sum !== 0) {
-        let a = v0, b = v2, pol = 1;
-        if (sum < 0) { a = -a; b = -b; pol = -1; }
-        buf.keys[buf.n]       = 91 * cap + idx * 9 + (a + 1) * 3 + (b + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
+    if (v0 !== 0 || v1 !== 0) {
+      buf.keys[buf.n] = 83 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
+      buf.n++;
     }
 
     // 2×2
-    {
-      const sum = v0 + v1 + v2 + v3;
-      if (sum !== 0) {
-        let a = v0, b = v1, d = v2, e = v3, pol = 1;
-        if (sum < 0) { a = -a; b = -b; d = -d; e = -e; pol = -1; }
-        buf.keys[buf.n]       = cap + idx * 81 + (a + 1) * 27 + (b + 1) * 9 + (d + 1) * 3 + (e + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
+    if (v0 !== 0 || v1 !== 0 || v2 !== 0 || v3 !== 0) {
+      buf.keys[buf.n] = 2 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
+      buf.n++;
     }
-
   }
 }
 
@@ -121,53 +97,27 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf) {
     // 1×1
     const v = cv(idx);
     if (v !== 0) {
-      buf.keys[buf.n]       = idx;
-      buf.polarities[buf.n] = v;
+      buf.keys[buf.n] = idx * 2 + (v > 0 ? 0 : 1);
       buf.n++;
     }
 
     const ri = nbr [idx * 4 + 3];
     const di = nbr [idx * 4 + 1];
     const dr = dnbr[idx * 4 + 3];
-
-    let v0 = cv(idx), v1 = cv(ri), v2 = cv(di), v3 = cv(dr);
+    const v0 = cv(idx), v1 = cv(ri);
+    const v2 = cv(di), v3 = cv(dr);
 
     // 1×2 (horizontal)
-    {
-      const sum = v0 + v1;
-      if (sum !== 0) {
-        let a = v0, b = v1, pol = 1;
-        if (sum < 0) { a = -a; b = -b; pol = -1; }
-        buf.keys[buf.n]       = 82 * cap + idx * 9 + (a + 1) * 3 + (b + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
-    }
-
-    // 2×1 (vertical)
-    {
-      const sum = v0 + v2;
-      if (sum !== 0) {
-        let a = v0, b = v2, pol = 1;
-        if (sum < 0) { a = -a; b = -b; pol = -1; }
-        buf.keys[buf.n]       = 91 * cap + idx * 9 + (a + 1) * 3 + (b + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
+    if (v0 !== 0 || v1 !== 0) {
+      buf.keys[buf.n] = 83 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
+      buf.n++;
     }
 
     // 2×2
-    {
-      const sum = v0 + v1 + v2 + v3;
-      if (sum !== 0) {
-        let a = v0, b = v1, d = v2, e = v3, pol = 1;
-        if (sum < 0) { a = -a; b = -b; d = -d; e = -e; pol = -1; }
-        buf.keys[buf.n]       = cap + idx * 81 + (a + 1) * 27 + (b + 1) * 9 + (d + 1) * 3 + (e + 1);
-        buf.polarities[buf.n] = pol;
-        buf.n++;
-      }
+    if (v0 !== 0 || v1 !== 0 || v2 !== 0 || v3 !== 0) {
+      buf.keys[buf.n] = 2 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
+      buf.n++;
     }
-
   }
 }
 
@@ -175,23 +125,23 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf) {
 
 // V(s) = P(BLACK wins)
 function evaluate(buf, weights) {
-  let z = 0;
-  const { keys, polarities, n } = buf;
+  let v = 0;
+  const { keys, n } = buf;
   for (let i = 0; i < n; i++) {
-    const w = weights.get(keys[i]) ?? 0;
-    z += polarities[i] * w;
+    v += weights.get(keys[i]) ?? 0;
   }
-  return z;  // linear
+  return v;
 }
 
-// Δw_k = (LR / n) · (target − v) · polarity_k
+// Δw_k = (LR / n) · (target − v)
 function tdUpdate(buf, v, target, weights) {
-  const { keys, polarities, n } = buf;
+  const { keys, n } = buf;
   if (n === 0) return;
   const step = (LR / n) * (target - v);
   for (let i = 0; i < n; i++) {
     const k = keys[i];
-    weights.set(k, (weights.get(k) || 0) + step * polarities[i]);
+    const w = weights.get(k) ?? 0;
+    weights.set(k, w + step);
   }
 }
 
@@ -199,7 +149,6 @@ function tdUpdate(buf, v, target, weights) {
 function snapBuf(buf, snap) {
   const n = buf.n;
   snap.keys.set(buf.keys.subarray(0, n));
-  snap.polarities.set(buf.polarities.subarray(0, n));
   snap.n = n;
 }
 
@@ -215,10 +164,11 @@ function search1ply(game, weights, width = 0) {
   for (let i = 0; i < cap; i++) {
     if (game.isLegal(i) && !game.isTrueEye(i)) candidates.push(i);
   }
-  Util.shuffle(candidates);
-  const count = width > 0 ? width : candidates.length;
+  const count = width > 0 ? Math.min(width, candidates.length) : candidates.length;
   for (let c = 0; c < count; c++) {
-    const move = candidates[c];
+    const j = c + Math.floor(Math.random() * (candidates.length - c));
+    const move = candidates[j];
+    candidates[j] = candidates[c];
     if (!game.isCapture(move)) {
       findFeaturesWithMove(game, move, game.current, buf);
     } else {
