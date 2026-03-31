@@ -30,7 +30,7 @@ const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 2000);
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 3);
+const N_EXPAND = Util.envInt('N_EXPAND', 5);
 
 // Fraction of parent RAVE stats inherited by a newly created child node.
 // Must be < 1 to prevent unbounded growth down the tree.
@@ -102,6 +102,7 @@ function makeNode(move, parent, ci, game2, N) {
   const M = movesArr.length;
   const area = N * N;
 
+  // Copy into Int32Array for compact, cache-friendly storage.
   const legalMoves = new Int32Array(M);
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 

@@ -2,6 +2,7 @@
 const { performance } = require('perf_hooks');
 const path = require('path');
 const { Game2, BLACK, WHITE, parseBoard } = require('./game2.js');
+const Util = require('./util.js');
 
 /**
  * Ladder evaluation script — run hardcoded ladder positions against an AI agent.
@@ -17,33 +18,7 @@ const { Game2, BLACK, WHITE, parseBoard } = require('./game2.js');
  *
  */
 
-// Boolean flags that take no value.
-const BOOL_FLAGS = new Set(['help']);
-
-function parseArgs(argv) {
-  const opts = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      if (BOOL_FLAGS.has(key)) { opts[key] = true; continue; }
-      const val = argv[i + 1];
-      if (val === undefined || val.startsWith('--')) {
-        console.error(`Missing value for ${arg}`);
-        process.exit(1);
-      }
-      opts[key] = val;
-      i++;
-    } else {
-      console.error(`Unknown argument: ${arg}`);
-      process.exit(1);
-    }
-  }
-  return opts;
-}
-
-const opts = parseArgs(process.argv.slice(2));
+const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 
 if (opts.help) {
   console.log('Usage: node evalladders.js [--agent <name>] [--budget <ms>] [--trials <n>]');

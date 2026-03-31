@@ -33,7 +33,26 @@ const Util = (() => {
     return (typeof process !== 'undefined' && process.env[name] !== undefined) ? parseInt(process.env[name], 10) : def;
   }
 
-  return { randInt, shuffle, envStr, envFloat, envInt };
+  // Parse --key value or --key=value flags from an argv array.
+  // boolFlags: Set (or array) of flag names that take no value (e.g. 'help', 'verbose').
+  // -h is always treated as an alias for --help.
+  function parseArgs(argv, boolFlags) {
+    const bools = boolFlags instanceof Set ? boolFlags : new Set(boolFlags || []);
+    const opts = {};
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === '-h') { opts.help = true; continue; }
+      if (!a.startsWith('--')) continue;
+      const eq = a.indexOf('=');
+      if (eq !== -1) { opts[a.slice(2, eq)] = a.slice(eq + 1); continue; }
+      const key = a.slice(2);
+      if (bools.has(key)) { opts[key] = true; continue; }
+      opts[key] = argv[++i];
+    }
+    return opts;
+  }
+
+  return { randInt, shuffle, envStr, envFloat, envInt, parseArgs };
 
 })();
 

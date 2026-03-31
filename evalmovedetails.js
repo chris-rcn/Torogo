@@ -15,7 +15,7 @@ const path = require('path');
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const { Game2, PASS, coordStr, parseMove, agentMoveToIdx } = require('./game2.js');
+const { Game2, PASS, coordStr, parseMove } = require('./game2.js');
 
 function loadPositions(filePath) {
   return fs.readFileSync(filePath, 'utf8').split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
@@ -29,7 +29,7 @@ function evalPositions(agent, positions, budgetMs) {
     for (const h of history) game.play(parseMove(h, boardSize));
 
     const agentMove = agent(game, budgetMs);
-    const agentStr  = coordStr(agentMoveToIdx(agentMove, boardSize), boardSize);
+    const agentStr  = coordStr(agentMove.move, boardSize);
 
     const topCand   = candidates[0];
     const _found    = candidates.find(c => c.m === agentStr);
@@ -102,7 +102,7 @@ if (require.main === module) {
     for (const h of history) game.play(parseMove(h, boardSize));
 
     const agentMove = agent(game, budgetMs);
-    const agentStr  = coordStr(agentMoveToIdx(agentMove, boardSize), boardSize);
+    const agentStr  = coordStr(agentMove.move, boardSize);
 
     const topCand   = candidates[0];
     const _found    = candidates.find(c => c.m === agentStr);
@@ -126,5 +126,20 @@ if (require.main === module) {
   printStats(positions.length);
 }
 
-module.exports = { loadPositions, evalPositions };
+// Evaluate agent on a random sample of n positions from the pool.
+// If n >= pool.length, uses the full pool.  Returns { rmsErr, count }.
+function evalPositionsSample(agent, pool, n, budgetMs) {
+  let positions = pool;
+  if (n < pool.length) {
+    const sample = pool.slice();
+    for (let i = 0; i < n; i++) {
+      const j = i + Math.floor(Math.random() * (sample.length - i));
+      [sample[i], sample[j]] = [sample[j], sample[i]];
+    }
+    positions = sample.slice(0, n);
+  }
+  return evalPositions(agent, positions, budgetMs);
+}
+
+module.exports = { loadPositions, evalPositions, evalPositionsSample };
 

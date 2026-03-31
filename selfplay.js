@@ -26,35 +26,9 @@ const { performance } = require('perf_hooks');
 
 const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const Util = require('./util.js');
 
-// Boolean flags that take no value.
-const BOOL_FLAGS = new Set(['help', 'verbose']);
-
-// Parse --key value switches from argv.
-function parseArgs(argv) {
-  const opts = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      if (BOOL_FLAGS.has(key)) { opts[key] = true; continue; }
-      const val = argv[i + 1];
-      if (val === undefined || val.startsWith('--')) {
-        console.error(`Missing value for ${arg}`);
-        process.exit(1);
-      }
-      opts[key] = val;
-      i++;
-    } else {
-      console.error(`Unknown argument: ${arg}`);
-      process.exit(1);
-    }
-  }
-  return opts;
-}
-
-const opts = parseArgs(process.argv.slice(2));
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
 
 if (opts.help) {
   console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>] [--verbose]`);
@@ -152,7 +126,7 @@ for (let g = 0; g < gameLimit; g++) {
     const move = policy(game, budgetMs);
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
-    const idx = move.type === 'place' ? move.y * boardSize + move.x : PASS;
+    const idx = move.move !== undefined ? move.move : (move.type === 'place' ? move.y * boardSize + move.x : PASS);
     if (!game.play(idx)) {
       console.error(`Illegal move from ${mover} (${p1IsBlack ? p1Name : p2Name}): ${JSON.stringify(move)}`);
       process.exit(1);

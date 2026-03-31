@@ -1,15 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-// test-patterns.js — correctness tests for patterns.js
+// test-patterns.js — correctness tests for vpatterns.js
 
-const assert = require('assert');
-const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
-const { rawState, flipState, canonicalize, pattern1, pattern2, pattern3,
-        PERMS_2x2, PERMS_3x3 } = require('./patterns.js');
-
-// maxLibs used for all pattern calls; must match liberty-count expectations below.
-const MAX_LIBS = 4;
+const { Game2, BLACK, WHITE } = require('./game2.js');
+const { rawState, flipState, canonicalize, extractFeatures, evaluateFeatures,
+        PERMS_2x2, PERMS_3x3 } = require('./vpatterns.js');
 
 let pass = 0, fail = 0;
 
@@ -24,207 +20,235 @@ function section(name) { console.log(`\n── ${name} ──`); }
 
 section('rawState');
 {
-  // Test 1: empty cell returns 0.
   const g = new Game2(5, false);
-  check(rawState(g, MAX_LIBS, 0) === 0, 'rawState: empty cell → 0');
+  check(rawState(g, 4, 0) === 0, 'rawState: empty cell → 0');
 }
-
 {
-  // Test 2: BLACK stone → positive value (own stone encoding).
-  // B@12 = center of 5×5, 4 liberties; with MAX_LIBS=4, rawState = +4.
+  // B@12 = center of 5×5, 4 liberties; with maxLibs=4, rawState = +4.
   const g = new Game2(5, false);
-  g.play(12); // B@12
-  const s = rawState(g, MAX_LIBS, 12);
-  check(s === 4, `rawState: B@12 → 4, got ${s}`);
+  g.play(12);
+  const s = rawState(g, 4, 12);
+  check(s === 4, `rawState: B@12 → +4, got ${s}`);
 }
-
 {
-  // Test 3: WHITE stone → negative value (opponent encoding).
-  // After B@12 and W@7: W@7=(1,2) has B@12 as its down-neighbour,
-  // leaving 3 empty neighbours → rawState = -3.
+  // W@7=(1,2) has B@12 as its down-neighbour → 3 empty neighbours → rawState = -3.
   const g = new Game2(5, false);
-  g.play(12); // B@12
-  g.play(7);  // W@7
-  const s = rawState(g, MAX_LIBS, 7);
+  g.play(12); g.play(7);
+  const s = rawState(g, 4, 7);
   check(s === -3, `rawState: W@7 → -3, got ${s}`);
 }
 
 // ── flipState ─────────────────────────────────────────────────────────────────
 
 section('flipState');
+check(flipState(0)  ===  0,  'flipState(0)===0');
+check(flipState(1)  === -1,  'flipState(1)===-1');
+check(flipState(-1) ===  1,  'flipState(-1)===1');
+check(flipState(3)  === -3,  'flipState(3)===-3');
+check(flipState(-3) ===  3,  'flipState(-3)===3');
+
+// ── evaluateFeatures ──────────────────────────────────────────────────────────
+
+section('evaluateFeatures');
 {
-  // flipState negates: own ↔ opponent.
-  check(flipState(0) === 0,   'flipState(0) === 0');
-  check(flipState(1) === -1,  'flipState(1) === -1');
-  check(flipState(-1) === 1,  'flipState(-1) === 1');
-  check(flipState(3) === -3,  'flipState(3) === -3');
-  check(flipState(-3) === 3,  'flipState(-3) === 3');
+  // No features → z=0 → σ(0) = 0.5.
+  const v = evaluateFeatures([], new Map());
+  check(v === 0.5, `evaluateFeatures: empty → 0.5, got ${v}`);
+}
+{
+  // One feature with polarity=+1 and weight=10 → σ(10) > 0.99.
+  const f = [{ key: 1, polarity: 1 }];
+  const w = new Map([[1, 10]]);
+  const v = evaluateFeatures(f, w);
+  check(v > 0.99, `evaluateFeatures: strong positive weight → >0.99, got ${v}`);
 }
 
-// ── pattern1 ──────────────────────────────────────────────────────────────────
+// ── extractFeatures – size 1 ──────────────────────────────────────────────────
 
-section('pattern1');
+section('extractFeatures – size 1');
 {
-  // Empty cell → null.
+  const SPEC = [{ size: 1, maxLibs: 1 }];
+
+  // Empty board → no features.
+  const g = new Game2(9, false);
+  check(extractFeatures(g, SPEC).length === 0, 'size-1: empty board → no features');
+}
+{
+  const SPEC = [{ size: 1, maxLibs: 1 }];
+
+  // Single B stone → one feature with polarity=+1.
+  const g = new Game2(9, false);
+  g.play(40);
+  const f = extractFeatures(g, SPEC);
+  check(f.length === 1 && f[0].polarity === 1,
+    `size-1: B stone → 1 feature polarity=+1, got length=${f.length} polarity=${f[0]?.polarity}`);
+}
+{
+  const SPEC = [{ size: 1, maxLibs: 1 }];
+
+  // Color symmetry: B and W at same position give same key, opposite polarity.
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = extractFeatures(gB, SPEC);
+
+  // B@0 (far corner), W@40 — cells not adjacent, so liberty counts unaffected.
+  const gW = new Game2(9, false);
+  gW.play(0); gW.play(40);
+  const fW = extractFeatures(gW, SPEC).filter(f => f.polarity === -1);
+
+  check(fB.length === 1 && fW.length === 1 && fB[0].key === fW[0].key,
+    `size-1: color symmetry — keyB=${fB[0]?.key} keyW=${fW[0]?.key}`);
+}
+
+// ── extractFeatures – size 2 ──────────────────────────────────────────────────
+
+section('extractFeatures – size 2');
+{
+  const SPEC = [{ size: 2, maxLibs: 1 }];
+
+  // Empty board → no features.
+  const g = new Game2(9, false);
+  check(extractFeatures(g, SPEC).length === 0, 'size-2: empty board → no features');
+}
+{
+  const SPEC = [{ size: 2, maxLibs: 1 }];
+
+  // Single B stone → exactly 4 overlapping 2×2 windows; all 4 positions within a
+  // 2×2 window form a single D4 orbit, so all features get the same canonical key
+  // and polarity.
+  const g = new Game2(9, false);
+  g.play(40);
+  const f = extractFeatures(g, SPEC);
+  const keys = new Set(f.map(x => x.key));
+  const pols = new Set(f.map(x => x.polarity));
+  check(f.length === 4, 'size-2: single B stone → 4 features');
+  check(keys.size === 1, 'size-2: single B stone → all same key (D4 symmetry)');
+  check(pols.size === 1, 'size-2: single B stone → all same polarity');
+}
+{
+  const SPEC = [{ size: 2, maxLibs: 1 }];
+
+  // Color symmetry: B and W at the same position give same key, opposite polarity.
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = extractFeatures(gB, SPEC);
+  const keyB = fB[0].key, polB = fB[0].polarity;
+
+  // B@0 (far from 40), W@40.
+  const gW = new Game2(9, false);
+  gW.play(0); gW.play(40);
+  const fW = extractFeatures(gW, SPEC).filter(f => f.polarity === -polB);
+
+  check(fW.length === 4 && fW[0].key === keyB,
+    `size-2: color symmetry — keyB=${keyB} keyW=${fW[0]?.key}`);
+}
+
+// ── extractFeatures – size 3 ──────────────────────────────────────────────────
+
+section('extractFeatures – size 3');
+{
+  const SPEC = [{ size: 3, maxLibs: 1 }];
+
+  // Empty board → no features.
+  const g = new Game2(9, false);
+  check(extractFeatures(g, SPEC).length === 0, 'size-3: empty board → no features');
+}
+{
+  const SPEC = [{ size: 3, maxLibs: 1 }];
+
+  // Single B stone → exactly 9 overlapping 3×3 windows.  The 9 positions within a
+  // 3×3 window form 3 D4 orbits (4 corners, 4 edge-midpoints, 1 center), producing
+  // exactly 3 distinct canonical keys.
+  const g = new Game2(9, false);
+  g.play(40);
+  const f = extractFeatures(g, SPEC);
+  const keys = new Set(f.map(x => x.key));
+  check(f.length === 9,    'size-3: single B stone → 9 features');
+  check(keys.size === 3,   'size-3: single B stone → 3 distinct keys (3 D4 orbits)');
+}
+{
+  const SPEC = [{ size: 3, maxLibs: 1 }];
+
+  // Orbit consistency: 4 corner windows (B at different corners) all give same key
+  // and polarity.  On a 9×9 board with B@40=(4,4), corner anchors are at
+  // (2,2)=20, (2,4)=22, (4,2)=38, (4,4)=40.
+  const g = new Game2(9, false);
+  g.play(40);
+  const all = extractFeatures(g, SPEC);
+  // The 3 keys correspond to corners, edges, and center; sort by frequency to find them.
+  const freq = new Map();
+  for (const f of all) freq.set(f.key, (freq.get(f.key) || 0) + 1);
+  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+  // corners and edges both appear 4 times; center appears once
+  check(sorted[2][1] === 1, 'size-3: center orbit has exactly 1 feature');
+  check(sorted[0][1] === 4 && sorted[1][1] === 4,
+    'size-3: corner and edge orbits each have exactly 4 features');
+}
+{
+  const SPEC = [{ size: 3, maxLibs: 1 }];
+
+  // Color symmetry: for each orbit, B and W at the same position give same key,
+  // opposite polarity.  Check by comparing the full sets of keys.
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = extractFeatures(gB, SPEC);
+
+  const gW = new Game2(9, false);
+  gW.play(0); gW.play(40);  // B@0 (far from 40), W@40
+  // Features from W@40 have opposite polarity to the corresponding B@40 features.
+  // B@0 produces its own set of keys; the intersection with B@40 keys verifies symmetry.
+  const keysB = new Set(fB.map(f => f.key));
+  const fW = extractFeatures(gW, SPEC).filter(f => keysB.has(f.key));
+  const keysW = new Set(fW.map(f => f.key));
+  check(keysB.size === keysW.size && [...keysB].every(k => keysW.has(k)),
+    'size-3: color symmetry — B and W produce same set of keys');
+}
+
+// ── maxLibs key isolation ─────────────────────────────────────────────────────
+
+section('maxLibs key isolation');
+{
+  // No key produced by maxLibs=1 specs should collide with any from maxLibs=2.
   const g = new Game2(5, false);
-  check(pattern1(g, MAX_LIBS, 12) === null, 'pattern1: empty cell → null');
+  g.play(12);  // B@12, center, 4 liberties
+  const sizes = [1, 2, 3];
+  const f1 = extractFeatures(g, sizes.map(size => ({ size, maxLibs: 1 })));
+  const f2 = extractFeatures(g, sizes.map(size => ({ size, maxLibs: 2 })));
+  const keys1 = new Set(f1.map(f => f.key));
+  const keys2 = new Set(f2.map(f => f.key));
+  const collisions = [...keys1].filter(k => keys2.has(k));
+  check(collisions.length === 0,
+    `${collisions.length} collision(s) between maxLibs=1 and maxLibs=2: [${collisions.slice(0, 5)}]`);
 }
 
+// ── Full enumeration counts ───────────────────────────────────────────────────
+
+section('full enumeration counts');
 {
-  // BLACK stone at center (4 liberties) → key=4, polarity=+1.
-  const g = new Game2(5, false);
-  g.play(12);
-  const r = pattern1(g, MAX_LIBS, 12);
-  check(r !== null && r.key === 4 && r.polarity === 1,
-    `pattern1: B@12 → {key:4, polarity:1}, got ${JSON.stringify(r)}`);
-}
+  // Enumerate all 3^n raw cell patterns and count distinct canonical keys.
+  // Uses canonicalize directly with the same mixers as extractFeatures
+  // (131 for 2×2, 537 for 3×3, both with maxLibs=1).
+  // Expected: 2×2 → 8, 3×3 → 1418.
 
-{
-  // WHITE stone → polarity=-1.
-  const g = new Game2(5, false);
-  g.play(12); // B@12
-  g.play(7);  // W@7
-  const r = pattern1(g, MAX_LIBS, 7);
-  check(r !== null && r.polarity === -1,
-    `pattern1: W@7 → polarity=-1, got ${JSON.stringify(r)}`);
-}
+  const keys2 = new Set();
+  const cells4 = new Array(4);
+  for (let mask = 0; mask < 81 /* 3^4 */; mask++) {
+    let m = mask;
+    for (let i = 0; i < 4; i++) { cells4[i] = (m % 3) - 1; m = (m / 3) | 0; }
+    const r = canonicalize(cells4, PERMS_2x2, 131);
+    if (r !== null) keys2.add(r.key);
+  }
+  check(keys2.size === 8, `2×2 full enum: expected 8, got ${keys2.size}`);
 
-{
-  // Color symmetry: B and W stones at the same position (same board context)
-  // give the same key but opposite polarity.
-  // gB: B@12 alone.   gW: B@0, W@12 (B@0 is not adjacent to 12).
-  const gB = new Game2(5, false);
-  gB.play(12);
-  const rB = pattern1(gB, MAX_LIBS, 12);
-
-  const gW = new Game2(5, false);
-  gW.play(0);   // B@0 (corner, not adjacent to 12)
-  gW.play(12);  // W@12
-  const rW = pattern1(gW, MAX_LIBS, 12);
-
-  check(rB !== null && rW !== null && rB.key === rW.key && rB.polarity === 1 && rW.polarity === -1,
-    `pattern1 color symmetry: keys ${rB && rB.key}/${rW && rW.key} polarities ${rB && rB.polarity}/${rW && rW.polarity}`);
-}
-
-// ── pattern2 ──────────────────────────────────────────────────────────────────
-
-section('pattern2');
-{
-  // All-empty → null.
-  const g = new Game2(5, false);
-  check(pattern2(g, MAX_LIBS, 12) === null, 'pattern2: all-empty → null');
-}
-
-{
-  // Single B stone at anchor TL: returns a non-null result.
-  const g = new Game2(5, false);
-  g.play(12);
-  const r = pattern2(g, MAX_LIBS, 12);
-  check(r !== null, `pattern2 single B stone at TL: non-null, got ${JSON.stringify(r)}`);
-}
-
-{
-  // Rotation symmetry: a single stone anywhere in a 2×2 window should produce
-  // the same canonical key regardless of which cell it occupies.
-  // B@12, anchor 12: stone at TL. anchor 7: stone at BL (7→TL, 8→TR, 12→BL, 13→BR).
-  const g = new Game2(5, false);
-  g.play(12);
-  const r12 = pattern2(g, MAX_LIBS, 12);
-  const r7  = pattern2(g, MAX_LIBS, 7);
-  check(r12 !== null && r7 !== null && r12.key === r7.key,
-    `pattern2 rotation: anchor 12 key=${r12 && r12.key} anchor 7 key=${r7 && r7.key}`);
-}
-
-{
-  // Color symmetry: B and W single stone give same key, opposite polarity.
-  const gA = new Game2(5, false);
-  gA.play(12);
-  const rA = pattern2(gA, MAX_LIBS, 12);
-
-  const gB = new Game2(5, false);
-  gB.play(0);   // B@0 (not in the 2×2 window at anchor 12)
-  gB.play(12);  // W@12
-  const rB = pattern2(gB, MAX_LIBS, 12);
-
-  // canonicalize guarantees same key and opposite polarity for color-swapped patterns.
-  check(rA !== null && rB !== null && rA.key === rB.key && rA.polarity !== rB.polarity,
-    `pattern2 color symmetry: keys ${rA && rA.key}/${rB && rB.key} polarities ${rA && rA.polarity}/${rB && rB.polarity}`);
-}
-
-{
-  // FlipV symmetry: two B stones in top row vs bottom row of the same 2×2 window
-  // should produce the same key.
-  // B@12, W@0 (advances turn only), B@13.
-  // anchor 12: raw=[B,B,e,e] (TL=12,TR=13).  anchor 7: raw=[e,e,B,B] (BL=12,BR=13).
-  const g = new Game2(5, false);
-  g.play(12);
-  g.play(0);  // W@0 — not adjacent to 12 or 13
-  g.play(13);
-  const r12 = pattern2(g, MAX_LIBS, 12);
-  const r7  = pattern2(g, MAX_LIBS, 7);
-  check(r12 !== null && r7 !== null && r12.key === r7.key,
-    `pattern2 FlipV symmetry: anchor 12 key=${r12 && r12.key} anchor 7 key=${r7 && r7.key}`);
-}
-
-// ── pattern3 (upper-left anchor) ─────────────────────────────────────────────
-
-section('pattern3');
-{
-  // All-empty → null.
-  const g = new Game2(5, false);
-  check(pattern3(g, MAX_LIBS, 12) === null, 'pattern3: all-empty → null');
-}
-
-{
-  // Single B stone at anchor (0,0) of window: returns a non-null result.
-  const g = new Game2(5, false);
-  g.play(12);
-  const r = pattern3(g, MAX_LIBS, 12);
-  check(r !== null, `pattern3 single stone at anchor: non-null, got ${JSON.stringify(r)}`);
-}
-
-{
-  // Rot180 symmetry: stone at (0,0) of window and stone at (2,2) of window give same key.
-  // On 5×5, B@12. anchor=12: stone at (0,0). anchor=0: (2,2) is idx 12.
-  const g = new Game2(5, false);
-  g.play(12);
-  const r12 = pattern3(g, MAX_LIBS, 12);  // stone at (0,0) of window
-  const r0  = pattern3(g, MAX_LIBS, 0);   // stone at (2,2) of window
-  check(r12 !== null && r0 !== null && r12.key === r0.key,
-    `pattern3 rot180 symmetry: anchor 12 key=${r12 && r12.key} anchor 0 key=${r0 && r0.key}`);
-}
-
-{
-  // Color symmetry: B and W stones at anchor give same key, opposite polarity.
-  const gB = new Game2(5, false);
-  gB.play(12);
-  const rB = pattern3(gB, MAX_LIBS, 12);
-
-  const gW = new Game2(5, false);
-  gW.play(0);   // B@0 — outside the window starting at anchor 12
-  gW.play(12);  // W@12
-  const rW = pattern3(gW, MAX_LIBS, 12);
-
-  // canonicalize guarantees same key and opposite polarity for color-swapped patterns.
-  check(rB !== null && rW !== null && rB.key === rW.key && rB.polarity !== rW.polarity,
-    `pattern3 color symmetry: keys ${rB && rB.key}/${rW && rW.key} polarities ${rB && rB.polarity}/${rW && rW.polarity}`);
-}
-
-{
-  // Two-stone rot180: B stones at (0,0)+(0,1) of one window match
-  // B stones at (2,1)+(2,2) of another window (related by Rot180).
-  // B@12, W@0 (turn-filler), B@13.
-  // anchor=12: stones at c00=12 and c01=13.
-  // anchor=1:  stones at c21=12 and c22=13.
-  const g = new Game2(5, false);
-  g.play(12);
-  g.play(0);  // W@0 — outside both windows
-  g.play(13);
-
-  const r12 = pattern3(g, MAX_LIBS, 12);  // stones at (0,0) and (0,1)
-  const r1  = pattern3(g, MAX_LIBS, 1);   // stones at (2,1) and (2,2)
-  check(r12 !== null && r1 !== null && r12.key === r1.key,
-    `pattern3 two-stone rot180: anchor 12 key=${r12 && r12.key} anchor 1 key=${r1 && r1.key}`);
+  const keys3 = new Set();
+  const cells9 = new Array(9);
+  for (let mask = 0; mask < 19683 /* 3^9 */; mask++) {
+    let m = mask;
+    for (let i = 0; i < 9; i++) { cells9[i] = (m % 3) - 1; m = (m / 3) | 0; }
+    const r = canonicalize(cells9, PERMS_3x3, 537);
+    if (r !== null) keys3.add(r.key);
+  }
+  check(keys3.size === 1418, `3×3 full enum: expected 1418, got ${keys3.size}`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

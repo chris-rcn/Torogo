@@ -12,6 +12,11 @@ Rave-influenced playouts: failed.  Didn't try
 
 Opening book
 
+Value patterns
+Game2 make it cheap to return chain lib/stone counts?
+Chain size attribute in pattern?
+
+TD search
 
 Why is rave copying the legal moves array?
 
@@ -84,4 +89,28 @@ key=41 [OO/OX] 3 own, 1 opp
 
 key=40 [OO/OO] 4 own, 0 opp
 
+
+getMove()
+  Clear all features
+  Repeat TD_SIMS count
+    Repeat for TD_DEPTH
+      1-ply search which maximizes evaluate(findFeatures(game))
+      play the move (or play random 10%)
+      Apply the TD update to the features fromn 2 moves ago.
+    Repeat until end of game
+      play random move
+    Apply the TD update to the last 2 feature sets.
+    1-ply search which maximizes evaluate(findFeatures(game))
+    return the move
+
+findFeatures(game)
+  collect all pairs of {featureKey,polarity}.
+
+Type 1 feature:
+featureKey is a hash of the location and the stone.
+
+Type 2 feature:
+featureKey is a hash of the location and 2x2 stones.
+
+We don't do any symmetry other than color/polarity adjustment.
 
