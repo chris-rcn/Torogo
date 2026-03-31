@@ -28,14 +28,14 @@ function makeBuf(cap) {
 
 // Fills buf with features for the current board position.
 //
-// Type 1 — 1×1 per stone: key = idx*2 + (BLACK ? 0 : 1)
-//   range [0, 2*cap)
-// Type 2 — 2×2 anchored at TL=idx:  key = 2*cap  + idx*81 + ternary4
-//   range [2*cap, 83*cap)
-// Type 3 — 1×2 anchored at L=idx:   key = 83*cap + idx*9  + ternary2
-//   range [83*cap, 92*cap)
-// Type 4 — 2×1 anchored at T=idx:   key = 92*cap + idx*9  + ternary2
-//   range [92*cap, 101*cap)
+// Type 1 — 1×1 per stone: key = idx*3 + c + 1  (BLACK=1→2, WHITE=-1→0)
+//   range [0, 3*cap)
+// Type 2 — 2×2 anchored at TL=idx:  key = 3*cap  + idx*81 + ternary4
+//   range [3*cap, 84*cap)
+// Type 3 — 1×2 anchored at L=idx:   key = 84*cap + idx*9  + ternary2
+//   range [84*cap, 93*cap)
+// Type 4 — 2×1 anchored at T=idx:   key = 93*cap + idx*9  + ternary2
+//   range [93*cap, 102*cap)
 //
 // Multi-cell ternary: v ∈ {-1,0,+1} encoded as v+1 ∈ {0,1,2}.
 // Windows where all cells are empty (sum = 0 and all v = 0) are skipped.
@@ -47,33 +47,32 @@ function findFeatures(game, buf) {
   buf.n = 0;
 
   for (let idx = 0; idx < cap; idx++) {
-    const c = cells[idx];
+    const v0 = cells[idx];
 
     // 1×1
-    if (c !== 0) {
-      buf.keys[buf.n] = idx * 2 + (c === BLACK ? 0 : 1);
+    if (v0 !== 0) {
+      buf.keys[buf.n] = idx * 3 + v0 + 1;
       buf.n++;
     }
 
     const ri = nbr [idx * 4 + 3];  // right
     const di = nbr [idx * 4 + 1];  // down
     const dr = dnbr[idx * 4 + 3];  // down-right
-    const v0 = cells[idx] === BLACK ? 1 : cells[idx] !== 0 ? -1 : 0;
-    const v1 = cells[ri]  === BLACK ? 1 : cells[ri]  !== 0 ? -1 : 0;
-    const v2 = cells[di]  === BLACK ? 1 : cells[di]  !== 0 ? -1 : 0;
-    const v3 = cells[dr]  === BLACK ? 1 : cells[dr]  !== 0 ? -1 : 0;
+    const v1 = cells[ri];
+    const v2 = cells[di];
+    const v3 = cells[dr];
 
-    // 1×2 (horizontal)
-    if (v0 !== 0 || v1 !== 0) {
-      buf.keys[buf.n] = 83 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
-      buf.n++;
-    }
-
-    // 2×2
-    if (v0 !== 0 || v1 !== 0 || v2 !== 0 || v3 !== 0) {
-      buf.keys[buf.n] = 2 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
-      buf.n++;
-    }
+//    // 1×2 (horizontal)
+//    if (v0*v0 + v1*v1 > 0) {
+//      buf.keys[buf.n] = 84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
+//      buf.n++;
+//    }
+//
+//    // 2×2
+//    if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
+//      buf.keys[buf.n] = 3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
+//      buf.n++;
+//    }
   }
 }
 
@@ -83,41 +82,40 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf) {
   const cells = game.cells;
   const nbr   = game._nbr;
   const dnbr  = game._dnbr;
-  const mv    = moveColor === BLACK ? 1 : -1;
+  const mv    = moveColor;
   buf.n = 0;
 
   // Inline helper: cell value with override at moveIdx.
   function cv(i) {
-    if (i === moveIdx) return mv;
-    const c = cells[i];
-    return c === BLACK ? 1 : c !== 0 ? -1 : 0;
+    return i === moveIdx ? mv : cells[i];
   }
 
   for (let idx = 0; idx < cap; idx++) {
     // 1×1
-    const v = cv(idx);
-    if (v !== 0) {
-      buf.keys[buf.n] = idx * 2 + (v > 0 ? 0 : 1);
+    const v0 = cv(idx);
+    if (v0 !== 0) {
+      buf.keys[buf.n] = idx * 3 + v0 + 1;
       buf.n++;
     }
 
     const ri = nbr [idx * 4 + 3];
     const di = nbr [idx * 4 + 1];
     const dr = dnbr[idx * 4 + 3];
-    const v0 = cv(idx), v1 = cv(ri);
-    const v2 = cv(di), v3 = cv(dr);
+    const v1 = cv(ri);
+    const v2 = cv(di);
+    const v3 = cv(dr);
 
     // 1×2 (horizontal)
-    if (v0 !== 0 || v1 !== 0) {
-      buf.keys[buf.n] = 83 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
-      buf.n++;
-    }
-
-    // 2×2
-    if (v0 !== 0 || v1 !== 0 || v2 !== 0 || v3 !== 0) {
-      buf.keys[buf.n] = 2 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
-      buf.n++;
-    }
+//    if (v0*v0 + v1*v1 > 0) {
+//      buf.keys[buf.n] = 84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
+//      buf.n++;
+//    }
+//
+//    // 2×2
+//    if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
+//      buf.keys[buf.n] = 3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
+//      buf.n++;
+//    }
   }
 }
 
@@ -130,7 +128,7 @@ function evaluate(buf, weights) {
   for (let i = 0; i < n; i++) {
     v += weights.get(keys[i]) ?? 0;
   }
-  return v;
+  return 1 / (1 + Math.exp(-v));
 }
 
 // Δw_k = (LR / n) · (target − v)
@@ -169,12 +167,12 @@ function search1ply(game, weights, width = 0) {
     const j = c + Math.floor(Math.random() * (candidates.length - c));
     const move = candidates[j];
     candidates[j] = candidates[c];
-    if (!game.isCapture(move)) {
-      findFeaturesWithMove(game, move, game.current, buf);
-    } else {
+    if (game.isCapture(move)) {
       const g = game.clone();
       g.play(move);
       findFeatures(g, buf);
+    } else {
+      findFeaturesWithMove(game, move, game.current, buf);
     }
     const v = evaluate(buf, weights);
     if (isBlack ? v > bestScore : v < bestScore) { bestScore = v; bestIdx = move; }
@@ -190,15 +188,15 @@ function getMove(game, budgetMs = 1000) {
   const cap      = game.N * game.N;
   const maxMoves = 2 * cap;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
-  let sim = 0;
+  let sims = 0;
   const tdUpdateDepth = 100;
 
   const buf   = makeBuf(cap);
   const snap1 = makeBuf(cap);
   const snap2 = makeBuf(cap);
 
-  while (TD_SIMS > 0 ? sim < TD_SIMS : Date.now() < deadline) {
-    sim++;
+  while (TD_SIMS > 0 ? sims < TD_SIMS : Date.now() < deadline) {
+    sims++;
     const g = game.clone();
     let prev1 = null, prev2 = null;  // point at snap1 / snap2, alternating
     let step = 0;
@@ -239,7 +237,7 @@ function getMove(game, budgetMs = 1000) {
     if (prev1 !== null) tdUpdate(prev1, prev1.val, outcome, weights);
   }
 
-  return { move: search1ply(game, weights) };
+  return { move: search1ply(game, weights), weights, sims };
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────

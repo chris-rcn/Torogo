@@ -16,7 +16,7 @@
 
 (function() {
 
-const EMPTY = 0, BLACK = 1, WHITE = 2;
+const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS  = -1;
 const KOMI  = 4.5;
 
@@ -383,7 +383,7 @@ class Game2 {
 
   _isKo(idx, color) {
     if (idx !== this.ko) return false;
-    const opp    = 3 - color;
+    const opp    = -color;
     const cells  = this.cells;
     const gidArr = this._gid;
     const nbr    = this._nbr;
@@ -467,7 +467,7 @@ class Game2 {
   playInfo(idx) {
     if (this.gameOver) return { success: false };
     const color = this.current;
-    const opp   = 3 - color;
+    const opp   = -color;
 
     if (idx === PASS) {
       this.consecutivePasses++;

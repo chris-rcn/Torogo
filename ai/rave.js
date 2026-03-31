@@ -123,7 +123,7 @@ function makeNode(move, parent, ci, game2, N) {
     }
   }
 
-  const mover = 3 - game2.current;
+  const mover = -game2.current;
 
   return {
     move,
