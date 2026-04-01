@@ -9,6 +9,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const { BLACK, WHITE, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
+const Tactics = require('./tactics.js');
+
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
 const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
@@ -17,31 +19,25 @@ const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 0);
 
-// ── Feature buffer ────────────────────────────────────────────────────────────
-
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 + one 2×1 entry per cell = 4 * cap.
-function makeBuf(cap) {
-  return { idxs: new Int32Array(4 * cap), n: 0 };
+function makeBuf(area) {
+  return { idxs: new Int32Array(3 * area), n: 0 };
 }
-
-// ── Weight store ──────────────────────────────────────────────────────────────
 
 // keyToIdx: Map<featureKey, weightIndex>
 // weightsArr: number[] — weight values indexed by weightIndex
 //
 // resolveKey returns the weight index for a feature key, inserting weight 0 if new.
-function resolveKey(key, keyToIdx, weightsArr) {
-  let wi = keyToIdx.get(key);
+function resolveKey(key, ctx) {
+  let wi = ctx.keyToIdx.get(key);
   if (wi === undefined) {
-    wi = weightsArr.length;
-    keyToIdx.set(key, wi);
-    weightsArr.push(0);
+    wi = ctx.weightsArr.length;
+    ctx.keyToIdx.set(key, wi);
+    ctx.weightsArr.push(0);
   }
   return wi;
 }
-
-// ── Features ──────────────────────────────────────────────────────────────────
 
 // Fills buf.idxs with weight indices for the current board position.
 //
@@ -55,7 +51,7 @@ function resolveKey(key, keyToIdx, weightsArr) {
 //   range [93*cap, 102*cap)
 //
 // Patterns where all cells are empty are skipped.
-function findFeatures(game, buf, keyToIdx, weightsArr) {
+function findFeatures(game, buf, ctx) {
   const cap   = game.N * game.N;
   const cells = game.cells;
   const nbr   = game._nbr;
@@ -68,14 +64,14 @@ function findFeatures(game, buf, keyToIdx, weightsArr) {
     // 1×1
     if (v0 !== 0) 
     {
-      buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, keyToIdx, weightsArr);
+      buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, ctx);
     }
 
     const v1 = cells[nbr [idx * 4 + 3]];
 
     // 1×2 (horizontal)
     if (USE_1x2 && v0*v0 + v1*v1 > 0) {
-      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), keyToIdx, weightsArr);
+      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), ctx);
     }
 
     // 2×2
@@ -83,14 +79,14 @@ function findFeatures(game, buf, keyToIdx, weightsArr) {
       const v2 = cells[nbr[idx * 4 + 1]];
       const v3 = cells[dnbr[idx * 4 + 3]];
       if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
-        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), keyToIdx, weightsArr);
+        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), ctx);
       }
     }
   }
 }
 
 // Like findFeatures but treats moveIdx as occupied by moveColor without modifying game.
-function findFeaturesWithMove(game, moveIdx, moveColor, buf, keyToIdx, weightsArr) {
+function findFeaturesWithMove(game, moveIdx, moveColor, buf, ctx) {
   const cap   = game.N * game.N;
   const cells = game.cells;
   const nbr   = game._nbr;
@@ -108,14 +104,14 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf, keyToIdx, weightsAr
     const v0 = cv(idx);
     if (v0 !== 0) 
     {
-      buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, keyToIdx, weightsArr);
+      buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, ctx);
     }
 
     const v1 = cv(nbr [idx * 4 + 3]);
 
     // 1×2 (horizontal)
     if (USE_1x2 && v0*v0 + v1*v1 > 0) {
-      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), keyToIdx, weightsArr);
+      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), ctx);
     }
 
     // 2×2
@@ -125,13 +121,11 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf, keyToIdx, weightsAr
       const v2 = cv(di);
       const v3 = cv(dr);
       if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
-        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), keyToIdx, weightsArr);
+        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), ctx);
       }
     }
   }
 }
-
-// ── Value function ─────────────────────────────────────────────────────────────
 
 // V(s) = σ(Σ w_k) = P(BLACK wins)
 function evaluate(buf, weightsArr) {
@@ -153,22 +147,20 @@ function tdUpdate(buf, v, target, weightsArr) {
 }
 
 // Copy buf contents into snap (pre-allocated buffer of same maxLen).
-function snapBuf(buf, snap) {
-  const n = buf.n;
-  snap.idxs.set(buf.idxs.subarray(0, n));
-  snap.n = n;
+function copyBuf(src, dest) {
+  const n = src.n;
+  dest.idxs.set(src.idxs.subarray(0, n));
+  dest.n = n;
 }
 
-// ── 1-ply search ──────────────────────────────────────────────────────────────
-
-function search1ply(game, keyToIdx, weightsArr, width = 0) {
-  const cap     = game.N * game.N;
+function search1ply(game, ctx, width = 0) {
+  const searchFeats = ctx.searchFeats;
+  const area = game.N * game.N;
   const isBlack = game.current === BLACK;
-  const buf     = makeBuf(cap);
-  let bestIdx   = PASS;
+  let bestIdx = PASS;
   let bestScore = isBlack ? -Infinity : Infinity;
-  const candidates = []; // TODO: iterative shuffle over all cells (using Game2.allCells).
-  for (let i = 0; i < cap; i++) {
+  const candidates = [];
+  for (let i = 0; i < area; i++) {
     if (game.isLegal(i) && !game.isTrueEye(i)) candidates.push(i);
   }
   const count = width > 0 ? Math.min(width, candidates.length) : candidates.length;
@@ -177,31 +169,42 @@ function search1ply(game, keyToIdx, weightsArr, width = 0) {
     const move = candidates[j];
     candidates[j] = candidates[c];
     if (game.isCapture(move)) {
-      const g = game.clone(); g.play(move);
-      findFeatures(g, buf, keyToIdx, weightsArr);
+      const g = game.clone();
+      g.play(move);
+      findFeatures(g, searchFeats, ctx);
     } else {
-      findFeaturesWithMove(game, move, game.current, buf, keyToIdx, weightsArr);
+      findFeaturesWithMove(game, move, game.current, searchFeats, ctx);
     }
-    const v = evaluate(buf, weightsArr);
-    if (isBlack === (v > bestScore)) { bestScore = v; bestIdx = move; }
+    const v = evaluate(searchFeats, ctx.weightsArr);
+    if (isBlack === (v > bestScore)) { 
+      bestScore = v;
+      bestIdx = move;
+    }
   }
-
-  return { move: bestIdx, moveScore: bestScore };
+  return { move: bestIdx, moveScore: bestScore, searched: true };
 }
 
-// ── getMove ───────────────────────────────────────────────────────────────────
-
-function selectTrainingMove(game, step, keyToIdx, weightsArr) {
+function selectTrainingMove(game, step, ctx) {
   if (Math.random() < EPSILON) 
-    return game.randomLegalMove();
+    return { move: game.randomLegalMove() };
 
-  if (step < WIDE_DEPTH) 
-    return search1ply(game, keyToIdx, weightsArr).move;
+  if (step < WIDE_DEPTH) {
+    if (false && Math.random() < ctx.lastSearchMoveSame[step]) {
+      return { move: ctx.lastSearchMove[step] };
+    } else {
+      const move = search1ply(game, ctx).move;
+      const isSame = ctx.lastSearchMove[step] === move ? 1 : 0;
+      ctx.lastSearchMoveSame[step] += 0.1 * (isSame - ctx.lastSearchMoveSame[step]);
+      ctx.lastSearchMove[step] = move;
+      return { move };
+    }
+  }
 
   if (step < NARROW_DEPTH) 
-    return search1ply(game, keyToIdx, weightsArr, 2).move;
+    return search1ply(game, ctx, 2);
 
-  return game.randomLegalMove();
+//  return { move: game.randomLegalMove() };
+  return Tactics.getMove(game);
 }
 
 function getMove(game, budgetMs = 1000) {
@@ -209,45 +212,50 @@ function getMove(game, budgetMs = 1000) {
     return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
   }
 
-  const keyToIdx = new Map();
-  const weightsArr = [];
   const area = game.N * game.N;
-  const maxMoves = 2 * area;
+  const maxMoves = 4 * area;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
   let sims = 0;
 
-  const buf   = makeBuf(area);
-  const snapA = makeBuf(area);
-  const snapB = makeBuf(area);
+  const keyToIdx = new Map();
+  const weightsArr = [];
+  const lastSearchMove = new Int32Array(maxMoves); // indexed by step
+  const lastSearchMoveSame = new Float32Array(maxMoves); // indexed by step
+  const ctx = { keyToIdx, weightsArr, lastSearchMove, lastSearchMoveSame, searchFeats: makeBuf(area) };
+
+  let prev2 = makeBuf(area);
+  let prev1 = makeBuf(area);
+  let feats = makeBuf(area);
 
   while (TD_SIMS > 0 ? sims < TD_SIMS : Date.now() < deadline) {
     sims++;
     const g = game.clone();
-    let prev1 = null, prev2 = null;  // point at snapA / snapB, alternating
     let step = 0;
 
-    let outcome = 0.5;
-    let move = selectTrainingMove(g, step, keyToIdx, weightsArr);
+    let outcome;
+    let moveSelection = selectTrainingMove(g, step, ctx);
     while (step < maxMoves) {
 
-      g.play(move);
+      g.play(moveSelection.move);
       if (g.gameOver) {
-        outcome = g.calcWinner() === BLACK ? 1 : 0;
+        outcome = (g.calcWinner() === BLACK) ? 1 : 0;
         break;
       }
       step++;
 
-      move = selectTrainingMove(g, step, keyToIdx, weightsArr);
+      moveSelection = selectTrainingMove(g, step, ctx);
 
-      findFeatures(g, buf, keyToIdx, weightsArr);
-      const val = evaluate(buf, weightsArr);
+      findFeatures(g, feats, ctx);
+      feats.val = evaluate(feats, weightsArr);
 
-      if (prev2 !== null) tdUpdate(prev2, prev2.val, val, weightsArr);
-      const snap = prev1 === snapA ? snapB : snapA;
-      snapBuf(buf, snap);
-      snap.val = val;
+      if (prev2.n > 0) {
+        tdUpdate(prev2, prev2.val, feats.val, weightsArr);
+      }
+
+      const temp = prev2;
       prev2 = prev1;
-      prev1 = snap;
+      prev1 = feats;
+      feats = temp;
     }
 
     // Terminal TD updates for the last two tracked positions.
@@ -255,10 +263,10 @@ function getMove(game, budgetMs = 1000) {
     if (prev1 !== null) tdUpdate(prev1, prev1.val, outcome, weightsArr);
   }
 
-  const searchResult = search1ply(game, keyToIdx, weightsArr);
+  const searchResult = search1ply(game, ctx);
   const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore
   const move = myScore < 0.01 ? PASS : searchResult.move;
-  const result = { move, keyToIdx, weightsArr, sims }
+  const result = { move, ctx, sims }
   result.info = `value=${myScore.toFixed(3)}`;
   if (move === PASS) {
     result.type = 'pass';
@@ -269,8 +277,6 @@ function getMove(game, budgetMs = 1000) {
   }
   return result;
 }
-
-// ── Exports ───────────────────────────────────────────────────────────────────
 
 if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;

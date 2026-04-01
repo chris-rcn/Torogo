@@ -114,3 +114,5 @@ featureKey is a hash of the location and 2x2 stones.
 
 We don't do any symmetry other than color/polarity adjustment.
 
+
+cap cap thr esc cap thr cap thr thr 

@@ -10,7 +10,7 @@ const { BLACK, WHITE, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
-const WIDE_DEPTH    = 1000;
+const WIDE_DEPTH    = 0;
 const NARROW_DEPTH  = 0;
 const LR            = 0.3;
 const EPSILON       = 0.1;
