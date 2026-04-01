@@ -1,6 +1,7 @@
 'use strict';
 
-const { Board, Game, DEFAULT_KOMI, parseBoard } = require('./game.js');
+const { Game2, PASS, BLACK, WHITE, KOMI, setKomi, parseBoard } = require('./game2.js');
+const _BLACK = BLACK, _WHITE = WHITE; // aliases for pattern symmetry tests
 
 let pass = 0, fail = 0;
 
@@ -11,606 +12,10 @@ function assert(cond, msg) {
 
 function section(name) { console.log(`\n── ${name} ──`); }
 
-// ─── Board basics ────────────────────────────────────────────────────────────
-
-section('Board construction');
-{
-  const b = new Board(9);
-  assert(b.size === 9, 'board size');
-  assert(b.get(0, 0) === null, 'empty cell');
-  assert(b.get(4, 4) === null, 'center empty');
-}
-
-section('Board get/set');
-{
-  const b = new Board(9);
-  b.set(3, 3, 'black');
-  assert(b.get(3, 3) === 'black', 'set then get black');
-  b.set(3, 3, 'white');
-  assert(b.get(3, 3) === 'white', 'overwrite with white');
-  b.set(3, 3, null);
-  assert(b.get(3, 3) === null, 'clear to null');
-}
-
-section('Toroidal neighbors');
-{
-  const b = new Board(9);
-  // Corner (0,0) wraps to (8,0), (0,8), (1,0), (0,1)
-  const n = b.getNeighbors(0, 0);
-  assert(n.length === 4, 'always 4 neighbors');
-  const set = new Set(n.map(([x, y]) => `${x},${y}`));
-  assert(set.has('8,0'), 'left wraps');
-  assert(set.has('0,8'), 'top wraps');
-  assert(set.has('1,0'), 'right');
-  assert(set.has('0,1'), 'down');
-}
-
-// ─── Group tracking ──────────────────────────────────────────────────────────
-
-section('Groups and liberties');
-{
-  const b = new Board(9);
-  b.set(4, 4, 'black');
-  b.captureGroups(4, 4); // triggers tracking
-  const g = b.getGroup(4, 4);
-  assert(g.length === 1, 'single stone group');
-  const libs = b.getLiberties(g);
-  assert(libs.size === 4, 'single stone has 4 liberties');
-  assert(!b.hasNoLiberties(g), 'has liberties');
-}
-
-{
-  const b = new Board(9);
-  // Place two adjacent black stones
-  b.set(4, 4, 'black');
-  b.captureGroups(4, 4);
-  b.set(5, 4, 'black');
-  b.captureGroups(5, 4);
-  const g = b.getGroup(4, 4);
-  assert(g.length === 2, 'two-stone group');
-  const libs = b.getLiberties(g);
-  assert(libs.size === 6, 'two-stone group has 6 liberties');
-}
-
-// ─── Capture ─────────────────────────────────────────────────────────────────
-
-section('Simple capture');
-{
-  const g = new Game(9);
-  // g starts with black at center (4,4), white to play
-  // Surround a white stone and capture it
-  const b = g.board;
-
-  // Place white at (0,0)
-  // Need to set up a capture scenario manually
-  const g2 = new Game(9);
-  // After constructor: black at (4,4), current = white
-  // White plays somewhere
-  g2.placeStone(2, 2); // white at (2,2), current = black
-  // Surround white stone at (2,2)
-  g2.placeStone(3, 2); // black, current = white
-  g2.pass();            // white passes, current = black
-  g2.placeStone(1, 2); // black, current = white
-  g2.pass();            // white passes, current = black
-  g2.placeStone(2, 3); // black, current = white
-  g2.pass();            // white passes, current = black
-  // Last liberty is (2,1)
-  g2.placeStone(2, 1); // black captures white at (2,2)
-  assert(g2.board.get(2, 2) === null, 'captured stone removed');
-}
-
-// ─── Suicide ─────────────────────────────────────────────────────────────────
-
-section('Suicide prevention');
-{
-  const b = new Board(9);
-  // Surround (2,2) with opponent stones
-  b.set(3, 2, 'black');
-  b.captureGroups(3, 2);
-  b.set(1, 2, 'black');
-  b.captureGroups(1, 2);
-  b.set(2, 3, 'black');
-  b.captureGroups(2, 3);
-  b.set(2, 1, 'black');
-  b.captureGroups(2, 1);
-  assert(b.isSingleSuicide(2, 2, 'white'), 'single suicide detected');
-  assert(b.isSuicide(2, 2, 'white'), 'isSuicide wrapper');
-  assert(!b.isSuicide(2, 2, 'black'), 'not suicide for same color (connects)');
-}
-
-// ─── Ko ──────────────────────────────────────────────────────────────────────
-
-section('Ko detection');
-{
-  const b = new Board(9);
-  // Ko shape: black captures one white stone, white cannot recapture immediately
-  // Set up:  . B .
-  //          B . B   (center is the ko point)
-  //          . W .
-  // But we need a more complete setup. Use isKo directly.
-  b.set(3, 2, 'black');
-  b.captureGroups(3, 2);
-  b.set(2, 3, 'black');
-  b.captureGroups(2, 3);
-  b.set(4, 3, 'black');
-  b.captureGroups(4, 3);
-  b.set(3, 4, 'white');
-  b.captureGroups(3, 4);
-  b.set(2, 4, 'white');
-  // White at (2,4) needs tracking
-  b.captureGroups(2, 4);
-  // koFlag points at (3,3) — as if white just captured there
-  const koFlag = { x: 3, y: 3 };
-  // If black recaptures at (3,3) and would capture exactly 1 stone, it's Ko
-  b.set(3, 3, 'white'); // put a stone to be "recaptured"
-  b.captureGroups(3, 3);
-  // Check isKo: black at (3,3) with koFlag at (3,3)
-  // Actually this needs a proper single-stone capture setup. Let's just test the flag logic.
-  assert(!b.isKo(0, 0, 'black', koFlag), 'not ko at different position');
-  assert(!b.isKo(3, 3, 'black', null), 'not ko with null flag');
-}
-
-// ─── True eye detection ──────────────────────────────────────────────────────
-
-section('True eye detection');
-{
-  const b = new Board(9);
-  // Create a true eye: all 4 ortho neighbors are the same color
-  b.set(3, 2, 'black');
-  b.captureGroups(3, 2);
-  b.set(2, 3, 'black');
-  b.captureGroups(2, 3);
-  b.set(4, 3, 'black');
-  b.captureGroups(4, 3);
-  b.set(3, 4, 'black');
-  b.captureGroups(3, 4);
-  // Need diagonals for true eye (≥3)
-  b.set(2, 2, 'black');
-  b.captureGroups(2, 2);
-  b.set(4, 2, 'black');
-  b.captureGroups(4, 2);
-  b.set(2, 4, 'black');
-  b.captureGroups(2, 4);
-  assert(b.isTrueEye(3, 3, 'black'), 'true eye with 3 diagonals');
-  assert(!b.isTrueEye(3, 3, 'white'), 'not true eye for other color');
-}
-
-// ─── classifyEmpty ───────────────────────────────────────────────────────────
-
-section('classifyEmpty');
-{
-  const b = new Board(9);
-  // Empty board: every cell has empty neighbors, no eyes
-  const info = b.classifyEmpty(4, 4, 'black');
-  assert(!info.isTrueEye, 'empty board: not true eye');
-  assert(info.hasEmptyNeighbor, 'empty board: has empty neighbor');
-}
-{
-  // Reuse true eye setup
-  const b = new Board(9);
-  b.set(3, 2, 'black'); b.captureGroups(3, 2);
-  b.set(2, 3, 'black'); b.captureGroups(2, 3);
-  b.set(4, 3, 'black'); b.captureGroups(4, 3);
-  b.set(3, 4, 'black'); b.captureGroups(3, 4);
-  b.set(2, 2, 'black'); b.captureGroups(2, 2);
-  b.set(4, 2, 'black'); b.captureGroups(4, 2);
-  b.set(2, 4, 'black'); b.captureGroups(2, 4);
-  const info = b.classifyEmpty(3, 3, 'black');
-  assert(info.isTrueEye, 'classifyEmpty agrees with isTrueEye');
-  assert(!info.hasEmptyNeighbor, 'no empty neighbor when surrounded');
-}
-
-// ─── Game construction ───────────────────────────────────────────────────────
-
-section('Game construction');
-{
-  const g = new Game(9);
-  assert(g.boardSize === 9, 'boardSize');
-  assert(g.current === 'white', 'white to play after center stone');
-  assert(g.board.get(4, 4) === 'black', 'center stone placed');
-  assert(!g.gameOver, 'game not over');
-  assert(g.moveCount === 1, 'one move played');
-}
-
-section('Game with different sizes');
-{
-  const g7 = new Game(7);
-  assert(g7.boardSize === 7, 'size 7');
-  assert(g7.board.get(3, 3) === 'black', 'center stone on 7x7');
-
-  const g13 = new Game(13);
-  assert(g13.boardSize === 13, 'size 13');
-  assert(g13.board.get(6, 6) === 'black', 'center stone on 13x13');
-}
-
-// ─── Game moves ──────────────────────────────────────────────────────────────
-
-section('Game placeStone');
-{
-  const g = new Game(9);
-  // White's turn
-  const result = g.placeStone(0, 0);
-  assert(result !== false, 'legal move returns truthy');
-  assert(g.board.get(0, 0) === 'white', 'stone placed');
-  assert(g.current === 'black', 'turn switches');
-  assert(g.moveCount === 2, 'move count incremented');
-}
-
-section('Illegal moves');
-{
-  const g = new Game(9);
-  // Try to play on occupied cell
-  const result = g.placeStone(4, 4);
-  assert(result === false, 'cannot play on occupied cell');
-  assert(g.current === 'white', 'turn unchanged after illegal move');
-}
-
-section('Pass');
-{
-  const g = new Game(9);
-  const passer = g.pass();
-  assert(passer === 'white', 'pass returns the passer');
-  assert(g.current === 'black', 'turn switches after pass');
-  assert(g.consecutivePasses === 1, 'one consecutive pass');
-  assert(g.lastMove === null, 'lastMove null after pass');
-  assert(g.koFlag === null, 'koFlag cleared after pass');
-}
-
-section('Double pass ends game');
-{
-  const g = new Game(9);
-  g.pass();
-  g.pass();
-  assert(g.gameOver, 'game over after two passes');
-  const sc = g.calcTerritory();
-  assert(typeof sc.black === 'number', 'black territory is number');
-  assert(typeof sc.white === 'number', 'white territory is number');
-  assert(sc.white + DEFAULT_KOMI >= DEFAULT_KOMI, 'white territory + komi ≥ komi');
-}
-
-// ─── Clone ───────────────────────────────────────────────────────────────────
-
-section('Game clone');
-{
-  const g = new Game(9);
-  g.placeStone(0, 0);
-  const c = g.clone();
-  assert(c.boardSize === g.boardSize, 'clone boardSize');
-  assert(c.current === g.current, 'clone current');
-  assert(c.moveCount === g.moveCount, 'clone moveCount');
-  // Mutations on clone don't affect original
-  c.placeStone(1, 1);
-  assert(g.board.get(1, 1) === null, 'clone is independent');
-  assert(c.board.get(1, 1) !== null, 'clone has the stone');
-}
-
-section('Clone divergence (independent futures)');
-{
-  const { getMove: random } = require('./ai/random.js');
-  let ok = true;
-
-  for (let trial = 0; trial < 10; trial++) {
-    const g = new Game(7);
-    for (let i = 0; i < 5 && !g.gameOver; i++) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-    if (g.gameOver) continue;
-
-    const c = g.clone();
-    for (let i = 0; i < 10 && !g.gameOver; i++) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-
-    try {
-      const move = random(c);
-      if (move.type === 'place') c.placeStone(move.x, move.y);
-      else c.pass();
-    } catch (e) {
-      ok = false;
-      console.error(`  Clone became corrupt after original diverged:`, e.message);
-    }
-  }
-  assert(ok, 'clones remain playable after original diverges');
-}
-
-section('Board clone');
-{
-  const b = new Board(9);
-  b.set(5, 5, 'black');
-  b.captureGroups(5, 5);
-  const c = b.clone();
-  assert(c.get(5, 5) === 'black', 'cloned board has stone');
-  c.set(5, 5, null);
-  assert(b.get(5, 5) === 'black', 'original unaffected');
-}
-
-// ─── Territory ───────────────────────────────────────────────────────────────
-
-section('Territory calculation');
-{
-  const g = new Game(7);
-  // End immediately — only center stone
-  g.pass();
-  g.pass();
-  assert(g.gameOver, 'game ended');
-  // All territory should be black (one stone on board, all connected empty is black territory)
-  // On a toroidal board, the single stone's territory = all empty cells
-  assert(g.calcTerritory().black > 0, 'black has territory');
-}
-
-section('Territory scoring makes sense');
-{
-  const { getMove: random } = require('./ai/random.js');
-  let ok = true;
-
-  for (let i = 0; i < 10; i++) {
-    const g = new Game(7);
-    while (!g.gameOver) {
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-    const territory = g.calcTerritory();
-    if (territory.black < 0 || territory.white < 0) {
-      ok = false;
-      console.error(`  Negative territory in game ${i}`);
-    }
-    const accounted = territory.black + territory.white + territory.neutral;
-    if (accounted !== 49) {
-      ok = false;
-      console.error(`  Territory doesn't sum to 49: got ${accounted}`);
-    }
-  }
-  assert(ok, 'territory scores are valid across 10 games');
-}
-
-// ─── Scoring ─────────────────────────────────────────────────────────────────
-
-section('Komi in scoring');
-{
-  // On an empty-ish board with only center stone, white gets komi
-  const g = new Game(7);
-  g.pass();
-  g.pass();
-  const _t = g.calcTerritory();
-  // calcTerritory returns raw counts without komi; caller adds it.
-  assert(typeof _t.white === 'number' && _t.white >= 0, 'calcTerritory returns non-negative white count');
-  assert(typeof _t.black === 'number' && _t.black >= 0, 'calcTerritory returns non-negative black count');
-  assert(_t.black + _t.white + _t.neutral === 7 * 7, 'calcTerritory accounts for all cells');
-}
-
-section('DEFAULT_KOMI');
-{
-  assert(DEFAULT_KOMI === 4.5, 'default komi is 4.5');
-}
-
-// ─── statusText ──────────────────────────────────────────────────────────────
-
-section('statusText');
-{
-  const g = new Game(9);
-  assert(g.statusText() === 'White to play', 'white to play after init');
-  g.placeStone(0, 0);
-  assert(g.statusText() === 'Black to play', 'black to play');
-  g.pass();
-  g.pass();
-  assert(g.statusText() === 'Game over', 'game over text');
-}
-
-// ─── Move count limit ────────────────────────────────────────────────────────
-
-section('Move count auto-end');
-{
-  const g = new Game(5);
-  // Threshold = 4 * 25 = 100 moves. Play passes until it ends.
-  let moves = 0;
-  while (!g.gameOver && moves < 200) {
-    g.pass();
-    moves++;
-  }
-  assert(g.gameOver, 'game auto-ended by move count or passes');
-}
-
-// ─── Random agent ────────────────────────────────────────────────────────────
-
-section('Random vs random roughly even (5x5, 20 games)');
-{
-  const { getMove: p1 } = require('./ai/random.js');
-  const { getMove: p2 } = require('./ai/random.js');
-  let p1Wins = 0, p2Wins = 0;
-
-  for (let i = 0; i < 20; i++) {
-    const g = new Game(5);
-    const blackAgent = i % 2 === 0 ? p1 : p2;
-    const whiteAgent = i % 2 === 0 ? p2 : p1;
-    const p1IsBlack = i % 2 === 0;
-
-    while (!g.gameOver) {
-      const agent = g.current === 'black' ? blackAgent : whiteAgent;
-      const move = agent(g, 0);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-    }
-
-    const _t = g.calcTerritory();
-    const blackWins = _t.black > _t.white + DEFAULT_KOMI;
-    if (p1IsBlack ? blackWins : !blackWins) p1Wins++;
-    else p2Wins++;
-  }
-  console.log(`  p1: ${p1Wins}  p2: ${p2Wins}`);
-  assert(p1Wins >= 3 && p2Wins >= 3,
-    `random vs random should be roughly balanced: ${p1Wins}-${p2Wins}`);
-}
-
-section('Random agent');
-{
-  const { getMove: randomAgent } = require('./ai/random.js');
-  const g = new Game(7);
-  const move = randomAgent(g);
-  assert(move.type === 'place' || move.type === 'pass', 'random returns valid move type');
-  if (move.type === 'place') {
-    assert(typeof move.x === 'number' && typeof move.y === 'number', 'place has coords');
-    assert(move.x >= 0 && move.x < 7, 'x in bounds');
-    assert(move.y >= 0 && move.y < 7, 'y in bounds');
-  }
-
-  // Ended game should return pass
-  const g2 = new Game(7);
-  g2.pass(); g2.pass();
-  assert(randomAgent(g2).type === 'pass', 'pass on ended game');
-}
-
-// ─── MC agent basic ──────────────────────────────────────────────────────────
-
-section('MC agent');
-{
-  const { getMove: mc } = require('./ai/mc.js');
-  const g = new Game(7);
-  const move = mc(g, 50); // very short budget
-  assert(move.type === 'place' || move.type === 'pass', 'mc returns valid move');
-  if (move.type === 'place') {
-    // Verify the move is legal
-    const clone = g.clone();
-    assert(clone.placeStone(move.x, move.y) !== false, 'mc move is legal');
-  }
-}
-
-// ─── MCTS agent basic ───────────────────────────────────────────────────────
-
-section('MCTS agent');
-{
-  const { getMove: mcts } = require('./ai/mcts.js');
-  const g = new Game(7);
-  const move = mcts(g, 50);
-  assert(move.type === 'place' || move.type === 'pass', 'mcts returns valid move');
-  if (move.type === 'place') {
-    const clone = g.clone();
-    assert(clone.placeStone(move.x, move.y) !== false, 'mcts move is legal');
-  }
-}
-
-// ─── AMAF agent basic ───────────────────────────────────────────────────────
-
-section('AMAF agent');
-{
-  const { getMove: amaf } = require('./ai/amaf.js');
-  const g = new Game(7);
-  const move = amaf(g, 50);
-  assert(move.type === 'place' || move.type === 'pass', 'amaf returns valid move');
-  if (move.type === 'place') {
-    const clone = g.clone();
-    assert(clone.placeStone(move.x, move.y) !== false, 'amaf move is legal');
-  }
-}
-
-// ─── Group verification mode ─────────────────────────────────────────────────
-
-section('Group tracker verification');
-{
-  const oldRatio = Board.verifyGroupRatio;
-  Board.verifyGroupRatio = 1; // verify every captureGroups call
-  const g = new Game(7);
-  // Play a sequence of moves — if tracker is wrong, verification throws
-  let ok = true;
-  try {
-    for (let i = 0; i < 20; i++) {
-      const { getMove: random } = require('./ai/random.js');
-      const move = random(g);
-      if (move.type === 'place') g.placeStone(move.x, move.y);
-      else g.pass();
-      if (g.gameOver) break;
-    }
-  } catch (e) {
-    ok = false;
-    console.error('  Group verify error:', e.message);
-  }
-  assert(ok, 'group tracker consistent through random game');
-  Board.verifyGroupRatio = oldRatio;
-}
-
-// ─── classifyEmpty consistency with isTrueEye ───────────────────────────────
-
-section('classifyEmpty matches isTrueEye on random board');
-{
-  const g = new Game(7);
-  const { getMove: random } = require('./ai/random.js');
-  // Play some random moves
-  for (let i = 0; i < 15 && !g.gameOver; i++) {
-    const move = random(g);
-    if (move.type === 'place') g.placeStone(move.x, move.y);
-    else g.pass();
-  }
-  // Check every empty cell
-  let allMatch = true;
-  for (let y = 0; y < 7; y++) {
-    for (let x = 0; x < 7; x++) {
-      if (g.board.get(x, y) !== null) continue;
-      for (const color of ['black', 'white']) {
-        const eye = g.board.isTrueEye(x, y, color);
-        const info = g.board.classifyEmpty(x, y, color);
-        if (eye !== info.isTrueEye) {
-          allMatch = false;
-          console.error(`  Mismatch at (${x},${y}) for ${color}: isTrueEye=${eye}, classifyEmpty=${info.isTrueEye}`);
-        }
-        // Also verify hasEmptyNeighbor
-        const neighbors = g.board.getNeighbors(x, y);
-        const hasEmpty = neighbors.some(([nx, ny]) => g.board.get(nx, ny) === null);
-        if (hasEmpty !== info.hasEmptyNeighbor) {
-          allMatch = false;
-          console.error(`  hasEmptyNeighbor mismatch at (${x},${y})`);
-        }
-      }
-    }
-  }
-  assert(allMatch, 'classifyEmpty consistent with isTrueEye + getNeighbors');
-}
-
-// ─── Hash consistency ────────────────────────────────────────────────────────
-
-// ─── placeStone return value ─────────────────────────────────────────────────
-
-section('placeStone return values');
-{
-  const g = new Game(9);
-  const r = g.placeStone(0, 0);
-  assert(r === true, 'no capture returns true (not a number)');
-  const r2 = g.placeStone(4, 4);
-  assert(r2 === false, 'occupied cell returns false');
-}
-
-// ─── Board serialize/parse round-trip ────────────────────────────────────────
-
-section('Board serialize/parse round-trip');
-{
-  const { parseBoard, boardTurnToString } = require('./game.js');
-  const g = new Game(7);
-  const { getMove: random } = require('./ai/random.js');
-  for (let i = 0; i < 10 && !g.gameOver; i++) {
-    const move = random(g);
-    if (move.type === 'place') g.placeStone(move.x, move.y);
-    else g.pass();
-  }
-  const str = boardTurnToString(g.board);
-  const { size, stones } = parseBoard(str);
-  assert(size === 7, 'parsed size matches');
-  const b2 = new Board(size);
-  for (const [x, y, color] of stones) b2.set(x, y, color);
-  let match = true;
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++)
-      if (g.board.get(x, y) !== b2.get(x, y)) match = false;
-  assert(match, 'round-trip preserves all cells');
-}
-
 // ─── Pattern symmetry ────────────────────────────────────────────────────────
 
 // Helpers shared by all pattern-symmetry sections.
 const { patternHash2 } = require('./pattern9.js');
-const { BLACK: _BLACK, WHITE: _WHITE } = require('./game2.js');
 
 // D4 symmetry permutations — must match SYMMETRY_PERMS in patterns.JS.
 const _D4_PERMS = [
@@ -634,16 +39,13 @@ function applyD4(sym, dx, dy) {
 }
 
 // Build a 9×9 game, place stones relative to (cx, cy), return patternHash2.
-// Center (1,1) is used so it stays clear of Game's initial stone at (4,4).
 function buildAndHash(stones, cx, cy, mover) {
-  const g = new Game(9);
+  const g = new Game2(9, false);
   for (const { dx, dy, color } of stones) {
-    g.board.set(cx + dx, cy + dy, color);
-    g.board.captureGroups(cx + dx, cy + dy);
+    g._place((cy + dy) * 9 + (cx + dx), color === 'black' ? _BLACK : _WHITE);
   }
-  const game2 = g.toGame2();
   const moverConst = mover === 'black' ? _BLACK : _WHITE;
-  return patternHash2(game2, cy * 9 + cx, moverConst);
+  return patternHash2(g, cy * 9 + cx, moverConst);
 }
 
 section('patternHash symmetry – diagonal stones');
@@ -711,22 +113,19 @@ section('patternHash mover-relative encoding');
 {
   // Same physical board should hash differently for different movers because
   // cell codes are relative to the mover (friend vs enemy swap).
-  const g = new Game(9);
-  g.board.set(0, 0, 'black');
-  g.board.captureGroups(0, 0);
-  const game2 = g.toGame2();
-  const hBlack = patternHash2(game2, 1 * 9 + 1, _BLACK);
-  const hWhite = patternHash2(game2, 1 * 9 + 1, _WHITE);
+  const g = new Game2(9, false);
+  g._place(0 * 9 + 0, _BLACK);
+  const hBlack = patternHash2(g, 1 * 9 + 1, _BLACK);
+  const hWhite = patternHash2(g, 1 * 9 + 1, _WHITE);
   assert(hBlack !== hWhite, 'different mover ⇒ different hash for same board');
 }
 
 section('patternHash2 return value is non-negative and bounded');
 {
-  const g = new Game(9);
-  g.board.set(0, 1, 'black'); g.board.captureGroups(0, 1);
-  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
-  const game2 = g.toGame2();
-  const h = patternHash2(game2, 1 * 9 + 1, _BLACK);
+  const g = new Game2(9, false);
+  g._place(1 * 9 + 0, _BLACK);
+  g._place(1 * 9 + 2, _WHITE);
+  const h = patternHash2(g, 1 * 9 + 1, _BLACK);
   const maxHash = 0xFFFFFFFF;
   assert(h >= 0,       `hash is non-negative (got ${h})`);
   assert(h <= maxHash, `hash is within uint32 bounds (got ${h})`);
@@ -734,34 +133,16 @@ section('patternHash2 return value is non-negative and bounded');
 
 section('patternHash2 determinism');
 {
-  const g = new Game(9);
-  g.board.set(2, 1, 'white'); g.board.captureGroups(2, 1);
-  const game2 = g.toGame2();
-  const h1 = patternHash2(game2, 1 * 9 + 1, _BLACK);
-  const h2 = patternHash2(game2, 1 * 9 + 1, _BLACK);
+  const g = new Game2(9, false);
+  g._place(1 * 9 + 2, _WHITE);
+  const h1 = patternHash2(g, 1 * 9 + 1, _BLACK);
+  const h2 = patternHash2(g, 1 * 9 + 1, _BLACK);
   assert(h1 === h2, 'patternHash2 returns the same value on repeated calls');
-}
-
-// Helper — mirrors evalladders.js buildPosition.
-function _buildPos(boardStr, toPlay) {
-  const { size, stones } = parseBoard(boardStr);
-  const g = new Game(size);
-  const c = size >> 1;
-  g.board.set(c, c, null);
-  g.moveCount = 0;
-  g.current = toPlay === '●' ? 'black' : 'white';
-  g.consecutivePasses = 0; g.koFlag = null;
-  for (const [x, y, color] of stones) {
-    g.board.set(x, y, color);
-  }
-  g.board._rebuildGroups();
-  return g;
 }
 
 
 // ─── Game2 ───────────────────────────────────────────────────────────────────
 
-const { Game2, PASS, BLACK, WHITE } = require('./game2.js');
 
 section('Game2 construction');
 {
@@ -978,250 +359,7 @@ section('Game2.nbr: shared with clone');
   assert(c.nbr === g.nbr, 'nbr is shared (same reference) between original and clone');
 }
 
-section('Game2 matches game.js: board state, isLegal, isTrueEye (20 random 7x7 games)');
-{
-  let allMatch = true;
-
-  for (let trial = 0; trial < 20 && allMatch; trial++) {
-    const N = 7;
-    const g1 = new Game(N);
-    const g2 = new Game2(N);
-
-    while (!g1.gameOver) {
-      // Check board state matches
-      for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-          const c1 = g1.board.get(x, y);
-          const c2 = g2.cells[y * N + x];
-          const exp = c1 === null ? 0 : (c1 === 'black' ? BLACK : WHITE);
-          if (c2 !== exp) {
-            allMatch = false;
-            console.error(`  board mismatch (${x},${y}) trial ${trial}: game=${c1} game2=${c2}`);
-          }
-        }
-      }
-
-      // Check isLegal and isTrueEye for every empty cell
-      const color1 = g1.current;
-      for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-          if (g1.board.get(x, y) !== null) continue;
-          const idx = y * N + x;
-
-          const l1 = g1.isLegal(x, y),  l2 = g2.isLegal(idx);
-          if (l1 !== l2) {
-            allMatch = false;
-            console.error(`  isLegal mismatch (${x},${y}) trial ${trial}: game=${l1} game2=${l2}`);
-          }
-
-          const e1 = g1.board.isTrueEye(x, y, color1),  e2 = g2.isTrueEye(idx);
-          if (e1 !== e2) {
-            allMatch = false;
-            console.error(`  isTrueEye mismatch (${x},${y}) trial ${trial}: game=${e1} game2=${e2}`);
-          }
-        }
-      }
-
-      // Pick a random legal non-eye move and apply to both
-      const cands = [];
-      for (let y = 0; y < N; y++)
-        for (let x = 0; x < N; x++)
-          if (g1.board.get(x, y) === null && g1.isLegal(x, y) &&
-              !g1.board.isTrueEye(x, y, color1)) cands.push({ x, y });
-
-      if (cands.length > 0) {
-        const { x, y } = cands[Math.floor(Math.random() * cands.length)];
-        g1.placeStone(x, y);
-        g2.play(y * N + x);
-      } else {
-        g1.pass();
-        g2.play(PASS);
-      }
-    }
-  }
-  assert(allMatch, 'game2 board, isLegal, isTrueEye match game.js across 20 random 7x7 games');
-}
-
-// ─── Game.toGame2() ──────────────────────────────────────────────────────────
-
-section('toGame2 basic state');
-{
-  const g1 = new Game(9);
-  g1.placeStone(0, 0); // white at (0,0)
-  g1.placeStone(1, 1); // black at (1,1)
-  const g2 = g1.toGame2();
-  assert(g2.N === 9,                      'toGame2: N');
-  assert(g2.current === WHITE,            'toGame2: current matches');
-  assert(g2.moveCount === g1.moveCount,   'toGame2: moveCount');
-  assert(g2.consecutivePasses === 0,      'toGame2: consecutivePasses');
-  assert(g2.gameOver === false,           'toGame2: gameOver');
-  assert(g2.ko === PASS,                  'toGame2: ko (no ko)');
-}
-
-// Play a random legal non-true-eye move on a legacy Game instance.
-function randomLegacyMove(g, N) {
-  const color = g.current;
-  const cands = [];
-  for (let y = 0; y < N; y++)
-    for (let x = 0; x < N; x++)
-      if (g.board.get(x, y) === null && g.isLegal(x, y) && !g.board.isTrueEye(x, y, color))
-        cands.push([x, y]);
-  if (cands.length === 0) return g.pass();
-  const [x, y] = cands[Math.floor(Math.random() * cands.length)];
-  g.placeStone(x, y);
-}
-
-section('toGame2 board cells match');
-{
-  const N = 7;
-  const g1 = new Game(N);
-  for (let i = 0; i < 15 && !g1.gameOver; i++) randomLegacyMove(g1, N);
-  const g2 = g1.toGame2();
-  let match = true;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const c1 = g1.board.get(x, y);
-      const exp = c1 === null ? 0 : (c1 === 'black' ? BLACK : WHITE);
-      if (g2.cells[y * N + x] !== exp) { match = false; break; }
-    }
-  }
-  assert(match, 'toGame2: all cells match after 15 random moves');
-}
-
-section('toGame2 isLegal and isTrueEye match');
-{
-  const N = 7;
-  const g1 = new Game(N);
-  for (let i = 0; i < 20 && !g1.gameOver; i++) randomLegacyMove(g1, N);
-  const g2 = g1.toGame2();
-  let match = true;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      if (g1.board.get(x, y) !== null) continue;
-      const idx = y * N + x;
-      if (g1.isLegal(x, y) !== g2.isLegal(idx)) {
-        match = false;
-        console.error(`  toGame2 isLegal mismatch at (${x},${y})`);
-      }
-      if (g1.board.isTrueEye(x, y, g1.current) !== g2.isTrueEye(idx)) {
-        match = false;
-        console.error(`  toGame2 isTrueEye mismatch at (${x},${y})`);
-      }
-    }
-  }
-  assert(match, 'toGame2: isLegal and isTrueEye agree on every empty cell');
-}
-
-section('toGame2 ko is transferred');
-{
-  // Build a ko position and verify the ko index is copied correctly.
-  // Use a sequence that produces a ko: surround a single stone so capturing it
-  // leaves the capturer with exactly 1 liberty pointing at the captured cell.
-  const N = 9;
-  const g1 = new Game(N);
-  // white plays (3,3); black surrounds from N/E/S, white fills W neighbour
-  // to leave black with 1 lib; black captures; ko is set.
-  // Simpler: use a known ko-producing sequence.
-  // W:(3,3) B:(4,3) W:(2,3) B:(3,4) W:(3,2) B:pass W:(3,1)... complex.
-  // Just manually set koFlag and verify it converts.
-  g1.koFlag = { x: 5, y: 3 };
-  const g2 = g1.toGame2();
-  assert(g2.ko === 3 * N + 5, 'toGame2: ko index = y*N+x');
-}
-
-section('toGame2 gameOver and consecutivePasses transferred');
-{
-  const g1 = new Game(7);
-  g1.pass(); g1.pass();
-  assert(g1.gameOver, 'precondition: game over');
-  const g2 = g1.toGame2();
-  assert(g2.gameOver === true,          'toGame2: gameOver=true transferred');
-  assert(g2.consecutivePasses === 2,    'toGame2: consecutivePasses=2 transferred');
-}
-
-section('toGame2 result is playable');
-{
-  const N = 7;
-  const g1 = new Game(N);
-  for (let i = 0; i < 10 && !g1.gameOver; i++) randomLegacyMove(g1, N);
-  const g2 = g1.toGame2();
-  // Play out the rest on game2 and verify it doesn't crash or loop
-  let steps = 0;
-  while (!g2.gameOver && steps < 500) {
-    const cap = N * N;
-    let placed = false;
-    for (let k = 0; k < 32 && !placed; k++) {
-      const idx = Math.floor(Math.random() * cap);
-      if (g2.cells[idx] !== 0) continue;
-      if (g2.isTrueEye(idx)) continue;
-      if (g2.isLegal(idx)) { g2.play(idx); placed = true; }
-    }
-    if (!placed) g2.play(PASS);
-    steps++;
-  }
-  assert(g2.gameOver, 'toGame2: converted game plays to completion');
-}
-
-section('toGame2 consistency across 20 mid-game positions');
-{
-  const N = 7;
-  let allMatch = true;
-
-  for (let trial = 0; trial < 20; trial++) {
-    const g1 = new Game(N);
-    const steps = 5 + Math.floor(Math.random() * 20);
-    for (let i = 0; i < steps && !g1.gameOver; i++) randomLegacyMove(g1, N);
-    if (g1.gameOver) continue;
-
-    const g2 = g1.toGame2();
-
-    // Verify board, isLegal, isTrueEye
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const idx = y * N + x;
-        const c1  = g1.board.get(x, y);
-        const exp = c1 === null ? 0 : (c1 === 'black' ? BLACK : WHITE);
-        if (g2.cells[idx] !== exp) {
-          allMatch = false;
-          console.error(`  toGame2 cell mismatch (${x},${y}) trial ${trial}`);
-        }
-        if (c1 !== null) continue;
-        if (g1.isLegal(x, y) !== g2.isLegal(idx)) {
-          allMatch = false;
-          console.error(`  toGame2 isLegal mismatch (${x},${y}) trial ${trial}`);
-        }
-        if (g1.board.isTrueEye(x, y, g1.current) !== g2.isTrueEye(idx)) {
-          allMatch = false;
-          console.error(`  toGame2 isTrueEye mismatch (${x},${y}) trial ${trial}`);
-        }
-      }
-    }
-
-    // Play one more move on both and verify they stay in sync
-    const cands = [];
-    for (let y = 0; y < N; y++)
-      for (let x = 0; x < N; x++)
-        if (g1.board.get(x, y) === null && g1.isLegal(x, y)) cands.push({ x, y });
-    if (cands.length > 0) {
-      const { x, y } = cands[Math.floor(Math.random() * cands.length)];
-      g1.placeStone(x, y);
-      g2.play(y * N + x);
-    } else {
-      g1.pass(); g2.play(PASS);
-    }
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const c1  = g1.board.get(x, y);
-        const exp = c1 === null ? 0 : (c1 === 'black' ? BLACK : WHITE);
-        if (g2.cells[y * N + x] !== exp) {
-          allMatch = false;
-          console.error(`  toGame2 post-move cell mismatch (${x},${y}) trial ${trial}`);
-        }
-      }
-    }
-  }
-  assert(allMatch, 'toGame2: board/isLegal/isTrueEye consistent across 20 mid-game positions');
-}
+// (Game2 matches game.js comparison tests removed — game.js deleted)
 
 // ─── Game2.clone ─────────────────────────────────────────────────────────────
 
@@ -1420,26 +558,28 @@ section('Game2.groupStones: all stones belong to the correct color');
 
 const { getLadderStatus2, getAllLadderStatuses } = require('./ladder2.js');
 
-// Helper: build a Game2 from a board string using the existing _buildPos helper.
+// Helper: build a Game2 from a board string (uses game2.js parseBoard).
+// toPlay is '●' (black) or '○' (white).
 function _buildGame2Pos(boardStr, toPlay) {
-  return _buildPos(boardStr, toPlay).toGame2();
+  const { size, stones } = parseBoard(boardStr);
+  const g = new Game2(size, false);
+  for (const [x, y, color] of stones) g._place(y * size + x, color);
+  g.current = toPlay === '●' ? BLACK : WHITE;
+  g.moveCount = 0;
+  return g;
 }
 
 // Helper: build a simple synthetic Game2 position from a list of stone placements.
 // stones = [{ x, y, color }] where color is 'black' or 'white'.
 // toPlay is 'black' or 'white'.
 function _syntheticGame2(N, stones, toPlay) {
-  const g = new Game(N);
-  // Clear the constructor's center stone so we start truly empty.
-  const c = N >> 1;
-  g.board.set(c, c, null);
+  const g = new Game2(N, false);
+  for (const { x, y, color } of stones) {
+    g._place(y * N + x, color === 'black' ? BLACK : WHITE);
+  }
+  g.current = toPlay === 'black' ? BLACK : WHITE;
   g.moveCount = 0;
-  g.current = toPlay;
-  g.consecutivePasses = 0;
-  g.koFlag = null;
-  for (const { x, y, color } of stones) g.board.set(x, y, color);
-  g.board._rebuildGroups();
-  return g.toGame2();
+  return g;
 }
 
 section('getLadderStatus2 – no stone / too many liberties');
@@ -1723,49 +863,28 @@ section('getLadderStatus2 – sanity check on 50 random positions');
   let checks = 0;
   for (let trial = 0; trial < 50; trial++) {
     const N = 9;
-    const g = new Game(N);
-    const c = N >> 1;
-    g.board.set(c, c, null);
-    g.moveCount = 0;
-    g.current = 'black';
-    g.consecutivePasses = 0;
-    g.koFlag = null;
-
+    const g = new Game2(N);
     const moves = 20 + Math.floor(Math.random() * 21);
-    for (let m = 0; m < moves && !g.gameOver; m++) {
-      const legal = [];
-      for (let y = 0; y < N; y++)
-        for (let x = 0; x < N; x++)
-          if (g.board.get(x, y) === null && g.isLegal(x, y)) legal.push([x, y]);
-      if (legal.length === 0) { g.pass(); continue; }
-      const [rx, ry] = legal[Math.floor(Math.random() * legal.length)];
-      g.placeStone(rx, ry);
-    }
-
-    const g2 = g.toGame2();
+    for (let m = 0; m < moves && !g.gameOver; m++) g.play(g.randomLegalMove());
 
     const visitedGids = new Set();
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const color = g.board.get(x, y);
-        if (!color) continue;
-        const gid = g.board._gid[g.board._idx(x, y)];
-        if (visitedGids.has(gid)) continue;
-        visitedGids.add(gid);
-        const libs = g.board.getLiberties(g.board.getGroup(x, y));
-        if (libs.size === 0 || libs.size > 2) continue;
+    for (let idx = 0; idx < N * N; idx++) {
+      if (g.cells[idx] === 0) continue;
+      const gid = g._gid[idx];
+      if (visitedGids.has(gid)) continue;
+      visitedGids.add(gid);
+      if (g._ls[gid] === 0 || g._ls[gid] > 2) continue;
 
-        const r2 = getLadderStatus2(g2, y * N + x);
-        if (!r2) continue;
+      const r2 = getLadderStatus2(g, idx);
+      if (!r2) continue;
 
-        // Structural checks.
-        assert(typeof r2.moverSucceeds === 'boolean', 'moverSucceeds is boolean');
-        assert(Array.isArray(r2.urgentLibs),          'urgentLibs is array');
-        if (r2.urgentLibs.length > 0) {
-          assert(r2.moverSucceeds === true, 'urgentLibs non-empty implies moverSucceeds');
-        }
-        checks++;
+      // Structural checks.
+      assert(typeof r2.moverSucceeds === 'boolean', 'moverSucceeds is boolean');
+      assert(Array.isArray(r2.urgentLibs),          'urgentLibs is array');
+      if (r2.urgentLibs.length > 0) {
+        assert(r2.moverSucceeds === true, 'urgentLibs non-empty implies moverSucceeds');
       }
+      checks++;
     }
   }
   assert(checks > 0, 'sanity check: at least one group checked');
@@ -2016,28 +1135,6 @@ section('Game3 undo restores ko');
   // Simple 5×5 ko setup.
   const N = 5;
   const g3 = new Game3(N);
-  // Clear the constructor's center stone by resetting to a custom position via Game.
-  const { Game } = require('./game.js');
-  const gRef = new Game(N);
-  const cg = N >> 1;
-  gRef.board.set(cg, cg, null);
-  gRef.moveCount = 0; gRef.current = 'black'; gRef.consecutivePasses = 0; gRef.koFlag = null;
-  // Place a classic ko shape.
-  // B at (1,1), W at (2,1), B at (3,1), W at (0,1)
-  // B at (1,0), B at (1,2), W at (2,0), W at (2,2)
-  // After B captures at (1,1), ko is at (2,1).
-  const stones = [
-    {x:1,y:1,color:'black'},{x:2,y:1,color:'white'},
-    {x:3,y:1,color:'black'},{x:0,y:1,color:'white'},
-    {x:1,y:0,color:'black'},{x:1,y:2,color:'black'},
-    {x:2,y:0,color:'white'},{x:2,y:2,color:'white'},
-  ];
-  for (const {x,y,color} of stones) gRef.board.set(x,y,color);
-  gRef.board._rebuildGroups();
-  gRef.current = 'black';
-  const g3ko = gRef.toGame2().constructor === Game2
-    ? (() => { const g = new Game3(N); g.reset(); /* use toGame3 workaround */ return g; })()
-    : null;
   // Simpler: just verify ko flag is preserved across play/undo on a fresh game3.
   const g3b = new Game3(9);
   const idxA = 0 * 9 + 2;
@@ -2162,12 +1259,11 @@ section('Game3 random play/undo stress test');
 
   section('pattern9: patternHash2 is deterministic');
   {
-    const g = new Game(9);
-    g.placeStone(4, 3);
-    g.placeStone(4, 5);
-    const game2 = g.toGame2();
-    const h1 = patternHash2(game2, 4 * 9 + 4, game2.current);
-    const h2 = patternHash2(game2, 4 * 9 + 4, game2.current);
+    const g = new Game2(9, false);
+    g._place(3 * 9 + 4, WHITE);
+    g._place(5 * 9 + 4, BLACK);
+    const h1 = patternHash2(g, 4 * 9 + 4, BLACK);
+    const h2 = patternHash2(g, 4 * 9 + 4, BLACK);
     assert(h1 === h2, 'same call returns same hash');
     assert(typeof h1 === 'number' && h1 >= 0, 'hash is a non-negative number');
   }
@@ -2176,20 +1272,12 @@ section('Game3 random play/undo stress test');
   {
     // Empty cell surrounded only by friendly stones vs. only by enemy stones.
     const N = 5;
-    const g1 = new Game(N);
-    const g2 = new Game(N);
-    // Centre of a 5×5 board is (2,2), idx=12.
-    // g1: place black stones around center on black's turn.
-    // g2: place white stones around center on black's turn.
-    // We'll work with the game2 states and check black's view of idx=12.
-    const gm1 = g1.toGame2();
-    const gm2 = g2.toGame2();
-    // Manually set neighbours for a quick structural test.
-    // Hash of empty center surrounded by nothing vs. surrounded by a friend.
+    // Hash of empty center (idx=12) surrounded by nothing vs. one friend.
+    const gm1 = new Game2(N, false);
     const hEmpty  = patternHash2(gm1, 12, BLACK);
-    // After placing a black stone next to center:
-    g1.placeStone(2, 1); // black at (2,1) = idx 7
-    const gm1b = g1.toGame2();
+    // After placing a black stone next to center (2,1) = idx 7:
+    const gm1b = new Game2(N, false);
+    gm1b._place(1 * N + 2, BLACK);
     const hWithFriend = patternHash2(gm1b, 12, BLACK);
     assert(hEmpty !== hWithFriend, 'empty neighbourhood hash differs from neighbourhood with a friend');
   }
@@ -2202,15 +1290,8 @@ section('Game3 random play/undo stress test');
     const N = 7;
     const rotPositions = [[3,2],[4,3],[3,4],[2,3]]; // N/E/S/W of center (3,3)
     const hashes = rotPositions.map(([sx, sy]) => {
-      const g = new Game(N);
-      // Place black at (sx, sy); need to reach it via play sequence.
-      // Easier: use game2 directly.
-      const gm = g.toGame2();
-      // Manually set cell and gid to simulate a single stone.
-      gm.cells[sy * N + sx] = BLACK;
-      gm._gid[sy * N + sx] = 0;
-      gm._ss[0] = 1;
-      gm._ls[0] = 4;
+      const gm = new Game2(N, false);
+      gm._place(sy * N + sx, BLACK);
       return patternHash2(gm, 3 * N + 3, BLACK); // hash of center
     });
     const allSame = hashes.every(h => h === hashes[0]);
@@ -2316,91 +1397,6 @@ section('Game3 random play/undo stress test');
 
 }
 
-// ─── calcTerritory / estimateTerritory ───────────────────────────────────────
-
-section('game.js calcTerritory — flood fill');
-{
-  // 3×3 board: all black stones except (1,1) empty → black claims everything
-  const g = new Game(3);
-  // Clear the board (constructor places center stone)
-  for (let y = 0; y < 3; y++)
-    for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
-  // Fill perimeter with black
-  for (let y = 0; y < 3; y++)
-    for (let x = 0; x < 3; x++)
-      if (!(x === 1 && y === 1)) g.board.grid[y][x] = 'black';
-  const t = g.calcTerritory();
-  assert(t.black === 8 + 1, 'calcTerritory: 8 black stones + 1 interior empty = 9 black');
-  assert(t.white === 0,     'calcTerritory: no white');
-  assert(t.neutral === 0,   'calcTerritory: no neutral');
-}
-{
-  // 3×3 board split: left column black, right column white, middle empty.
-  // Middle column is adjacent to both → neutral.
-  const g = new Game(3);
-  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
-  for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
-  const t = g.calcTerritory();
-  assert(t.black === 3, 'calcTerritory split: 3 black stones');
-  assert(t.white === 3, 'calcTerritory split: 3 white stones');
-  assert(t.neutral === 3, 'calcTerritory split: 3 neutral empties (mixed border)');
-}
-{
-  // 5×5: black surrounds a 3-cell interior region.
-  // On a toroidal board, "surrounded" means the whole empty region must be
-  // enclosed — verify flood fill assigns the interior to black.
-  const g = new Game(5);
-  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
-  // Clear a 1×3 interior strip
-  g.board.grid[2][1] = null;
-  g.board.grid[2][2] = null;
-  g.board.grid[2][3] = null;
-  const t = g.calcTerritory();
-  assert(t.black === 25, 'calcTerritory: interior empty region fully enclosed by black');
-  assert(t.white === 0,  'calcTerritory: no white');
-}
-
-section('game.js estimateWinner — 1-step neighbour check');
-{
-  // 3×3 all-black except interior: 8 black stones + interior cell adjacent to black.
-  // black=9, white=0 → black wins (9 > 0 + komi=4.5).
-  const g = new Game(3);
-  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
-  for (let y = 0; y < 3; y++)
-    for (let x = 0; x < 3; x++)
-      if (!(x === 1 && y === 1)) g.board.grid[y][x] = 'black';
-  assert(g.estimateWinner() === 'black', 'estimateWinner: 8 black + 1 interior → black wins');
-}
-{
-  // 3×3 split: 3 black on left, 3 white on right, 3 neutral empties in middle.
-  // black=3, white=3, neutral=3 → 3 vs 3+4.5 → white wins by komi.
-  const g = new Game(3);
-  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) g.board.grid[y][x] = null;
-  for (let y = 0; y < 3; y++) { g.board.grid[y][0] = 'black'; g.board.grid[y][2] = 'white'; }
-  assert(g.estimateWinner() === 'white', 'estimateWinner: equal territory → white wins by komi');
-}
-{
-  // 5×5 all-black except 3-cell interior: black=25, white=0 → black wins.
-  const g = new Game(5);
-  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = 'black';
-  g.board.grid[2][1] = null;
-  g.board.grid[2][2] = null;
-  g.board.grid[2][3] = null;
-  assert(g.estimateWinner() === 'black', 'estimateWinner: dominated board → black wins');
-}
-{
-  // 5×5: white perimeter, empty interior.
-  // calcTerritory → white wins; estimateWinner agrees (1-step undercounts but still white).
-  const g = new Game(5);
-  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) g.board.grid[y][x] = null;
-  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
-    if (y === 0 || y === 4 || x === 0 || x === 4) g.board.grid[y][x] = 'white';
-  }
-  const tc = g.calcTerritory();
-  assert(tc.white === 25 && tc.black === 0, 'calcTerritory: large interior all white');
-  assert(g.estimateWinner() === 'white', 'estimateWinner: white perimeter → white wins');
-}
-
 section('game2 calcScore — flood fill');
 {
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
@@ -2412,7 +1408,7 @@ section('game2 calcScore — flood fill');
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
     const t = g.calcScore();
     assert(t.black === 25,        'game2.calcScore: all black → black = 25');
-    assert(t.white === 0 + 4.5,  'game2.calcScore: all black → white = 4.5 (komi only)');
+    assert(t.white === KOMI(5),   'game2.calcScore: all black → white = KOMI(5) only');
     assert(t.black > t.white,     'game2.calcScore: black wins');
   }
   {
@@ -2872,6 +1868,109 @@ section('book: serializeBook / deserializeBook round-trip');
       assert(entry2.get(move) === count, 'round-trip: same counts');
     }
   }
+}
+
+// ─── Game2 agent tests ───────────────────────────────────────────────────────
+
+section('Random agent (Game2)');
+{
+  const { getMove: randomAgent } = require('./ai/random.js');
+  const g = new Game2(7);
+  const move = randomAgent(g);
+  assert(move.type === 'place' || move.type === 'pass', 'random returns valid move type');
+  if (move.type === 'place') {
+    assert(typeof move.x === 'number' && typeof move.y === 'number', 'place has coords');
+    assert(move.x >= 0 && move.x < 7, 'x in bounds');
+    assert(move.y >= 0 && move.y < 7, 'y in bounds');
+    const clone = g.clone();
+    assert(clone.play(move.y * 7 + move.x) !== false, 'random move is legal on Game2');
+  }
+  const g2 = new Game2(7);
+  while (!g2.gameOver) g2.play(PASS);
+  assert(randomAgent(g2).type === 'pass', 'random returns pass on ended game');
+}
+
+section('MC agent (Game2)');
+{
+  const { getMove: mc } = require('./ai/mc.js');
+  const g = new Game2(7);
+  const move = mc(g, 50);
+  assert(move.type === 'place' || move.type === 'pass', 'mc returns valid move');
+  if (move.type === 'place') {
+    const clone = g.clone();
+    assert(clone.play(move.y * 7 + move.x) !== false, 'mc move is legal on Game2');
+  }
+}
+
+section('MCTS agent (Game2)');
+{
+  const { getMove: mcts } = require('./ai/mcts.js');
+  const g = new Game2(7);
+  const move = mcts(g, 50);
+  assert(move.type === 'place' || move.type === 'pass', 'mcts returns valid move');
+  if (move.type === 'place') {
+    const clone = g.clone();
+    assert(clone.play(move.y * 7 + move.x) !== false, 'mcts move is legal on Game2');
+  }
+}
+
+section('AMAF agent (Game2)');
+{
+  const { getMove: amaf } = require('./ai/amaf.js');
+  const g = new Game2(7);
+  const move = amaf(g, 50);
+  assert(move.type === 'place' || move.type === 'pass', 'amaf returns valid move');
+  if (move.type === 'place') {
+    const clone = g.clone();
+    assert(clone.play(move.y * 7 + move.x) !== false, 'amaf move is legal on Game2');
+  }
+}
+
+section('Game2 clone divergence (independent futures)');
+{
+  let ok = true;
+  for (let trial = 0; trial < 10; trial++) {
+    const g = new Game2(7);
+    for (let i = 0; i < 5 && !g.gameOver; i++) g.play(g.randomLegalMove());
+    if (g.gameOver) continue;
+    const c = g.clone();
+    for (let i = 0; i < 10 && !g.gameOver; i++) g.play(g.randomLegalMove());
+    try {
+      c.play(c.randomLegalMove());
+    } catch (e) {
+      ok = false;
+      console.error('  Clone became corrupt after original diverged:', e.message);
+    }
+  }
+  assert(ok, 'Game2 clones remain playable after original diverges');
+}
+
+section('KOMI function');
+{
+  assert(typeof KOMI === 'function', 'KOMI is a function');
+  assert(KOMI(9)  === 4.5, 'KOMI(9) = 4.5');
+  assert(KOMI(7)  === 3.5, 'KOMI(7) = 3.5');
+  assert(KOMI(5)  === 2.5, 'KOMI(5) = 2.5');
+  assert(KOMI(13) === 6.5, 'KOMI(13) = 6.5');
+}
+
+section('setKomi override');
+{
+  assert(typeof setKomi === 'function', 'setKomi is a function');
+  // Override 7×7 komi, verify KOMI(7) returns the override.
+  setKomi(7, 0.5);
+  assert(KOMI(7) === 0.5, 'setKomi(7, 0.5): KOMI(7) returns 0.5');
+  // Other sizes are unaffected.
+  assert(KOMI(9) === 4.5, 'setKomi(7): KOMI(9) still 4.5');
+  // Restore default and confirm.
+  setKomi(7, 3.5);
+  assert(KOMI(7) === 3.5, 'setKomi(7, 3.5): restored to default');
+  // calcScore respects the override.
+  setKomi(9, 100);
+  const g = new Game2(9);
+  const sc = g.calcScore();
+  assert(sc.white >= 100, 'calcScore uses overridden komi');
+  setKomi(9, 4.5); // restore
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────
