@@ -1,5 +1,11 @@
 'use strict';
 
+// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
+// Wrapped in an IIFE to avoid polluting the global namespace.
+// Loaded as a plain <script> tag; do not add require/module/process at top level.
+
+(function () {
+
 /**
  * Shore-up policy.
  *
@@ -20,46 +26,48 @@
  *   5. Fallback  — random legal non-eye move that avoids self-atari
  *
  * Interface: getMove(game, timeBudgetMs) → { type: 'pass' } | { type: 'place', x, y }
- *   game         - a live Game instance (read-only; do not mutate)
+ *   game         - a live Game2 instance (read-only; do not mutate)
  *   timeBudgetMs - ignored (always fast)
  */
 
-if (typeof require === 'function') { var Util = require('../util.js'); }
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
+const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const Util = _isNode ? require('../util.js') : window.Util;
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// Return all groups of `color`, each as { group, libs }, sorted by group size
-// descending (largest first).
-function groupsByColor(board, color) {
-  const visited = new Set();
+// Return all groups of `color`, each as { firstIdx, size, libertyCount },
+// sorted by size descending (largest first).
+function groupsByColor(game2, color) {
+  const cells   = game2.cells;
+  const cap     = game2.N * game2.N;
+  const seen    = new Set();
   const results = [];
-  const N = board.size;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const key = `${x},${y}`;
-      if (board.get(x, y) !== color || visited.has(key)) continue;
-      const group = board.getGroup(x, y);
-      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
-      const libs = board.getLiberties(group);
-      results.push({ group, libs });
-    }
+
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] !== color) continue;
+    const gid = game2._gid[i];
+    if (seen.has(gid)) continue;
+    seen.add(gid);
+    results.push({ firstIdx: i, size: game2._ss[gid], libertyCount: game2._ls[gid] });
   }
-  results.sort((a, b) => b.group.length - a.group.length);
+  results.sort((a, b) => b.size - a.size);
   return results;
 }
 
-// True if any own group in `clone` has exactly 1 liberty (we'd be in atari).
-function leavesOwnGroupAtari(clone, color) {
-  const visited = new Set();
-  const N = clone.board.size;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const key = `${x},${y}`;
-      if (clone.board.get(x, y) !== color || visited.has(key)) continue;
-      const group = clone.board.getGroup(x, y);
-      group.forEach(([gx, gy]) => visited.add(`${gx},${gy}`));
-      if (clone.board.getLiberties(group).size === 1) return true;
-    }
+// True if any own group in game2 has exactly 1 liberty (we'd be in atari).
+function leavesOwnGroupAtari(game2, color) {
+  const cells = game2.cells;
+  const cap   = game2.N * game2.N;
+  const seen  = new Set();
+
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] !== color) continue;
+    const gid = game2._gid[i];
+    if (seen.has(gid)) continue;
+    seen.add(gid);
+    if (game2._ls[gid] === 1) return true;
   }
   return false;
 }
@@ -67,70 +75,75 @@ function leavesOwnGroupAtari(clone, color) {
 // ── tiers ──────────────────────────────────────────────────────────────────
 
 // Tier 1: capture an opponent group in atari — largest first.
-function findCapture(game) {
-  const opp = game.current === 'black' ? 'white' : 'black';
-  const atari = groupsByColor(game.board, opp).filter(({ libs }) => libs.size === 1);
-  for (const { libs } of atari) {
-    const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = game.clone();
-    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
+function findCapture(game2) {
+  const N   = game2.N;
+  const opp = game2.current === BLACK ? WHITE : BLACK;
+  for (const g of groupsByColor(game2, opp)) {
+    if (g.libertyCount !== 1) continue;
+    const libs = game2.groupLibs(g.firstIdx);
+    const idx  = libs[0];
+    const clone = game2.clone();
+    if (clone.play(idx)) return { type: 'place', x: idx % N, y: (idx / N) | 0 };
   }
   return null;
 }
 
 // Tier 2: save own group in atari — largest first.
-function findEscape(game) {
-  const color = game.current;
-  const atari = groupsByColor(game.board, color).filter(({ libs }) => libs.size === 1);
-  for (const { libs } of atari) {
-    const [lx, ly] = [...libs][0].split(',').map(Number);
-    const clone = game.clone();
-    if (clone.placeStone(lx, ly)) return { type: 'place', x: lx, y: ly };
+function findEscape(game2) {
+  const N     = game2.N;
+  const color = game2.current;
+  for (const g of groupsByColor(game2, color)) {
+    if (g.libertyCount !== 1) continue;
+    const libs = game2.groupLibs(g.firstIdx);
+    const idx  = libs[0];
+    const clone = game2.clone();
+    if (clone.play(idx)) return { type: 'place', x: idx % N, y: (idx / N) | 0 };
   }
   return null;
 }
 
 // Tier 3: extend own groups at exactly 2 liberties to ≥ 3 — largest first.
-function findShoreUp(game) {
-  const color = game.current;
-  const vulnerable = groupsByColor(game.board, color).filter(({ libs }) => libs.size === 2);
-  for (const { libs } of vulnerable) {
-    for (const libStr of libs) {
-      const [x, y] = libStr.split(',').map(Number);
-      const clone = game.clone();
-      if (!clone.placeStone(x, y)) continue;
+function findShoreUp(game2) {
+  const N     = game2.N;
+  const color = game2.current;
+  for (const g of groupsByColor(game2, color)) {
+    if (g.libertyCount !== 2) continue;
+    const libs = game2.groupLibs(g.firstIdx);
+    for (let k = 0; k < libs.length; k++) {
+      const idx   = libs[k];
+      const clone = game2.clone();
+      if (!clone.play(idx)) continue;
       // Only worthwhile if the extended group genuinely gains liberties.
-      const afterGroup = clone.board.getGroup(x, y);
-      if (clone.board.getLiberties(afterGroup).size >= 3)
-        return { type: 'place', x, y };
+      const newGid = clone._gid[idx];
+      if (newGid !== -1 && clone._ls[newGid] >= 3)
+        return { type: 'place', x: idx % N, y: (idx / N) | 0 };
     }
   }
   return null;
 }
 
 // Tier 4: put the largest opponent group into atari.
-function findThreat(game, candidates) {
-  const opp = game.current === 'black' ? 'white' : 'black';
+function findThreat(game2, candidates) {
+  const N   = game2.N;
+  const opp = game2.current === BLACK ? WHITE : BLACK;
   let bestMove = null;
   let bestSize = -1;
 
-  for (const [x, y] of candidates) {
-    const clone = game.clone();
-    if (!clone.placeStone(x, y)) continue;
+  for (const idx of candidates) {
+    const clone = game2.clone();
+    if (!clone.play(idx)) continue;
 
-    // Find the largest opponent group now in atari.
-    const visited = new Set();
-    const N = clone.board.size;
-    for (let gy = 0; gy < N; gy++) {
-      for (let gx = 0; gx < N; gx++) {
-        const key = `${gx},${gy}`;
-        if (clone.board.get(gx, gy) !== opp || visited.has(key)) continue;
-        const group = clone.board.getGroup(gx, gy);
-        group.forEach(([ax, ay]) => visited.add(`${ax},${ay}`));
-        if (clone.board.getLiberties(group).size === 1 && group.length > bestSize) {
-          bestSize = group.length;
-          bestMove = { type: 'place', x, y };
-        }
+    const cells = clone.cells;
+    const cap   = N * N;
+    const seen  = new Set();
+    for (let i = 0; i < cap; i++) {
+      if (cells[i] !== opp) continue;
+      const gid = clone._gid[i];
+      if (seen.has(gid)) continue;
+      seen.add(gid);
+      if (clone._ls[gid] === 1 && clone._ss[gid] > bestSize) {
+        bestSize = clone._ss[gid];
+        bestMove = { type: 'place', x: idx % N, y: (idx / N) | 0 };
       }
     }
   }
@@ -138,51 +151,57 @@ function findThreat(game, candidates) {
 }
 
 // Tier 5: random legal non-eye move, skipping self-atari.
-function findRandom(game, candidates) {
-  const color = game.current;
-  for (const [x, y] of candidates) {
-    const clone = game.clone();
-    if (!clone.placeStone(x, y)) continue;
+function findRandom(game2, candidates) {
+  const N     = game2.N;
+  const color = game2.current;
+  for (const idx of candidates) {
+    const clone = game2.clone();
+    if (!clone.play(idx)) continue;
     if (leavesOwnGroupAtari(clone, color)) continue;
-    return { type: 'place', x, y };
+    return { type: 'place', x: idx % N, y: (idx / N) | 0 };
   }
   // If every legal move leaves us in atari, accept the least-bad option.
-  for (const [x, y] of candidates) {
-    const clone = game.clone();
-    if (clone.placeStone(x, y)) return { type: 'place', x, y };
+  for (const idx of candidates) {
+    const clone = game2.clone();
+    if (clone.play(idx)) return { type: 'place', x: idx % N, y: (idx / N) | 0 };
   }
   return null;
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
 
-module.exports = function getMove(game, _timeBudgetMs) {
+function getMove(game, _timeBudgetMs) {
   if (game.gameOver) return { type: 'pass' };
 
-  const N = game.boardSize;
-  const color = game.current;
+  const game2 = game.cells ? game.clone() : game.toGame2();
+  const N     = game2.N;
+  const color = game2.current;
 
-  const capture = findCapture(game);
+  const capture = findCapture(game2);
   if (capture) return capture;
 
-  const escape = findEscape(game);
+  const escape = findEscape(game2);
   if (escape) return escape;
 
-  const shoreUp = findShoreUp(game);
+  const shoreUp = findShoreUp(game2);
   if (shoreUp) return shoreUp;
 
   // Build shuffled candidate list for tiers 4 & 5.
   const candidates = [];
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      if (game.board.get(x, y) !== null) continue;
-      if (game.board.isTrueEye(x, y, color)) continue;
-      candidates.push([x, y]);
-    }
+  const cells = game2.cells;
+  for (let i = 0; i < N * N; i++) {
+    if (cells[i] !== 0) continue;
+    if (game2.isTrueEye(i)) continue;
+    candidates.push(i);
   }
   Util.shuffle(candidates);
 
-  return findThreat(game, candidates)
-      || findRandom(game, candidates)
+  return findThreat(game2, candidates)
+      || findRandom(game2, candidates)
       || { type: 'pass' };
-};
+}
+
+if (typeof module !== 'undefined') module.exports = { getMove };
+else window.getMove = getMove;
+
+})();
