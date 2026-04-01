@@ -61,7 +61,6 @@ function printBoard(game) {
     const passer = game.current === BLACK ? 'White' : 'Black';
     console.log(passer + ' passed');
   }
-  console.log();
 }
 
 const tally = { p1: 0, p2: 0 };
@@ -113,8 +112,13 @@ function maybePrint(gamesPlayed) {
 // Run games until the limit (or forever if no limit).
 for (let g = 0; g < gameLimit; g++) {
   const p1IsBlack = g % 2 === 0;
+  const names = [ p1IsBlack ? p1Name : p2Name, p1IsBlack ? p2Name : p1Name]
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
+
+  if (verboseBoard) {
+    console.log(`${names[0]} ● vs ${names[1]} ○`);
+  }
 
   const game = new Game2(boardSize);
 
@@ -131,7 +135,12 @@ for (let g = 0; g < gameLimit; g++) {
       console.error(`Illegal move from ${mover} (${p1IsBlack ? p1Name : p2Name}): ${JSON.stringify(move)}`);
       process.exit(1);
     }
-    if (verboseBoard) printBoard(game);
+    if (verboseBoard) {
+      console.log(`${names[isBlackTurn?0:1]}:`);
+      printBoard(game);
+      console.log(`Agent info: ${move.info}`);
+      console.log();
+    };
   }
 
   const winner = game.calcWinner();

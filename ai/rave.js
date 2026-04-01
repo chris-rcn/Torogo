@@ -230,7 +230,7 @@ function selectAndExpand(root, rootGame2, N) {
 // childMover(n): the player choosing the next move from node n = opponent of n.mover.
 function backpropagate(node, winner, played, rootPlayer) {
   function childMover(n) {
-    return 3 - n.mover;
+    return -n.mover;
   }
 
   function updateRave(node, won, played, chooser) {
@@ -342,7 +342,7 @@ function getMove(game, timeBudgetMs) {
 
   const result = m === PASS ? { type: 'pass', move: PASS, children, rootWinRatio }
                             : { type: 'place', move: m, x: m % N, y: (m / N) | 0, children, rootWinRatio };
-  result.info = `win likelihood: ${bestWinRatio.toFixed(3)}`;
+  result.info = `value=${(game.current===BLACK?bestWinRatio:(1-bestWinRatio)).toFixed(3)}`;
   return result;
 }
 

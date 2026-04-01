@@ -13,7 +13,8 @@ const t0 = Date.now();
 const result = getMove(new Game2(size, false), budget);
 const elapsed = (Date.now() - t0) / 1000;
 let magSum = 0, magMax = 0;
-for (const w of result.weights.values()) { const a = Math.abs(w); magSum += a; if (a > magMax) magMax = a; }
-const avgMag = magSum / result.weights.size;
-console.log(`size: ${size}  sims: ${result.sims}  sims/s: ${(result.sims / elapsed).toFixed(0)}  weights/cell: ${(result.weights.size / (size * size)).toFixed(2)}  avg|w|: ${avgMag.toFixed(4)}  max|w|: ${magMax.toFixed(4)}`);
+for (const w of result.weightsArr) { const a = Math.abs(w); magSum += a; if (a > magMax) magMax = a; }
+const nWeights = result.keyToIdx.size;
+const avgMag = magSum / nWeights;
+console.log(`size: ${size}  sims: ${result.sims}  sims/s: ${(result.sims / elapsed).toFixed(0)}  weights/cell: ${(nWeights / (size * size)).toFixed(2)}  avg|w|: ${avgMag.toFixed(4)}  max|w|: ${magMax.toFixed(4)}`);
 

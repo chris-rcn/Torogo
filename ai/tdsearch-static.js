@@ -10,12 +10,10 @@ const { BLACK, WHITE, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
-const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
-const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
-const LR            = Util.envFloat('TD_LR', 0.3);
-const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
-const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
-const USE_2x2       = Util.envInt  ('TD_USE_2x2', 0);
+const WIDE_DEPTH    = 1000;
+const NARROW_DEPTH  = 0;
+const LR            = 0.3;
+const EPSILON       = 0.1;
 
 // ── Feature buffer ────────────────────────────────────────────────────────────
 
@@ -54,7 +52,8 @@ function resolveKey(key, keyToIdx, weightsArr) {
 // Type 4 — 2×1 anchored at T=idx:   key = 93*cap + idx*9  + ternary2
 //   range [93*cap, 102*cap)
 //
-// Patterns where all cells are empty are skipped.
+// Multi-cell ternary: v ∈ {-1,0,+1} encoded as v+1 ∈ {0,1,2}.
+// Windows where all cells are empty are skipped.
 function findFeatures(game, buf, keyToIdx, weightsArr) {
   const cap   = game.N * game.N;
   const cells = game.cells;
@@ -66,26 +65,10 @@ function findFeatures(game, buf, keyToIdx, weightsArr) {
     const v0 = cells[idx];
 
     // 1×1
-    if (v0 !== 0) 
-    {
+    if (v0 !== 0) {
       buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, keyToIdx, weightsArr);
     }
 
-    const v1 = cells[nbr [idx * 4 + 3]];
-
-    // 1×2 (horizontal)
-    if (USE_1x2 && v0*v0 + v1*v1 > 0) {
-      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), keyToIdx, weightsArr);
-    }
-
-    // 2×2
-    if (USE_2x2) {
-      const v2 = cells[nbr[idx * 4 + 1]];
-      const v3 = cells[dnbr[idx * 4 + 3]];
-      if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
-        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), keyToIdx, weightsArr);
-      }
-    }
   }
 }
 
@@ -106,28 +89,10 @@ function findFeaturesWithMove(game, moveIdx, moveColor, buf, keyToIdx, weightsAr
   for (let idx = 0; idx < cap; idx++) {
     // 1×1
     const v0 = cv(idx);
-    if (v0 !== 0) 
-    {
+    if (v0 !== 0) {
       buf.idxs[buf.n++] = resolveKey(idx * 3 + v0 + 1, keyToIdx, weightsArr);
     }
 
-    const v1 = cv(nbr [idx * 4 + 3]);
-
-    // 1×2 (horizontal)
-    if (USE_1x2 && v0*v0 + v1*v1 > 0) {
-      buf.idxs[buf.n++] = resolveKey(84 * cap + idx * 9 + (v0 + 1) * 3 + (v1 + 1), keyToIdx, weightsArr);
-    }
-
-    // 2×2
-    if (USE_2x2) {
-      const di = nbr [idx * 4 + 1];
-      const dr = dnbr[idx * 4 + 3];
-      const v2 = cv(di);
-      const v3 = cv(dr);
-      if (v0*v0 + v1*v1 + v2*v2 + v3*v3 > 0) {
-        buf.idxs[buf.n++] = resolveKey(3 * cap + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1), keyToIdx, weightsArr);
-      }
-    }
   }
 }
 
@@ -145,11 +110,8 @@ function evaluate(buf, weightsArr) {
 function tdUpdate(buf, v, target, weightsArr) {
   const { idxs, n } = buf;
   if (n === 0) return;
-  const alphaError = LR * (target - v);
-  const step = LR * (target - v) / n;
-  for (let i = 0; i < n; i++) {
-    weightsArr[idxs[i]] += step;
-  }
+  const step = (LR / n) * (target - v);
+  for (let i = 0; i < n; i++) weightsArr[idxs[i]] += step;
 }
 
 // Copy buf contents into snap (pre-allocated buffer of same maxLen).
@@ -217,13 +179,13 @@ function getMove(game, budgetMs = 1000) {
   let sims = 0;
 
   const buf   = makeBuf(area);
-  const snapA = makeBuf(area);
-  const snapB = makeBuf(area);
+  const snap1 = makeBuf(area);
+  const snap2 = makeBuf(area);
 
   while (TD_SIMS > 0 ? sims < TD_SIMS : Date.now() < deadline) {
     sims++;
     const g = game.clone();
-    let prev1 = null, prev2 = null;  // point at snapA / snapB, alternating
+    let prev1 = null, prev2 = null;  // point at snap1 / snap2, alternating
     let step = 0;
 
     let outcome = 0.5;
@@ -243,7 +205,7 @@ function getMove(game, budgetMs = 1000) {
       const val = evaluate(buf, weightsArr);
 
       if (prev2 !== null) tdUpdate(prev2, prev2.val, val, weightsArr);
-      const snap = prev1 === snapA ? snapB : snapA;
+      const snap = prev1 === snap1 ? snap2 : snap1;
       snapBuf(buf, snap);
       snap.val = val;
       prev2 = prev1;
@@ -276,4 +238,3 @@ if (typeof module !== 'undefined') module.exports = { getMove };
 else window.getMove = getMove;
 
 })();
-

@@ -244,7 +244,7 @@ function selectAndExpand(root, rootGame2, N) {
 // childMover(n): the player choosing the next move from node n = opponent of n.mover.
 function backpropagate(node, winner, played, rootPlayer) {
   function childMover(n) {
-    return 3 - n.mover;
+    return -n.mover;
   }
 
   function updateRave(node, won, played, chooser) {
