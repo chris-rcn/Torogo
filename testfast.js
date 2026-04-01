@@ -1,6 +1,6 @@
 'use strict';
 
-const { Game2, PASS, BLACK, WHITE, KOMI, parseBoard } = require('./game2.js');
+const { Game2, PASS, BLACK, WHITE, KOMI, setKomi, parseBoard } = require('./game2.js');
 const _BLACK = BLACK, _WHITE = WHITE; // aliases for pattern symmetry tests
 
 let pass = 0, fail = 0;
@@ -1952,6 +1952,25 @@ section('KOMI function');
   assert(KOMI(7)  === 3.5, 'KOMI(7) = 3.5');
   assert(KOMI(5)  === 2.5, 'KOMI(5) = 2.5');
   assert(KOMI(13) === 6.5, 'KOMI(13) = 6.5');
+}
+
+section('setKomi override');
+{
+  assert(typeof setKomi === 'function', 'setKomi is a function');
+  // Override 7×7 komi, verify KOMI(7) returns the override.
+  setKomi(7, 0.5);
+  assert(KOMI(7) === 0.5, 'setKomi(7, 0.5): KOMI(7) returns 0.5');
+  // Other sizes are unaffected.
+  assert(KOMI(9) === 4.5, 'setKomi(7): KOMI(9) still 4.5');
+  // Restore default and confirm.
+  setKomi(7, 3.5);
+  assert(KOMI(7) === 3.5, 'setKomi(7, 3.5): restored to default');
+  // calcScore respects the override.
+  setKomi(9, 100);
+  const g = new Game2(9);
+  const sc = g.calcScore();
+  assert(sc.white >= 100, 'calcScore uses overridden komi');
+  setKomi(9, 4.5); // restore
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

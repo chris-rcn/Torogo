@@ -18,7 +18,9 @@
 
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS  = -1;
-const KOMI = N => N / 2;
+const _komiOverrides = new Map();
+const KOMI = N => _komiOverrides.has(N) ? _komiOverrides.get(N) : N / 2;
+function setKomi(N, value) { _komiOverrides.set(N, value); }
 
 // Shared neighbor-table cache (same design as game.js)
 const topologyCache = new Map();
@@ -781,7 +783,7 @@ function parseBoard(boardStr) {
   return { size, stones };
 }
 
-const _exports = { Game2, PASS, BLACK, WHITE, KOMI, coordStr, parseMove, agentMoveToIdx, parseBoard };
+const _exports = { Game2, PASS, BLACK, WHITE, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Game2 = _exports;
 
