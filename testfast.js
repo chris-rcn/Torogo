@@ -1408,7 +1408,7 @@ section('game2 calcScore — flood fill');
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
     const t = g.calcScore();
     assert(t.black === 25,        'game2.calcScore: all black → black = 25');
-    assert(t.white === 0 + 4.5,  'game2.calcScore: all black → white = 4.5 (komi only)');
+    assert(t.white === KOMI(5),   'game2.calcScore: all black → white = KOMI(5) only');
     assert(t.black > t.white,     'game2.calcScore: black wins');
   }
   {
@@ -1945,9 +1945,13 @@ section('Game2 clone divergence (independent futures)');
   assert(ok, 'Game2 clones remain playable after original diverges');
 }
 
-section('KOMI constant');
+section('KOMI function');
 {
-  assert(KOMI === 4.5, 'KOMI is 4.5');
+  assert(typeof KOMI === 'function', 'KOMI is a function');
+  assert(KOMI(9)  === 4.5, 'KOMI(9) = 4.5');
+  assert(KOMI(7)  === 3.5, 'KOMI(7) = 3.5');
+  assert(KOMI(5)  === 2.5, 'KOMI(5) = 2.5');
+  assert(KOMI(13) === 6.5, 'KOMI(13) = 6.5');
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

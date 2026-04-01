@@ -112,7 +112,7 @@ section('Winning agent passes after opponent passes (7x7)', () => {
   g.ko = PASS;
 
   const score = g.calcScore();
-  console.log(`  white score: ${score.white.toFixed(1)} vs black: ${score.black.toFixed(1)} (komi ${KOMI})`);
+  console.log(`  white score: ${score.white.toFixed(1)} vs black: ${score.black.toFixed(1)} (komi ${KOMI(g.N)})`);
   assert(score.white > score.black,
     `position should favour white: ${score.white.toFixed(1)} vs ${score.black.toFixed(1)}`);
 

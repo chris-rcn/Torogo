@@ -18,7 +18,7 @@
 
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS  = -1;
-const KOMI  = 4.5;
+const KOMI = N => N / 2;
 
 // Shared neighbor-table cache (same design as game.js)
 const topologyCache = new Map();
@@ -657,7 +657,7 @@ class Game2 {
   // ── Scoring ───────────────────────────────────────────────────────────────
 
   // Accurate area score via flood-fill of empty regions.
-  // Returns { black, white } where white already includes KOMI.
+  // Returns { black, white } where white already includes KOMI(N).
   calcScore() {
     const N      = this.N;
     const cap    = N * N;
@@ -691,7 +691,7 @@ class Game2 {
       else if (wBorder && !bBorder) white += region.length;
     }
 
-    return { black, white: white + KOMI };
+    return { black, white: white + KOMI(N) };
   }
 
   // Accurate winner using flood-fill territory + komi.  Returns BLACK, WHITE, or null.
@@ -738,8 +738,8 @@ class Game2 {
       if (bAdj && !wAdj) black++;
       else if (wAdj && !bAdj) white++;
     }
-    return black > white + KOMI ? BLACK
-         : white + KOMI > black ? WHITE
+    return black > white + KOMI(N) ? BLACK
+         : white + KOMI(N) > black ? WHITE
          : null;
   }
 
