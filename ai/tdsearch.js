@@ -40,16 +40,6 @@ function resolveKey(key, ctx) {
 }
 
 // Fills buf.idxs with weight indices for the current board position.
-//
-// Type 1 — 1×1 per stone: key = idx*3 + c + 1  (BLACK=1→2, WHITE=-1→0)
-//   range [0, 3*cap)
-// Type 2 — 2×2 anchored at TL=idx:  key = 3*cap  + idx*81 + ternary4
-//   range [3*cap, 84*cap)
-// Type 3 — 1×2 anchored at L=idx:   key = 84*cap + idx*9  + ternary2
-//   range [84*cap, 93*cap)
-// Type 4 — 2×1 anchored at T=idx:   key = 93*cap + idx*9  + ternary2
-//   range [93*cap, 102*cap)
-//
 // Patterns where all cells are empty are skipped.
 function findFeatures(game, buf, ctx) {
   const cap   = game.N * game.N;
@@ -85,18 +75,18 @@ function findFeatures(game, buf, ctx) {
   }
 }
 
-// Like findFeatures but treats moveIdx as occupied by moveColor without modifying game.
-function findFeaturesWithMove(game, moveIdx, moveColor, buf, ctx) {
+// Like findFeatures but treats newStoneIdx as a new stone without modifying game.
+function findFeaturesWithMove(game, buf, ctx, newStoneIdx) {
   const cap   = game.N * game.N;
   const cells = game.cells;
   const nbr   = game._nbr;
   const dnbr  = game._dnbr;
-  const mv    = moveColor;
+  const mv    = game.current;
   buf.n = 0;
 
   // Inline helper: cell value with override at moveIdx.
   function cv(i) {
-    return i === moveIdx ? mv : cells[i];
+    return i === newStoneIdx ? mv : cells[i];
   }
 
   for (let idx = 0; idx < cap; idx++) {
@@ -132,30 +122,23 @@ function evaluate(buf, weightsArr) {
   let z = 0;
   const { idxs, n } = buf;
   for (let i = 0; i < n; i++) z += weightsArr[idxs[i]];
-  return 1 / (1 + Math.exp(-z));
+  buf.val = 1 / (1 + Math.exp(-z));
 }
 
-// Δw_k = (LR / n) · (target − v)
-function tdUpdate(buf, v, target, weightsArr) {
+// Δw_k = (LR / n) · (target − buf.val)
+function tdUpdate(buf, target, weightsArr) {
   const { idxs, n } = buf;
   if (n === 0) return;
-  const alphaError = LR * (target - v);
-  const step = LR * (target - v) / n;
+  const step = LR * (target - buf.val) / n;
+  
   for (let i = 0; i < n; i++) {
     weightsArr[idxs[i]] += step;
   }
 }
 
-// Copy buf contents into snap (pre-allocated buffer of same maxLen).
-function copyBuf(src, dest) {
-  const n = src.n;
-  dest.idxs.set(src.idxs.subarray(0, n));
-  dest.n = n;
-}
-
 function search1ply(game, ctx, width = 0) {
-  const searchFeats = ctx.searchFeats;
   const area = game.N * game.N;
+  const searchFeats = ctx.searchFeats;
   const isBlack = game.current === BLACK;
   let bestIdx = PASS;
   let bestScore = isBlack ? -Infinity : Infinity;
@@ -173,15 +156,15 @@ function search1ply(game, ctx, width = 0) {
       g.play(move);
       findFeatures(g, searchFeats, ctx);
     } else {
-      findFeaturesWithMove(game, move, game.current, searchFeats, ctx);
+      findFeaturesWithMove(game, searchFeats, ctx, move);
     }
-    const v = evaluate(searchFeats, ctx.weightsArr);
-    if (isBlack === (v > bestScore)) { 
-      bestScore = v;
+    evaluate(searchFeats, ctx.weightsArr);
+    if (isBlack === (searchFeats.val > bestScore)) { 
+      bestScore = searchFeats.val;
       bestIdx = move;
     }
   }
-  return { move: bestIdx, moveScore: bestScore, searched: true };
+  return { move: bestIdx, moveScore: bestScore };
 }
 
 function selectTrainingMove(game, step, ctx) {
@@ -213,14 +196,15 @@ function getMove(game, budgetMs = 1000) {
   }
 
   const area = game.N * game.N;
-  const maxMoves = 4 * area;
+  const maxMoves = 3 * area;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
   let sims = 0;
+  let maxSteps = 0;
 
   const keyToIdx = new Map();
   const weightsArr = [];
-  const lastSearchMove = new Int32Array(maxMoves); // indexed by step
-  const lastSearchMoveSame = new Float32Array(maxMoves); // indexed by step
+  const lastSearchMove = new Int32Array(WIDE_DEPTH); // indexed by step
+  const lastSearchMoveSame = new Float32Array(WIDE_DEPTH); // indexed by step
   const ctx = { keyToIdx, weightsArr, lastSearchMove, lastSearchMoveSame, searchFeats: makeBuf(area) };
 
   let prev2 = makeBuf(area);
@@ -234,10 +218,10 @@ function getMove(game, budgetMs = 1000) {
 
     let outcome;
     let moveSelection = selectTrainingMove(g, step, ctx);
-    while (step < maxMoves) {
+    while (true) {
 
       g.play(moveSelection.move);
-      if (g.gameOver) {
+      if (g.gameOver || step > maxMoves) {
         outcome = (g.calcWinner() === BLACK) ? 1 : 0;
         break;
       }
@@ -246,10 +230,10 @@ function getMove(game, budgetMs = 1000) {
       moveSelection = selectTrainingMove(g, step, ctx);
 
       findFeatures(g, feats, ctx);
-      feats.val = evaluate(feats, weightsArr);
+      evaluate(feats, weightsArr);
 
       if (prev2.n > 0) {
-        tdUpdate(prev2, prev2.val, feats.val, weightsArr);
+        tdUpdate(prev2, feats.val, weightsArr);
       }
 
       const temp = prev2;
@@ -259,14 +243,16 @@ function getMove(game, budgetMs = 1000) {
     }
 
     // Terminal TD updates for the last two tracked positions.
-    if (prev2 !== null) tdUpdate(prev2, prev2.val, outcome, weightsArr);
-    if (prev1 !== null) tdUpdate(prev1, prev1.val, outcome, weightsArr);
+    if (prev2 !== null) tdUpdate(prev2, outcome, weightsArr);
+    if (prev1 !== null) tdUpdate(prev1, outcome, weightsArr);
+
+    maxSteps = Math.max(maxSteps, step);
   }
 
   const searchResult = search1ply(game, ctx);
   const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore
   const move = myScore < 0.01 ? PASS : searchResult.move;
-  const result = { move, ctx, sims }
+  const result = { move, ctx, sims, maxSteps }
   result.info = `value=${myScore.toFixed(3)}`;
   if (move === PASS) {
     result.type = 'pass';

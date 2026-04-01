@@ -8,7 +8,7 @@ const { performance } = require('perf_hooks');
  *
  * Options:
  *   --p1      <policy>   AI policy for player 1      (default: random)
- *   --p2      <policy>   AI policy for player 2      (default: random)
+ *   --p2      <policy>   AI policy for player 2      (default: p1)
  *   --size    <n>        Board size: 9, 13, or 19    (required)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
@@ -42,7 +42,7 @@ if (isNaN(gameLimit) || gameLimit < 1) {
 }
 
 const p1Name    = opts.p1   || 'random';
-const p2Name    = opts.p2   || 'random';
+const p2Name    = opts.p2   || p1Name;
 if (!opts.size) { console.error('--size is required'); process.exit(1); }
 const boardSize = parseInt(opts.size, 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
@@ -78,12 +78,13 @@ const hdr =
   `${'games'.padStart(GW)}` +
   `  ${'elapsed'.padStart(EW)}` +
   `  ${'p2%'.padStart(PW)}` +
-  `  ${'p1ms'.padStart(MW)}  ${'p2ms'.padStart(MW)}`;
+  `  ${'p1ms'.padStart(MW)}  ${'p2ms'.padStart(MW)}  maxLen`;
 console.log(hdr);
 
 let printPeriodMs  = 1000;
 let lastPrintTime  = startTime;
 let lastPrintGames = 0;
+let maxGameLen = 0;
 
 function printStats(gamesPlayed) {
   const now     = performance.now();
@@ -94,7 +95,7 @@ function printStats(gamesPlayed) {
     `${String(gamesPlayed).padStart(GW)}` +
     `  ${elapsed}` +
     `  ${pct(tally.p2)}` +
-    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}`
+    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}  ${String(maxGameLen).padStart(6)}`
   );
 }
 
@@ -142,7 +143,7 @@ for (let g = 0; g < gameLimit; g++) {
       console.log();
     };
   }
-
+  maxGameLen = Math.max(maxGameLen, game.moveCount);
   const winner = game.calcWinner();
   if (winner === BLACK) {
     tally[p1IsBlack ? 'p1' : 'p2']++;
@@ -155,3 +156,4 @@ for (let g = 0; g < gameLimit; g++) {
 
 // Final stats row (always printed, even if maybePrint already fired).
 printStats(tally.p1 + tally.p2);
+
