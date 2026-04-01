@@ -264,8 +264,15 @@ function getMove(game, budgetMs = 1000) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { getMove };
-else window.getMove = getMove;
+if (typeof module !== 'undefined') {
+  module.exports = { getMove };
+  require('./tdsearch.test.js').runTests(
+    { makeBuf, resolveKey, findFeatures, findFeaturesWithMove, evaluate, tdUpdate, getMove },
+    require('../game2.js')
+  );
+} else {
+  window.getMove = getMove;
+}
 
 })();
 
