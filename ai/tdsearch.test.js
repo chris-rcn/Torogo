@@ -8,7 +8,7 @@
 // features are active.
 
 function runTests(
-  { makeBuf, resolveKey, findFeatures, findFeaturesWithMove, evaluate, tdUpdate, getMove },
+  { makeBuf, resolveKey, findFeatures, evaluate, tdUpdate, getMove },
   { Game2, BLACK, WHITE, PASS }
 ) {
   let failures = 0;
@@ -78,6 +78,7 @@ function runTests(
 
   // ── tdUpdate ───────────────────────────────────────────────────────────────
   {
+    const lr = 0.3;
     const wa = [0, 0];
     const buf = makeBuf(4);
     buf.n = 2;
@@ -89,7 +90,7 @@ function runTests(
     check(Math.abs(buf.val - 0.5) < 1e-10, 'tdUpdate setup: val = 0.5 with zero weights');
 
     // Update toward 1.0 → both weights increase
-    tdUpdate(buf, 1.0, wa);
+    tdUpdate(buf, 1.0, wa, lr);
     check(wa[0] > 0,                       'tdUpdate: weight[0] increases toward target 1');
     check(wa[1] > 0,                       'tdUpdate: weight[1] increases toward target 1');
     check(Math.abs(wa[0] - wa[1]) < 1e-12,'tdUpdate: equal-index weights get equal steps');
@@ -97,14 +98,14 @@ function runTests(
     // Update toward 0.0 → weights decrease
     evaluate(buf, wa);
     const w0 = wa[0];
-    tdUpdate(buf, 0.0, wa);
+    tdUpdate(buf, 0.0, wa, lr);
     check(wa[0] < w0, 'tdUpdate: weights decrease toward target 0');
 
     // Empty buf → no change
     const emptyBuf = makeBuf(1);
     emptyBuf.n = 0;
     const wSnap = wa[0];
-    tdUpdate(emptyBuf, 1.0, wa);
+    tdUpdate(emptyBuf, 1.0, wa, lr);
     check(wa[0] === wSnap, 'tdUpdate: empty buf leaves weights unchanged');
   }
 
@@ -164,7 +165,7 @@ function runTests(
     const bufA = makeBuf(area);
     const bufB = makeBuf(area);
 
-    findFeaturesWithMove(gPre, bufA, ctxA, 7);
+    findFeatures(gPre, bufA, ctxA, true, 7);
     findFeatures(gPost, bufB, ctxB);
 
     check(bufA.n === bufB.n,

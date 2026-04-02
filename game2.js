@@ -19,10 +19,12 @@
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS  = -1;
 const _komiOverrides = new Map([
-  [8, 2.5],
+  [ 5, 24.5],
+  [ 6, 35.5],
+  [ 7, 45.5],
 ]);
-const KOMI = N => _komiOverrides.has(N) ? _komiOverrides.get(N) : 2.5;
-function setKomi(N, value) { _komiOverrides.set(N, value); }
+const KOMI = size => _komiOverrides.get(size) ?? 3.5;
+function setKomi(size, komi) { _komiOverrides.set(size, komi); }
 
 // Shared neighbor-table cache (same design as game.js)
 const topologyCache = new Map();
@@ -424,6 +426,7 @@ class Game2 {
 
   // Returns true if playing at idx (for this.current) would capture at least one opponent stone.
   isCapture(idx) {
+    if (idx === PASS) return false;
     const opp = this.current === BLACK ? WHITE : BLACK;
     const nbr = this._nbr;
     for (let d = 0; d < 4; d++) {
@@ -431,6 +434,42 @@ class Game2 {
       if (this.cells[ni] === opp && this._ls[this._gid[ni]] === 1) return true;
     }
     return false;
+  }
+
+  // Returns an array of cell indices that would be captured by playing idx for this.current.
+  // Returns [] if idx is PASS or no captures would occur.
+  captureList(idx) {
+    if (idx === PASS) return [];
+    const opp    = -this.current;
+    const nbr    = this._nbr;
+    const cells  = this.cells;
+    const gidArr = this._gid;
+    const ls     = this._ls;
+    const sw     = this._sw;
+    const W      = this._W;
+    const result = [];
+    let seen0 = -1, seen1 = -1, seen2 = -1, seen3 = -1;
+    for (let d = 0; d < 4; d++) {
+      const ni  = nbr[idx * 4 + d];
+      if (cells[ni] !== opp) continue;
+      const gid = gidArr[ni];
+      if (ls[gid] !== 1) continue;
+      if (gid === seen0 || gid === seen1 || gid === seen2 || gid === seen3) continue;
+      if      (seen0 === -1) seen0 = gid;
+      else if (seen1 === -1) seen1 = gid;
+      else if (seen2 === -1) seen2 = gid;
+      else                   seen3 = gid;
+      const gb = gid * W;
+      for (let wi = 0; wi < W; wi++) {
+        let w = sw[gb + wi];
+        while (w) {
+          const lsb = w & -w;
+          result.push(wi * 32 + (31 - Math.clz32(lsb)));
+          w ^= lsb;
+        }
+      }
+    }
+    return result;
   }
 
   isTrueEye(idx) {

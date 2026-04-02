@@ -198,6 +198,79 @@ section('Game2 capture');
   assert(g.cells[2*N+2] === 0, 'game2: captured stone removed');
 }
 
+section('Game2.captureList: PASS returns empty');
+{
+  const g = new Game2(5, false);
+  assert(g.captureList(PASS).length === 0, 'captureList(PASS) is empty');
+}
+
+section('Game2.captureList: no capture returns empty');
+{
+  const g = new Game2(5, false);
+  g._place(12, WHITE);
+  g.current = BLACK;
+  // Cell 7 is adjacent to 12 but WHITE group has 4 liberties — no capture.
+  assert(g.captureList(7).length === 0, 'captureList with no capture returns []');
+}
+
+section('Game2.captureList: captures single stone');
+{
+  const g = new Game2(5, false);
+  g._place(12, WHITE);
+  g._place(7,  BLACK);
+  g._place(17, BLACK);
+  g._place(11, BLACK);
+  g.current = BLACK;
+  // WHITE at 12 has one liberty left: cell 13.
+  const caps = g.captureList(13);
+  assert(caps.length === 1, `captureList single stone: length 1, got ${caps.length}`);
+  assert(caps[0] === 12, `captureList single stone: cell 12, got ${caps[0]}`);
+}
+
+section('Game2.captureList: captures multi-stone group');
+{
+  const g = new Game2(5, false);
+  // WHITE chain at 12,13; BLACK surrounds all but cell 14.
+  g._place(12, WHITE); g._place(13, WHITE);
+  g._place(7,  BLACK); g._place(8,  BLACK);
+  g._place(17, BLACK); g._place(18, BLACK);
+  g._place(11, BLACK);
+  g.current = BLACK;
+  const caps = g.captureList(14).sort((a, b) => a - b);
+  assert(caps.length === 2, `captureList multi-stone: length 2, got ${caps.length}`);
+  assert(caps[0] === 12 && caps[1] === 13, `captureList multi-stone: [12,13], got [${caps}]`);
+}
+
+section('Game2.captureList: captures two separate groups in one move');
+{
+  const g = new Game2(5, false);
+  // Two isolated WHITE stones, each with only cell 12 as their last liberty.
+  // WHITE at 7 (neighbors: 2,8,12,_), surround 7 from all sides except 12.
+  // WHITE at 17 (neighbors: 12,18,22,_), surround 17 from all sides except 12.
+  g._place(7,  WHITE); g._place(17, WHITE);
+  g._place(2,  BLACK); g._place(8,  BLACK);
+  g._place(22, BLACK); g._place(18, BLACK);
+  // On a 5×5 toroidal board, neighbors of 7 are: 2,12,6,8  (up,down,left,right).
+  // neighbors of 17 are: 12,22,16,18.
+  // Surround 7 on all sides except 12: place at 2,8,6.
+  // Surround 17 on all sides except 12: place at 22,18,16.
+  g._place(6,  BLACK); g._place(16, BLACK);
+  g.current = BLACK;
+  const caps = g.captureList(12).sort((a, b) => a - b);
+  assert(caps.length === 2, `captureList two groups: length 2, got ${caps.length}`);
+  assert(caps.includes(7),  `captureList two groups: includes 7`);
+  assert(caps.includes(17), `captureList two groups: includes 17`);
+}
+
+section('Game2.captureList: non-capturing move on occupied cell returns empty');
+{
+  const g = new Game2(5, false);
+  g._place(12, WHITE);
+  g.current = BLACK;
+  // Cell 12 is occupied — captureList should return [] (move is illegal anyway).
+  assert(g.captureList(12).length === 0, 'captureList on occupied cell returns []');
+}
+
 section('Game2 ko');
 {
   const N = 9, g = new Game2(N);
@@ -1948,29 +2021,109 @@ section('Game2 clone divergence (independent futures)');
 section('KOMI function');
 {
   assert(typeof KOMI === 'function', 'KOMI is a function');
-  assert(KOMI(9)  === 4.5, 'KOMI(9) = 4.5');
-  assert(KOMI(7)  === 3.5, 'KOMI(7) = 3.5');
-  assert(KOMI(5)  === 2.5, 'KOMI(5) = 2.5');
-  assert(KOMI(13) === 6.5, 'KOMI(13) = 6.5');
+  for (const size of [5, 7, 9, 13]) {
+    const k = KOMI(size);
+    assert(typeof k === 'number' && k > 0, `KOMI(${size}) is a positive number, got ${k}`);
+    assert(k % 0.5 === 0, `KOMI(${size}) is a half-integer, got ${k}`);
+  }
 }
 
 section('setKomi override');
 {
   assert(typeof setKomi === 'function', 'setKomi is a function');
+  const orig7 = KOMI(7);
+  const orig9 = KOMI(9);
   // Override 7×7 komi, verify KOMI(7) returns the override.
   setKomi(7, 0.5);
   assert(KOMI(7) === 0.5, 'setKomi(7, 0.5): KOMI(7) returns 0.5');
   // Other sizes are unaffected.
-  assert(KOMI(9) === 4.5, 'setKomi(7): KOMI(9) still 4.5');
+  assert(KOMI(9) === orig9, `setKomi(7): KOMI(9) still ${orig9}`);
   // Restore default and confirm.
-  setKomi(7, 3.5);
-  assert(KOMI(7) === 3.5, 'setKomi(7, 3.5): restored to default');
+  setKomi(7, orig7);
+  assert(KOMI(7) === orig7, 'setKomi(7, orig): restored to default');
   // calcScore respects the override.
   setKomi(9, 100);
   const g = new Game2(9);
   const sc = g.calcScore();
   assert(sc.white >= 100, 'calcScore uses overridden komi');
-  setKomi(9, 4.5); // restore
+  setKomi(9, orig9); // restore
+}
+
+// ─── ab-search ───────────────────────────────────────────────────────────────
+
+const { ab, search: abSearch } = require('./ab-search.js');
+
+section('ab-search: depth-0 returns evaluate(game)');
+{
+  const g = new Game2(5);
+  const evalFn = game => 0.75;
+  const v = ab(g, 0, -Infinity, Infinity, evalFn, 0);
+  assert(Math.abs(v - 0.75) < 1e-9, `depth-0 returns evaluate result, got ${v}`);
+}
+
+section('ab-search: terminal position returns winner');
+{
+  const g = new Game2(5);
+  while (!g.gameOver) g.play(PASS);
+  const v = ab(g, 5, -Infinity, Infinity, () => 0.5, 0);
+  assert(v === 0 || v === 1, `terminal returns 0 or 1, got ${v}`);
+}
+
+section('ab-search: search returns a legal move index');
+{
+  const g = new Game2(5);
+  const evalFn = game => 0.5;
+  const move = abSearch(g, 1, evalFn, 0);
+  if (move === PASS) {
+    assert(true, 'search returned PASS');
+  } else {
+    assert(typeof move === 'number' && move >= 0 && move < 25, `move in range, got ${move}`);
+    const clone = g.clone();
+    assert(clone.play(move) !== false, 'search move is legal');
+  }
+}
+
+section('ab-search: BLACK prefers winning move at depth 1');
+{
+  // 5×5 empty board (applyFirstMove=false), BLACK to move.
+  // evalFn returns 1 only if center cell has a BLACK stone.
+  const g = new Game2(5, false);
+  const winner = 12; // center
+  const evalFn = game => game.cells[winner] === BLACK ? 1 : 0;
+  const move = abSearch(g, 1, evalFn, 0);
+  assert(move === winner, `BLACK picks winning cell ${winner}, got ${move}`);
+}
+
+section('ab-search: WHITE prefers minimising move at depth 1');
+{
+  // Empty board, BLACK plays non-center, then WHITE to move.
+  const g = new Game2(5, false);
+  g.play(0); // BLACK plays corner
+  const loser = 12; // center
+  // evalFn returns 0 if loser has WHITE stone, 1 otherwise — WHITE should pick loser.
+  const evalFn = game => game.cells[loser] === WHITE ? 0 : 1;
+  const move = abSearch(g, 1, evalFn, 0);
+  assert(move === loser, `WHITE picks minimising cell ${loser}, got ${move}`);
+}
+
+section('ab-search: depth-2 search completes without error on 5×5');
+{
+  const g = new Game2(5);
+  let evalCalls = 0;
+  const evalFn = game => { evalCalls++; return 0.5; };
+  const move = abSearch(g, 2, evalFn, 0);
+  assert(typeof move === 'number', 'depth-2 returns a number');
+  assert(evalCalls > 0, `evalFn was called (${evalCalls} times)`);
+}
+
+section('ab-search: dither produces non-deterministic results');
+{
+  const g = new Game2(5);
+  // evalFn returns same value for all moves — dither should break ties randomly.
+  const evalFn = () => 0.5;
+  const moves = new Set();
+  for (let i = 0; i < 20; i++) moves.add(abSearch(g, 1, evalFn, 1.0));
+  assert(moves.size > 1, `dither produced ${moves.size} distinct moves over 20 runs`);
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────

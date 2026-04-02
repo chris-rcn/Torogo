@@ -19,7 +19,7 @@
  *   node determine-komi.js [--agent <name>] [--size <n>] [--budget <ms>]
  *                          [--sharpness <α>]
  *
- * Defaults: agent=mcts  size=9  budget=100  sharpness=0.4
+ * Defaults: agent=mcts  size=9  budget=100  sharpness=0.1
  * Output: printed at exponentially increasing intervals (1s × 1.5^n).
  * Runs indefinitely.
  */
@@ -38,14 +38,17 @@ const size      = parseInt(arg('size',      '5'),   10);
 const budget    = parseInt(arg('budget',    '1000'), 10);
 // α: steepness of the sigmoid win-rate curve.
 // Higher → strong agents with sharp transitions; lower → weak/random agents.
-const ALPHA     = parseFloat(arg('sharpness', '0.4'));
+const ALPHA     = parseFloat(arg('sharpness', '0.2'));
+
+const minKomi = parseFloat(arg('min', '0.5'));
+const maxKomi = parseFloat(arg('max', '6.5'));
 
 const { getMove } = require(`./ai/${agentName}.js`);
 
 // ── Komi grid ─────────────────────────────────────────────────────────────────
-// All half-integers from 0.5 up to size*2+0.5.
+// All half-integers from minKomi up to maxKomi.
 const grid = [];
-for (let k = 0.5; k <= size * 2 + 0.5; k += 1) grid.push(k);
+for (let k = minKomi; k <= maxKomi; k += 1) grid.push(k);
 const G = grid.length;
 
 // ── Bayesian posterior (log-space for numerical stability) ────────────────────

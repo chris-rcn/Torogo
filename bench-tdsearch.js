@@ -6,7 +6,7 @@ const { Game2 } = require('./game2.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2));
-const size   = parseInt(opts.size   || '9',    10);
+const size   = parseInt(opts.size   || '4',    10);
 const budget = parseInt(opts.budget || '1000', 10);
 
 const t0 = Date.now();

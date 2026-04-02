@@ -10,29 +10,19 @@ const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const Playout = require('./playout.js');
-const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
 const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
+const LR            = Util.envFloat('TD_LR', 0.3);
 const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
-const USE_2x3       = Util.envInt  ('TD_USE_2x3', 0);
-const RETAIN        = Util.envInt  ('TD_RETAIN', 1);
-const LR0           = Util.envFloat('TD_LR0', 0.6);
-const LR1           = Util.envFloat('TD_LR1', 0.3);
-const AB_DEPTH      = Util.envFloat('TD_AB_DEPTH', 1);
 
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
 function makeBuf(area) {
-  return { 
-    scratchA: new Int32Array(area),
-    scratchB: new Int32Array(area),
-    idxs: new Int32Array((1 + USE_1x2 + USE_2x2 + USE_2x3) * area), 
-    n: 0,
-  };
+  return { idxs: new Int32Array((1 + USE_1x2 + USE_2x2) * area), n: 0 };
 }
 
 // keyToIdx: Map<featureKey, weightIndex>
@@ -49,6 +39,16 @@ function resolveKey(key, ctx) {
   return wi;
 }
 
+function encodeKey11(idx, v0) {
+  return idx * 3 + v0 + 1;
+}
+function encodeKey12(area, idx, v0, v1) {
+  return 84 * area + idx * 9 + (v0 + 1) * 3 + (v1 + 1);
+}
+function encodeKey22(area, idx, v0, v1, v2, v3) {
+  return 3 * area + idx * 81 + (v0 + 1) * 27 + (v1 + 1) * 9 + (v2 + 1) * 3 + (v3 + 1);
+}
+
 // Fills buf.idxs with weight indices for the current board position.
 // Patterns where all cells are empty are skipped.
 function findFeatures(game, buf, ctx, doSetNext, nextStoneIdx) {
@@ -59,44 +59,30 @@ function findFeatures(game, buf, ctx, doSetNext, nextStoneIdx) {
   buf.n = 0;
 
   if (doSetNext) {
-    cells[nextStoneIdx] = game.current;  // TODO: Capture moves can be handled as well.  Call game.captureList(move).
+    cells[nextStoneIdx] = game.current;
   }
   for (let idx = 0; idx < area; idx++) {
     const v0 = cells[idx];
+
     // 1×1
-    if (v0) {
-      buf.idxs[buf.n++] = resolveKey(Math.imul(835 + idx, 691 + v0), ctx);
+    if (v0 !== 0) {
+      buf.idxs[buf.n++] = resolveKey(encodeKey11(idx, v0), ctx);
     }
 
-    const v1 = cells[(idx+1)%area];
-    const v0v1 = (v0*v0 + v1*v1) | 0;
+    const v1 = cells[nbr [idx * 4 + 3]];
+    const v0v1 = v0*v0 + v1*v1;
 
-    // Set scratchA to 2x1 keys.
-    buf.scratchA[idx] = v0v1 * Math.imul(389 + v0, 593 + v1);
-    if (USE_1x2 && v0v1) {
-      buf.idxs[buf.n++] = resolveKey(Math.imul(129 + idx, 972 + buf.scratchA[idx]), ctx);
+    // 1×2 (horizontal)
+    if (USE_1x2 && v0v1 > 0) {
+      buf.idxs[buf.n++] = resolveKey(encodeKey12(area, idx, v0, v1), ctx);
     }
-  }
-  // Now combine 1x2 keys into 2x2 keys.
-  // Set scratchB to 2x2 keys.
-  if (USE_2x2 || USE_2x3) {
-    for (let idx = 0; idx < area; idx++) {
-      const v0 = buf.scratchA[idx];
-      const v1 = buf.scratchA[(idx+game.N)%area];
-      const v0v1 = (v0*v0 + v1*v1) | 0;
-      buf.scratchB[idx] = v0v1 * Math.imul(843 + v0, 670 + v1);
-      if (USE_2x2 && v0v1) {
-        buf.idxs[buf.n++] = resolveKey(Math.imul(381 + idx, 463 + buf.scratchB[idx]), ctx);
-      }
-    }
-    if (USE_2x3) {
-      for (let idx = 0; idx < area; idx++) {
-        const v0 = buf.scratchB[idx];
-        const v1 = buf.scratchB[(idx+1)%area];
-        if (v0*v0 + v1*v1) {
-          const hash = Math.imul(427 + v0, 595 + v1);
-          buf.idxs[buf.n++] = resolveKey(Math.imul(743 + idx, 603 + hash), ctx);
-        }
+
+    // 2×2
+    if (USE_2x2) {
+      const v2 = cells[nbr[idx * 4 + 1]];
+      const v3 = cells[dnbr[idx * 4 + 3]];
+      if (v0v1 + v2*v2 + v3*v3 > 0) {
+        buf.idxs[buf.n++] = resolveKey(encodeKey22(area, idx, v0, v1, v2, v3), ctx);
       }
     }
   }
@@ -114,17 +100,16 @@ function evaluate(buf, weightsArr) {
 }
 
 // Δw_k = (LR / n) · (target − buf.val)
-function tdUpdate(buf, target, weightsArr, lr) {
+function tdUpdate(buf, target, weightsArr) {
   const { idxs, n } = buf;
   if (n === 0) return;
-  const step = lr * (target - buf.val) / n;
+  const step = LR * (target - buf.val) / n;
   
   for (let i = 0; i < n; i++) {
     weightsArr[idxs[i]] += step;
   }
 }
 
-// Custom 1-ply search which bypasses non-capture moves.
 function search1ply(game, ctx, width = 0) {
   const area = game.N * game.N;
   const searchFeats = ctx.searchFeats;
@@ -134,12 +119,6 @@ function search1ply(game, ctx, width = 0) {
   const candidates = [];
   for (let i = 0; i < area; i++) {
     if (game.isLegal(i) && !game.isTrueEye(i)) candidates.push(i);
-  }
-  if (candidates.length === 0) {
-    return { move: PASS };
-  }
-  if (game.consecutivePasses > 0 || game.emptyCount < area/2) {
-    candidates.push(PASS);
   }
   const count = width > 0 ? Math.min(width, candidates.length) : candidates.length;
   for (let c = 0; c < count; c++) {
@@ -151,7 +130,7 @@ function search1ply(game, ctx, width = 0) {
       g.play(move);
       findFeatures(g, searchFeats, ctx);
     } else {
-      findFeatures(game, searchFeats, ctx, move !== PASS, move);
+      findFeatures(game, searchFeats, ctx, true, move);
     }
     evaluate(searchFeats, ctx.weightsArr);
     if (isBlack === (searchFeats.val > bestScore)) { 
@@ -185,29 +164,19 @@ function selectTrainingMove(game, step, ctx) {
   return Playout.getMove(game);
 }
 
-let keyToIdx;
-let weightsArr;
-let lastMoveCount = 0;
-
 function getMove(game, budgetMs = 1000) {
   if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
     return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
   }
 
-  const moveCountDiff = game.moveCount - lastMoveCount;
-  const moveCountUnexpected = moveCountDiff < 0 || moveCountDiff > 2;
-  if (!RETAIN || !keyToIdx || moveCountUnexpected) {
-    keyToIdx = new Map();
-    weightsArr = [];
-  }
-  lastMoveCount = game.moveCount;
-
   const area = game.N * game.N;
   const maxMoves = 3 * game.emptyCount + 20;
-  const tStart = Date.now();
+  const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
   let sims = 0;
   let maxSteps = 0;
 
+  const keyToIdx = new Map();
+  const weightsArr = [];
   const lastSearchMove = new Int32Array(WIDE_DEPTH); // indexed by step
   const lastSearchMoveSame = new Float32Array(WIDE_DEPTH); // indexed by step
   const ctx = { keyToIdx, weightsArr, lastSearchMove, lastSearchMoveSame, searchFeats: makeBuf(area) };
@@ -216,17 +185,7 @@ function getMove(game, budgetMs = 1000) {
   let prev1 = makeBuf(area);
   let feats = makeBuf(area);
 
-  while (true) {
-
-    let progress;
-    if (TD_SIMS > 0) {
-      progress = sims / TD_SIMS;
-    } else {
-      progress = (Date.now() - tStart) / budgetMs;
-    }
-    if (progress >= 1) break;
-    const lr = LR1 - progress * (LR0 - LR1);
-
+  while (TD_SIMS > 0 ? sims < TD_SIMS : Date.now() < deadline) {
     sims++;
     const g = game.clone();
     let step = 0;
@@ -236,11 +195,11 @@ function getMove(game, budgetMs = 1000) {
     while (true) {
 
       g.play(moveSelection.move);
-      step++;
       if (g.gameOver || step > maxMoves) {
         outcome = (g.estimateWinner() === BLACK) ? 1 : 0;
         break;
       }
+      step++;
 
       moveSelection = selectTrainingMove(g, step, ctx);
 
@@ -248,7 +207,7 @@ function getMove(game, budgetMs = 1000) {
       evaluate(feats, weightsArr);
 
       if (prev2.n > 0) {
-        tdUpdate(prev2, feats.val, weightsArr, lr);
+        tdUpdate(prev2, feats.val, weightsArr);
       }
 
       const temp = prev2;
@@ -258,15 +217,13 @@ function getMove(game, budgetMs = 1000) {
     }
 
     // Terminal TD updates for the last two tracked positions.
-    if (prev2.n > 0) tdUpdate(prev2, outcome, weightsArr, lr);
-    if (prev1.n > 0) tdUpdate(prev1, outcome, weightsArr, lr);
+    if (prev2.n > 0) tdUpdate(prev2, outcome, weightsArr);
+    if (prev1.n > 0) tdUpdate(prev1, outcome, weightsArr);
 
     maxSteps = Math.max(maxSteps, step);
   }
 
-  const evalFn = g => { findFeatures(g, ctx.searchFeats, ctx); evaluate(ctx.searchFeats, ctx.weightsArr); return ctx.searchFeats.val; };
-  const searchResult = { move: abSearch(game, AB_DEPTH, evalFn), moveScore: evalFn(game) };
-
+  const searchResult = search1ply(game, ctx);
   const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore
   const move = myScore < 0.01 ? PASS : searchResult.move;
   const result = { move, ctx, sims, maxSteps }

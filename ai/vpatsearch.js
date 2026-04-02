@@ -18,14 +18,14 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { BLACK, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const { extractFeatures, evaluateFeatures, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
+const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const MIN_LIBS    = Util.envInt('MIN_LIBS',    1);
-const MAX_LIBS    = Util.envInt('MAX_LIBS',    1);
-const DEPTH       = Util.envInt('SEARCH_DEPTH', 1);
-const DITHER       = Util.envFloat('DITHER', 0.002);
+const MIN_LIBS = Util.envInt  ('MIN_LIBS',     1);
+const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
+const DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
+const DITHER   = Util.envFloat('DITHER',       0.002);
 
 // ── Agent state ───────────────────────────────────────────────────────────────
 
@@ -36,78 +36,11 @@ for (let maxLibs = MIN_LIBS; maxLibs <= MAX_LIBS; maxLibs++)
 
 let model = { weights: new Map(), specs: defaultSpecs };
 
-// ── Alpha-beta search ─────────────────────────────────────────────────────────
+// ── Search ────────────────────────────────────────────────────────────────────
 
-// Recursive alpha-beta evaluator. Returns V ∈ [0,1] = P(BLACK wins).
-// At depth 0 returns the static evaluation; terminal nodes return 0 or 1.
-function ab(game, depth, alpha, beta, m, dither) {
-  if (game.gameOver) return game.calcWinner() === BLACK ? 1 : 0;
-  if (depth <= 0) {
-    const v = evaluateFeatures(extractFeatures(game, m.specs), m.weights);
-    return v + Math.random() * dither;
-  }
-
-  const cap     = game.N * game.N;
-  const isBlack = game.current === BLACK;
-  let   v       = isBlack ? -Infinity : Infinity;
-  let   cutoff  = false;
-
-  for (let i = 0; i < cap && !cutoff; i++) {
-    if (game.cells[i] !== 0) continue;
-    if (game.isTrueEye(i))   continue;
-    if (!game.isLegal(i))    continue;
-    const g = game.clone();
-    g.play(i);
-    const s = ab(g, depth - 1, alpha, beta, m, dither);
-    if (isBlack) { if (s > v) v = s; if (v > alpha) alpha = v; if (alpha >= beta) cutoff = true; }
-    else         { if (s < v) v = s; if (v < beta)  beta  = v; if (beta <= alpha) cutoff = true; }
-  }
-
-  // PASS: always as fallback if no legal move was found; also consider proactively late in game.
-  if (!cutoff && (v === (isBlack ? -Infinity : Infinity) || game.emptyCount < cap / 2)) {
-    const g = game.clone();
-    g.play(PASS);
-    const s = ab(g, depth - 1, alpha, beta, m, dither);
-    if (isBlack) { if (s > v) v = s; }
-    else         { if (s < v) v = s; }
-  }
-
-  return v;
-}
-
-// Root search: returns the best move index.
-// depth=1 is equivalent to the original 1-ply greedy policy.
-// dither adds uniform noise to each leaf evaluation.
-// m: { weights: Map, specs: [...] }
 function search(game, m, depth = 1, dither = 0) {
-  const cap     = game.N * game.N;
-  const isBlack = game.current === BLACK;
-  let bestIdx   = PASS;
-  let bestScore = isBlack ? -Infinity : Infinity;
-  let alpha = -Infinity, beta = Infinity;
-
-  for (let i = 0; i < cap; i++) {
-    if (game.cells[i] !== 0) continue;
-    if (game.isTrueEye(i))   continue;
-    if (!game.isLegal(i))    continue;
-    const g = game.clone();
-    g.play(i);
-    const s = ab(g, depth - 1, alpha, beta, m, dither);
-    if (isBlack ? s > bestScore : s < bestScore) {
-      bestScore = s; bestIdx = i;
-      if (isBlack) alpha = Math.max(alpha, s);
-      else         beta  = Math.min(beta,  s);
-    }
-  }
-
-  if (game.emptyCount < cap / 2) {
-    const g = game.clone();
-    g.play(PASS);
-    const s = ab(g, depth - 1, alpha, beta, m, dither);
-    if (isBlack ? s > bestScore : s < bestScore) bestIdx = PASS;
-  }
-
-  return bestIdx;
+  const evaluate = g => evaluateFeatures(extractFeatures(g, m.specs), m.weights);
+  return abSearch(game, depth, evaluate, dither);
 }
 
 function getMove(game) {

@@ -22,8 +22,8 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 
-const W_CAPTURE  = 3;
-const W_ESCAPE   = 1;
+const W_CAPTURE  = 4;
+const W_ESCAPE   = 2;
 const W_SHOREUP  = 1;
 const W_THREATEN = 1;
 
