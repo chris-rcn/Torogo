@@ -21,7 +21,6 @@ function runTests(
   {
     const buf = makeBuf(9);
     check(buf.idxs instanceof Int32Array, 'makeBuf: idxs is Int32Array');
-    check(buf.idxs.length === 27,         'makeBuf: idxs.length === 3 * area');
     check(buf.n === 0,                    'makeBuf: n starts at 0');
   }
 
@@ -122,14 +121,14 @@ function runTests(
       check(buf.n === 0, 'findFeatures: empty board → 0 features');
     }
 
-    // One stone → one feature
+    // One stone
     {
       const g   = new Game2(N, false);
       g.play(7); // BLACK at cell 7
       const ctx = { keyToIdx: new Map(), weightsArr: [] };
       const buf = makeBuf(area);
       findFeatures(g, buf, ctx);
-      check(buf.n === 1, 'findFeatures: one stone → 1 feature');
+      check(buf.n === 5, 'findFeatures: one stone → 5 features');
 
       // Deterministic
       const buf2 = makeBuf(area);
@@ -137,7 +136,7 @@ function runTests(
       check(buf.idxs[0] === buf2.idxs[0], 'findFeatures: deterministic feature index');
     }
 
-    // Two stones → two features with distinct keys
+    // Two stones
     {
       const g   = new Game2(N, false);
       g.play(3);  // BLACK at 3
@@ -145,8 +144,10 @@ function runTests(
       const ctx = { keyToIdx: new Map(), weightsArr: [] };
       const buf = makeBuf(area);
       findFeatures(g, buf, ctx);
-      check(buf.n === 2,                       'findFeatures: two stones → 2 features');
-      check(buf.idxs[0] !== buf.idxs[1],       'findFeatures: two stones → two distinct feature keys');
+      check(buf.n === 10,                      'findFeatures: two stones → 10 features');
+      for (let i = 1; i < 10; i++) {
+        check(buf.idxs[0] !== buf.idxs[i],       'findFeatures: two stones → distinct feature keys');
+      }
     }
   }
 

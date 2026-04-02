@@ -18,8 +18,10 @@
 
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS  = -1;
-const _komiOverrides = new Map();
-const KOMI = N => _komiOverrides.has(N) ? _komiOverrides.get(N) : N / 2;
+const _komiOverrides = new Map([
+  [8, 2.5],
+]);
+const KOMI = N => _komiOverrides.has(N) ? _komiOverrides.get(N) : 2.5;
 function setKomi(N, value) { _komiOverrides.set(N, value); }
 
 // Shared neighbor-table cache (same design as game.js)

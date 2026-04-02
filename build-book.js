@@ -30,7 +30,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
-const { Game2, PASS } = require('./game2.js');
+const { Game2, PASS, BLACK, WHITE } = require('./game2.js');
 const { addToBook, lookupBook, serializeBook, deserializeBook, canonicalHash, INV_T, applyTransform } = require('./book.js');
 
 const args = process.argv.slice(2);
@@ -68,6 +68,7 @@ const N = boardSize;
 
 // Print the book entries for a given game state as a board with counts.
 function printBookBoard(game, label) {
+  console.log(`${game.current===BLACK?'●':'○'} to play:`);
   const cells = game.cells;
   const { hash, t } = canonicalHash(cells, N);
   const entry = book.get(hash);
@@ -86,18 +87,19 @@ function printBookBoard(game, label) {
   const maxCount = counts.size > 0 ? Math.max(...counts.values()) : 0;
   const W = Math.max(3, String(maxCount).length + 1);
 
-  const letters = Array.from({length: N}, (_, i) => String.fromCharCode(97 + i));
   if (label) console.log(`\n${label}`);
   else console.log();
-  console.log('   ' + letters.map(l => l.padStart(W)).join(''));
+//  const letters = Array.from({length: N}, (_, i) => String.fromCharCode(97 + i));
+//  console.log('   ' + letters.map(l => l.padStart(W)).join(''));
   for (let y = 0; y < N; y++) {
-    let row = String.fromCharCode(97 + y) + '  ';
+    let row = '';
+//    row += String.fromCharCode(97 + y) + '  ';
     for (let x = 0; x < N; x++) {
       const idx = y * N + x;
       const c = cells[idx];
       let s;
-      if      (c === 1)          s = '●';
-      else if (c === 2)          s = '○';
+      if      (c === BLACK)      s = '●';
+      else if (c === WHITE)      s = '○';
       else if (counts.has(idx))  s = String(counts.get(idx));
       else                       s = '·';
       row += s.padStart(W);

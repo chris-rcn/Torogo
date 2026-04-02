@@ -47,7 +47,7 @@ function playTracked(game2, node) {
   // Zero means not yet played.  First play on a cell wins; recaptures are ignored.
   const played = new Float32Array(cap);
 
-  const moveLimit = cap + 20;
+  const moveLimit = 3 * game2.emptyCount + 20;
   const weightStep = 1 / cap;
   let moves = 0;
   let weight = 1.0;

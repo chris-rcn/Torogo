@@ -74,29 +74,42 @@ const PW = 6;   // percentage  "66.7%"
 const MW = 7;   // ms/move     "123.45"
 const EW = 8;   // elapsed     "1234.5s"
 
-const hdr =
-  `${'games'.padStart(GW)}` +
-  `  ${'elapsed'.padStart(EW)}` +
-  `  ${'p2%'.padStart(PW)}` +
-  `  ${'p1ms'.padStart(MW)}  ${'p2ms'.padStart(MW)}  maxLen`;
-console.log(hdr);
+console.log(
+  `${'games'.padStart(6)}  ` +
+  `${'elapsed'.padStart(8)}  ` +
+  `${'black%'.padStart(6)}  ` +
+  `${'maxLen'.padStart(6)}  ` +
+  `${'p1ms'.padStart(7)}  ` +
+  `${'p2ms'.padStart(7)}  ` +
+  `${'p2%'.padStart(6)}  ` +
+  `${'p2Better%'.padStart(9)}  ` +
+  ``);
 
 let printPeriodMs  = 1000;
 let lastPrintTime  = startTime;
 let lastPrintGames = 0;
+let blackWinCount = 0;
 let maxGameLen = 0;
 
 function printStats(gamesPlayed) {
-  const now     = performance.now();
-  const pct     = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%').padStart(PW);
-  const avgMs   = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—').padStart(MW);
-  const elapsed = (((now - startTime) / 1000).toFixed(1) + 's').padStart(EW);
+  const now = performance.now();
+  const strGames = String(gamesPlayed);
+  const strElapsed = (((now - startTime) / 1000).toFixed(1) + 's');
+  const strBlackWin = (100 * blackWinCount / gamesPlayed).toFixed(1) + '%';
+  const strGameLen = String(maxGameLen);
+  const strAvgMs = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—');
+  const strWinRatio = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%');
+  const strP2Better = (100 * probPlayerBetter(tally.p2, gamesPlayed)).toFixed(1) + '%';
   console.log(
-    `${String(gamesPlayed).padStart(GW)}` +
-    `  ${elapsed}` +
-    `  ${pct(tally.p2)}` +
-    `  ${avgMs(stats.p1)}  ${avgMs(stats.p2)}  ${String(maxGameLen).padStart(6)}`
-  );
+    `${strGames.padStart(6)}  ` +
+    `${strElapsed.padStart(8)}  ` +
+    `${strBlackWin.padStart(6)}  ` +
+    `${strGameLen.padStart(6)}  ` +
+    `${strAvgMs(stats.p1).padStart(7)}  ` +
+    `${strAvgMs(stats.p2).padStart(7)}  ` +
+    `${strWinRatio(tally.p2).padStart(6)}  ` +
+    `${strP2Better.padStart(9)}  ` +
+    ``);
 }
 
 function maybePrint(gamesPlayed) {
@@ -108,6 +121,105 @@ function maybePrint(gamesPlayed) {
   lastPrintGames = gamesPlayed;
   printStats(gamesPlayed);
   printPeriodMs = Math.round(printPeriodMs * 1.5);
+}
+
+// Probability that true win rate p > 0.5 given w wins out of n games
+// Uses a Beta(w+1, n-w+1) posterior with uniform prior
+
+function probPlayerBetter(w, n) {
+  if (w < 0 || n <= 0 || w > n) {
+    throw new Error("Invalid inputs");
+  }
+
+  const a = w + 1;
+  const b = n - w + 1;
+
+  return 1 - regularizedIncompleteBeta(0.5, a, b);
+}
+
+/*
+ * Regularized incomplete beta function Ix(a,b)
+ * Implementation via continued fraction (Numerical Recipes style)
+ */
+
+function regularizedIncompleteBeta(x, a, b) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+
+  const bt =
+    Math.exp(
+      logGamma(a + b) -
+      logGamma(a) -
+      logGamma(b) +
+      a * Math.log(x) +
+      b * Math.log(1 - x)
+    );
+
+  if (x < (a + 1) / (a + b + 2)) {
+    return (bt * betaCF(x, a, b)) / a;
+  } else {
+    return 1 - (bt * betaCF(1 - x, b, a)) / b;
+  }
+}
+
+function betaCF(x, a, b) {
+  const MAX_ITER = 100;
+  const EPS = 1e-12;
+
+  let am = 1;
+  let bm = 1;
+  let az = 1;
+  let qab = a + b;
+  let qap = a + 1;
+  let qam = a - 1;
+  let bz = 1 - qab * x / qap;
+
+  for (let m = 1; m <= MAX_ITER; m++) {
+    let em = m;
+    let tem = em + em;
+
+    let d = em * (b - em) * x / ((qam + tem) * (a + tem));
+    let ap = az + d * am;
+    let bp = bz + d * bm;
+
+    d = -(a + em) * (qab + em) * x / ((a + tem) * (qap + tem));
+    let app = ap + d * az;
+    let bpp = bp + d * bz;
+
+    let aold = az;
+    am = ap / bpp;
+    bm = bp / bpp;
+    az = app / bpp;
+    bz = 1;
+
+    if (Math.abs(az - aold) < EPS * Math.abs(az)) {
+      return az;
+    }
+  }
+
+  return az;
+}
+
+// Lanczos approximation for log gamma
+function logGamma(z) {
+  const cof = [
+    76.18009172947146, -86.50532032941677,
+    24.01409824083091, -1.231739572450155,
+    0.001208650973866179, -0.000005395239384953
+  ];
+
+  let x = z;
+  let y = z;
+  let tmp = x + 5.5;
+  tmp -= (x + 0.5) * Math.log(tmp);
+
+  let ser = 1.000000000190015;
+  for (let j = 0; j < cof.length; j++) {
+    y += 1;
+    ser += cof[j] / y;
+  }
+
+  return -tmp + Math.log(2.5066282746310005 * ser / x);
 }
 
 // Run games until the limit (or forever if no limit).
@@ -146,6 +258,7 @@ for (let g = 0; g < gameLimit; g++) {
   maxGameLen = Math.max(maxGameLen, game.moveCount);
   const winner = game.calcWinner();
   if (winner === BLACK) {
+    blackWinCount++;
     tally[p1IsBlack ? 'p1' : 'p2']++;
   } else if (winner === WHITE) {
     tally[p1IsBlack ? 'p2' : 'p1']++;
@@ -156,4 +269,5 @@ for (let g = 0; g < gameLimit; g++) {
 
 // Final stats row (always printed, even if maybePrint already fired).
 printStats(tally.p1 + tally.p2);
+
 

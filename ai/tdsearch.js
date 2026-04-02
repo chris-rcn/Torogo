@@ -9,20 +9,20 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const { BLACK, WHITE, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const Tactics = require('./tactics.js');
+const Playout = require('./playout.js');
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
-const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
+const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 2);
 const LR            = Util.envFloat('TD_LR', 0.3);
 const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
-const USE_2x2       = Util.envInt  ('TD_USE_2x2', 0);
+const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
 
 // Reusable container storing weight indices (resolved from feature keys).
-// maxLen upper bound: one 1×1 + one 2×2 + one 1×2 + one 2×1 entry per cell = 4 * cap.
+// maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
 function makeBuf(area) {
-  return { idxs: new Int32Array(3 * area), n: 0 };
+  return { idxs: new Int32Array((1 + USE_1x2 + USE_2x2) * area), n: 0 };
 }
 
 // keyToIdx: Map<featureKey, weightIndex>
@@ -187,7 +187,7 @@ function selectTrainingMove(game, step, ctx) {
     return search1ply(game, ctx, 2);
 
 //  return { move: game.randomLegalMove() };
-  return Tactics.getMove(game);
+  return Playout.getMove(game);
 }
 
 function getMove(game, budgetMs = 1000) {
@@ -196,7 +196,7 @@ function getMove(game, budgetMs = 1000) {
   }
 
   const area = game.N * game.N;
-  const maxMoves = 3 * area;
+  const maxMoves = 3 * game.emptyCount + 20;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
   let sims = 0;
   let maxSteps = 0;
@@ -243,8 +243,8 @@ function getMove(game, budgetMs = 1000) {
     }
 
     // Terminal TD updates for the last two tracked positions.
-    if (prev2 !== null) tdUpdate(prev2, outcome, weightsArr);
-    if (prev1 !== null) tdUpdate(prev1, outcome, weightsArr);
+    if (prev2.n > 0) tdUpdate(prev2, outcome, weightsArr);
+    if (prev1.n > 0) tdUpdate(prev1, outcome, weightsArr);
 
     maxSteps = Math.max(maxSteps, step);
   }
