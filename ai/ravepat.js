@@ -33,7 +33,7 @@ const RAVE_EQUIV   = Util.envFloat('RAVE_EQUIV',   2000);
 const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
 
 // Total virtual visits contributed by the pattern prior across all children.
-const PATTERN_EQUIV = Util.envFloat('PATTERN_EQUIV', 100);
+const PATTERN_EQUIV = Util.envFloat('PATTERN_EQUIV', 50);
 
 // Half-life for count-based confidence: confidence = count / (count + k).
 // Only used when the pattern table stores [ratio, count] pairs.

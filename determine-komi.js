@@ -33,9 +33,9 @@ function arg(name, def) {
   return i >= 0 ? argv[i + 1] : def;
 }
 
-const agentName = arg('agent',     'mcts');
-const size      = parseInt(arg('size',      '9'),   10);
-const budget    = parseInt(arg('budget',    '100'), 10);
+const agentName = arg('agent',     'prod');
+const size      = parseInt(arg('size',      '5'),   10);
+const budget    = parseInt(arg('budget',    '1000'), 10);
 // α: steepness of the sigmoid win-rate curve.
 // Higher → strong agents with sharp transitions; lower → weak/random agents.
 const ALPHA     = parseFloat(arg('sharpness', '0.4'));

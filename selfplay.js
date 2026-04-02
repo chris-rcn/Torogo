@@ -7,7 +7,7 @@ const { performance } = require('perf_hooks');
  *   node selfplay.js [options]
  *
  * Options:
- *   --p1      <policy>   AI policy for player 1      (default: random)
+ *   --p1      <policy>   AI policy for player 1      (default: prod)
  *   --p2      <policy>   AI policy for player 2      (default: p1)
  *   --size    <n>        Board size: 9, 13, or 19    (required)
  *   --budget  <ms>       Time budget per move in ms  (required)
@@ -41,7 +41,7 @@ if (isNaN(gameLimit) || gameLimit < 1) {
   process.exit(1);
 }
 
-const p1Name    = opts.p1   || 'random';
+const p1Name    = opts.p1   || 'prod';
 const p2Name    = opts.p2   || p1Name;
 if (!opts.size) { console.error('--size is required'); process.exit(1); }
 const boardSize = parseInt(opts.size, 10);

@@ -19,7 +19,7 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-const agentName  = get('--agent',  'production');
+const agentName  = get('--agent',  'prod');
 const budget     = parseInt(get('--budget', '2000'), 10);
 const boardSize  = parseInt(get('--size', 13),    10);
 
