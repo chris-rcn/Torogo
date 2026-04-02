@@ -3,20 +3,28 @@
 /**
  * determine-komi.js
  *
- * Plays self-play games under various komi values to find the "fair komi"
- * where black wins ~50% of the time.
+ * Finds the "fair komi" (black win rate ≈ 50%) via Bayesian inference.
+ *
+ * Model: P(black wins | tested komi=k, fair komi=k*) = sigmoid(α × (k* − k))
+ *   – monotonically decreasing in k
+ *   – equals 0.5 exactly when k = k*
+ *
+ * A discrete prior over all half-integer komi values is updated after every
+ * game using the likelihood above.  No hypothesis is ever eliminated — it
+ * merely becomes less probable.  Thompson sampling (draw k* from the
+ * posterior, test at that value) drives exploration toward the uncertain
+ * boundary while still revisiting other regions.
  *
  * Usage:
  *   node determine-komi.js [--agent <name>] [--size <n>] [--budget <ms>]
+ *                          [--sharpness <α>]
  *
- * Defaults: agent=mcts  size=9  budget=100
- *
- * Komi is always a half-integer (0.5, 1.5, 2.5, …; never 0, 1, 2, …).
- * Output is printed at exponentially increasing intervals: 1s, 1.5s, 2.25s, …
- * The script runs indefinitely.
+ * Defaults: agent=mcts  size=9  budget=100  sharpness=0.4
+ * Output: printed at exponentially increasing intervals (1s × 1.5^n).
+ * Runs indefinitely.
  */
 
-const { Game2, PASS, BLACK, WHITE, setKomi } = require('./game2.js');
+const { Game2, PASS, setKomi } = require('./game2.js');
 
 // ── CLI arguments ─────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -25,98 +33,95 @@ function arg(name, def) {
   return i >= 0 ? argv[i + 1] : def;
 }
 
-const agentName = arg('agent', 'mcts');
-const size      = parseInt(arg('size',   '9'),   10);
-const budget    = parseInt(arg('budget', '100'), 10);
+const agentName = arg('agent',     'mcts');
+const size      = parseInt(arg('size',      '9'),   10);
+const budget    = parseInt(arg('budget',    '100'), 10);
+// α: steepness of the sigmoid win-rate curve.
+// Higher → strong agents with sharp transitions; lower → weak/random agents.
+const ALPHA     = parseFloat(arg('sharpness', '0.4'));
 
 const { getMove } = require(`./ai/${agentName}.js`);
 
-// ── Per-komi statistics ───────────────────────────────────────────────────────
-// Map<komi, { games: number, blackWins: number }>
-const stats = new Map();
+// ── Komi grid ─────────────────────────────────────────────────────────────────
+// All half-integers from 0.5 up to size*2+0.5.
+const grid = [];
+for (let k = 0.5; k <= size * 2 + 0.5; k += 1) grid.push(k);
+const G = grid.length;
 
-function getOrCreate(komi) {
-  if (!stats.has(komi)) stats.set(komi, { games: 0, blackWins: 0 });
-  return stats.get(komi);
-}
+// ── Bayesian posterior (log-space for numerical stability) ────────────────────
+// logPost[i]  ∝  log P(fair komi = grid[i] | observations so far)
+// Initialized to 0 (uniform prior before normalization).
+const logPost = new Float64Array(G); // all zeros = uniform
 
-// Black win-rate at a komi (0..1), or null if untested.
-function winRate(komi) {
-  const s = stats.get(komi);
-  return s && s.games > 0 ? s.blackWins / s.games : null;
-}
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 
-// ── Komi utilities ────────────────────────────────────────────────────────────
-// Project x onto the nearest half-integer ≥ 0.5.
-// halfInt(4.0) → 4.5   halfInt(4.5) → 4.5   halfInt(4.9) → 4.5
-// halfInt(5.0) → 5.5   halfInt(3.7) → 3.5
-function halfInt(x) {
-  return Math.max(0.5, Math.floor(x) + 0.5);
-}
-
-// ── Adaptive bisection komi selector ─────────────────────────────────────────
-//
-// Maintains a bracket [loKomi, hiKomi] where:
-//   loKomi = largest komi tested where black wins ≥ 50%
-//   hiKomi = smallest komi tested where black wins  < 50%
-//
-// Strategy:
-//   • No bracket yet  → extend the range in the appropriate direction.
-//   • Bracket found   → bisect; when adjacent half-integers, refine
-//                       whichever endpoint has fewer samples.
-//
-function selectKomi() {
-  if (stats.size === 0) {
-    return halfInt(size / 2);   // start near the "natural" komi
+// After observing one game at `komi`, multiply each hypothesis's probability
+// by the likelihood of that outcome under the logistic model, then renormalize.
+function updatePosterior(komi, blackWon) {
+  for (let i = 0; i < G; i++) {
+    const p = sigmoid(ALPHA * (grid[i] - komi));
+    logPost[i] += blackWon ? Math.log(p) : Math.log(1 - p);
   }
-
-  let loKomi = null;  // black-favoured: highest komi with wr >= 0.5
-  let hiKomi = null;  // white-favoured: lowest  komi with wr <  0.5
-
-  for (const [k, s] of stats) {
-    if (s.games === 0) continue;
-    const w = s.blackWins / s.games;
-    if (w >= 0.5 && (loKomi === null || k > loKomi)) loKomi = k;
-    if (w  < 0.5 && (hiKomi === null || k < hiKomi)) hiKomi = k;
-  }
-
-  // Extend search range until both sides are bracketed.
-  if (loKomi === null && hiKomi === null) return halfInt(size / 2);
-  if (loKomi === null) return halfInt(hiKomi - 2);   // white wins everywhere → go lower
-  if (hiKomi === null) return halfInt(loKomi + 2);   // black wins everywhere → go higher
-
-  // Adjacent half-integers: refine whichever side has fewer data.
-  if (hiKomi - loKomi <= 1) {
-    const sLo = stats.get(loKomi), sHi = stats.get(hiKomi);
-    return sLo.games <= sHi.games ? loKomi : hiKomi;
-  }
-
-  // Bisect the bracket.
-  return halfInt((loKomi + hiKomi) / 2);
+  // Subtract max before exponentiating to prevent underflow.
+  let maxLP = -Infinity;
+  for (let i = 0; i < G; i++) if (logPost[i] > maxLP) maxLP = logPost[i];
+  let sum = 0;
+  for (let i = 0; i < G; i++) { logPost[i] -= maxLP; sum += Math.exp(logPost[i]); }
+  const logSum = Math.log(sum);
+  for (let i = 0; i < G; i++) logPost[i] -= logSum;
 }
 
-// ── Play one full game at the given komi ──────────────────────────────────────
+// Return posterior as a normalized Float64Array of probabilities.
+function posteriorProbs() {
+  const p = new Float64Array(G);
+  for (let i = 0; i < G; i++) p[i] = Math.exp(logPost[i]);
+  return p;
+}
+
+// ── Thompson sampling ─────────────────────────────────────────────────────────
+// Draw a fair-komi hypothesis from the posterior; test at that komi.
+function thompsonSample() {
+  const p = posteriorProbs();
+  const r = Math.random();
+  let cum = 0;
+  for (let i = 0; i < G; i++) {
+    cum += p[i];
+    if (r <= cum) return grid[i];
+  }
+  return grid[G - 1];
+}
+
+// ── Posterior summaries ───────────────────────────────────────────────────────
+function mapKomi(p) {
+  let best = 0;
+  for (let i = 1; i < G; i++) if (p[i] > p[best]) best = i;
+  return grid[best];
+}
+
+function meanKomi(p) {
+  let m = 0;
+  for (let i = 0; i < G; i++) m += grid[i] * p[i];
+  return m;
+}
+
+// ── Empirical per-komi stats (for display only) ───────────────────────────────
+const empirical = new Map(); // komi → { games, blackWins }
+function getEmp(komi) {
+  if (!empirical.has(komi)) empirical.set(komi, { games: 0, blackWins: 0 });
+  return empirical.get(komi);
+}
+
+// ── Play one full game at `komi` ──────────────────────────────────────────────
 function playGame(komi) {
   setKomi(size, komi);
   const g = new Game2(size);
   while (!g.gameOver) {
     const move = getMove(g, budget);
-    const idx  = move.type === 'place' ? move.y * size + move.x : PASS;
+    const idx  = move.type === 'place' ? move.y * size + move.x : -1; // PASS = -1
     g.play(idx);
   }
   const sc = g.calcScore();
-  return sc.black > sc.white;   // true → black wins
-}
-
-// ── Find the komi whose win-rate is closest to 50% ───────────────────────────
-function bestKomi() {
-  let best = null, bestDist = Infinity;
-  for (const [k, s] of stats) {
-    if (s.games === 0) continue;
-    const dist = Math.abs(s.blackWins / s.games - 0.5);
-    if (dist < bestDist) { bestDist = dist; best = k; }
-  }
-  return best;
+  return sc.black > sc.white;
 }
 
 // ── Display ───────────────────────────────────────────────────────────────────
@@ -127,47 +132,56 @@ function fmtElapsed(sec) {
 }
 
 function printStatus(totalGames, elapsedSec) {
-  const best = bestKomi();
+  const p    = posteriorProbs();
+  const map  = mapKomi(p);
+  const mean = meanKomi(p);
+  const maxP = Math.max(...p);
 
   console.log(`\n[+${fmtElapsed(elapsedSec)} | ${totalGames} games]`);
+  console.log(`  ★  MAP komi: ${map.toFixed(1)}  |  posterior mean: ${mean.toFixed(2)}`);
+  console.log(`  Posterior over fair komi (bar scaled to mode):\n`);
 
-  if (best !== null) {
-    const bs   = stats.get(best);
-    const rate = (bs.blackWins / bs.games * 100).toFixed(1);
-    console.log(`  ★  Best komi: ${best.toFixed(1)}  |  black win rate: ${rate}%  (n=${bs.games})`);
-  } else {
-    console.log(`  (no data yet)`);
-  }
+  for (let i = 0; i < G; i++) {
+    const k   = grid[i];
+    const emp = empirical.get(k);
 
-  const sorted = [...stats.entries()]
-    .filter(([, s]) => s.games > 0)
-    .sort(([a], [b]) => a - b);
+    // Skip lines with negligible probability and no empirical data.
+    if (p[i] < 0.001 && !emp) continue;
 
-  for (const [k, s] of sorted) {
-    const rate  = s.blackWins / s.games;
-    const pct   = (rate * 100).toFixed(1).padStart(5);
-    const fill  = Math.round(rate * 20);
-    const bar   = '█'.repeat(fill) + '░'.repeat(20 - fill);
-    const mark  = k === best ? ' ◄' : '  ';
-    console.log(`    komi ${String(k.toFixed(1)).padStart(5)}: [${bar}] ${pct}% black  n=${String(s.games).padStart(4)}${mark}`);
+    const fill   = Math.round(p[i] / maxP * 24);
+    const bar    = '█'.repeat(fill) + '░'.repeat(24 - fill);
+    const pct    = (p[i] * 100).toFixed(1).padStart(5);
+    const marker = k === map ? ' ◄' : '  ';
+
+    let empStr = '';
+    if (emp && emp.games > 0) {
+      const wr = (emp.blackWins / emp.games * 100).toFixed(0);
+      empStr = `  ${wr.padStart(3)}% B  n=${emp.games}`;
+    }
+
+    console.log(`    komi ${String(k.toFixed(1)).padStart(5)}: [${bar}] ${pct}%${marker}${empStr}`);
   }
 }
 
 // ── Main loop (runs forever) ──────────────────────────────────────────────────
 const startTime  = Date.now();
 let   totalGames = 0;
-let   interval   = 1000;                    // first output after 1 s
+let   interval   = 1000;
 let   nextPrint  = startTime + interval;
 
-console.log(`determine-komi  agent=${agentName}  size=${size}×${size}  budget=${budget}ms`);
-console.log(`Output schedule: 1s × 1.5^n  (Ctrl-C to stop)\n`);
+console.log(`determine-komi  agent=${agentName}  size=${size}×${size}  budget=${budget}ms  sharpness=${ALPHA}`);
+console.log(`Method: Bayesian logistic model + Thompson sampling`);
+console.log(`Output: 1s × 1.5ⁿ  (Ctrl-C to stop)\n`);
 
 while (true) {
-  const komi     = selectKomi();
+  const komi     = thompsonSample();
   const blackWon = playGame(komi);
-  const s        = getOrCreate(komi);
-  s.games++;
-  if (blackWon) s.blackWins++;
+
+  updatePosterior(komi, blackWon);
+
+  const emp = getEmp(komi);
+  emp.games++;
+  if (blackWon) emp.blackWins++;
   totalGames++;
 
   const now = Date.now();
