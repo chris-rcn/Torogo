@@ -95,6 +95,9 @@ function canonicalize(cells, perms, mixer) {
 // Given an array of specs [{ size: 1|2|3, maxLibs: N }, ...], scans every cell
 // prepareSpecs: convert a specs array into the internal structure used by
 // extractFeatures.  Call once per unique specs array and reuse the result.
+// Also precomputes lookup tables for size:2 and size:3:
+//   lut2/lut3: Map<maxLibs, { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }>
+//   Index = Σ (cell[i]+maxLibs) * base^i.  pols[i]===0 → skip (symmetric/empty).
 function prepareSpecs(specs) {
   const byMaxLibs = new Map();
   for (const spec of specs) {
@@ -102,14 +105,56 @@ function prepareSpecs(specs) {
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
   const sortedMaxLibs = [...byMaxLibs.keys()].sort((a, b) => b - a);
-  return { byMaxLibs, sortedMaxLibs };
+
+  const lut2 = new Map();
+  const lut3 = new Map();
+  for (const maxLibs of sortedMaxLibs) {
+    const sizes = byMaxLibs.get(maxLibs);
+    const base  = 2 * maxLibs + 1;
+
+    if (sizes.includes(2)) {
+      const mix  = 131 * maxLibs;
+      const n    = base ** 4;
+      const keys = new Int32Array(n);
+      const pols = new Int8Array(n);
+      const c    = [0, 0, 0, 0];
+      for (let i = 0; i < n; i++) {
+        let tmp = i;
+        for (let j = 0; j < 4; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
+        const r = canonicalize(c, PERMS_2x2, mix);
+        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
+      }
+      const b2 = base * base, b3 = b2 * base;
+      lut2.set(maxLibs, { keys, pols, base, b2, b3, ml: maxLibs });
+    }
+
+    if (sizes.includes(3) && base ** 9 <= 4000000) {
+      const mix  = 537 * maxLibs;
+      const n    = base ** 9;
+      const keys = new Int32Array(n);
+      const pols = new Int8Array(n);
+      const c    = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      for (let i = 0; i < n; i++) {
+        let tmp = i;
+        for (let j = 0; j < 9; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
+        const r = canonicalize(c, PERMS_3x3, mix);
+        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
+      }
+      const b2 = base*base, b3 = b2*base, b4 = b3*base, b5 = b4*base,
+            b6 = b5*base,   b7 = b6*base, b8 = b7*base;
+      lut3.set(maxLibs, { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml: maxLibs });
+    }
+  }
+
+  return { byMaxLibs, sortedMaxLibs, lut2, lut3 };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
 //
 // Optimisations vs calling pattern1/2/3 individually:
 //   - Raw cell states are precomputed once per unique maxLibs value.
-//   - Scratch arrays for the cell windows are reused across calls.
+//   - size:2 and size:3 use precomputed lookup tables (built by prepareSpecs) to
+//     replace the 8-permutation canonicalize loop with a single array index.
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
 function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const cells = game.cells;
@@ -127,9 +172,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     cells[nextMove] = game.current;
   }
 
-  const { byMaxLibs, sortedMaxLibs } = prepSpecs;
+  const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // reusable scratch for 2x2,3×3 window
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
@@ -144,43 +189,69 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
     }
     const sizes = byMaxLibs.get(maxLibs);
+    const do1   = sizes.includes(1);
+    const do2   = sizes.includes(2);
+    const do3   = sizes.includes(3);
 
-    const do1 = sizes.includes(1);
-    const do2 = sizes.includes(2);
-    const do3 = sizes.includes(3);
-    const mix2 = 131 * maxLibs;
-    const mix3 = 537 * maxLibs;
-
-    for (let idx = 0; idx < cap; idx++) {
-      if (do1) {
+    if (do1) {
+      const k1base = 131 * maxLibs;
+      for (let idx = 0; idx < cap; idx++) {
         const s = raw[idx];
         if (s !== 0) {
           const libs = s > 0 ? s : -s;
-          out.push({ key: libs + 131 * maxLibs, polarity: s > 0 ? 1 : -1 });
+          out.push({ key: libs + k1base, polarity: s > 0 ? 1 : -1 });
         }
       }
+    }
 
-      if (do2) {
-        buf[0] = raw[idx];
-        buf[1] = raw[(idx + 1)   % cap];
-        buf[2] = raw[(idx + N)   % cap];
-        buf[3] = raw[(idx + N+1) % cap];
-        const r2 = canonicalize(buf, PERMS_2x2, mix2);
-        if (r2 !== null) out.push(r2);
+    if (do2) {
+      const lut = lut2.get(maxLibs);
+      if (lut) {
+        const { keys, pols, base, b2, b3, ml } = lut;
+        for (let idx = 0; idx < cap; idx++) {
+          const li = (raw[idx]+ml) + base*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
+          const pol = pols[li];
+          if (pol !== 0) out.push({ key: keys[li], polarity: pol });
+        }
+      } else {
+        const mix2 = 131 * maxLibs;
+        for (let idx = 0; idx < cap; idx++) {
+          buf[0] = raw[idx]; buf[1] = raw[(idx+1)%cap];
+          buf[2] = raw[(idx+N)%cap]; buf[3] = raw[(idx+N+1)%cap];
+          const r = canonicalize(buf, PERMS_2x2, mix2);
+          if (r !== null) out.push(r);
+        }
       }
+    }
 
-      if (do3) {
-        buf[0] = raw[idx];
-        buf[1] = raw[(idx + 1)     % cap];
-        buf[2] = raw[(idx + 2)     % cap];
-        buf[3] = raw[(idx + N)     % cap];
-        buf[4] = raw[(idx + N+1)   % cap];
-        buf[5] = raw[(idx + N+2)   % cap];
-        buf[6] = raw[(idx + 2*N)   % cap];
-        buf[7] = raw[(idx + 2*N+1) % cap];
-        buf[8] = raw[(idx + 2*N+2) % cap];
-        const r3 = canonicalize(buf, PERMS_3x3, mix3);
-        if (r3 !== null) out.push(r3);
+    if (do3) {
+      const lut = lut3.get(maxLibs);
+      if (lut) {
+        const { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
+        for (let idx = 0; idx < cap; idx++) {
+          const li =
+            (raw[idx]           +ml)       +
+            base*(raw[(idx+1)  %cap]+ml)   +
+            b2  *(raw[(idx+2)  %cap]+ml)   +
+            b3  *(raw[(idx+N)  %cap]+ml)   +
+            b4  *(raw[(idx+N+1)%cap]+ml)   +
+            b5  *(raw[(idx+N+2)%cap]+ml)   +
+            b6  *(raw[(idx+2*N)  %cap]+ml) +
+            b7  *(raw[(idx+2*N+1)%cap]+ml) +
+            b8  *(raw[(idx+2*N+2)%cap]+ml);
+          const pol = pols[li];
+          if (pol !== 0) out.push({ key: keys[li], polarity: pol });
+        }
+      } else {
+        const mix3 = 537 * maxLibs;
+        for (let idx = 0; idx < cap; idx++) {
+          buf[0] = raw[idx];
+          buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
+          buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
+          buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
+          const r = canonicalize(buf, PERMS_3x3, mix3);
+          if (r !== null) out.push(r);
+        }
       }
     }
   }
