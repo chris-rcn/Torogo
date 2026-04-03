@@ -194,6 +194,11 @@ function evaluateFeatures(features, weights) {
   return 1 / (1 + Math.exp(-z));
 }
 
+// Convenience: extract features and evaluate in one call.
+function evaluate(game2, model) {
+  return evaluateFeatures(extractFeatures(game2, model.specs), model.weights);
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 // Loads a model JS file and returns { weights: Map<number,float>, specs: [...] }.
@@ -226,6 +231,7 @@ const Patterns = {
   canonicalize,
   extractFeatures,
   evaluateFeatures,
+  evaluate,
   loadWeights,
   saveWeights,
   PERMS_2x2,

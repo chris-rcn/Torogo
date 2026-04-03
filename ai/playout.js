@@ -22,11 +22,12 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 
-const W_CAPTURE  = 4;
-const W_ESCAPE   = 2;
+const W_CAPTURE  = 6;
+const W_ESCAPE   = 4;
 const W_SHOREUP  = 1;
-const W_THREATEN = 1;
+const W_THREATEN = 6;
 
+const W_OPEN_ADJ = 0.02;
 const W_OTHER    = 1;
 
 function getMove(game, _timeBudgetMs) {
@@ -60,7 +61,9 @@ function getMove(game, _timeBudgetMs) {
       const ni = nbr[base + d];
       const c  = cells[ni];
       const g  = gidArr[ni];
-      if (c !== 0 && !adjChains.has(g)) {
+      if (c === 0) {
+        w += W_OPEN_ADJ;
+      } else if (!adjChains.has(g)) {
         adjChains.add(g);
         if (c === opp) {
           if (ls[g] === 1) w += W_CAPTURE;

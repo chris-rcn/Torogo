@@ -36,6 +36,7 @@ const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
+const Playout = require('./ai/playout.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
@@ -56,9 +57,9 @@ const BUDGET     = parseFloat(opts['budget']    || '1');
 // ── Features ───────────────────────────
 
 let specs = [
-  { size: 1, maxLibs: 3 },
-  { size: 2, maxLibs: 2 },
-//  { size: 3, maxLibs: 1 },
+  { size: 1, maxLibs: 1 },
+  { size: 2, maxLibs: 1 },
+  { size: 3, maxLibs: 1 },
 ];
 
 // ── Weight table ──────────────────────────────────────────────────────────────
@@ -96,13 +97,11 @@ function trainGame(N) {
   const tStartMs = Date.now();
 
   let prev2 = null, prev1 = null;  // feature sets from 2 and 1 steps ago
-  const vals = [];                  // value at each position, for delta calculation
   let moves = 0;
 
   while (!game.gameOver && moves < maxMoves) {
     const features = extractFeatures(game, specs);
     const v        = evaluateFeatures(features, weights);
-    vals.push(v);
 
     if (prev2 !== null) {
       const v2 = evaluateFeatures(prev2, weights);
@@ -111,7 +110,13 @@ function trainGame(N) {
 
     prev2 = prev1;
     prev1 = features;
-    const move = Math.random() < EPSILON ? game.randomLegalMove() : search(game, { weights, specs: specs }, 1);
+    let move;
+    if (Math.random() < EPSILON) {
+      move = game.randomLegalMove();
+      //move = Playout.getMove(game).move;
+    } else {
+      move = search(game, { weights, specs: specs }, 1);
+    }
     game.play(move);
     moves++;
   }
@@ -125,14 +130,7 @@ function trainGame(N) {
     tdUpdate(features, v, outcome);
   }
 
-  let ceSum = 0, correct = 0;
-  for (const v of vals) {
-    const vc = Math.max(1e-7, Math.min(1 - 1e-7, v));
-    ceSum += -(outcome * Math.log(vc) + (1 - outcome) * Math.log(1 - vc));
-    if ((v >= 0.5) === (outcome === 1)) correct++;
-  }
-
-  return { winner: game.calcWinner(), elapsedMs, moves, ceSum, correct, nVals: vals.length };
+  return { winner: game.calcWinner(), elapsedMs, moves };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -204,10 +202,10 @@ console.log();
 console.log(
   `${'game'.padStart(7)}  ${'elapsedS'.padStart(8)}  ${'weights'.padStart(8)}` +
   `  ${'win%'.padStart(6)}(${'n'.padStart(3)})  ${'winAvg%'.padStart(7)}` +
-  `  ${'avglen'.padStart(6)}  ${'ceLoss'.padStart(6)}  ${'acc%'.padStart(5)}` +
+  `  ${'avglen'.padStart(6)}` +
   (ACCURACY_FILE ? `  ${'vacc%'.padStart(6)}` : '') +
   (evalPositionsPool ? `  ${'rmsErr'.padStart(7)}  ${'rmsAvg'.padStart(7)}` : '') +
-  `  ${'avg|w|'.padStart(7)}  ${'max|w|'.padStart(7)}` +
+  `  ${'avg|w|'.padStart(7)}  ${'rms(w)'.padStart(7)}  ${'max|w|'.padStart(7)}` +
   `  ${'tTrain'.padStart(7)}  ${'tTest'.padStart(6)}  ${'turnMs'.padStart(6)}`
 );
 
@@ -217,7 +215,6 @@ let g = 0;
 let totalMoves = 0;
 let intervalGames = 0;
 let intervalMoves = 0;
-let intervalCeSum = 0, intervalCorrect = 0, intervalNVals = 0;
 let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
@@ -226,13 +223,10 @@ const rmsHistory  = [];   // per-interval rmsErr values
 
 while (true) {
   g++;
-  const { moves, elapsedMs, ceSum, correct, nVals } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
-  intervalCeSum   += ceSum;
-  intervalCorrect += correct;
-  intervalNVals   += nVals;
   moveElapsedMs += elapsedMs;
   intervalTrainMs += elapsedMs;
   const timePerMoveMs = moveElapsedMs / totalMoves;
@@ -259,11 +253,8 @@ while (true) {
     const avgPct  = (100 * avgWR).toFixed(1);
 
     const avgLen  = (intervalMoves / intervalGames).toFixed(1);
-    const avgCE   = (intervalCeSum   / intervalNVals).toFixed(4);
-    const avgAcc  = (100 * intervalCorrect / intervalNVals).toFixed(1);
     intervalGames = 0;
     intervalMoves = 0;
-    intervalCeSum = 0; intervalCorrect = 0; intervalNVals = 0;
     let vaccStr = '';
     if (ACCURACY_FILE) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
@@ -277,14 +268,16 @@ while (true) {
       const rmsAvg    = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
       rmsStr = `  ${rmsErr.toFixed(4).padStart(7)}  ${rmsAvg.toFixed(4).padStart(7)}`;
     }
-    let wAbsSum = 0, wAbsMax = 0;
+    let wAbsSum = 0, wAbsMax = 0, wSqSum = 0;
     for (const w of weights.values()) {
       const a = Math.abs(w);
       wAbsSum += a;
+      wSqSum  += w * w;
       if (a > wAbsMax) wAbsMax = a;
     }
-    const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
-    const wStr = `  ${wAvg.toFixed(3).padStart(7)}  ${wAbsMax.toFixed(3).padStart(7)}`;
+    const wAvg   = weights.size > 0 ? wAbsSum / weights.size : 0;
+    const wRms = weights.size > 0 ? Math.sqrt(wSqSum / weights.size) : 0;
+    const wStr = `  ${wAvg.toFixed(3).padStart(7)}  ${wRms.toFixed(3).padStart(7)}  ${wAbsMax.toFixed(3).padStart(7)}`;
 
     const tTestMs   = Date.now() - tTestStart;
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
@@ -295,7 +288,7 @@ while (true) {
     console.log(
       `${String(g).padStart(7)}  ${elapsedS.padStart(8)}  ${String(weights.size).padStart(8)}` +
       `  ${(latestPct + '%').padStart(6)}(${String(resultsBatch.length).padStart(3)})  ${(avgPct + '%').padStart(7)}` +
-      `  ${avgLen.padStart(6)}  ${avgCE.padStart(6)}  ${(avgAcc + '%').padStart(5)}${vaccStr}${rmsStr}${wStr}  ${tTrainStr.padStart(7)}  ${tTestStr.padStart(6)}  ${timePerMoveMs.toFixed(1).padStart(6)}`
+      `  ${avgLen.padStart(6)}${vaccStr}${rmsStr}${wStr}  ${tTrainStr.padStart(7)}  ${tTestStr.padStart(6)}  ${timePerMoveMs.toFixed(1).padStart(6)}`
     );
     saveWeights(SAVE_PATH, { weights, specs: specs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);

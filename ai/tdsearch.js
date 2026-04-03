@@ -11,6 +11,7 @@ const Util = _isNode ? require('../util.js') : window.Util;
 
 const Playout = require('./playout.js');
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
+const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
@@ -19,11 +20,14 @@ const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
 const USE_2x3       = Util.envInt  ('TD_USE_2x3', 0);
-const RETAIN        = Util.envInt  ('TD_RETAIN', 1);
 const LR0           = Util.envFloat('TD_LR0', 0.6);
 const LR1           = Util.envFloat('TD_LR1', 0.3);
 const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 2);
-const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0); // TODO: When EVAL_DEPTH>0, truncate the playout and return outcome as the eval returned from a call to vpatterns.evaluateFeatures().
+const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
+const PAT_DATA      = Util.envStr  ('TD_PAT_DATA', '');
+
+let evalModel = null;
+if (_isNode && PAT_DATA) evalModel = loadWeights(PAT_DATA);
 
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
@@ -189,8 +193,14 @@ function selectTrainingMove(game, step, ctx) {
 //  return Playout.getMove(game);
 }
 
-let keyToIdx;
-let weightsArr;
+// These two store the state of the model at the start of the game.
+let keyToIdx_start = new Map();
+let weightsArr_start = [];
+
+// These two store the current state of the model.
+let keyToIdx = new Map();
+let weightsArr = [];
+
 let lastMoveCount = 0;
 
 function getMove(game, budgetMs = 1000) {
@@ -200,7 +210,11 @@ function getMove(game, budgetMs = 1000) {
 
   const moveCountDiff = game.moveCount - lastMoveCount;
   const moveCountUnexpected = moveCountDiff < 0 || moveCountDiff > 2;
-  if (!RETAIN || !keyToIdx || moveCountUnexpected) {
+  
+  if (game.moveCount === 1) {
+    keyToIdx   = keyToIdx_start;
+    weightsArr = weightsArr_start;
+  } else if (moveCountUnexpected) {
     keyToIdx = new Map();
     weightsArr = [];
   }
@@ -220,6 +234,8 @@ function getMove(game, budgetMs = 1000) {
   let prev1 = makeBuf(area);
   let feats = makeBuf(area);
 
+  let lr = LR1;
+
   while (true) {
 
     let progress;
@@ -229,12 +245,14 @@ function getMove(game, budgetMs = 1000) {
       progress = (Date.now() - tStart) / budgetMs;
     }
     if (progress >= 1) break;
-    const lr = LR1 - progress * (LR0 - LR1);
+    if (game.moveCount > 1) {  // Hacky guard to keep start model stable.
+      lr = LR1 - progress * (LR0 - LR1);
+    }
 
     sims++;
     const g = game.clone();
+    const evalDepth = (EVAL_DEPTH > 0 && evalModel) ? EVAL_DEPTH + (sims % 2) : 10000;
     let step = 0;
-
     let outcome;
     let moveSelection = selectTrainingMove(g, step, ctx);
     while (true) {
@@ -243,6 +261,10 @@ function getMove(game, budgetMs = 1000) {
       step++;
       if (g.gameOver || step > maxMoves) {
         outcome = (g.estimateWinner() === BLACK) ? 1 : 0;
+        break;
+      }
+      if (step >= evalDepth) {
+        outcome = vpEvaluate(g, evalModel);
         break;
       }
 
@@ -266,6 +288,11 @@ function getMove(game, budgetMs = 1000) {
     if (prev1.n > 0) tdUpdate(prev1, outcome, weightsArr, lr);
 
     maxSteps = Math.max(maxSteps, step);
+  }
+
+  if (game.moveCount === 1) {
+    keyToIdx_start = new Map(keyToIdx);
+    weightsArr_start = weightsArr.slice();
   }
 
   const evalFn = g => { findFeatures(g, ctx.searchFeats, ctx); evaluate(ctx.searchFeats, ctx.weightsArr); return ctx.searchFeats.val; };
