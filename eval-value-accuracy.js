@@ -65,7 +65,7 @@ function evalValueAccuracy(filePath, model, { nGames = Infinity, sampleRate = 0.
     for (const token of tokens) {
       if (game.gameOver) break;
       if (Math.random() < sampleRate)
-        sampledVs.push(evaluateFeatures(extractFeatures(game, model.specs), model.weights));
+        sampledVs.push(evaluateFeatures(extractFeatures(game, model.preparedSpecs), model.weights));
       game.play(parseMoveToken(token, N));
     }
 

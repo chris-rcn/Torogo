@@ -1950,17 +1950,7 @@ section('Random agent (Game2)');
   const { getMove: randomAgent } = require('./ai/random.js');
   const g = new Game2(7);
   const move = randomAgent(g);
-  assert(move.type === 'place' || move.type === 'pass', 'random returns valid move type');
-  if (move.type === 'place') {
-    assert(typeof move.x === 'number' && typeof move.y === 'number', 'place has coords');
-    assert(move.x >= 0 && move.x < 7, 'x in bounds');
-    assert(move.y >= 0 && move.y < 7, 'y in bounds');
-    const clone = g.clone();
-    assert(clone.play(move.y * 7 + move.x) !== false, 'random move is legal on Game2');
-  }
-  const g2 = new Game2(7);
-  while (!g2.gameOver) g2.play(PASS);
-  assert(randomAgent(g2).type === 'pass', 'random returns pass on ended game');
+  assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'random returns legal move');
 }
 
 section('MC agent (Game2)');
@@ -1968,11 +1958,7 @@ section('MC agent (Game2)');
   const { getMove: mc } = require('./ai/mc.js');
   const g = new Game2(7);
   const move = mc(g, 50);
-  assert(move.type === 'place' || move.type === 'pass', 'mc returns valid move');
-  if (move.type === 'place') {
-    const clone = g.clone();
-    assert(clone.play(move.y * 7 + move.x) !== false, 'mc move is legal on Game2');
-  }
+  assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'mc returns legal move');
 }
 
 section('MCTS agent (Game2)');
@@ -1980,11 +1966,7 @@ section('MCTS agent (Game2)');
   const { getMove: mcts } = require('./ai/mcts.js');
   const g = new Game2(7);
   const move = mcts(g, 50);
-  assert(move.type === 'place' || move.type === 'pass', 'mcts returns valid move');
-  if (move.type === 'place') {
-    const clone = g.clone();
-    assert(clone.play(move.y * 7 + move.x) !== false, 'mcts move is legal on Game2');
-  }
+  assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'mcts returns legal move');
 }
 
 section('AMAF agent (Game2)');
@@ -1992,11 +1974,7 @@ section('AMAF agent (Game2)');
   const { getMove: amaf } = require('./ai/amaf.js');
   const g = new Game2(7);
   const move = amaf(g, 50);
-  assert(move.type === 'place' || move.type === 'pass', 'amaf returns valid move');
-  if (move.type === 'place') {
-    const clone = g.clone();
-    assert(clone.play(move.y * 7 + move.x) !== false, 'amaf move is legal on Game2');
-  }
+  assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'amaf returns legal move');
 }
 
 section('Game2 clone divergence (independent futures)');

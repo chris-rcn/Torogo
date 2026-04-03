@@ -8,7 +8,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { BLACK } = _isNode ? require('./game2.js') : window.Game2;
+const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -47,16 +47,11 @@ const PERMS_3x3 = [
 
 // Returns the raw state of the cell at idx: 0 for empty, 1-maxLibs for BLACK
 // with that many liberties (capped), maxLibs+1 .. 2*maxLibs for WHITE.
-function rawState(game2, maxLibs, idx) {
-  const color = game2.cells[idx];
+function rawState(game, maxLibs, idx) {
+  const color = game.cells[idx];
   if (color === 0) return 0;
-  const libs = maxLibs === 1 ? 1 : Math.min(game2.groupLibertyCount(game2.groupIdAt(idx)), maxLibs);
-  if (color === BLACK) return libs;
-  return -libs;
-}
-
-function flipState(s) {
-  return -s;
+  const libs = maxLibs === 1 ? 1 : Math.min(game.groupLibertyCount(game.groupIdAt(idx)), maxLibs);
+  return color * libs;
 }
 
 // Given an array of raw cell states and a set of D4 permutation arrays,
@@ -65,7 +60,7 @@ function flipState(s) {
 // (whether the minimum-achieving transform used the original or flipped cells).
 // Returns null if all cells are empty.
 function canonicalize(cells, perms, mixer) {
-  const n = cells.length;
+  const n = perms[0].length;
 
   // A pattern is color-symmetric if some D4 transform maps each cell to its
   // negation: cells[perm[i]] === -cells[i] for all i.  Such patterns are
@@ -98,35 +93,49 @@ function canonicalize(cells, perms, mixer) {
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
 // Given an array of specs [{ size: 1|2|3, maxLibs: N }, ...], scans every cell
-// and returns a flat array of { key, polarity } for all matching patterns.
-//
-// Optimisations vs calling pattern1/2/3 individually:
-//   - Raw cell states are precomputed once per unique maxLibs value.
-//   - Scratch arrays for the cell windows are reused across calls.
-//   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
-function extractFeatures(game2, specs) {
-  const cap  = game2.N * game2.N;
-  const nbr  = game2._nbr;
-  const dnbr = game2._dnbr;
-  const out  = [];
-
-  // Group specs by maxLibs; sort descending so we compute raw once at the
-  // highest maxLibs and clamp in-place for each lower value.
+// prepareSpecs: convert a specs array into the internal structure used by
+// extractFeatures.  Call once per unique specs array and reuse the result.
+function prepareSpecs(specs) {
   const byMaxLibs = new Map();
   for (const spec of specs) {
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
   const sortedMaxLibs = [...byMaxLibs.keys()].sort((a, b) => b - a);
+  return { byMaxLibs, sortedMaxLibs };
+}
 
-  const buf2 = [0, 0, 0, 0];              // reusable scratch for 2×2 window
-  const buf3 = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // reusable scratch for 3×3 window
+// and returns a flat array of { key, polarity } for all matching patterns.
+//
+// Optimisations vs calling pattern1/2/3 individually:
+//   - Raw cell states are precomputed once per unique maxLibs value.
+//   - Scratch arrays for the cell windows are reused across calls.
+//   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
+function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
+  const cells = game.cells;
+  const cap   = game.N * game.N;
+  const N     = game.N;
+  const out   = [];
+
+  if (nextMove === PASS) doSetNext = false;
+  let captures;
+  if (doSetNext) {
+    captures = game.captureList(nextMove);
+    for (let c = 0; c < captures.length; c++) {
+      cells[captures[c]] = EMPTY;
+    }
+    cells[nextMove] = game.current;
+  }
+
+  const { byMaxLibs, sortedMaxLibs } = prepSpecs;
+
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // reusable scratch for 2x2,3×3 window
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
     if (raw === null) {
       raw = new Int8Array(cap);
-      for (let i = 0; i < cap; i++) raw[i] = rawState(game2, maxLibs, i);
+      for (let i = 0; i < cap; i++) raw[i] = rawState(game, maxLibs, i);
     } else {
       // Clamp in-place: rawState(maxLibs) = sign * min(|rawState(prevMaxLibs)|, maxLibs).
       for (let i = 0; i < cap; i++) {
@@ -152,31 +161,34 @@ function extractFeatures(game2, specs) {
       }
 
       if (do2) {
-        const tr = nbr[idx * 4 + 3];
-        const bl = nbr[idx * 4 + 1];
-        const br = dnbr[idx * 4 + 3];
-        buf2[0] = raw[idx]; buf2[1] = raw[tr];
-        buf2[2] = raw[bl];  buf2[3] = raw[br];
-        const r2 = canonicalize(buf2, PERMS_2x2, mix2);
+        buf[0] = raw[idx];
+        buf[1] = raw[(idx + 1)   % cap];
+        buf[2] = raw[(idx + N)   % cap];
+        buf[3] = raw[(idx + N+1) % cap];
+        const r2 = canonicalize(buf, PERMS_2x2, mix2);
         if (r2 !== null) out.push(r2);
       }
 
       if (do3) {
-        const c01 = nbr[idx * 4 + 3];
-        const c02 = nbr[c01 * 4 + 3];
-        const c10 = nbr[idx * 4 + 1];
-        const c11 = nbr[c10 * 4 + 3];
-        const c12 = nbr[c11 * 4 + 3];
-        const c20 = nbr[c10 * 4 + 1];
-        const c21 = nbr[c20 * 4 + 3];
-        const c22 = nbr[c21 * 4 + 3];
-        buf3[0] = raw[idx]; buf3[1] = raw[c01]; buf3[2] = raw[c02];
-        buf3[3] = raw[c10]; buf3[4] = raw[c11]; buf3[5] = raw[c12];
-        buf3[6] = raw[c20]; buf3[7] = raw[c21]; buf3[8] = raw[c22];
-        const r3 = canonicalize(buf3, PERMS_3x3, mix3);
+        buf[0] = raw[idx];
+        buf[1] = raw[(idx + 1)     % cap];
+        buf[2] = raw[(idx + 2)     % cap];
+        buf[3] = raw[(idx + N)     % cap];
+        buf[4] = raw[(idx + N+1)   % cap];
+        buf[5] = raw[(idx + N+2)   % cap];
+        buf[6] = raw[(idx + 2*N)   % cap];
+        buf[7] = raw[(idx + 2*N+1) % cap];
+        buf[8] = raw[(idx + 2*N+2) % cap];
+        const r3 = canonicalize(buf, PERMS_3x3, mix3);
         if (r3 !== null) out.push(r3);
       }
     }
+  }
+  if (doSetNext) {
+    for (let c = 0; c < captures.length; c++) {
+      cells[captures[c]] = -game.current;
+    }
+    cells[nextMove] = EMPTY;
   }
   return out;
 }
@@ -188,15 +200,17 @@ function extractFeatures(game2, specs) {
 function evaluateFeatures(features, weights) {
   let z = 0;
   for (const f of features) {
-    const w = weights.get(f.key);
-    if (w !== undefined) z += f.polarity * w;
+    const w = weights.get(f.key) ?? 0;
+    z += f.polarity * w;
   }
-  return 1 / (1 + Math.exp(-z));
+  features.val = 1 / (1 + Math.exp(-z));
+  return features.val;
 }
 
 // Convenience: extract features and evaluate in one call.
-function evaluate(game2, model) {
-  return evaluateFeatures(extractFeatures(game2, model.specs), model.weights);
+// model must have a preparedSpecs property (see prepareSpecs).
+function evaluate(game, model) {
+  return evaluateFeatures(extractFeatures(game, model.preparedSpecs), model.weights);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -205,7 +219,8 @@ function evaluate(game2, model) {
 // Always returns a fresh copy so multiple callers don't share the same Map.
 function loadWeights(filePath) {
   const raw = require(require('path').resolve(filePath));
-  return { specs: raw.specs, weights: new Map(raw.weights) };
+  const specs = raw.specs;
+  return { specs, preparedSpecs: prepareSpecs(specs), weights: new Map(raw.weights) };
 }
 
 // Writes a model { weights, specs } to a JS file (browser-includable).
@@ -227,8 +242,8 @@ function saveWeights(filePath, model) {
 
 const Patterns = {
   rawState,
-  flipState,
   canonicalize,
+  prepareSpecs,
   extractFeatures,
   evaluateFeatures,
   evaluate,

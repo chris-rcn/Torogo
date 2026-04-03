@@ -11,7 +11,7 @@
 // sizes from every cell.  Accumulates unique canonical keys in three Sets.
 
 const { Game2 } = require('./game2.js');
-const { extractFeatures } = require('./vpatterns.js');
+const { extractFeatures, prepareSpecs } = require('./vpatterns.js');
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -24,6 +24,7 @@ const specs = [
   { size: 2, maxLibs },
   { size: 3, maxLibs },
 ];
+const prepSpecs = prepareSpecs(specs);
 
 const unique = new Set();
 
@@ -53,7 +54,7 @@ for (let g = 0; ; g++) {
     game.play(move);
 
     const t0 = Date.now();
-    for (const { key } of extractFeatures(game, specs)) unique.add(key);
+    for (const { key } of extractFeatures(game, prepSpecs)) unique.add(key);
     totalScanMs += Date.now() - t0;
     totalPositions++;
   }

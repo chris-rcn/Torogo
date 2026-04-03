@@ -30,7 +30,7 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, loadWeights, saveWeights } = require('./vpatterns.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
@@ -46,48 +46,80 @@ const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '9',  10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || 'random';
-const EPSILON    = parseFloat(opts.epsilon      || '0.1');
+const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']     || '0.3');
 const BUDGET     = parseFloat(opts['budget']    || '1');
+const LAMBDA     = parseFloat(opts['lambda']    || '0.0');
 
 // ── Features ───────────────────────────
 
 let specs = [
-  { size: 1, maxLibs: 1 },
+//  { size: 1, maxLibs: 1 },
   { size: 2, maxLibs: 1 },
-  { size: 3, maxLibs: 1 },
+//  { size: 3, maxLibs: 1 },
 ];
+let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
 let weights = new Map();  // pattern key (int32) → weight (float)
 
-function addWeight(key, delta) {
-  const w = weights.get(key);
-  weights.set(key, (w !== undefined ? w : 0) + delta);
-}
-
-
 // ── Training helpers ──────────────────────────────────────────────────────────
 
 // Absolute terminal outcome: 1=BLACK wins, 0=WHITE wins.
 function absoluteOutcome(game) {
-  return game.calcWinner() === BLACK ? 1 : 0;
+  return game.estimateWinner() === BLACK ? 1 : 0;
 }
 
 // Δw_k = (LR / n) · (target − V) · polarity_k
-function tdUpdate(features, v, target) {
+function tdUpdate(features, target, lr) {
   const n = features.length;
   if (n === 0) return;
-  const step = (LR / n) * (target - v);
-  for (const f of features) addWeight(f.key, step * f.polarity);
+  const perFeature = (target - features.val) / n;
+  const step = lr * perFeature;
+  for (const f of features) {
+    const w = weights.get(f.key) ?? 0;
+    weights.set(f.key, w + f.polarity * step);
+  }
 }
 
 // ── Self-play training ────────────────────────────────────────────────────────
+
+// Custom 1-ply search which bypasses non-capture moves.
+function search1ply(game) {
+  const area = game.N * game.N;
+  const isBlack = game.current === BLACK;
+  let bestMove = PASS;
+  let bestScore = isBlack ? -Infinity : Infinity;
+  for (let coord = 0; coord < area; coord++) {
+    if (!game.isLegal(coord) || game.isTrueEye(coord)) continue;
+//    const g = game.clone();
+//    g.play(coord);
+//    const features = extractFeatures(g, specs);
+    const features = extractFeatures(game, prepSpecs, true, coord);
+    evaluateFeatures(features, weights);
+    if (isBlack === (features.val > bestScore)) { 
+      bestScore = features.val;
+      bestMove = coord;
+    }
+  }
+  if (bestMove === PASS) {
+    return PASS;
+  }
+  if (game.consecutivePasses > 0 || game.emptyCount < area/2) {
+    const passFeatures = extractFeatures(game, prepSpecs);
+    evaluateFeatures(passFeatures, weights);
+    if (isBlack === (passFeatures.val >= bestScore)) { 
+      bestScore = passFeatures.val;
+      bestMove = PASS;
+    }
+  }
+  return bestMove;
+}
 
 // Both colours use the policy.  Apply 2-step logistic TD inline during play.
 // All targets are absolute (P(BLACK wins)).
@@ -98,14 +130,21 @@ function trainGame(N) {
 
   let prev2 = null, prev1 = null;  // feature sets from 2 and 1 steps ago
   let moves = 0;
+  const vals = [];
+  const lambdaFeats = [];
+  const lamdbaLr = LAMBDA * LR;
+  const tdLr = (1 - LAMBDA) * LR;
 
   while (!game.gameOver && moves < maxMoves) {
-    const features = extractFeatures(game, specs);
-    const v        = evaluateFeatures(features, weights);
+    const features = extractFeatures(game, prepSpecs);
+    evaluateFeatures(features, weights);
+    vals.push(features.val);
+    if (Math.random() < LAMBDA) {
+      lambdaFeats.push(features);
+    }
 
     if (prev2 !== null) {
-      const v2 = evaluateFeatures(prev2, weights);
-      tdUpdate(prev2, v2, v);
+      tdUpdate(prev2, features.val, tdLr);
     }
 
     prev2 = prev1;
@@ -115,7 +154,8 @@ function trainGame(N) {
       move = game.randomLegalMove();
       //move = Playout.getMove(game).move;
     } else {
-      move = search(game, { weights, specs: specs }, 1);
+//      move = search(game, { weights, specs, preparedSpecs: prepSpecs }, 1);
+      move = search1ply(game);
     }
     game.play(move);
     moves++;
@@ -126,11 +166,19 @@ function trainGame(N) {
 
   for (const features of [prev2, prev1]) {
     if (features === null) continue;
-    const v = evaluateFeatures(features, weights);
-    tdUpdate(features, v, outcome);
+    tdUpdate(features, outcome, tdLr);
   }
 
-  return { winner: game.calcWinner(), elapsedMs, moves };
+  for (const features of lambdaFeats) {
+    tdUpdate(features, outcome, lamdbaLr);
+  }
+
+  let correct = 0;
+  for (const v of vals) {
+    if ((v >= 0.5) === (outcome === 1)) correct++;
+  }
+
+  return { winner: game.estimateWinner(), elapsedMs, moves, correct, nVals: vals.length };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -149,7 +197,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     while (!game.gameOver && moves++ < maxMoves) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
-        idx = search(game, { weights, specs: specs });
+        idx = search(game, { weights, specs, preparedSpecs: prepSpecs });
       } else {
         const mv = refGetMove(game, budget);
         idx = mv.move !== undefined ? mv.move : PASS;
@@ -157,7 +205,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
       game.play(idx);
     }
 
-    const winner = game.calcWinner();
+    const winner = game.estimateWinner();
     if (winner === null) {
       results.push(0.5);
     } else if ((winner === BLACK) === policyIsBlack) {
@@ -185,7 +233,7 @@ if (POSITIONS_FILE) {
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
-    ({ weights, specs } = loadWeights(LOAD_PATH));
+    ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -193,21 +241,30 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
 
 // Print header.
-console.log(
-  `${'game'.padStart(7)}  ${'elapsedS'.padStart(8)}  ${'weights'.padStart(8)}` +
-  `  ${'win%'.padStart(6)}(${'n'.padStart(3)})  ${'winAvg%'.padStart(7)}` +
-  `  ${'avglen'.padStart(6)}` +
-  (ACCURACY_FILE ? `  ${'vacc%'.padStart(6)}` : '') +
-  (evalPositionsPool ? `  ${'rmsErr'.padStart(7)}  ${'rmsAvg'.padStart(7)}` : '') +
-  `  ${'avg|w|'.padStart(7)}  ${'rms(w)'.padStart(7)}  ${'max|w|'.padStart(7)}` +
-  `  ${'tTrain'.padStart(7)}  ${'tTest'.padStart(6)}  ${'turnMs'.padStart(6)}`
-);
+console.log([
+  'game'   .padStart(7),
+  'elapsedS'.padStart(8),
+  'tGameMs'.padStart(7),
+  'weights'.padStart(8),
+  'win%'   .padStart(6) + '(' + 'n'.padStart(3) + ')',
+  'winAvg%'.padStart(7),
+  'avglen' .padStart(6),
+  'acc%'   .padStart(5),
+  ...(ACCURACY_FILE    ? ['vacc%' .padStart(6)] : []),
+  ...(evalPositionsPool ? ['rmsErr'.padStart(7), 'rmsAvg'.padStart(7)] : []),
+  'avg|w|' .padStart(7),
+  'rms(w)' .padStart(7),
+  'max|w|' .padStart(7),
+  'tTrain' .padStart(7),
+  'tTest'  .padStart(6),
+  'turnMs' .padStart(6),
+].join('  '));
 
 const t0 = Date.now();
 let nextPrintAt = t0 + 1000;
@@ -215,6 +272,8 @@ let g = 0;
 let totalMoves = 0;
 let intervalGames = 0;
 let intervalMoves = 0;
+let intervalCorrect = 0, intervalNVals = 0;
+let totalCorrect = 0, totalNVals = 0;
 let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
@@ -223,10 +282,14 @@ const rmsHistory  = [];   // per-interval rmsErr values
 
 while (true) {
   g++;
-  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
+  intervalCorrect += correct;
+  intervalNVals   += nVals;
+  totalCorrect    += correct;
+  totalNVals      += nVals;
   moveElapsedMs += elapsedMs;
   intervalTrainMs += elapsedMs;
   const timePerMoveMs = moveElapsedMs / totalMoves;
@@ -252,21 +315,25 @@ while (true) {
     const avgWR   = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
     const avgPct  = (100 * avgWR).toFixed(1);
 
-    const avgLen  = (intervalMoves / intervalGames).toFixed(1);
+    const avgLen   = (intervalMoves / intervalGames).toFixed(1);
+    const tGameMs  = (intervalTrainMs / intervalGames).toFixed(1);
+    const avgAcc   = (100 * totalCorrect / totalNVals).toFixed(1);
     intervalGames = 0;
     intervalMoves = 0;
-    let vaccStr = '';
+    intervalCorrect = 0; intervalNVals = 0;
+    let vaccCol = null;
     if (ACCURACY_FILE) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
-      vaccStr = `  ${(100 * accuracy).toFixed(1).padStart(5)}%`;
+      vaccCol = (100 * accuracy).toFixed(1).padStart(5) + '%';
     }
-    let rmsStr = '';
+    let rmsCol = null, rmsAvgCol = null;
     if (evalPositionsPool) {
-      const { rmsErr } = evalPositionsSample(game => ({ move: search(game, { weights, specs: specs }) }), evalPositionsPool, POSITIONS_N || evalPositionsPool.length, 0);
+      const { rmsErr } = evalPositionsSample(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), evalPositionsPool, POSITIONS_N || evalPositionsPool.length, 0);
       rmsHistory.push(rmsErr);
-      const rmsHalf   = Math.max(1, Math.floor(rmsHistory.length / 2));
-      const rmsAvg    = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
-      rmsStr = `  ${rmsErr.toFixed(4).padStart(7)}  ${rmsAvg.toFixed(4).padStart(7)}`;
+      const rmsHalf = Math.max(1, Math.floor(rmsHistory.length / 2));
+      const rmsAvg  = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
+      rmsCol    = rmsErr.toFixed(4).padStart(7);
+      rmsAvgCol = rmsAvg.toFixed(4).padStart(7);
     }
     let wAbsSum = 0, wAbsMax = 0, wSqSum = 0;
     for (const w of weights.values()) {
@@ -275,22 +342,33 @@ while (true) {
       wSqSum  += w * w;
       if (a > wAbsMax) wAbsMax = a;
     }
-    const wAvg   = weights.size > 0 ? wAbsSum / weights.size : 0;
+    const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
     const wRms = weights.size > 0 ? Math.sqrt(wSqSum / weights.size) : 0;
-    const wStr = `  ${wAvg.toFixed(3).padStart(7)}  ${wRms.toFixed(3).padStart(7)}  ${wAbsMax.toFixed(3).padStart(7)}`;
 
     const tTestMs   = Date.now() - tTestStart;
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
-    const tTestStr  = (tTestMs / 1000).toFixed(1) + 's';
     intervalTrainMs = 0;
-    const nextMs = Date.now() - t0;
+    const nextMs    = Date.now() - t0;
     const elapsedS = ((Date.now() - t0) / 1000).toFixed(0);
-    console.log(
-      `${String(g).padStart(7)}  ${elapsedS.padStart(8)}  ${String(weights.size).padStart(8)}` +
-      `  ${(latestPct + '%').padStart(6)}(${String(resultsBatch.length).padStart(3)})  ${(avgPct + '%').padStart(7)}` +
-      `  ${avgLen.padStart(6)}${vaccStr}${rmsStr}${wStr}  ${tTrainStr.padStart(7)}  ${tTestStr.padStart(6)}  ${timePerMoveMs.toFixed(1).padStart(6)}`
-    );
-    saveWeights(SAVE_PATH, { weights, specs: specs });
+    console.log([
+      String(g)                          .padStart(7),
+      elapsedS                           .padStart(8),
+      tGameMs                            .padStart(7),
+      String(weights.size)               .padStart(8),
+      (latestPct + '%')                  .padStart(6) + '(' + String(resultsBatch.length).padStart(3) + ')',
+      (avgPct + '%')                     .padStart(7),
+      avgLen                             .padStart(6),
+      (avgAcc + '%')                     .padStart(5),
+      ...(vaccCol    ? [vaccCol]                    : []),
+      ...(rmsCol     ? [rmsCol, rmsAvgCol]          : []),
+      wAvg.toFixed(3)                    .padStart(7),
+      wRms.toFixed(3)                    .padStart(7),
+      wAbsMax.toFixed(3)                 .padStart(7),
+      tTrainStr                            .padStart(7),
+      ((tTestMs / 1000).toFixed(1) + 's')          .padStart(6),
+      timePerMoveMs.toFixed(1)           .padStart(6),
+    ].join('  '));
+    saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 }

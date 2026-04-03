@@ -4,8 +4,14 @@
 // test-patterns.js — correctness tests for vpatterns.js
 
 const { Game2, BLACK, WHITE } = require('./game2.js');
-const { rawState, flipState, canonicalize, extractFeatures, evaluateFeatures,
+const { rawState, canonicalize, extractFeatures: _extractFeatures,
+        prepareSpecs, evaluateFeatures,
         PERMS_2x2, PERMS_3x3 } = require('./vpatterns.js');
+const _prepCache = new Map();
+function extractFeatures(game, specs, ...rest) {
+  if (!_prepCache.has(specs)) _prepCache.set(specs, prepareSpecs(specs));
+  return _extractFeatures(game, _prepCache.get(specs), ...rest);
+}
 
 let pass = 0, fail = 0;
 
@@ -38,14 +44,6 @@ section('rawState');
   check(s === -3, `rawState: W@7 → -3, got ${s}`);
 }
 
-// ── flipState ─────────────────────────────────────────────────────────────────
-
-section('flipState');
-check(flipState(0)  ===  0,  'flipState(0)===0');
-check(flipState(1)  === -1,  'flipState(1)===-1');
-check(flipState(-1) ===  1,  'flipState(-1)===1');
-check(flipState(3)  === -3,  'flipState(3)===-3');
-check(flipState(-3) ===  3,  'flipState(-3)===3');
 
 // ── evaluateFeatures ──────────────────────────────────────────────────────────
 
