@@ -56,9 +56,9 @@ const BUDGET     = parseFloat(opts['budget']    || '1');
 // ── Features ───────────────────────────
 
 let specs = [
-  { size: 1, maxLibs: 1 },
-  { size: 2, maxLibs: 1 },
-  { size: 3, maxLibs: 1 },
+  { size: 1, maxLibs: 3 },
+  { size: 2, maxLibs: 2 },
+//  { size: 3, maxLibs: 1 },
 ];
 
 // ── Weight table ──────────────────────────────────────────────────────────────
@@ -202,11 +202,12 @@ console.log();
 
 // Print header.
 console.log(
-  `${'game'.padStart(7)}  ${'weights'.padStart(8)}` +
+  `${'game'.padStart(7)}  ${'elapsedS'.padStart(8)}  ${'weights'.padStart(8)}` +
   `  ${'win%'.padStart(6)}(${'n'.padStart(3)})  ${'winAvg%'.padStart(7)}` +
   `  ${'avglen'.padStart(6)}  ${'ceLoss'.padStart(6)}  ${'acc%'.padStart(5)}` +
   (ACCURACY_FILE ? `  ${'vacc%'.padStart(6)}` : '') +
   (evalPositionsPool ? `  ${'rmsErr'.padStart(7)}  ${'rmsAvg'.padStart(7)}` : '') +
+  `  ${'avg|w|'.padStart(7)}  ${'max|w|'.padStart(7)}` +
   `  ${'tTrain'.padStart(7)}  ${'tTest'.padStart(6)}  ${'turnMs'.padStart(6)}`
 );
 
@@ -276,15 +277,25 @@ while (true) {
       const rmsAvg    = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
       rmsStr = `  ${rmsErr.toFixed(4).padStart(7)}  ${rmsAvg.toFixed(4).padStart(7)}`;
     }
+    let wAbsSum = 0, wAbsMax = 0;
+    for (const w of weights.values()) {
+      const a = Math.abs(w);
+      wAbsSum += a;
+      if (a > wAbsMax) wAbsMax = a;
+    }
+    const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
+    const wStr = `  ${wAvg.toFixed(3).padStart(7)}  ${wAbsMax.toFixed(3).padStart(7)}`;
+
     const tTestMs   = Date.now() - tTestStart;
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
     const tTestStr  = (tTestMs / 1000).toFixed(1) + 's';
     intervalTrainMs = 0;
     const nextMs = Date.now() - t0;
+    const elapsedS = ((Date.now() - t0) / 1000).toFixed(0);
     console.log(
-      `${String(g).padStart(7)}  ${String(weights.size).padStart(8)}` +
+      `${String(g).padStart(7)}  ${elapsedS.padStart(8)}  ${String(weights.size).padStart(8)}` +
       `  ${(latestPct + '%').padStart(6)}(${String(resultsBatch.length).padStart(3)})  ${(avgPct + '%').padStart(7)}` +
-      `  ${avgLen.padStart(6)}  ${avgCE.padStart(6)}  ${(avgAcc + '%').padStart(5)}${vaccStr}${rmsStr}  ${tTrainStr.padStart(7)}  ${tTestStr.padStart(6)}  ${timePerMoveMs.toFixed(1).padStart(6)}`
+      `  ${avgLen.padStart(6)}  ${avgCE.padStart(6)}  ${(avgAcc + '%').padStart(5)}${vaccStr}${rmsStr}${wStr}  ${tTrainStr.padStart(7)}  ${tTestStr.padStart(6)}  ${timePerMoveMs.toFixed(1).padStart(6)}`
     );
     saveWeights(SAVE_PATH, { weights, specs: specs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);

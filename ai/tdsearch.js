@@ -22,7 +22,8 @@ const USE_2x3       = Util.envInt  ('TD_USE_2x3', 0);
 const RETAIN        = Util.envInt  ('TD_RETAIN', 1);
 const LR0           = Util.envFloat('TD_LR0', 0.6);
 const LR1           = Util.envFloat('TD_LR1', 0.3);
-const AB_DEPTH      = Util.envFloat('TD_AB_DEPTH', 1);
+const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 2);
+const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0); // TODO: When EVAL_DEPTH>0, truncate the playout and return outcome as the eval returned from a call to vpatterns.evaluateFeatures().
 
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
@@ -51,15 +52,21 @@ function resolveKey(key, ctx) {
 
 // Fills buf.idxs with weight indices for the current board position.
 // Patterns where all cells are empty are skipped.
-function findFeatures(game, buf, ctx, doSetNext, nextStoneIdx) {
+function findFeatures(game, buf, ctx, doSetNext, nextMove) {
   const area  = game.N * game.N;
   const cells = game.cells;
   const nbr   = game._nbr;
   const dnbr  = game._dnbr;
   buf.n = 0;
 
+  if (nextMove === PASS) doSetNext = false;
+  let captures;
   if (doSetNext) {
-    cells[nextStoneIdx] = game.current;  // TODO: Capture moves can be handled as well.  Call game.captureList(move).
+    captures = game.captureList(nextMove);
+    for (let c = 0; c < captures.length; c++) {
+      cells[captures[c]] = EMPTY;
+    }
+    cells[nextMove] = game.current;
   }
   for (let idx = 0; idx < area; idx++) {
     const v0 = cells[idx];
@@ -101,7 +108,10 @@ function findFeatures(game, buf, ctx, doSetNext, nextStoneIdx) {
     }
   }
   if (doSetNext) {
-    cells[nextStoneIdx] = EMPTY;
+    for (let c = 0; c < captures.length; c++) {
+      cells[captures[c]] = -game.current;
+    }
+    cells[nextMove] = EMPTY;
   }
 }
 
@@ -146,13 +156,7 @@ function search1ply(game, ctx, width = 0) {
     const j = c + Math.floor(Math.random() * (candidates.length - c));
     const move = candidates[j];
     candidates[j] = candidates[c];
-    if (game.isCapture(move)) {
-      const g = game.clone();
-      g.play(move);
-      findFeatures(g, searchFeats, ctx);
-    } else {
-      findFeatures(game, searchFeats, ctx, move !== PASS, move);
-    }
+    findFeatures(game, searchFeats, ctx, true, move);
     evaluate(searchFeats, ctx.weightsArr);
     if (isBlack === (searchFeats.val > bestScore)) { 
       bestScore = searchFeats.val;
@@ -181,8 +185,8 @@ function selectTrainingMove(game, step, ctx) {
   if (step < NARROW_DEPTH) 
     return search1ply(game, ctx, 2);
 
-//  return { move: game.randomLegalMove() };
-  return Playout.getMove(game);
+  return { move: game.randomLegalMove() };
+//  return Playout.getMove(game);
 }
 
 let keyToIdx;

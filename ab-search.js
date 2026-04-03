@@ -22,7 +22,7 @@ const { BLACK, PASS } = _isNode ? require('./game2.js') : window.Game2;
 // Recursive alpha-beta evaluator. Returns V ∈ [0,1] = P(BLACK wins).
 // At depth 0 returns the static evaluation; terminal nodes return 0 or 1.
 function ab(game, depth, alpha, beta, evaluate, dither) {
-  if (game.gameOver) return game.calcWinner() === BLACK ? 1 : 0;
+  if (game.gameOver) return game.estimateWinner() === BLACK ? 1 : 0;
   if (depth <= 0) return evaluate(game) + Math.random() * dither;
 
   const cap     = game.N * game.N;
@@ -31,9 +31,7 @@ function ab(game, depth, alpha, beta, evaluate, dither) {
   let   cutoff  = false;
 
   for (let i = 0; i < cap && !cutoff; i++) {
-    if (game.cells[i] !== 0) continue;
-    if (game.isTrueEye(i))   continue;
-    if (!game.isLegal(i))    continue;
+    if (!game.isLegal(i) || game.isTrueEye(i)) continue;
     const g = game.clone();
     g.play(i);
     const s = ab(g, depth - 1, alpha, beta, evaluate, dither);
@@ -42,7 +40,7 @@ function ab(game, depth, alpha, beta, evaluate, dither) {
   }
 
   // PASS: always as fallback if no legal move was found; also consider proactively late in game.
-  if (!cutoff && (v === (isBlack ? -Infinity : Infinity) || game.emptyCount < cap / 2)) {
+  if (!cutoff && (v === (isBlack ? -Infinity : Infinity) || game.consecutivePasses > 0 || game.emptyCount < cap / 2)) {
     const g = game.clone();
     g.play(PASS);
     const s = ab(g, depth - 1, alpha, beta, evaluate, dither);
@@ -64,9 +62,7 @@ function search(game, depth, evaluate, dither = 0) {
   let alpha = -Infinity, beta = Infinity;
 
   for (let i = 0; i < cap; i++) {
-    if (game.cells[i] !== 0) continue;
-    if (game.isTrueEye(i))   continue;
-    if (!game.isLegal(i))    continue;
+    if (!game.isLegal(i) || game.isTrueEye(i)) continue;
     const g = game.clone();
     g.play(i);
     const s = ab(g, depth - 1, alpha, beta, evaluate, dither);
@@ -77,7 +73,7 @@ function search(game, depth, evaluate, dither = 0) {
     }
   }
 
-  if (game.emptyCount < cap / 2) {
+  if (game.consecutivePasses > 0 || game.emptyCount < cap / 2) {
     const g = game.clone();
     g.play(PASS);
     const s = ab(g, depth - 1, alpha, beta, evaluate, dither);

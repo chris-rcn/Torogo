@@ -21,7 +21,7 @@ const PASS  = -1;
 const _komiOverrides = new Map([
   [ 5, 24.5],
   [ 6, 35.5],
-  [ 7, 45.5],
+  [ 7, 48.5],
 ]);
 const KOMI = size => _komiOverrides.get(size) ?? 3.5;
 function setKomi(size, komi) { _komiOverrides.set(size, komi); }
