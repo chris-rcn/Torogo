@@ -285,8 +285,21 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         buf[4]  = raw[(idx+N)      %cap]; buf[5]  = raw[(idx+N+1)    %cap]; buf[6]  = raw[(idx+N+2)    %cap]; buf[7]  = raw[(idx+N+3)    %cap];
         buf[8]  = raw[(idx+2*N)    %cap]; buf[9]  = raw[(idx+2*N+1)  %cap]; buf[10] = raw[(idx+2*N+2)  %cap]; buf[11] = raw[(idx+2*N+3)  %cap];
         buf[12] = raw[(idx+3*N)    %cap]; buf[13] = raw[(idx+3*N+1)  %cap]; buf[14] = raw[(idx+3*N+2)  %cap]; buf[15] = raw[(idx+3*N+3)  %cap];
-        const r = canonicalize(buf, PERMS_4x4, mix4);
-        if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+
+        // Or with rounded corners:
+//        buf[0]  = 0                     ; buf[1]  = raw[(idx+1)      %cap]; buf[2]  = raw[(idx+2)      %cap]; buf[3]  = 0                     ;
+//        buf[4]  = raw[(idx+N)      %cap]; buf[5]  = raw[(idx+N+1)    %cap]; buf[6]  = raw[(idx+N+2)    %cap]; buf[7]  = raw[(idx+N+3)    %cap];
+//        buf[8]  = raw[(idx+2*N)    %cap]; buf[9]  = raw[(idx+2*N+1)  %cap]; buf[10] = raw[(idx+2*N+2)  %cap]; buf[11] = raw[(idx+2*N+3)  %cap];
+//        buf[12] = 0                     ; buf[13] = raw[(idx+3*N+1)  %cap]; buf[14] = raw[(idx+3*N+2)  %cap]; buf[15] = 0                     ;
+
+        let stones = 0;
+        for (let i = 0; i < 16; i++) {
+          if (buf[i]) stones++;
+        }
+        if (stones > 0 && stones >= 16) {
+          const r = canonicalize(buf, PERMS_4x4, mix4);
+          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+        }
       }
     }
   }

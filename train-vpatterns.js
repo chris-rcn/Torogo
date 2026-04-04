@@ -36,7 +36,6 @@ const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
-const Playout = require('./ai/playout.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
@@ -51,23 +50,25 @@ const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
-const LR         = parseFloat(opts['lr']     || '0.3');
-const BUDGET     = parseFloat(opts['budget']    || '1');
-const LAMBDA     = parseFloat(opts['lambda']    || '0.0');
+const LR         = parseFloat(opts['lr']       || '0.3');
+const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
+const BUDGET     = parseFloat(opts['budget']   || '1');
+const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
 // ── Features ───────────────────────────
 
 let specs = [
-  { size: 1, maxLibs: 1 },
+//  { size: 1, maxLibs: 1 },
   { size: 2, maxLibs: 1 },
-//  { size: 3, maxLibs: 1 },
-//  { size: 4, maxLibs: 1 },
+  { size: 3, maxLibs: 1 },
+  { size: 4, maxLibs: 1 },
 ];
 let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
-let weights = new Map();  // pattern key (int32) → weight (float)
+let weights  = new Map();  // pattern key (int32) → weight (float)
+let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -77,16 +78,31 @@ function absoluteOutcome(game) {
   return game.calcWinner() === BLACK ? 1 : 0;
 }
 
-// Δw_k = (LR / n) · (target − V) · polarity_k
+// SGD (+ optional momentum):
+//   g_k    = (target − V) / n · polarity_k
+//   vel_k ← β · vel_k + g_k
+//   Δw_k   = lr · vel_k
+// β=0 (default) → plain SGD.  β>0 smooths gradients and accelerates in
+// consistent directions while still decaying to 0 when targets are met.
 function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
   const perFeature = (target - features.val) / n;
-  const step = lr * perFeature;
   const { keys, pols } = features;
-  for (let i = 0; i < n; i++) {
-    const w = weights.get(keys[i]) ?? 0;
-    weights.set(keys[i], w + pols[i] * step);
+  if (MOMENTUM === 0) {
+    const step = lr * perFeature;
+    for (let i = 0; i < n; i++) {
+      const k = keys[i];
+      weights.set(k, (weights.get(k) ?? 0) + pols[i] * step);
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      const k   = keys[i];
+      const g   = pols[i] * perFeature;
+      const vel = MOMENTUM * (velocity.get(k) ?? 0) + g;
+      velocity.set(k, vel);
+      weights.set(k, (weights.get(k) ?? 0) + lr * vel);
+    }
   }
 }
 
@@ -155,9 +171,7 @@ function trainGame(N) {
     let move;
     if (Math.random() < EPSILON) {
       move = game.randomLegalMove();
-      //move = Playout.getMove(game).move;
     } else {
-//      move = search(game, { weights, specs, preparedSpecs: prepSpecs }, 1);
       move = search1ply(game);
     }
     game.play(move);
@@ -244,7 +258,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
@@ -305,7 +319,7 @@ while (true) {
       for (const r of results) resultsBatch.push(r);
       const tTestMs   = Date.now() - tTestStart;
       if (tTestMs > 0.3 * intervalTrainMs) break;
-      if (resultsBatch.length >= 500) break;
+      if (resultsBatch.length >= 998) break;
     }
     for (const r of resultsBatch) evalHistory.push(r);
 
