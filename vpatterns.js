@@ -43,6 +43,18 @@ const PERMS_3x3 = [
   [8, 5, 2, 7, 4, 1, 6, 3, 0],   // TransposeAD
 ];
 
+// 4×4 grid, row-major: 0=TL, 15=BR
+const PERMS_4x4 = [
+  [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15],  // Identity
+  [12,  8,  4,  0, 13,  9,  5,  1, 14, 10,  6,  2, 15, 11,  7,  3],  // Rot90CW
+  [15, 14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0],  // Rot180
+  [ 3,  7, 11, 15,  2,  6, 10, 14,  1,  5,  9, 13,  0,  4,  8, 12],  // Rot270CW
+  [ 3,  2,  1,  0,  7,  6,  5,  4, 11, 10,  9,  8, 15, 14, 13, 12],  // FlipH
+  [12, 13, 14, 15,  8,  9, 10, 11,  4,  5,  6,  7,  0,  1,  2,  3],  // FlipV
+  [ 0,  4,  8, 12,  1,  5,  9, 13,  2,  6, 10, 14,  3,  7, 11, 15],  // TransposeMD
+  [15, 11,  7,  3, 14, 10,  6,  2, 13,  9,  5,  1, 12,  8,  4,  0],  // TransposeAD
+];
+
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
 // Returns the raw state of the cell at idx: 0 for empty, 1-maxLibs for BLACK
@@ -182,7 +194,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
 
   const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize (up to 4×4)
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
@@ -200,6 +212,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do1   = sizes.includes(1);
     const do2   = sizes.includes(2);
     const do3   = sizes.includes(3);
+    const do4   = sizes.includes(4);
 
     if (do1) {
       const k1base = 131 * maxLibs;
@@ -262,6 +275,18 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           const r = canonicalize(buf, PERMS_3x3, mix3);
           if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
         }
+      }
+    }
+
+    if (do4) {
+      const mix4 = 1637 * maxLibs;
+      for (let idx = 0; idx < cap; idx++) {
+        buf[0]  = raw[idx];               buf[1]  = raw[(idx+1)      %cap]; buf[2]  = raw[(idx+2)      %cap]; buf[3]  = raw[(idx+3)      %cap];
+        buf[4]  = raw[(idx+N)      %cap]; buf[5]  = raw[(idx+N+1)    %cap]; buf[6]  = raw[(idx+N+2)    %cap]; buf[7]  = raw[(idx+N+3)    %cap];
+        buf[8]  = raw[(idx+2*N)    %cap]; buf[9]  = raw[(idx+2*N+1)  %cap]; buf[10] = raw[(idx+2*N+2)  %cap]; buf[11] = raw[(idx+2*N+3)  %cap];
+        buf[12] = raw[(idx+3*N)    %cap]; buf[13] = raw[(idx+3*N+1)  %cap]; buf[14] = raw[(idx+3*N+2)  %cap]; buf[15] = raw[(idx+3*N+3)  %cap];
+        const r = canonicalize(buf, PERMS_4x4, mix4);
+        if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
       }
     }
   }
@@ -334,6 +359,7 @@ const Patterns = {
   saveWeights,
   PERMS_2x2,
   PERMS_3x3,
+  PERMS_4x4,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;

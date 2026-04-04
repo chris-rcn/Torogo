@@ -6,7 +6,7 @@
 const { Game2, BLACK, WHITE } = require('./game2.js');
 const { rawState, canonicalize, extractFeatures: _extractFeatures,
         prepareSpecs, evaluateFeatures,
-        PERMS_2x2, PERMS_3x3 } = require('./vpatterns.js');
+        PERMS_2x2, PERMS_3x3, PERMS_4x4 } = require('./vpatterns.js');
 const _prepCache = new Map();
 function extractFeatures(game, specs, ...rest) {
   if (!_prepCache.has(specs)) _prepCache.set(specs, prepareSpecs(specs));
@@ -204,6 +204,47 @@ section('extractFeatures – size 3');
   const keysW = new Set(fW.map(f => f.key));
   check(keysB.size === keysW.size && [...keysB].every(k => keysW.has(k)),
     'size-3: color symmetry — B and W produce same set of keys');
+}
+
+// ── extractFeatures – size 4 ──────────────────────────────────────────────────
+
+section('extractFeatures – size 4');
+{
+  const SPEC = [{ size: 4, maxLibs: 1 }];
+
+  // Empty board → no features.
+  const g = new Game2(9, false);
+  check(extractFeatures(g, SPEC).length === 0, 'size-4: empty board → no features');
+}
+{
+  const SPEC = [{ size: 4, maxLibs: 1 }];
+
+  // Single B stone → exactly 16 overlapping 4×4 windows (each cell is the anchor
+  // of a window that contains it).  A single stone at the center of a 9×9 board
+  // sits in a 4×4 orbit with 3 distinct canonical keys (4 corners {orbit:4},
+  // 8 edge non-corner {orbit:4+4}, 4 inner {orbit:4}).
+  const g = new Game2(9, false);
+  g.play(40);
+  const f = extractFeatures(g, SPEC);
+  const keys = new Set(f.map(x => x.key));
+  check(f.length === 16,   'size-4: single B stone → 16 features');
+  check(keys.size === 3,   'size-4: single B stone → 3 distinct keys (3 D4 orbits)');
+}
+{
+  const SPEC = [{ size: 4, maxLibs: 1 }];
+
+  // Color symmetry: B and W at same position give same key, opposite polarity.
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = extractFeatures(gB, SPEC);
+  const keyB = fB[0].key, polB = fB[0].polarity;
+
+  const gW = new Game2(9, false);
+  gW.play(0); gW.play(40);
+  const fW = extractFeatures(gW, SPEC).filter(f => f.polarity === -polB);
+
+  check(fW.length === 16 && fW[0].key === keyB,
+    `size-4: color symmetry — keyB=${keyB} keyW=${fW[0]?.key}`);
 }
 
 // ── maxLibs key isolation ─────────────────────────────────────────────────────
