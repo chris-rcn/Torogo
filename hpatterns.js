@@ -94,7 +94,16 @@
   // ── Canonicalisation ───────────────────────────────────────────────────────
   // Generates 16 variants (8 D4 rotations × 2 color flips), finds the minimum
   // hash as the canonical key, detects color-twin patterns, and stores all 16
-  // rawKey → entry mappings in canonMap for future O(1) lookups.
+  // rawKey → encoded mappings in canonMap for future O(1) lookups.
+  //
+  // Encoding: a single float64 integer per rawKey.
+  //   flags  = isTwin ? 0 : (polarity === 1 ? 1 : 2)   (0, 1, or 2)
+  //   encoded = canonKey * 4 + flags
+  // Decoding:
+  //   flags     = ((encoded % 4) + 4) % 4               (handles negative encoded)
+  //   canonKey  = (encoded - flags) / 4
+  //   isTwin    = flags === 0
+  //   polarity  = flags === 1 ? 1 : -1
 
   function computeAndStoreCanon(winCells, M, canonMap) {
     const perms = getD4Perms(M);
@@ -108,12 +117,12 @@
 
       // Non-inverted rotation
       for (let i = 0; i < n2; i++) rotated[i] =  winCells[perm[i]];
-      vHashes[pi * 2]     = hierHash(rotated, M, 0, 0, M);
+      vHashes[pi * 2]     = hierHash(rotated, M);
       vParities[pi * 2]   = 1;
 
       // Color-inverted rotation
       for (let i = 0; i < n2; i++) rotated[i] = -winCells[perm[i]];
-      vHashes[pi * 2 + 1]   = hierHash(rotated, M, 0, 0, M);
+      vHashes[pi * 2 + 1]   = hierHash(rotated, M);
       vParities[pi * 2 + 1] = -1;
     }
 
@@ -141,7 +150,9 @@
     // Guarantees polarity[canonVariant] === +1.
     for (let i = 0; i < 16; i++) {
       if (canonMap.has(vHashes[i])) continue;  // earlier entry (smaller M) wins
-      canonMap.set(vHashes[i], { canonKey, polarity: vParities[i] * canonParity, isTwin });
+      const pol   = vParities[i] * canonParity;
+      const flags = isTwin ? 0 : (pol === 1 ? 1 : 2);
+      canonMap.set(vHashes[i], canonKey * 4 + flags);
     }
 
     return canonMap.get(vHashes[0]);
@@ -241,10 +252,11 @@
         if (stones === 0 || stones > limit) continue;
         anyEligible = true;
 
-        // Canon lookup.
-        let entry = canonMap.get(rawKey);
-        if (entry !== undefined) {
-          if (!entry.isTwin) { outKeys[count] = entry.canonKey; outPols[count] = entry.polarity; count++; }
+        // Canon lookup — decode: flags = ((enc%4)+4)%4; canonKey = (enc-flags)/4.
+        let enc = canonMap.get(rawKey);
+        if (enc !== undefined) {
+          const flags = ((enc % 4) + 4) % 4;
+          if (flags !== 0) { outKeys[count] = (enc - flags) / 4; outPols[count] = flags === 1 ? 1 : -1; count++; }
           continue;
         }
 
@@ -252,11 +264,12 @@
         for (let dr = 0; dr < M; dr++)
           for (let dc = 0; dc < M; dc++)
             winCells[dr * M + dc] = cells[(idx + dr * N + dc) % cap];
-        entry = computeAndStoreCanon(winCells, M, canonMap);
-        if (entry.isTwin) continue;
+        enc = computeAndStoreCanon(winCells, M, canonMap);
+        const flags = ((enc % 4) + 4) % 4;
+        if (flags === 0) continue;
 
-        outKeys[count] = entry.canonKey;
-        outPols[count] = entry.polarity;
+        outKeys[count] = (enc - flags) / 4;
+        outPols[count] = flags === 1 ? 1 : -1;
         count++;
       }
 

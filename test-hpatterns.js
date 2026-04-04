@@ -262,6 +262,95 @@ section('evaluate');
   check(f2.val > 0.5, `evaluate with positive weights → >0.5, got ${f2.val}`);
 }
 
+// ── canonMap encoding ─────────────────────────────────────────────────────────
+// encoded = canonKey * 4 + flags  where flags: 0=twin, 1=pol+1, 2=pol-1
+// flags   = ((encoded % 4) + 4) % 4
+// canonKey = (encoded - flags) / 4
+
+section('canonMap encoding');
+{
+  function encode(canonKey, polarity, isTwin) {
+    const flags = isTwin ? 0 : (polarity === 1 ? 1 : 2);
+    return canonKey * 4 + flags;
+  }
+  function decodeFlags(enc) { return ((enc % 4) + 4) % 4; }
+  function decodeKey(enc)   { const f = decodeFlags(enc); return (enc - f) / 4; }
+
+  const cases = [
+    // [canonKey, polarity, isTwin]
+    [0,           1,  false],
+    [0,          -1,  false],
+    [0,           1,  true ],
+    [1,           1,  false],
+    [1,          -1,  false],
+    [-1,          1,  false],
+    [-1,         -1,  false],
+    [-1,          1,  true ],
+    [2147483647,  1,  false],  // max int32
+    [2147483647, -1,  false],
+    [-2147483648, 1,  false],  // min int32
+    [-2147483648,-1,  false],
+  ];
+
+  for (const [key, pol, twin] of cases) {
+    const enc   = encode(key, pol, twin);
+    const flags = decodeFlags(enc);
+    const decKey = decodeKey(enc);
+    check(decKey === key,
+      `round-trip canonKey: key=${key} pol=${pol} twin=${twin} → enc=${enc} → key=${decKey}`);
+    check((flags === 0) === twin,
+      `twin flag: key=${key} pol=${pol} twin=${twin} → flags=${flags}`);
+    if (!twin) {
+      const decPol = flags === 1 ? 1 : -1;
+      check(decPol === pol,
+        `polarity: key=${key} pol=${pol} → flags=${flags} → decPol=${decPol}`);
+    }
+  }
+}
+{
+  // Verify via API: B and W single-stone patterns have opposite polarities and same canonKey.
+  const { WHITE } = require('./game2.js');
+  const m = createModel({2:1}, 2);
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = featureArr(extractFeatures(gB, m));
+
+  const gW = new Game2(9, false);
+  gW.cells[40] = WHITE;
+  const fW = featureArr(extractFeatures(gW, m));
+
+  check(fB.length > 0, 'B stone produces features');
+  check(fB.length === fW.length, 'B and W produce same feature count');
+  const bKey = fB[0].key, wKey = fW[0].key;
+  const bPol = fB[0].pol, wPol = fW[0].pol;
+  check(bKey === wKey,   `same canonKey after encoding: B=${bKey} W=${wKey}`);
+  check(bPol === -wPol,  `opposite polarities after encoding: B=${bPol} W=${wPol}`);
+}
+{
+  // Encoding round-trip: keys from a fresh extraction must match a saved copy,
+  // even when canonKeys are negative. Strategy: copy keys/pols before calling
+  // evaluate (which overwrites the shared output buffer), then compare.
+  const m = createModel({2:4, 3:4}, 3);
+  const g = new Game2(9, false);
+  g.play(20); g.play(30); g.play(40); g.play(50);
+  const f = extractFeatures(g, m);
+  // Copy feature data before evaluate() overwrites the model's output buffers.
+  const savedKeys = f.keys.slice(0, f.count);
+  const savedPols = f.pols.slice(0, f.count);
+  check(f.count > 0, 'board with 4 stones has features');
+  check(savedKeys.some(k => k < 0), 'some canonKeys are negative (exercises negative decoding)');
+  // Assign distinct weights per unique key.
+  for (let i = 0; i < f.count; i++) m.weights.set(savedKeys[i], (i + 1) * 0.1);
+  // Manually compute expected value from saved (pre-overwrite) features.
+  let z = 0;
+  for (let i = 0; i < f.count; i++) z += savedPols[i] * m.weights.get(savedKeys[i]);
+  const expected = 1 / (1 + Math.exp(-z));
+  // evaluate re-extracts using the populated canonMap — keys must match.
+  const result = evaluate(g, m);
+  check(Math.abs(result.val - expected) < 1e-10,
+    `encoding round-trip: result=${result.val.toFixed(6)} expected=${expected.toFixed(6)}`);
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass} passed, ${fail} failed`);
