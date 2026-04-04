@@ -17,11 +17,81 @@ Game2 make it cheap to return chain lib/stone counts?
 Chain size attribute in pattern?
 
 TD search
-  Retain weights between turns
-  LR schedule
+  Sparse 4x4
+  Single-color patterns?
 
 Unify move notation in files.  Use A1 or AA ?
 
 
 t 4-2-1-1; PLAYOUTS=4000 TD_SIMS=3000 node selfplay.js --p2 tdsearch --size 9
+
+P1
+ x                                   
+
+P4                                     
+ xx                                 
+ xx                                  
+
+P9                                     
+ xxx                                 
+ xxx                                 
+ xxx                                 
+
+P12                                     
+  xx                                 
+ xxxx                                
+ xxxx                                
+  xx                                 
+
+P13                                     
+   x                                 
+  xxx                                
+ xxxxx                               
+  xxx                                
+   x                                 
+                                     
+P16                                     
+ xxxx                                
+ xxxx                                
+ xxxx                                
+ xxxx                                
+
+P21
+  xxx                                
+ xxxxx                               
+ xxxxx                               
+ xxxxx                               
+  xxx                                
+
+P25                                     
+ xxxxx                               
+ xxxxx                               
+ xxxxx                               
+ xxxxx                               
+ xxxxx                               
+
+P9 cardinality by stone count
+1: 3
+2: 12
+3: 54
+4: 144
+5: 286
+6: 372
+7: 328
+8: 168
+9: 50
+
+P12 cardinality by stone count (approximate)
+ 1:    2
+ 2:   17
+ 3:  115
+ 4:  500
+ 5: 1600
+ 6: 3710
+ 7: 6380
+ 8: 7950
+ 9: 7070
+10: 4260
+11: 1550
+12:  268
 
