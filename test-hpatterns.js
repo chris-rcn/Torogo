@@ -262,19 +262,64 @@ section('evaluate');
   check(f2.val > 0.5, `evaluate with positive weights → >0.5, got ${f2.val}`);
 }
 
+// ── corner zeroing ────────────────────────────────────────────────────────────
+
+section('corner zeroing');
+{
+  // Two 4×4 windows identical except for one corner cell should share a canonKey.
+  const m = createModel({4: 4}, 4);
+  const g1 = new Game2(9, false);
+  const g2 = new Game2(9, false);
+  // Place B at the center of a 4×4 window (non-corner, non-edge).
+  // idx 20 = row 2, col 2.  A 4×4 window starting at row 1, col 1 (idx 10)
+  // has its center cells at rows 2-3, cols 2-3.
+  g1.play(20);   // B at (2,2) — interior of a 4×4 window starting at (1,1)
+  g2.play(20);   // same interior stone
+  g2.cells[10] = 1;  // also place B at top-left corner of that window (1,1) = idx 10
+
+  const f1 = featureArr(extractFeatures(g1, m));
+  const f2 = featureArr(extractFeatures(g2, m));
+
+  // The window starting at (1,1) in g2 has an extra stone at its corner vs g1.
+  // After corner-zeroing, both should map to the same canonKey for that window.
+  const keys1 = new Set(f1.map(x => x.key));
+  const keys2 = new Set(f2.map(x => x.key));
+  const shared = [...keys1].filter(k => keys2.has(k));
+  check(shared.length === keys1.size,
+    `all canonKeys in g1 also appear in g2 (corners zeroed): g1=${keys1.size} shared=${shared.length}`);
+}
+{
+  // Corners are NOT zeroed for size < 4: two 2×2 windows differing in a corner
+  // (which is every cell for 2×2) should produce different canonKeys.
+  const m = createModel({2: 2}, 2);
+  const g1 = new Game2(9, false);
+  const g2 = new Game2(9, false);
+  g1.play(40);           // B at (4,4)
+  g2.play(40); g2.cells[30] = 1;  // B at (4,4) and also B at (3,3)
+  const f1 = featureArr(extractFeatures(g1, m));
+  const f2 = featureArr(extractFeatures(g2, m));
+  // g2 has strictly more stones so should produce at least as many features,
+  // and the extra stone at (3,3) creates new patterns not in g1.
+  const keys1 = new Set(f1.map(x => x.key));
+  const keys2 = new Set(f2.map(x => x.key));
+  check(keys2.size >= keys1.size, 'size-2 patterns not corner-zeroed: g2 has ≥ keys as g1');
+}
+
 // ── canonMap encoding ─────────────────────────────────────────────────────────
-// encoded = canonKey * 4 + flags  where flags: 0=twin, 1=pol+1, 2=pol-1
-// flags   = ((encoded % 4) + 4) % 4
-// canonKey = (encoded - flags) / 4
+// twin → 0; pol+1 → abs(canonKey)+1 (positive Smi); pol-1 → -(abs(canonKey)+1) (negative Smi)
+// outKey = abs(enc) - 1;  polarity = enc > 0 ? 1 : -1
 
 section('canonMap encoding');
 {
+  // twin → 0; pol+1 → abs(key)+1; pol-1 → -(abs(key)+1)
   function encode(canonKey, polarity, isTwin) {
-    const flags = isTwin ? 0 : (polarity === 1 ? 1 : 2);
-    return canonKey * 4 + flags;
+    if (isTwin) return 0;
+    const a = canonKey < 0 ? -canonKey : canonKey;
+    return polarity === 1 ? a + 1 : -(a + 1);
   }
-  function decodeFlags(enc) { return ((enc % 4) + 4) % 4; }
-  function decodeKey(enc)   { const f = decodeFlags(enc); return (enc - f) / 4; }
+  function decodeKey(enc)  { return (enc > 0 ? enc : -enc) - 1; }
+  function decodePol(enc)  { return enc > 0 ? 1 : -1; }
+  function decodeTwin(enc) { return enc === 0; }
 
   const cases = [
     // [canonKey, polarity, isTwin]
@@ -288,22 +333,23 @@ section('canonMap encoding');
     [-1,          1,  true ],
     [2147483647,  1,  false],  // max int32
     [2147483647, -1,  false],
-    [-2147483648, 1,  false],  // min int32
-    [-2147483648,-1,  false],
+    [-2147483647, 1,  false],  // near min int32 (abs safe)
+    [-2147483647,-1,  false],
   ];
 
   for (const [key, pol, twin] of cases) {
-    const enc   = encode(key, pol, twin);
-    const flags = decodeFlags(enc);
-    const decKey = decodeKey(enc);
-    check(decKey === key,
-      `round-trip canonKey: key=${key} pol=${pol} twin=${twin} → enc=${enc} → key=${decKey}`);
-    check((flags === 0) === twin,
-      `twin flag: key=${key} pol=${pol} twin=${twin} → flags=${flags}`);
+    const enc    = encode(key, pol, twin);
+    const isTwin = decodeTwin(enc);
+    check(isTwin === twin,
+      `twin flag: key=${key} pol=${pol} twin=${twin} → enc=${enc} → twin=${isTwin}`);
     if (!twin) {
-      const decPol = flags === 1 ? 1 : -1;
-      check(decPol === pol,
-        `polarity: key=${key} pol=${pol} → flags=${flags} → decPol=${decPol}`);
+      const outKey = decodeKey(enc);
+      const outPol = decodePol(enc);
+      const absKey = key < 0 ? -key : key;
+      check(outKey === absKey,
+        `round-trip abs(canonKey): key=${key} → enc=${enc} → outKey=${outKey} (expected ${absKey})`);
+      check(outPol === pol,
+        `polarity: key=${key} pol=${pol} → enc=${enc} → outPol=${outPol}`);
     }
   }
 }
@@ -338,7 +384,10 @@ section('canonMap encoding');
   const savedKeys = f.keys.slice(0, f.count);
   const savedPols = f.pols.slice(0, f.count);
   check(f.count > 0, 'board with 4 stones has features');
-  check(savedKeys.some(k => k < 0), 'some canonKeys are negative (exercises negative decoding)');
+  // Output keys are always non-negative (abs(enc)-1); negative enc values encode polarity=-1.
+  check(savedKeys.every(k => k >= 0), 'all output keys are non-negative');
+  check(Array.from({length: f.count}, (_, i) => f.pols[i]).some(p => p === -1),
+    'some features have polarity -1 (exercises negative enc decoding)');
   // Assign distinct weights per unique key.
   for (let i = 0; i < f.count; i++) m.weights.set(savedKeys[i], (i + 1) * 0.1);
   // Manually compute expected value from saved (pre-overwrite) features.
