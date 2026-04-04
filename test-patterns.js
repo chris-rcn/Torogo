@@ -10,7 +10,11 @@ const { rawState, canonicalize, extractFeatures: _extractFeatures,
 const _prepCache = new Map();
 function extractFeatures(game, specs, ...rest) {
   if (!_prepCache.has(specs)) _prepCache.set(specs, prepareSpecs(specs));
-  return _extractFeatures(game, _prepCache.get(specs), ...rest);
+  const f = _extractFeatures(game, _prepCache.get(specs), ...rest);
+  // Convert typed arrays back to array-of-objects for test assertions.
+  const arr = [];
+  for (let i = 0; i < f.count; i++) arr.push({ key: f.keys[i], polarity: f.pols[i] });
+  return arr;
 }
 
 let pass = 0, fail = 0;
@@ -50,12 +54,12 @@ section('rawState');
 section('evaluateFeatures');
 {
   // No features → z=0 → σ(0) = 0.5.
-  const v = evaluateFeatures([], new Map());
+  const v = evaluateFeatures({ keys: new Int32Array(0), pols: new Int8Array(0), count: 0 }, new Map());
   check(v === 0.5, `evaluateFeatures: empty → 0.5, got ${v}`);
 }
 {
   // One feature with polarity=+1 and weight=10 → σ(10) > 0.99.
-  const f = [{ key: 1, polarity: 1 }];
+  const f = { keys: new Int32Array([1]), pols: new Int8Array([1]), count: 1 };
   const w = new Map([[1, 10]]);
   const v = evaluateFeatures(f, w);
   check(v > 0.99, `evaluateFeatures: strong positive weight → >0.99, got ${v}`);

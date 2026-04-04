@@ -72,18 +72,20 @@ let weights = new Map();  // pattern key (int32) → weight (float)
 
 // Absolute terminal outcome: 1=BLACK wins, 0=WHITE wins.
 function absoluteOutcome(game) {
-  return game.estimateWinner() === BLACK ? 1 : 0;
+//  return game.estimateWinner() === BLACK ? 1 : 0;
+  return game.calcWinner() === BLACK ? 1 : 0;
 }
 
 // Δw_k = (LR / n) · (target − V) · polarity_k
 function tdUpdate(features, target, lr) {
-  const n = features.length;
+  const n = features.count;
   if (n === 0) return;
   const perFeature = (target - features.val) / n;
   const step = lr * perFeature;
-  for (const f of features) {
-    const w = weights.get(f.key) ?? 0;
-    weights.set(f.key, w + f.polarity * step);
+  const { keys, pols } = features;
+  for (let i = 0; i < n; i++) {
+    const w = weights.get(keys[i]) ?? 0;
+    weights.set(keys[i], w + pols[i] * step);
   }
 }
 
@@ -202,13 +204,13 @@ function evalVsReference(N, refGetMove, nGames, budget) {
         const mv = refGetMove(game, budget);
         idx = mv.move !== undefined ? mv.move : PASS;
       }
-      game.play(idx);
+      if (!game.play(idx)) {
+        console.log("Illegal move!");
+      }
     }
 
-    const winner = game.estimateWinner();
-    if (winner === null) {
-      results.push(0.5);
-    } else if ((winner === BLACK) === policyIsBlack) {
+    const winner = game.calcWinner();
+    if ((winner === BLACK) === policyIsBlack) {
       results.push(1);
     } else {
       results.push(0);

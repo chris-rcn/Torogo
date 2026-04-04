@@ -146,7 +146,10 @@ function prepareSpecs(specs) {
     }
   }
 
-  return { byMaxLibs, sortedMaxLibs, lut2, lut3 };
+  let totalSizes = 0;
+  for (const sizes of byMaxLibs.values()) totalSizes += sizes.length;
+
+  return { byMaxLibs, sortedMaxLibs, lut2, lut3, totalSizes };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -160,7 +163,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const cells = game.cells;
   const cap   = game.N * game.N;
   const N     = game.N;
-  const out   = [];
+
+  // Pre-allocate flat typed output arrays; max one feature per cell per size entry.
+  const maxF   = cap * prepSpecs.totalSizes;
+  const outKeys = new Int32Array(maxF);
+  const outPols = new Int8Array(maxF);
+  let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
   let captures;
@@ -199,7 +207,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         const s = raw[idx];
         if (s !== 0) {
           const libs = s > 0 ? s : -s;
-          out.push({ key: libs + k1base, polarity: s > 0 ? 1 : -1 });
+          outKeys[count] = libs + k1base;
+          outPols[count] = s > 0 ? 1 : -1;
+          count++;
         }
       }
     }
@@ -211,7 +221,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         for (let idx = 0; idx < cap; idx++) {
           const li = (raw[idx]+ml) + base*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
           const pol = pols[li];
-          if (pol !== 0) out.push({ key: keys[li], polarity: pol });
+          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
         }
       } else {
         const mix2 = 131 * maxLibs;
@@ -219,7 +229,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           buf[0] = raw[idx]; buf[1] = raw[(idx+1)%cap];
           buf[2] = raw[(idx+N)%cap]; buf[3] = raw[(idx+N+1)%cap];
           const r = canonicalize(buf, PERMS_2x2, mix2);
-          if (r !== null) out.push(r);
+          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
         }
       }
     }
@@ -240,7 +250,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
             b7  *(raw[(idx+2*N+1)%cap]+ml) +
             b8  *(raw[(idx+2*N+2)%cap]+ml);
           const pol = pols[li];
-          if (pol !== 0) out.push({ key: keys[li], polarity: pol });
+          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
         }
       } else {
         const mix3 = 537 * maxLibs;
@@ -250,7 +260,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
           buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
           const r = canonicalize(buf, PERMS_3x3, mix3);
-          if (r !== null) out.push(r);
+          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
         }
       }
     }
@@ -261,18 +271,20 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     }
     cells[nextMove] = EMPTY;
   }
-  return out;
+  return { keys: outKeys, pols: outPols, count, val: 0.5 };
 }
 
 // ── Value function (pure) ─────────────────────────────────────────────────────
 
 // V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
+// features: { keys: Int32Array, pols: Int8Array, count, val }  (from extractFeatures)
 // weights: Map<key, float>  (missing keys treated as 0)
 function evaluateFeatures(features, weights) {
   let z = 0;
-  for (const f of features) {
-    const w = weights.get(f.key) ?? 0;
-    z += f.polarity * w;
+  const { keys, pols, count } = features;
+  for (let i = 0; i < count; i++) {
+    const w = weights.get(keys[i]) ?? 0;
+    z += pols[i] * w;
   }
   features.val = 1 / (1 + Math.exp(-z));
   return features.val;

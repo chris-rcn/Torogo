@@ -740,7 +740,7 @@ class Game2 {
   // Accurate winner using flood-fill territory + komi.  Returns BLACK, WHITE, or null.
   calcWinner() {
     const sc = this.calcScore();
-    return sc.black > sc.white ? BLACK : sc.white > sc.black ? WHITE : null;
+    return sc.black > sc.white ? BLACK : WHITE;
   }
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
@@ -824,7 +824,7 @@ function parseBoard(boardStr) {
   return { size, stones };
 }
 
-const _exports = { Game2, PASS, BLACK, WHITE, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard };
+const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Game2 = _exports;
 

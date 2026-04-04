@@ -26,7 +26,7 @@ const MIN_LIBS = Util.envInt  ('MIN_LIBS',     1);
 const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
 const DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
 const DITHER   = Util.envFloat('DITHER',       0.002);
-const PAT_DATA = Util.envStr  ('PAT_DATA',     'out/vpatterns-S1L3_S2L3_S3L1.js');
+const PAT_DATA = Util.envStr  ('PAT_DATA',     'out/ref13.js');
 
 // ── Agent state ───────────────────────────────────────────────────────────────
 
