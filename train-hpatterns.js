@@ -40,8 +40,8 @@ for (const part of SPEC_RAW.split(',')) {
   const [k, v] = part.split(':');
   SPEC[parseInt(k, 10)] = parseInt(v, 10);
 }
-const MAX_SIZE   = Math.max(...Object.keys(SPEC).map(Number));
-const MAX_STONES = SPEC;
+let MAX_SIZE   = Math.max(...Object.keys(SPEC).map(Number));
+let MAX_STONES = SPEC;
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -111,29 +111,55 @@ function tdUpdate(features, target, lr) {
 
 // ── 1-ply search ──────────────────────────────────────────────────────────────
 
+// Shallow depth for two-pass search: fast first pass to score all moves cheaply.
+const SHALLOW_DEPTH = 3;
+// Temperature for softmax-based full-eval selection (value space, 0–1).
+// Moves with player-score within ~TEMP of the best are evaluated with high probability;
+// moves further away are exponentially less likely to be fully evaluated.
+// The best shallow move always has p=1 and is always fully evaluated.
+const SHALLOW_TEMP  = 0.05;
+
 function search1ply(game, maxSearch) {
   const area    = game.N * game.N;
   const isBlack = game.current === BLACK;
-  let bestMove  = PASS;
-  let bestVal   = isBlack ? -Infinity : Infinity;
 
+  // Collect legal non-eye moves; include PASS when relevant.
+  // PASS = -1 < 0, so extractFeatures treats it as non-speculative (correct: PASS doesn't change board).
+  const coords = [];
   for (let coord = 0; coord < area; coord++) {
     if (!game.isLegal(coord) || game.isTrueEye(coord)) continue;
-    const f = extractFeatures(game, model, maxSearch, coord);
-    f.val = evaluateFeatures(f, model.weights);
-    if (isBlack ? f.val > bestVal : f.val < bestVal) {
-      bestVal  = f.val;
-      bestMove = coord;
-    }
+    coords.push(coord);
+  }
+  if (game.consecutivePasses > 0 || game.emptyCount < area / 2) coords.push(PASS);
+  if (coords.length === 0) return PASS;
+
+  // If already at or below shallow depth, single pass suffices.
+  const doTwoPass = maxSearch === undefined || maxSearch > SHALLOW_DEPTH;
+  const depth1    = doTwoPass ? SHALLOW_DEPTH : maxSearch;
+
+  // ── Pass 1: shallow evaluation ─────────────────────────────────────────────
+  const vals1  = new Float64Array(coords.length);
+  let   best1  = isBlack ? -Infinity : Infinity;
+  let   bestMove = coords[0];
+
+  for (let i = 0; i < coords.length; i++) {
+    const val = evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), model.weights);
+    vals1[i]  = val;
+    if (isBlack ? val > best1 : val < best1) { best1 = val; bestMove = coords[i]; }
   }
 
-  // Consider passing late in the game or after opponent passed.
-  if (game.consecutivePasses > 0 || game.emptyCount < area / 2) {
-    const fPass = extractFeatures(game, model, maxSearch);
-    fPass.val = evaluateFeatures(fPass, model.weights);
-    if (isBlack ? fPass.val >= bestVal : fPass.val <= bestVal) {
-      bestMove = PASS;
-    }
+  if (!doTwoPass) return bestMove;
+
+  // ── Pass 2: full evaluation, softmax-selected ──────────────────────────────
+  // p(full eval) = exp((player_score − best_player_score) / SHALLOW_TEMP)
+  // Best shallow move has diff=0 → p=1, so it is always fully evaluated.
+  let bestVal = isBlack ? -Infinity : Infinity;
+
+  for (let i = 0; i < coords.length; i++) {
+    const diff = isBlack ? vals1[i] - best1 : best1 - vals1[i];
+    if (Math.random() >= Math.exp(diff / SHALLOW_TEMP)) continue;
+    const val = evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), model.weights);
+    if (isBlack ? val > bestVal : val < bestVal) { bestVal = val; bestMove = coords[i]; }
   }
 
   return bestMove;
@@ -215,7 +241,12 @@ const { getMove: evalGetMove } = require(path.join(__dirname, 'ai', EVAL_AGENT +
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     const raw = require(path.resolve(LOAD_PATH));
-    model = createModelWithWeights(raw.maxStones, raw.maxSize, new Map(raw.weights));
+    // Union of file spec and CLI spec; for sizes present in both, take the larger stone limit.
+    MAX_STONES = Object.assign({}, raw.maxStones);
+    for (const [k, v] of Object.entries(SPEC))
+      MAX_STONES[k] = Math.max(MAX_STONES[k] ?? 0, v);
+    MAX_SIZE = Math.max(...Object.keys(MAX_STONES).map(Number));
+    model = createModelWithWeights(MAX_STONES, MAX_SIZE, new Map(raw.weights));
     console.log(`Loaded ${model.weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);

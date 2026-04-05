@@ -11,6 +11,7 @@ function runTests(
   { makeBuf, resolveKey, findFeatures, evaluate, tdUpdate, getMove },
   { Game2, BLACK, WHITE, PASS }
 ) {
+  const { makeIntMap } = require('../int-map.js');
   let failures = 0;
 
   function check(cond, msg) {
@@ -26,7 +27,7 @@ function runTests(
 
   // ── resolveKey ─────────────────────────────────────────────────────────────
   {
-    const ctx = { keyToIdx: new Map(), weightsArr: [] };
+    const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
 
     const i0 = resolveKey(42, ctx);
     check(i0 === 0,                    'resolveKey: first key → index 0');
@@ -116,7 +117,7 @@ function runTests(
     // Empty board → no features
     {
       const g   = new Game2(N, false);
-      const ctx = { keyToIdx: new Map(), weightsArr: [] };
+      const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
       const buf = makeBuf(area);
       findFeatures(g, buf, ctx);
       check(buf.n === 0, 'findFeatures: empty board → 0 features');
@@ -126,7 +127,7 @@ function runTests(
     {
       const g   = new Game2(N, false);
       g.play(7); // BLACK at cell 7
-      const ctx = { keyToIdx: new Map(), weightsArr: [] };
+      const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
       const buf = makeBuf(area);
       findFeatures(g, buf, ctx);
       check(buf.n === 5, 'findFeatures: one stone → 5 features');
@@ -142,7 +143,7 @@ function runTests(
       const g   = new Game2(N, false);
       g.play(3);  // BLACK at 3
       g.play(10); // WHITE at 10
-      const ctx = { keyToIdx: new Map(), weightsArr: [] };
+      const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
       const buf = makeBuf(area);
       findFeatures(g, buf, ctx);
       check(buf.n === 10,                      'findFeatures: two stones → 10 features');
@@ -160,19 +161,19 @@ function runTests(
     const gPost = new Game2(N, false);
     gPost.play(7);                     // BLACK at 7; cells[7] = BLACK
 
-    const ctxA = { keyToIdx: new Map(), weightsArr: [] };
-    const ctxB = { keyToIdx: new Map(), weightsArr: [] };
+    const ctxA = { keyToIdx: makeIntMap(), weightsArr: [] };
+    const ctxB = { keyToIdx: makeIntMap(), weightsArr: [] };
     const bufA = makeBuf(area);
     const bufB = makeBuf(area);
 
-    findFeatures(gPre, bufA, ctxA, true, 7);
+    findFeatures(gPre, bufA, ctxA, 7);
     findFeatures(gPost, bufB, ctxB);
 
     check(bufA.n === bufB.n,
           'findFeaturesWithMove: same feature count as findFeatures after play');
 
-    const keysA = [...ctxA.keyToIdx.keys()].sort((a, b) => a - b);
-    const keysB = [...ctxB.keyToIdx.keys()].sort((a, b) => a - b);
+    const keysA = []; ctxA.keyToIdx.forEach(k => keysA.push(k)); keysA.sort((a, b) => a - b);
+    const keysB = []; ctxB.keyToIdx.forEach(k => keysB.push(k)); keysB.sort((a, b) => a - b);
     check(
       keysA.length === keysB.length && keysA.every((k, i) => k === keysB[i]),
       'findFeaturesWithMove: same feature keys as findFeatures after play'
@@ -192,8 +193,8 @@ function runTests(
     check(typeof result.sims === 'number' && result.sims >= 0,
                                                         'getMove: sims is non-negative');
     check(typeof result.info === 'string',              'getMove: info is a string');
-    check(result.ctx && result.ctx.keyToIdx instanceof Map,
-                                                        'getMove: ctx.keyToIdx is a Map');
+    check(result.ctx && typeof result.ctx.keyToIdx.get === 'function',
+                                                        'getMove: ctx.keyToIdx has get()');
     check(Array.isArray(result.ctx.weightsArr),         'getMove: ctx.weightsArr is Array');
 
     if (result.type === 'place') {

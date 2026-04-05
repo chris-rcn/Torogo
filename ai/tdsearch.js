@@ -12,6 +12,7 @@ const Util = _isNode ? require('../util.js') : window.Util;
 const Playout = require('./playout.js');
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
+const { makeIntMap } = _isNode ? require('../int-map.js') : window.IntMap;
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
@@ -24,10 +25,10 @@ const LR0           = Util.envFloat('TD_LR0', 0.6);
 const LR1           = Util.envFloat('TD_LR1', 0.3);
 const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 2);
 const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
-const PAT_DATA      = Util.envStr  ('TD_PAT_DATA', '');
+const EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
 
 let evalModel = null;
-if (_isNode && PAT_DATA) evalModel = loadWeights(PAT_DATA);
+if (_isNode && EVAL_DATA) evalModel = loadWeights(EVAL_DATA);
 
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
@@ -40,13 +41,13 @@ function makeBuf(area) {
   };
 }
 
-// keyToIdx: Map<featureKey, weightIndex>
+// keyToIdx: IntMap<featureKey, weightIndex>
 // weightsArr: number[] — weight values indexed by weightIndex
 //
 // resolveKey returns the weight index for a feature key, inserting weight 0 if new.
 function resolveKey(key, ctx) {
   let wi = ctx.keyToIdx.get(key);
-  if (wi === undefined) {
+  if (wi < 0) {
     wi = ctx.weightsArr.length;
     ctx.keyToIdx.set(key, wi);
     ctx.weightsArr.push(0);
@@ -56,16 +57,15 @@ function resolveKey(key, ctx) {
 
 // Fills buf.idxs with weight indices for the current board position.
 // Patterns where all cells are empty are skipped.
-function findFeatures(game, buf, ctx, doSetNext, nextMove) {
+function findFeatures(game, buf, ctx, nextMove) {
   const area  = game.N * game.N;
   const cells = game.cells;
   const nbr   = game._nbr;
   const dnbr  = game._dnbr;
   buf.n = 0;
 
-  if (nextMove === PASS) doSetNext = false;
   let captures;
-  if (doSetNext) {
+  if (nextMove >= 0) {
     captures = game.captureList(nextMove);
     for (let c = 0; c < captures.length; c++) {
       cells[captures[c]] = EMPTY;
@@ -111,7 +111,7 @@ function findFeatures(game, buf, ctx, doSetNext, nextMove) {
       }
     }
   }
-  if (doSetNext) {
+  if (nextMove >= 0) {
     for (let c = 0; c < captures.length; c++) {
       cells[captures[c]] = -game.current;
     }
@@ -160,7 +160,7 @@ function search1ply(game, ctx, width = 0) {
     const j = c + Math.floor(Math.random() * (candidates.length - c));
     const move = candidates[j];
     candidates[j] = candidates[c];
-    findFeatures(game, searchFeats, ctx, true, move);
+    findFeatures(game, searchFeats, ctx, move);
     evaluate(searchFeats, ctx.weightsArr);
     if (isBlack === (searchFeats.val > bestScore)) { 
       bestScore = searchFeats.val;
@@ -194,11 +194,11 @@ function selectTrainingMove(game, step, ctx) {
 }
 
 // These two store the state of the model at the start of the game.
-let keyToIdx_start = new Map();
+let keyToIdx_start = makeIntMap();
 let weightsArr_start = [];
 
 // These two store the current state of the model.
-let keyToIdx = new Map();
+let keyToIdx = makeIntMap();
 let weightsArr = [];
 
 let lastMoveCount = 0;
@@ -215,7 +215,7 @@ function getMove(game, budgetMs = 1000) {
     keyToIdx   = keyToIdx_start;
     weightsArr = weightsArr_start;
   } else if (moveCountUnexpected) {
-    keyToIdx = new Map();
+    keyToIdx = makeIntMap();
     weightsArr = [];
   }
   lastMoveCount = game.moveCount;
@@ -291,7 +291,7 @@ function getMove(game, budgetMs = 1000) {
   }
 
   if (game.moveCount === 1) {
-    keyToIdx_start = new Map(keyToIdx);
+    keyToIdx_start = keyToIdx.clone();
     weightsArr_start = weightsArr.slice();
   }
 
