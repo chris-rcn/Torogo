@@ -144,4 +144,6 @@ XXXXXXX
                                 
                                 
                                 
+Now proceed with the optimization to reduce the cost of findFeatures within a search context by running an initial findFeatures and then only updating
+
 

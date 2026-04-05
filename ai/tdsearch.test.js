@@ -8,7 +8,7 @@
 // features are active.
 
 function runTests(
-  { makeBuf, resolveKey, findFeatures, evaluate, tdUpdate, getMove },
+  { makeBuf, resolveKey, findFeatures, evaluate, evaluateDelta, tdUpdate, getMove },
   { Game2, BLACK, WHITE, PASS }
 ) {
   const { makeIntMap } = require('../int-map.js');
@@ -205,6 +205,67 @@ function runTests(
     } else {
       check(result.move === PASS, 'getMove: pass type → move is PASS');
     }
+  }
+
+  // ── evaluateDelta matches findFeatures+evaluate for speculative moves ────────
+  {
+    const N = 5, area = N * N;
+
+    // Helper: get val from full speculative findFeatures for a given move.
+    function fullVal(g, move, ctx) {
+      const buf = makeBuf(area);
+      findFeatures(g, buf, ctx, move);
+      evaluate(buf, ctx.weightsArr);
+      return buf.val;
+    }
+
+    // Seed some weights so not everything is 0.
+    const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
+    const g0  = new Game2(N, false);
+    for (let i = 0; i < area; i++) { if (i % 3 === 0 && g0.isLegal(i)) g0.play(i); }
+    // Populate ctx by running findFeatures a few times.
+    { const b = makeBuf(area); findFeatures(g0, b, ctx); evaluate(b, ctx.weightsArr); }
+    // Tweak some weights so they are non-zero.
+    for (let i = 0; i < ctx.weightsArr.length; i++) ctx.weightsArr[i] = (i % 7) * 0.1 - 0.3;
+
+    // Base.
+    const base = makeBuf(area);
+    findFeatures(g0, base, ctx);
+    evaluate(base, ctx.weightsArr);
+
+    // Check every legal non-eye move.
+    const g1 = new Game2(N, false);
+    g1.play(12); g1.play(13);  // set up a simple position
+    { const b = makeBuf(area); findFeatures(g1, b, ctx); evaluate(b, ctx.weightsArr); }
+    const base1 = makeBuf(area);
+    findFeatures(g1, base1, ctx);
+    evaluate(base1, ctx.weightsArr);
+
+    let tested = 0;
+    for (let m = 0; m < area; m++) {
+      if (!g1.isLegal(m)) continue;
+      const expected = fullVal(g1, m, { keyToIdx: ctx.keyToIdx, weightsArr: ctx.weightsArr });
+      const delta    = evaluateDelta(g1, base1, ctx, m);
+      const got      = 1 / (1 + Math.exp(-(base1.sum + delta)));
+      check(Math.abs(got - expected) < 1e-9,
+        `evaluateDelta: move ${m} val ${got.toFixed(6)} matches full ${expected.toFixed(6)}`);
+      tested++;
+    }
+    check(tested > 0, 'evaluateDelta: at least one move tested');
+
+    // Verify scratchA is restored after each evaluateDelta call.
+    const snapA = base1.scratchA.slice();
+    evaluateDelta(g1, base1, ctx, 0);
+    let saOk = true;
+    for (let i = 0; i < area; i++) if (base1.scratchA[i] !== snapA[i]) { saOk = false; break; }
+    check(saOk, 'evaluateDelta: scratchA restored after call');
+
+    // Verify cells are restored.
+    const snapCells = g1.cells.slice();
+    evaluateDelta(g1, base1, ctx, 5);
+    let cellsOk = true;
+    for (let i = 0; i < area; i++) if (g1.cells[i] !== snapCells[i]) { cellsOk = false; break; }
+    check(cellsOk, 'evaluateDelta: cells restored after call');
   }
 
   // ── getMove: returned move is legal ───────────────────────────────────────
