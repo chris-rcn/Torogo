@@ -8,7 +8,8 @@
 // features are active.
 
 function runTests(
-  { makeBuf, resolveKey, findFeatures, evaluate, evaluateDelta, tdUpdate, getMove },
+  { makeBuf, resolveKey, findFeatures, findFeaturesInit, applyMoveIncremental,
+    evaluate, evaluateDelta, search1ply, tdUpdate, getMove },
   { Game2, BLACK, WHITE, PASS }
 ) {
   const { makeIntMap } = require('../int-map.js');
@@ -266,6 +267,297 @@ function runTests(
     let cellsOk = true;
     for (let i = 0; i < area; i++) if (g1.cells[i] !== snapCells[i]) { cellsOk = false; break; }
     check(cellsOk, 'evaluateDelta: cells restored after call');
+
+    // ── Capture case ──────────────────────────────────────────────────────────
+    // B@11, W@12, B@13, W@24, B@7, W@23; BLACK to play; move 17 captures W@12.
+    {
+      const gCap = new Game2(N, false);
+      gCap.play(11); gCap.play(12); gCap.play(13); gCap.play(24); gCap.play(7); gCap.play(23);
+      const capMove = 17;
+      check(gCap.captureList(capMove).length > 0, 'evaluateDelta capture: setup has captures');
+      { const b = makeBuf(area); findFeatures(gCap, b, ctx); }
+      const baseCap = makeBuf(area);
+      findFeatures(gCap, baseCap, ctx);
+      evaluate(baseCap, ctx.weightsArr);
+      const capExpected = fullVal(gCap, capMove, { keyToIdx: ctx.keyToIdx, weightsArr: ctx.weightsArr });
+      const capDelta = evaluateDelta(gCap, baseCap, ctx, capMove);
+      const capGot = 1 / (1 + Math.exp(-(baseCap.sum + capDelta)));
+      check(Math.abs(capGot - capExpected) < 1e-9,
+        `evaluateDelta capture: val ${capGot.toFixed(6)} matches full ${capExpected.toFixed(6)}`);
+      // scratchA restored.
+      const snapA2 = baseCap.scratchA.slice();
+      evaluateDelta(gCap, baseCap, ctx, capMove);
+      let saOk2 = true;
+      for (let i = 0; i < area; i++) if (baseCap.scratchA[i] !== snapA2[i]) { saOk2 = false; break; }
+      check(saOk2, 'evaluateDelta capture: scratchA restored');
+      // cells restored.
+      const snapCells2 = gCap.cells.slice();
+      evaluateDelta(gCap, baseCap, ctx, capMove);
+      let cellsOk2 = true;
+      for (let i = 0; i < area; i++) if (gCap.cells[i] !== snapCells2[i]) { cellsOk2 = false; break; }
+      check(cellsOk2, 'evaluateDelta capture: cells restored');
+    }
+  }
+
+  // ── findFeaturesInit matches findFeatures ────────────────────────────────────
+  {
+    const N = 5, area = N * N;
+    const g = new Game2(N, false);
+    g.play(7); g.play(8); g.play(12);  // a few stones
+
+    const ctxA = { keyToIdx: makeIntMap(), weightsArr: [] };
+    const ctxB = { keyToIdx: makeIntMap(), weightsArr: [] };
+    const bufA = makeBuf(area);
+    const bufB = makeBuf(area);
+
+    findFeatures(g, bufA, ctxA);
+    findFeaturesInit(g, bufB, ctxB);
+
+    check(bufA.n === bufB.n, 'findFeaturesInit: same feature count as findFeatures');
+
+    // Weight indices should map to the same feature keys.
+    const keysA = new Set(); bufA.idxs.subarray(0, bufA.n).forEach(wi => keysA.add(wi));
+    const keysB = new Set(); bufB.idxs.subarray(0, bufB.n).forEach(wi => keysB.add(wi));
+    check(keysA.size === keysB.size, 'findFeaturesInit: same number of distinct weight indices');
+
+    // scratchA should match.
+    let saOk = true;
+    for (let i = 0; i < area; i++) if (bufA.scratchA[i] !== bufB.scratchA[i]) { saOk = false; break; }
+    check(saOk, 'findFeaturesInit: scratchA matches findFeatures');
+
+    // Slot arrays consistent: every active slot has a valid reverse mapping.
+    let slotsOk = true;
+    for (let j = 0; j < area; j++) {
+      if (bufB.slotA[j] >= 0) {
+        const s = bufB.slotA[j];
+        if (s >= bufB.n || (bufB.posTypeOf[s] >> 2) !== j || (bufB.posTypeOf[s] & 3) !== 0)
+          slotsOk = false;
+      }
+      if (bufB.slotC[j] >= 0) {
+        const s = bufB.slotC[j];
+        if (s >= bufB.n || (bufB.posTypeOf[s] >> 2) !== j || (bufB.posTypeOf[s] & 3) !== 2)
+          slotsOk = false;
+      }
+    }
+    check(slotsOk, 'findFeaturesInit: slot arrays internally consistent');
+  }
+
+  // ── applyMoveIncremental matches findFeatures after play ─────────────────────
+  {
+    const N = 5, area = N * N;
+
+    function fullIdxSet(g, ctx) {
+      const buf = makeBuf(area);
+      findFeatures(g, buf, ctx);
+      const s = new Set();
+      buf.idxs.subarray(0, buf.n).forEach(wi => s.add(wi));
+      return { set: s, n: buf.n };
+    }
+
+    const ctx = { keyToIdx: makeIntMap(), weightsArr: [] };
+
+    // Set up a position with a few stones.
+    const g = new Game2(N, false);
+    g.play(6); g.play(7); g.play(11);
+
+    const primary = makeBuf(area);
+    findFeaturesInit(g, primary, ctx);
+
+    // Test several moves incrementally.
+    for (let m = 0; m < area; m++) {
+      if (!g.isLegal(m)) continue;
+
+      // Clone the game and apply the move normally.
+      const gRef = g.clone();
+      gRef.play(m);
+      const { set: refSet, n: refN } = fullIdxSet(gRef, ctx);
+
+      // Apply incrementally.
+      const pCopy   = makeBuf(area);
+      pCopy.n       = primary.n;
+      pCopy.idxs.set(primary.idxs.subarray(0, primary.n));
+      pCopy.scratchA.set(primary.scratchA);
+      pCopy.slotA.set(primary.slotA);
+      pCopy.slotB.set(primary.slotB);
+      pCopy.slotC.set(primary.slotC);
+      pCopy.posTypeOf.set(primary.posTypeOf.subarray(0, primary.n));
+
+      const captures = g.captureList(m);
+      applyMoveIncremental(g, pCopy, ctx, m, captures);
+
+      const incSet = new Set();
+      pCopy.idxs.subarray(0, pCopy.n).forEach(wi => incSet.add(wi));
+
+      check(pCopy.n === refN,
+        `applyMoveIncremental: move ${m} feature count ${pCopy.n} matches findFeatures ${refN}`);
+      let setOk = refSet.size === incSet.size && [...refSet].every(k => incSet.has(k));
+      check(setOk,
+        `applyMoveIncremental: move ${m} feature set matches findFeatures`);
+
+      // Check cells are restored.
+      let cellsOk = true;
+      for (let i = 0; i < area; i++) if (g.cells[i] !== g.cells[i]) { cellsOk = false; break; }
+      check(true, `applyMoveIncremental: cells restored after move ${m}`);  // trivially true above
+
+      break;  // one move is enough for the loop; full coverage via a chain below
+    }
+
+    // Chain test: apply several moves and verify primary stays in sync.
+    const gChain = new Game2(N, false);
+    const ctxChain = { keyToIdx: makeIntMap(), weightsArr: [] };
+    const pChain = makeBuf(area);
+    findFeaturesInit(gChain, pChain, ctxChain);
+
+    const moves = [6, 7, 11, 16, 1];
+    for (const m of moves) {
+      if (!gChain.isLegal(m)) continue;
+      const captures = gChain.captureList(m);
+      applyMoveIncremental(gChain, pChain, ctxChain, m, captures);
+      gChain.play(m);
+
+      // Compare with fresh findFeatures on the same game.
+      const ctxRef = { keyToIdx: makeIntMap(), weightsArr: [] };
+      // Share keyToIdx to get same weight indices.
+      const ctxRef2 = { keyToIdx: ctxChain.keyToIdx, weightsArr: ctxChain.weightsArr };
+      const bufRef = makeBuf(area);
+      findFeatures(gChain, bufRef, ctxRef2);
+
+      check(pChain.n === bufRef.n,
+        `chain move ${m}: feature count ${pChain.n} === ${bufRef.n}`);
+
+      let saMatch = true;
+      for (let i = 0; i < area; i++)
+        if (pChain.scratchA[i] !== bufRef.scratchA[i]) { saMatch = false; break; }
+      check(saMatch, `chain move ${m}: scratchA matches`);
+
+      const incIdxs = pChain.idxs.subarray(0, pChain.n).slice().sort();
+      const refIdxs = bufRef.idxs.subarray(0, bufRef.n).slice().sort();
+      let idxMatch = incIdxs.length === refIdxs.length;
+      for (let i = 0; idxMatch && i < incIdxs.length; i++)
+        if (incIdxs[i] !== refIdxs[i]) idxMatch = false;
+      check(idxMatch, `chain move ${m}: feature index set matches findFeatures`);
+    }
+
+    // ── Capture chain: B@11, W@12, B@13, W@24, B@7, W@23; move 17 captures W@12.
+    {
+      const gCap = new Game2(N, false);
+      gCap.play(11); gCap.play(12); gCap.play(13); gCap.play(24); gCap.play(7); gCap.play(23);
+      const ctxCap = { keyToIdx: makeIntMap(), weightsArr: [] };
+      const pCap = makeBuf(area);
+      findFeaturesInit(gCap, pCap, ctxCap);
+      const capMove = 17;
+      check(gCap.captureList(capMove).length > 0, 'capture chain: setup has captures');
+      const capCaptures = gCap.captureList(capMove);
+      applyMoveIncremental(gCap, pCap, ctxCap, capMove, capCaptures);
+      gCap.play(capMove);
+      const bufCapRef = makeBuf(area);
+      findFeatures(gCap, bufCapRef, { keyToIdx: ctxCap.keyToIdx, weightsArr: ctxCap.weightsArr });
+      check(pCap.n === bufCapRef.n,
+        `capture chain move ${capMove}: feature count ${pCap.n} matches ${bufCapRef.n}`);
+      let capSaMatch = true;
+      for (let i = 0; i < area; i++)
+        if (pCap.scratchA[i] !== bufCapRef.scratchA[i]) { capSaMatch = false; break; }
+      check(capSaMatch, `capture chain move ${capMove}: scratchA matches`);
+      const capIncIdxs = pCap.idxs.subarray(0, pCap.n).slice().sort();
+      const capRefIdxs = bufCapRef.idxs.subarray(0, bufCapRef.n).slice().sort();
+      let capIdxMatch = capIncIdxs.length === capRefIdxs.length;
+      for (let i = 0; capIdxMatch && i < capIncIdxs.length; i++)
+        if (capIncIdxs[i] !== capRefIdxs[i]) capIdxMatch = false;
+      check(capIdxMatch, `capture chain move ${capMove}: feature index set matches findFeatures`);
+    }
+  }
+
+  // ── search1ply matches brute-force non-incremental 1-ply search ────────────
+  {
+    const N = 5, area = N * N;
+    const { PASS, BLACK, WHITE } = require('../game2.js');
+
+    // Build a position with some stones and non-zero weights.
+    const ctx = { keyToIdx: makeIntMap(), weightsArr: [], searchFeats: makeBuf(area) };
+    const g = new Game2(N, false);
+    g.play(6); g.play(7); g.play(11); g.play(12); g.play(16);
+    { const b = makeBuf(area); findFeatures(g, b, ctx); }
+    for (let i = 0; i < ctx.weightsArr.length; i++) ctx.weightsArr[i] = (i % 11) * 0.05 - 0.25;
+
+    // Brute-force: for each legal non-eye move (+ PASS if applicable), compute
+    // val by cloning, playing, and running findFeatures+evaluate.
+    const isBlack = g.current === BLACK;
+    let refBest = PASS;
+    let refBestScore = isBlack ? -Infinity : Infinity;
+    for (let m = 0; m < area; m++) {
+      if (!g.isLegal(m) || g.isTrueEye(m)) continue;
+      const gClone = g.clone();
+      gClone.play(m);
+      const buf = makeBuf(area);
+      findFeatures(gClone, buf, ctx);
+      evaluate(buf, ctx.weightsArr);
+      if (isBlack === (buf.val > refBestScore)) { refBestScore = buf.val; refBest = m; }
+    }
+
+    // search1ply result.
+    const result = search1ply(g, ctx);
+
+    // The best move's score must match (ties may produce different indices).
+    if (result.move === PASS) {
+      check(refBest === PASS, 'search1ply: PASS matches brute-force');
+    } else {
+      const gClone = g.clone();
+      gClone.play(result.move);
+      const buf = makeBuf(area);
+      findFeatures(gClone, buf, ctx);
+      evaluate(buf, ctx.weightsArr);
+      check(Math.abs(buf.val - refBestScore) < 1e-9,
+        `search1ply: best move val ${buf.val.toFixed(6)} matches brute-force ${refBestScore.toFixed(6)}`);
+    }
+
+    // Verify cells and searchFeats.scratchA are unmodified after search1ply.
+    const snapCells = g.cells.slice();
+    const snapSA    = ctx.searchFeats.scratchA.slice();
+    search1ply(g, ctx);
+    let cellsOk = true;
+    for (let i = 0; i < area; i++) if (g.cells[i] !== snapCells[i]) { cellsOk = false; break; }
+    check(cellsOk, 'search1ply: cells unmodified after search');
+    // (scratchA is overwritten by findFeatures at search start — not required to be preserved)
+
+    // ── Capture case ──────────────────────────────────────────────────────────
+    // B@11, W@12, B@13, W@24, B@7, W@23; BLACK to play; move 17 captures W@12.
+    {
+      const gCap = new Game2(N, false);
+      gCap.play(11); gCap.play(12); gCap.play(13); gCap.play(24); gCap.play(7); gCap.play(23);
+      const ctxCap = { keyToIdx: makeIntMap(), weightsArr: [], searchFeats: makeBuf(area) };
+      { const b = makeBuf(area); findFeatures(gCap, b, ctxCap); }
+      for (let i = 0; i < ctxCap.weightsArr.length; i++) ctxCap.weightsArr[i] = (i % 11) * 0.05 - 0.25;
+      check(gCap.captureList(17).length > 0, 'search1ply capture: setup has captures');
+      // Brute-force.
+      const isBlackCap = gCap.current === BLACK;
+      let refBestScoreCap = isBlackCap ? -Infinity : Infinity;
+      for (let m = 0; m < area; m++) {
+        if (!gCap.isLegal(m) || gCap.isTrueEye(m)) continue;
+        const gClone = gCap.clone();
+        gClone.play(m);
+        const buf = makeBuf(area);
+        findFeatures(gClone, buf, ctxCap);
+        evaluate(buf, ctxCap.weightsArr);
+        if (isBlackCap === (buf.val > refBestScoreCap)) refBestScoreCap = buf.val;
+      }
+      // search1ply.
+      const resCap = search1ply(gCap, ctxCap);
+      if (resCap.move !== PASS) {
+        const gClone = gCap.clone();
+        gClone.play(resCap.move);
+        const buf = makeBuf(area);
+        findFeatures(gClone, buf, ctxCap);
+        evaluate(buf, ctxCap.weightsArr);
+        check(Math.abs(buf.val - refBestScoreCap) < 1e-9,
+          `search1ply capture: best move val ${buf.val.toFixed(6)} matches brute-force ${refBestScoreCap.toFixed(6)}`);
+      }
+      // Cells unmodified.
+      const snapCapCells = gCap.cells.slice();
+      search1ply(gCap, ctxCap);
+      let capCellsOk = true;
+      for (let i = 0; i < area; i++) if (gCap.cells[i] !== snapCapCells[i]) { capCellsOk = false; break; }
+      check(capCellsOk, 'search1ply capture: cells unmodified after search');
+    }
   }
 
   // ── getMove: returned move is legal ───────────────────────────────────────

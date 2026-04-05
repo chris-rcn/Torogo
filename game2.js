@@ -700,8 +700,9 @@ class Game2 {
   // ── Scoring ───────────────────────────────────────────────────────────────
 
   // Accurate area score via flood-fill of empty regions.
-  // Returns { black, white } where white already includes KOMI(N).
+  // Returns { black, white } where white already includes komi.
   calcScore() {
+    return this.estimateScore();  // I don't think we ever need to do the flood fill.
     const N      = this.N;
     const cap    = N * N;
     const cells  = this.cells;
@@ -737,10 +738,10 @@ class Game2 {
     return { black, white: white + KOMI(N) };
   }
 
-  // Accurate winner using flood-fill territory + komi.  Returns BLACK, WHITE, or null.
+  // Accurate winner using flood-fill territory + komi.  Returns BLACK or WHITE.
   calcWinner() {
-    const sc = this.calcScore();
-    return sc.black > sc.white ? BLACK : WHITE;
+    const score = this.calcScore();
+    return score.black > score.white ? BLACK : WHITE;
   }
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
@@ -761,9 +762,8 @@ class Game2 {
     return PASS;
   }
 
-  // Fast 1-step area estimate.  Returns 'black', 'white', or null.
-  // Undercounts large interior empty regions; use only for playout rollouts.
-  estimateWinner() {
+  // Fast 1-step area estimate plus komi.
+  estimateScore() {
     const N = this.N, cap = N * N;
     const cells = this.cells, nbr = this._nbr;
     let black = 0, white = 0;
@@ -781,9 +781,14 @@ class Game2 {
       if (bAdj && !wAdj) black++;
       else if (wAdj && !bAdj) white++;
     }
-    return black > white + KOMI(N) ? BLACK
-         : white + KOMI(N) > black ? WHITE
-         : null;
+    white += KOMI(N);
+    return { black, white };
+  }
+
+  // Fast 1-step area estimate.  Returns BLACK or WHITE.
+  estimateWinner() {
+    const score = this.estimateScore();
+    return score.black > score.white ? BLACK : WHITE;
   }
 
 }

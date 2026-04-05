@@ -14,7 +14,7 @@ const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSea
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 const { makeIntMap } = _isNode ? require('../int-map.js') : window.IntMap;
 
-const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
+const SIMS          = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
 const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
 const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
@@ -22,7 +22,7 @@ const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
 const LR0           = Util.envFloat('TD_LR0', 0.6);
 const LR1           = Util.envFloat('TD_LR1', 0.3);
-const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 2);
+const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 1);
 const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
 const EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
 
@@ -32,10 +32,11 @@ if (_isNode && EVAL_DATA) evalModel = loadWeights(EVAL_DATA);
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
 function makeBuf(area) {
+  const maxN = (1 + USE_1x2 + USE_2x2) * area;
   return {
     scratchA:  new Int32Array(area),
     scratchB:  new Int32Array(area),
-    idxs:      new Int32Array((1 + USE_1x2 + USE_2x2) * area),
+    idxs:      new Int32Array(maxN),
     n:         0,
     sum:       0,
     // Scratch for evaluateDelta — avoids per-call allocation in the hot path.
@@ -43,6 +44,11 @@ function makeBuf(area) {
     deltasSA:  new Int32Array(64),     // affected scratchA slot indices
     deltasW:   new Int32Array(64),     // affected 2×2 window indices
     savedSA:   new Int32Array(64),     // saved scratchA values for restore
+    // Slot tracking for incremental maintenance (used only by primary buffer).
+    slotA:     new Int32Array(area).fill(-1),  // slot in idxs for 1×1 feature at j
+    slotB:     new Int32Array(area).fill(-1),  // slot in idxs for 1×2 feature at j
+    slotC:     new Int32Array(area).fill(-1),  // slot in idxs for 2×2 feature at j
+    posTypeOf: new Int32Array(maxN),           // (j << 2) | type for each slot
   };
 }
 
@@ -132,16 +138,66 @@ function evaluateDelta(game, buf, ctx, nextMove) {
   const area  = N * N;
   const cells = game.cells;
   const sA    = buf.scratchA;
-  const mark  = buf.deltaMark;
-  const sArr  = buf.deltasSA;
-  const wArr  = buf.deltasW;
-  const svd   = buf.savedSA;
   const wts   = ctx.weightsArr;
 
   const captures = game.captureList(nextMove);
   const nCap     = captures.length;
 
-  // ── Collect affected scratchA slots (p and p-1 per changed cell) ──────────
+  if (nCap === 0) {
+    // ── Fast path: single stone placed, no captures ──────────────────────────
+    // Affected scratchA slots: p, p1=(p-1).  Affected windows: p, p1, pN, pN1.
+    // sA[(pN +N)%area]=sA[p] and sA[(pN1+N)%area]=sA[p1] by construction.
+    const p   = nextMove;
+    const p1  = p  > 0     ? p  - 1 : area - 1;
+    const pN  = p  >= N    ? p  - N : p  - N + area;
+    const pN1 = pN > 0     ? pN - 1 : area - 1;
+    const pS  = p  + N < area ? p  + N : p  + N - area;
+    const p1S = p1 + N < area ? p1 + N : p1 + N - area;
+
+    // Old sum — cells[p]=EMPTY so no 1×1 feature to subtract.
+    let oldSum = 0;
+    if (USE_1x2) {
+      if (sA[p])  { const wi = ctx.keyToIdx.get(Math.imul(129 + p,  972 + sA[p]));  if (wi >= 0) oldSum += wts[wi]; }
+      if (sA[p1]) { const wi = ctx.keyToIdx.get(Math.imul(129 + p1, 972 + sA[p1])); if (wi >= 0) oldSum += wts[wi]; }
+    }
+    if (USE_2x2) {
+      let sa0, sa1, v0v1, h, wi;
+      sa0 = sA[p];   sa1 = sA[pS];  v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); wi = ctx.keyToIdx.get(Math.imul(381+p,   463+h)); if (wi >= 0) oldSum += wts[wi]; }
+      sa0 = sA[p1];  sa1 = sA[p1S]; v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); wi = ctx.keyToIdx.get(Math.imul(381+p1,  463+h)); if (wi >= 0) oldSum += wts[wi]; }
+      sa0 = sA[pN];  sa1 = sA[p];   v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); wi = ctx.keyToIdx.get(Math.imul(381+pN,  463+h)); if (wi >= 0) oldSum += wts[wi]; }
+      sa0 = sA[pN1]; sa1 = sA[p1];  v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); wi = ctx.keyToIdx.get(Math.imul(381+pN1, 463+h)); if (wi >= 0) oldSum += wts[wi]; }
+    }
+
+    // Apply move, update scratchA, compute new sum, restore.
+    cells[p] = game.current;
+    const sv0 = sA[p], sv1 = sA[p1];
+    { const v0 = game.current,  v1 = cells[p + 1 < area ? p + 1 : 0]; const vv = (v0*v0+v1*v1)|0; sA[p]  = vv * Math.imul(389+v0, 593+v1); }
+    { const v0 = cells[p1],     v1 = game.current;       const vv = (v0*v0+v1*v1)|0; sA[p1] = vv * Math.imul(389+v0, 593+v1); }
+
+    let newSum = wts[resolveKey(Math.imul(835 + p, 691 + game.current), ctx)];
+    if (USE_1x2) {
+      if (sA[p])  newSum += wts[resolveKey(Math.imul(129 + p,  972 + sA[p]),  ctx)];
+      if (sA[p1]) newSum += wts[resolveKey(Math.imul(129 + p1, 972 + sA[p1]), ctx)];
+    }
+    if (USE_2x2) {
+      let sa0, sa1, v0v1, h;
+      sa0 = sA[p];   sa1 = sA[pS];  v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); newSum += wts[resolveKey(Math.imul(381+p,   463+h), ctx)]; }
+      sa0 = sA[p1];  sa1 = sA[p1S]; v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); newSum += wts[resolveKey(Math.imul(381+p1,  463+h), ctx)]; }
+      sa0 = sA[pN];  sa1 = sA[p];   v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); newSum += wts[resolveKey(Math.imul(381+pN,  463+h), ctx)]; }
+      sa0 = sA[pN1]; sa1 = sA[p1];  v0v1 = (sa0*sa0 + sa1*sa1)|0; if (v0v1) { h = v0v1*Math.imul(843+sa0, 670+sa1); newSum += wts[resolveKey(Math.imul(381+pN1, 463+h), ctx)]; }
+    }
+
+    cells[p] = EMPTY;
+    sA[p] = sv0; sA[p1] = sv1;
+    return newSum - oldSum;
+  }
+
+  // ── Slow path: captures present ───────────────────────────────────────────
+  const mark = buf.deltaMark;
+  const sArr = buf.deltasSA;
+  const wArr = buf.deltasW;
+  const svd  = buf.savedSA;
+
   let nsA = 0;
   for (let ci = -1; ci < nCap; ci++) {
     const p = ci < 0 ? nextMove : captures[ci];
@@ -150,9 +206,8 @@ function evaluateDelta(game, buf, ctx, nextMove) {
       if (!mark[j]) { mark[j] = 1; sArr[nsA++] = j; }
     }
   }
-  for (let i = 0; i < nsA; i++) mark[sArr[i]] = 0;  // unmark
+  for (let i = 0; i < nsA; i++) mark[sArr[i]] = 0;
 
-  // ── Collect affected 2×2 window slots (p, p-1, p-N, p-N-1 per changed cell) ─
   let nW = 0;
   for (let ci = -1; ci < nCap; ci++) {
     const p = ci < 0 ? nextMove : captures[ci];
@@ -163,84 +218,55 @@ function evaluateDelta(game, buf, ctx, nextMove) {
       if (!mark[j]) { mark[j] = 1; wArr[nW++] = j; }
     }
   }
-  for (let i = 0; i < nW; i++) mark[wArr[i]] = 0;  // unmark
+  for (let i = 0; i < nW; i++) mark[wArr[i]] = 0;
 
-  // ── Old sum: features in affected windows on the current board ─────────────
   let oldSum = 0;
-
-  for (let ci = -1; ci < nCap; ci++) {        // 1×1
-    const p  = ci < 0 ? nextMove : captures[ci];
+  for (let ci = -1; ci < nCap; ci++) {
+    const p = ci < 0 ? nextMove : captures[ci];
     const v0 = cells[p];
-    if (v0) {
-      const wi = ctx.keyToIdx.get(Math.imul(835 + p, 691 + v0));
-      if (wi >= 0) oldSum += wts[wi];
-    }
+    if (v0) { const wi = ctx.keyToIdx.get(Math.imul(835 + p, 691 + v0)); if (wi >= 0) oldSum += wts[wi]; }
   }
   if (USE_1x2) {
-    for (let i = 0; i < nsA; i++) {           // 1×2
+    for (let i = 0; i < nsA; i++) {
       const j = sArr[i];
-      if (sA[j]) {
-        const wi = ctx.keyToIdx.get(Math.imul(129 + j, 972 + sA[j]));
-        if (wi >= 0) oldSum += wts[wi];
-      }
+      if (sA[j]) { const wi = ctx.keyToIdx.get(Math.imul(129 + j, 972 + sA[j])); if (wi >= 0) oldSum += wts[wi]; }
     }
   }
   if (USE_2x2) {
-    for (let i = 0; i < nW; i++) {            // 2×2
-      const j    = wArr[i];
-      const sa0  = sA[j];
-      const sa1  = sA[(j + N) % area];
-      const v0v1 = (sa0 * sa0 + sa1 * sa1) | 0;
-      if (v0v1) {
-        const hash = v0v1 * Math.imul(843 + sa0, 670 + sa1);
-        const wi   = ctx.keyToIdx.get(Math.imul(381 + j, 463 + hash));
-        if (wi >= 0) oldSum += wts[wi];
-      }
+    for (let i = 0; i < nW; i++) {
+      const j = wArr[i], sa0 = sA[j], sa1 = sA[(j + N) % area], v0v1 = (sa0*sa0 + sa1*sa1)|0;
+      if (v0v1) { const h = v0v1*Math.imul(843+sa0, 670+sa1); const wi = ctx.keyToIdx.get(Math.imul(381+j, 463+h)); if (wi >= 0) oldSum += wts[wi]; }
     }
   }
 
-  // ── Apply move temporarily ─────────────────────────────────────────────────
   for (let ci = 0; ci < nCap; ci++) cells[captures[ci]] = EMPTY;
   cells[nextMove] = game.current;
 
-  // ── Update scratchA for affected slots ────────────────────────────────────
   for (let i = 0; i < nsA; i++) {
-    const j  = sArr[i];
-    svd[i]   = sA[j];
-    const v0 = cells[j];
-    const v1 = cells[(j + 1) % area];
-    const vv = (v0 * v0 + v1 * v1) | 0;
-    sA[j]    = vv * Math.imul(389 + v0, 593 + v1);
+    const j = sArr[i]; svd[i] = sA[j];
+    const v0 = cells[j], v1 = cells[(j + 1) % area], vv = (v0*v0 + v1*v1)|0;
+    sA[j] = vv * Math.imul(389 + v0, 593 + v1);
   }
 
-  // ── New sum: features in affected windows on the new board ─────────────────
   let newSum = 0;
-
-  for (let ci = -1; ci < nCap; ci++) {        // 1×1
-    const p  = ci < 0 ? nextMove : captures[ci];
+  for (let ci = -1; ci < nCap; ci++) {
+    const p = ci < 0 ? nextMove : captures[ci];
     const v0 = cells[p];
     if (v0) newSum += wts[resolveKey(Math.imul(835 + p, 691 + v0), ctx)];
   }
   if (USE_1x2) {
-    for (let i = 0; i < nsA; i++) {           // 1×2
+    for (let i = 0; i < nsA; i++) {
       const j = sArr[i];
       if (sA[j]) newSum += wts[resolveKey(Math.imul(129 + j, 972 + sA[j]), ctx)];
     }
   }
   if (USE_2x2) {
-    for (let i = 0; i < nW; i++) {            // 2×2
-      const j    = wArr[i];
-      const sa0  = sA[j];
-      const sa1  = sA[(j + N) % area];
-      const v0v1 = (sa0 * sa0 + sa1 * sa1) | 0;
-      if (v0v1) {
-        const hash = v0v1 * Math.imul(843 + sa0, 670 + sa1);
-        newSum += wts[resolveKey(Math.imul(381 + j, 463 + hash), ctx)];
-      }
+    for (let i = 0; i < nW; i++) {
+      const j = wArr[i], sa0 = sA[j], sa1 = sA[(j + N) % area], v0v1 = (sa0*sa0 + sa1*sa1)|0;
+      if (v0v1) { const h = v0v1*Math.imul(843+sa0, 670+sa1); newSum += wts[resolveKey(Math.imul(381+j, 463+h), ctx)]; }
     }
   }
 
-  // ── Restore ────────────────────────────────────────────────────────────────
   for (let ci = 0; ci < nCap; ci++) cells[captures[ci]] = -game.current;
   cells[nextMove] = EMPTY;
   for (let i = 0; i < nsA; i++) sA[sArr[i]] = svd[i];
@@ -259,7 +285,183 @@ function tdUpdate(buf, target, weightsArr, lr) {
   }
 }
 
-// Custom 1-ply search which bypasses non-capture moves.
+// ── Incremental feature maintenance ──────────────────────────────────────────
+//
+// Maintains a "primary" buffer whose idxs/scratchA are kept in sync with the
+// live board after each move, at O(k) cost per move instead of O(N²).
+// Used exclusively in the training loop; search paths use findFeatures directly.
+//
+// posTypeOf encodes (j << 2 | type) so a swap-with-last removal can locate and
+// update the right slot array for the displaced entry.
+// type 0 → slotA (1×1), type 1 → slotB (1×2), type 2 → slotC (2×2).
+
+function _removeSlot(buf, s, slotForJ, j) {
+  const last   = --buf.n;
+  slotForJ[j]  = -1;
+  if (s === last) return;
+  buf.idxs[s]      = buf.idxs[last];
+  const pt         = buf.posTypeOf[last];
+  buf.posTypeOf[s] = pt;
+  const lastJ = pt >> 2, lastT = pt & 3;
+  if      (lastT === 0) buf.slotA[lastJ] = s;
+  else if (lastT === 1) buf.slotB[lastJ] = s;
+  else                  buf.slotC[lastJ] = s;
+}
+
+// Full extraction with slot tracking. Call once per simulation to initialise
+// the primary buffer; applyMoveIncremental maintains it thereafter.
+function findFeaturesInit(game, buf, ctx) {
+  const N    = game.N;
+  const area = N * N;
+  const cells = game.cells;
+  buf.n = 0;
+  buf.slotA.fill(-1, 0, area);
+  buf.slotB.fill(-1, 0, area);
+  buf.slotC.fill(-1, 0, area);
+
+  for (let idx = 0; idx < area; idx++) {
+    const v0 = cells[idx];
+    if (v0) {
+      const s = buf.n++;
+      buf.idxs[s]      = resolveKey(Math.imul(835 + idx, 691 + v0), ctx);
+      buf.slotA[idx]   = s;
+      buf.posTypeOf[s] = (idx << 2) | 0;
+    }
+    const v1   = cells[(idx + 1) % area];
+    const v0v1 = (v0*v0 + v1*v1) | 0;
+    buf.scratchA[idx] = v0v1 * Math.imul(389 + v0, 593 + v1);
+    if (USE_1x2 && v0v1) {
+      const s = buf.n++;
+      buf.idxs[s]      = resolveKey(Math.imul(129 + idx, 972 + buf.scratchA[idx]), ctx);
+      buf.slotB[idx]   = s;
+      buf.posTypeOf[s] = (idx << 2) | 1;
+    }
+  }
+  if (USE_2x2) {
+    for (let idx = 0; idx < area; idx++) {
+      const sa0  = buf.scratchA[idx];
+      const sa1  = buf.scratchA[(idx + N) % area];
+      const v0v1 = (sa0*sa0 + sa1*sa1) | 0;
+      if (v0v1) {
+        const hash = v0v1 * Math.imul(843 + sa0, 670 + sa1);
+        const s = buf.n++;
+        buf.idxs[s]      = resolveKey(Math.imul(381 + idx, 463 + hash), ctx);
+        buf.slotC[idx]   = s;
+        buf.posTypeOf[s] = (idx << 2) | 2;
+      }
+    }
+  }
+}
+
+// Update the primary buffer incrementally after nextMove is played.
+// Must be called BEFORE game.play(nextMove); restores cells afterward.
+// primary.scratchA is permanently updated to match the post-move board.
+function applyMoveIncremental(game, buf, ctx, nextMove, captures) {
+  const N    = game.N;
+  const area = N * N;
+  const cells = game.cells;
+  const sA   = buf.scratchA;
+  const mark = buf.deltaMark;
+  const sArr = buf.deltasSA;
+  const wArr = buf.deltasW;
+  const nCap = captures.length;
+
+  let nsA = 0, nW = 0;
+  for (let ci = -1; ci < nCap; ci++) {
+    const p = ci < 0 ? nextMove : captures[ci];
+    for (let d = 0; d < 2; d++) {
+      const j = d === 0 ? p : (p - 1 + area) % area;
+      if (!mark[j]) { mark[j] = 1; sArr[nsA++] = j; }
+    }
+  }
+  for (let i = 0; i < nsA; i++) mark[sArr[i]] = 0;
+
+  for (let ci = -1; ci < nCap; ci++) {
+    const p  = ci < 0 ? nextMove : captures[ci];
+    const pN = (p - N + area) % area;
+    for (let d = 0; d < 4; d++) {
+      const j = d === 0 ? p : d === 1 ? (p - 1 + area) % area :
+                d === 2 ? pN          : (pN - 1 + area) % area;
+      if (!mark[j]) { mark[j] = 1; wArr[nW++] = j; }
+    }
+  }
+  for (let i = 0; i < nW; i++) mark[wArr[i]] = 0;
+
+  // Remove old features for affected positions.
+  for (let ci = -1; ci < nCap; ci++) {
+    const p = ci < 0 ? nextMove : captures[ci];
+    if (buf.slotA[p] >= 0) _removeSlot(buf, buf.slotA[p], buf.slotA, p);
+  }
+  if (USE_1x2) {
+    for (let i = 0; i < nsA; i++) {
+      const j = sArr[i];
+      if (buf.slotB[j] >= 0) _removeSlot(buf, buf.slotB[j], buf.slotB, j);
+    }
+  }
+  if (USE_2x2) {
+    for (let i = 0; i < nW; i++) {
+      const j = wArr[i];
+      if (buf.slotC[j] >= 0) _removeSlot(buf, buf.slotC[j], buf.slotC, j);
+    }
+  }
+
+  // Apply changes temporarily so scratchA and new features can be computed.
+  for (let ci = 0; ci < nCap; ci++) cells[captures[ci]] = EMPTY;
+  cells[nextMove] = game.current;
+
+  // Permanently update scratchA for affected positions.
+  for (let i = 0; i < nsA; i++) {
+    const j  = sArr[i];
+    const v0 = cells[j];
+    const v1 = cells[(j + 1) % area];
+    const vv = (v0*v0 + v1*v1) | 0;
+    sA[j]    = vv * Math.imul(389 + v0, 593 + v1);
+  }
+
+  // Add new features for affected positions.
+  for (let ci = -1; ci < nCap; ci++) {
+    const p  = ci < 0 ? nextMove : captures[ci];
+    const v0 = cells[p];
+    if (v0) {
+      const s = buf.n++;
+      buf.idxs[s]      = resolveKey(Math.imul(835 + p, 691 + v0), ctx);
+      buf.slotA[p]     = s;
+      buf.posTypeOf[s] = (p << 2) | 0;
+    }
+  }
+  if (USE_1x2) {
+    for (let i = 0; i < nsA; i++) {
+      const j = sArr[i];
+      if (sA[j]) {
+        const s = buf.n++;
+        buf.idxs[s]      = resolveKey(Math.imul(129 + j, 972 + sA[j]), ctx);
+        buf.slotB[j]     = s;
+        buf.posTypeOf[s] = (j << 2) | 1;
+      }
+    }
+  }
+  if (USE_2x2) {
+    for (let i = 0; i < nW; i++) {
+      const j    = wArr[i];
+      const sa0  = sA[j];
+      const sa1  = sA[(j + N) % area];
+      const v0v1 = (sa0*sa0 + sa1*sa1) | 0;
+      if (v0v1) {
+        const hash = v0v1 * Math.imul(843 + sa0, 670 + sa1);
+        const s = buf.n++;
+        buf.idxs[s]      = resolveKey(Math.imul(381 + j, 463 + hash), ctx);
+        buf.slotC[j]     = s;
+        buf.posTypeOf[s] = (j << 2) | 2;
+      }
+    }
+  }
+
+  // Restore cells; game.play will apply these changes permanently.
+  for (let ci = 0; ci < nCap; ci++) cells[captures[ci]] = -game.current;
+  cells[nextMove] = EMPTY;
+}
+
+// Custom 1-ply search with incremental moves and feature extraction.
 function search1ply(game, ctx, width = 0) {
   const area = game.N * game.N;
   const searchFeats = ctx.searchFeats;
@@ -304,15 +506,7 @@ function selectTrainingMove(game, step, ctx) {
     return { move: game.randomLegalMove() };
 
   if (step < WIDE_DEPTH) {
-    if (false && Math.random() < ctx.lastSearchMoveSame[step]) {
-      return { move: ctx.lastSearchMove[step] };
-    } else {
-      const move = search1ply(game, ctx).move;
-      const isSame = ctx.lastSearchMove[step] === move ? 1 : 0;
-      ctx.lastSearchMoveSame[step] += 0.1 * (isSame - ctx.lastSearchMoveSame[step]);
-      ctx.lastSearchMove[step] = move;
-      return { move };
-    }
+    return search1ply(game, ctx);
   }
 
   if (step < NARROW_DEPTH) 
@@ -355,21 +549,20 @@ function getMove(game, budgetMs = 1000) {
   let sims = 0;
   let maxSteps = 0;
 
-  const lastSearchMove = new Int32Array(WIDE_DEPTH); // indexed by step
-  const lastSearchMoveSame = new Float32Array(WIDE_DEPTH); // indexed by step
-  const ctx = { keyToIdx, weightsArr, lastSearchMove, lastSearchMoveSame, searchFeats: makeBuf(area) };
+  const ctx = { keyToIdx, weightsArr, searchFeats: makeBuf(area) };
 
-  let prev2 = makeBuf(area);
-  let prev1 = makeBuf(area);
-  let feats = makeBuf(area);
+  let prev2   = makeBuf(area);
+  let prev1   = makeBuf(area);
+  let feats   = makeBuf(area);
+  let primary = makeBuf(area);  // always tracks the current sim board state
 
   let lr = LR1;
 
   while (true) {
 
     let progress;
-    if (TD_SIMS > 0) {
-      progress = sims / TD_SIMS;
+    if (SIMS > 0) {
+      progress = sims / SIMS;
     } else {
       progress = (Date.now() - tStart) / budgetMs;
     }
@@ -383,10 +576,22 @@ function getMove(game, budgetMs = 1000) {
     const evalDepth = (EVAL_DEPTH > 0 && evalModel) ? EVAL_DEPTH + (sims % 2) : 10000;
     let step = 0;
     let outcome;
+
+    // Initialise primary for the real board state; maintained incrementally.
+    findFeaturesInit(g, primary, ctx);
+    prev1.n = prev2.n = 0;
+
     let moveSelection = selectTrainingMove(g, step, ctx);
     while (true) {
+      const nextMove = moveSelection.move;
 
-      g.play(moveSelection.move);
+      // Update primary incrementally before playing (cells still in pre-move state).
+      if (nextMove !== PASS) {
+        const captures = g.captureList(nextMove);
+        applyMoveIncremental(g, primary, ctx, nextMove, captures);
+      }
+
+      g.play(nextMove);
       step++;
       if (g.gameOver || step > maxMoves) {
         outcome = (g.estimateWinner() === BLACK) ? 1 : 0;
@@ -399,7 +604,9 @@ function getMove(game, budgetMs = 1000) {
 
       moveSelection = selectTrainingMove(g, step, ctx);
 
-      findFeatures(g, feats, ctx);
+      // Copy primary.idxs into feats (O(n) native copy) then evaluate.
+      feats.n = primary.n;
+      feats.idxs.set(primary.idxs.subarray(0, primary.n));
       evaluate(feats, weightsArr);
 
       if (prev2.n > 0) {
@@ -444,7 +651,8 @@ function getMove(game, budgetMs = 1000) {
 if (typeof module !== 'undefined') {
   module.exports = { getMove };
   require('./tdsearch.test.js').runTests(
-    { makeBuf, resolveKey, findFeatures, evaluate, evaluateDelta, tdUpdate, getMove },
+    { makeBuf, resolveKey, findFeatures, findFeaturesInit, applyMoveIncremental,
+      evaluate, evaluateDelta, search1ply, tdUpdate, getMove },
     require('../game2.js')
   );
 } else {
