@@ -418,6 +418,10 @@ class Game2 {
   isLegal(idx) {
     if (idx === PASS) return true;
     if (this.cells[idx] !== EMPTY) return false;
+    const nbr = this._nbr, base = idx * 4, cells = this.cells;
+    if (cells[nbr[base]] === EMPTY || cells[nbr[base+1]] === EMPTY ||
+        cells[nbr[base+2]] === EMPTY || cells[nbr[base+3]] === EMPTY)
+      return !this._isKo(idx, this.current);
     if (this._isSingleSuicide(idx, this.current)) return false;
     if (this._isMultiSuicide(idx, this.current))  return false;
     if (this._isKo(idx, this.current))             return false;

@@ -17,6 +17,7 @@ Game2 make it cheap to return chain lib/stone counts?
 Chain size attribute in pattern?
 
 TD search
+  Ramp epsilon
   Why doesn't wide search help?
   Sparse 4x4
   Single-color patterns?

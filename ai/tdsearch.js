@@ -17,7 +17,8 @@ const { makeIntMap } = _isNode ? require('../int-map.js') : window.IntMap;
 const SIMS          = Util.envInt  ('TD_SIMS', 0);
 const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
 const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
-const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
+const EPSILON0      = Util.envFloat('TD_EPSILON0', 0.1);
+const EPSILON1      = Util.envFloat('TD_EPSILON1', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
 const LR0           = Util.envFloat('TD_LR0', 0.6);
@@ -25,6 +26,7 @@ const LR1           = Util.envFloat('TD_LR1', 0.3);
 const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 1);
 const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
 const EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
+const USE_PLAYOUT   = Util.envInt  ('TD_USE_PLAYOUT', '0');
 
 let evalModel = null;
 if (_isNode && EVAL_DATA) evalModel = loadWeights(EVAL_DATA);
@@ -501,8 +503,8 @@ function search1ply(game, ctx, width = 0) {
   return { move: bestIdx, moveScore: bestScore };
 }
 
-function selectTrainingMove(game, step, ctx) {
-  if (Math.random() < EPSILON) 
+function selectTrainingMove(game, step, ctx, epsilon) {
+  if (Math.random() < epsilon) 
     return { move: game.randomLegalMove() };
 
   if (step < WIDE_DEPTH) {
@@ -512,8 +514,10 @@ function selectTrainingMove(game, step, ctx) {
   if (step < NARROW_DEPTH) 
     return search1ply(game, ctx, 2);
 
+  if (USE_PLAYOUT) {
+    return Playout.getMove(game);
+  }
   return { move: game.randomLegalMove() };
-//  return Playout.getMove(game);
 }
 
 // These two store the state of the model at the start of the game.
@@ -526,40 +530,25 @@ let weightsArr = [];
 
 let lastMoveCount = 0;
 
-function getMove(game, budgetMs = 1000) {
-  if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
-    return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
-  }
-
-  const moveCountDiff = game.moveCount - lastMoveCount;
-  const moveCountUnexpected = moveCountDiff < 0 || moveCountDiff > 2;
-  
-  if (game.moveCount === 1) {
-    keyToIdx   = keyToIdx_start;
-    weightsArr = weightsArr_start;
-  } else if (moveCountUnexpected) {
-    keyToIdx = makeIntMap();
-    weightsArr = [];
-  }
-  lastMoveCount = game.moveCount;
-
-  const area = game.N * game.N;
+// Runs TD self-play simulations to train the model. Returns { ctx, sims, maxSteps }.
+function ponder(game, budgetMs, ctx) {
+  const area     = game.N * game.N;
   const maxMoves = 3 * game.emptyCount + 20;
-  const tStart = Date.now();
-  let sims = 0;
+  const tStart   = Date.now();
+  const weightsArr = ctx.weightsArr;
+  let sims     = 0;
   let maxSteps = 0;
-
-  const ctx = { keyToIdx, weightsArr, searchFeats: makeBuf(area) };
 
   let prev2   = makeBuf(area);
   let prev1   = makeBuf(area);
   let feats   = makeBuf(area);
   let primary = makeBuf(area);  // always tracks the current sim board state
 
+  // Initialize to the stable values, maybe update later.
   let lr = LR1;
+  let epsilon = EPSILON1;
 
   while (true) {
-
     let progress;
     if (SIMS > 0) {
       progress = sims / SIMS;
@@ -567,8 +556,10 @@ function getMove(game, budgetMs = 1000) {
       progress = (Date.now() - tStart) / budgetMs;
     }
     if (progress >= 1) break;
-    if (game.moveCount > 1) {  // Hacky guard to keep start model stable.
+    if (game.moveCount > 1) {
+      // We are not operating on the preserved game-start model, so ramp these.
       lr = LR1 - progress * (LR0 - LR1);
+      epsilon = EPSILON1 - progress * (EPSILON0 - EPSILON1);
     }
 
     sims++;
@@ -581,7 +572,7 @@ function getMove(game, budgetMs = 1000) {
     findFeaturesInit(g, primary, ctx);
     prev1.n = prev2.n = 0;
 
-    let moveSelection = selectTrainingMove(g, step, ctx);
+    let moveSelection = selectTrainingMove(g, step, ctx, epsilon);
     while (true) {
       const nextMove = moveSelection.move;
 
@@ -602,7 +593,7 @@ function getMove(game, budgetMs = 1000) {
         break;
       }
 
-      moveSelection = selectTrainingMove(g, step, ctx);
+      moveSelection = selectTrainingMove(g, step, ctx, epsilon);
 
       // Copy primary.idxs into feats (O(n) native copy) then evaluate.
       feats.n = primary.n;
@@ -626,6 +617,33 @@ function getMove(game, budgetMs = 1000) {
     maxSteps = Math.max(maxSteps, step);
   }
 
+  return { sims, maxSteps };
+}
+
+function getMove(game, budgetMs = 1000) {
+  if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
+    return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
+  }
+
+  const moveCountDiff = game.moveCount - lastMoveCount;
+  const moveCountUnexpected = moveCountDiff < 0 || moveCountDiff > 2;
+
+  if (game.moveCount === 1) {
+    keyToIdx   = keyToIdx_start;
+    weightsArr = weightsArr_start;
+  } else if (moveCountUnexpected) {
+    keyToIdx = makeIntMap();
+    weightsArr = [];
+  }
+  lastMoveCount = game.moveCount;
+
+  const area = game.N * game.N;
+  const ctx  = { keyToIdx, weightsArr, searchFeats: makeBuf(area) };
+
+  ///////////////////////////////////////////////////////
+  const { sims, maxSteps } = ponder(game, budgetMs, ctx);
+  ///////////////////////////////////////////////////////
+
   if (game.moveCount === 1) {
     keyToIdx_start = keyToIdx.clone();
     weightsArr_start = weightsArr.slice();
@@ -634,9 +652,9 @@ function getMove(game, budgetMs = 1000) {
   const evalFn = g => { findFeatures(g, ctx.searchFeats, ctx); evaluate(ctx.searchFeats, ctx.weightsArr); return ctx.searchFeats.val; };
   const searchResult = { move: abSearch(game, AB_DEPTH, evalFn), moveScore: evalFn(game) };
 
-  const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore
+  const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore;
   const move = myScore < 0.01 ? PASS : searchResult.move;
-  const result = { move, ctx, sims, maxSteps }
+  const result = { move, ctx, sims, maxSteps };
   result.info = `value=${myScore.toFixed(3)}`;
   if (move === PASS) {
     result.type = 'pass';
