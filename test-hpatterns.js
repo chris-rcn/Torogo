@@ -196,10 +196,10 @@ section('speculative placement');
   const m1 = createModel({2:4, 3:4}, 3);
   const m2 = createModel({2:4, 3:4}, 3);
 
-  const fSpec = featureArr(extractFeatures(g, m1, true, 40));
+  const fSpec = featureArr(extractFeatures(g, m1, undefined, 40));
 
   g.play(40);  // actually play
-  const fReal = featureArr(extractFeatures(g, m2, false));
+  const fReal = featureArr(extractFeatures(g, m2));
 
   check(fSpec.length === fReal.length,
     `speculative B@40 count=${fSpec.length} matches actual count=${fReal.length}`);
@@ -210,7 +210,7 @@ section('speculative placement');
   g.play(20);  // B@20
   const before = Array.from(g.cells);
   const m = createModel({2:4, 3:4}, 3);
-  extractFeatures(g, m, true, 30);  // speculative B@30
+  extractFeatures(g, m, undefined, 30);  // speculative B@30
   const after = Array.from(g.cells);
   const changed = before.some((v, i) => v !== after[i]);
   check(!changed, 'board cells unchanged after speculative extraction');
@@ -222,8 +222,8 @@ section('speculative placement');
   // when a move actually changes the board.
   const g = new Game2(9, false);
   const m = createModel({2:4, 3:4}, 3);
-  const fBefore = featureArr(extractFeatures(g, m, false));
-  const fSpec   = featureArr(extractFeatures(g, m, true, 40));
+  const fBefore = featureArr(extractFeatures(g, m));
+  const fSpec   = featureArr(extractFeatures(g, m, undefined, 40));
   check(fBefore.length !== fSpec.length || fSpec.length > 0,
     'speculative on empty board adds features (B@40)');
   check(fBefore.length === 0, 'empty board still has 0 features without doSetNext');
@@ -235,8 +235,8 @@ section('speculative placement');
   const g = new Game2(9, false);
   g.play(40);
   const m = createModel({2:4, 3:4}, 3);
-  const fNormal = featureArr(extractFeatures(g, m, false));
-  const fPass   = featureArr(extractFeatures(g, m, true, PASS));
+  const fNormal = featureArr(extractFeatures(g, m));
+  const fPass   = featureArr(extractFeatures(g, m, undefined, PASS));
   check(fNormal.length === fPass.length, 'doSetNext with PASS = no change');
 }
 

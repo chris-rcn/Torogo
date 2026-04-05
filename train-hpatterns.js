@@ -111,7 +111,7 @@ function tdUpdate(features, target, lr) {
 
 // ── 1-ply search ──────────────────────────────────────────────────────────────
 
-function search1ply(game) {
+function search1ply(game, maxSearch) {
   const area    = game.N * game.N;
   const isBlack = game.current === BLACK;
   let bestMove  = PASS;
@@ -119,7 +119,7 @@ function search1ply(game) {
 
   for (let coord = 0; coord < area; coord++) {
     if (!game.isLegal(coord) || game.isTrueEye(coord)) continue;
-    const f = extractFeatures(game, model, true, coord);
+    const f = extractFeatures(game, model, maxSearch, coord);
     f.val = evaluateFeatures(f, model.weights);
     if (isBlack ? f.val > bestVal : f.val < bestVal) {
       bestVal  = f.val;
@@ -129,7 +129,7 @@ function search1ply(game) {
 
   // Consider passing late in the game or after opponent passed.
   if (game.consecutivePasses > 0 || game.emptyCount < area / 2) {
-    const fPass = extractFeatures(game, model);
+    const fPass = extractFeatures(game, model, maxSearch);
     fPass.val = evaluateFeatures(fPass, model.weights);
     if (isBlack ? fPass.val >= bestVal : fPass.val <= bestVal) {
       bestMove = PASS;
@@ -150,9 +150,10 @@ function trainGame(N) {
   let moves = 0;
   let correct = 0;
   const vals = [];
+  let maxSearch = MAX_SIZE;  // shrinks when a level has no eligible patterns; reset on capture/new game
 
   while (!game.gameOver && moves < maxMoves) {
-    const f = extractFeatures(game, model);
+    const f = extractFeatures(game, model, maxSearch);
     f.val = evaluateFeatures(f, model.weights);
     vals.push(f.val);
 
@@ -161,7 +162,12 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), count: f.count, val: f.val };
 
-    game.play(Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game));
+    const move = Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game, maxSearch);
+    const hasCaptures = move !== PASS && game.captureList(move).length > 0;
+    game.play(move);
+
+    // After a capture, stones are removed so higher levels may become eligible again.
+    maxSearch = hasCaptures ? MAX_SIZE : f.topLevel;
     moves++;
   }
 

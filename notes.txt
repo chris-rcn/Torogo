@@ -95,3 +95,52 @@ P12 cardinality by stone count (approximate)
 11: 1550
 12:  268
 
+
+S4
+ XX                             
+XXXX                            
+XXXX                            
+ XX                             
+                                
+S5
+ XXX                          
+XXXXX                         
+XXXXX                         
+XXXXX                         
+ XXX                          
+                                
+S6                              
+ XXXX                           
+XXXXXX                          
+XXXXXX                          
+XXXXXX                          
+XXXXXX                          
+ XXXX                           
+                                
+S7
+ XXXXX                       
+XXXXXXX                      
+XXXXXXX                      
+XXXXXXX                      
+XXXXXXX                      
+XXXXXXX                      
+ XXXXX                       
+                                
+S7
+  XXX                        
+ XXXXX                       
+XXXXXXX                      
+XXXXXXX                      
+XXXXXXX                      
+ XXXXX                       
+  XXX                        
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+                                
+
