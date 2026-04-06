@@ -98,6 +98,9 @@ class Game2 {
     this.lastMove = PASS;
     this.emptyCount = N * N;
 
+    this._lastCaptures     = new Int32Array(cap);
+    this._lastCaptureCount = 0;
+
     if (applyFirstMove) {
       const center = (N >> 1) * N + (N >> 1);
       this._place(center, BLACK);
@@ -263,7 +266,9 @@ class Game2 {
     return mainGid;
   }
 
-  _remove(gid) {
+  // Removes gid from the board, restores liberties of adjacent groups.
+  // Appends captured stone indices to lastCap starting at offset nCap0; returns updated count.
+  _remove(gid, lastCap, nCap0) {
     const W      = this._W;
     const sw     = this._sw;
     const lw     = this._lw;
@@ -272,13 +277,14 @@ class Game2 {
     const gidArr = this._gid;
     const nbr    = this._nbr;
     const sb     = gid * W;
-    let count = 0;
+    let nCap = nCap0;
 
     for (let wi = 0; wi < W; wi++) {
       let w = sw[sb + wi];
       while (w) {
         const bit = 31 - Math.clz32(w & -w);
         const idx = wi * 32 + bit;
+        lastCap[nCap++] = idx;
         cells[idx] = EMPTY;
         gidArr[idx] = -1;
         const base = idx * 4;
@@ -291,12 +297,11 @@ class Game2 {
             if (!(lw[nlb + nwi] & m)) { lw[nlb + nwi] |= m; ls[nGid]++; }
           }
         }
-        count++;
         w &= w - 1;
       }
     }
-    this.emptyCount += count;
-    return count;
+    this.emptyCount += nCap - nCap0;
+    return nCap;
   }
 
   // ── Public group info ──────────────────────────────────────────────────────
@@ -476,41 +481,6 @@ class Game2 {
     return result;
   }
 
-  // Like captureList but writes into a pre-allocated Int32Array and returns the count.
-  // Avoids allocation in hot paths (separate implementation to stay monomorphic).
-  captureListInto(idx, result) {
-    if (idx === PASS) return 0;
-    const opp    = -this.current;
-    const nbr    = this._nbr;
-    const cells  = this.cells;
-    const gidArr = this._gid;
-    const ls     = this._ls;
-    const sw     = this._sw;
-    const W      = this._W;
-    let n = 0;
-    let seen0 = -1, seen1 = -1, seen2 = -1, seen3 = -1;
-    for (let d = 0; d < 4; d++) {
-      const ni  = nbr[idx * 4 + d];
-      if (cells[ni] !== opp) continue;
-      const gid = gidArr[ni];
-      if (ls[gid] !== 1) continue;
-      if (gid === seen0 || gid === seen1 || gid === seen2 || gid === seen3) continue;
-      if      (seen0 === -1) seen0 = gid;
-      else if (seen1 === -1) seen1 = gid;
-      else if (seen2 === -1) seen2 = gid;
-      else                   seen3 = gid;
-      const gb = gid * W;
-      for (let wi = 0; wi < W; wi++) {
-        let w = sw[gb + wi];
-        while (w) {
-          const lsb = w & -w;
-          result[n++] = wi * 32 + (31 - Math.clz32(lsb));
-          w ^= lsb;
-        }
-      }
-    }
-    return n;
-  }
 
   isTrueEye(idx) {
     const color  = this.current;
@@ -559,6 +529,7 @@ class Game2 {
       this.ko = PASS;
       this.moveCount++;
       this.lastMove = PASS;
+      this._lastCaptureCount = 0;
       return { success: true };
     }
 
@@ -575,8 +546,9 @@ class Game2 {
     const sw     = this._sw;
     const W      = this._W;
     let c0 = -1, c1 = -1, c2 = -1, c3 = -1;
-    let capturedCount = 0;
-    let capturedIdx   = PASS;
+    let capturedIdx = PASS;
+    let nCap = 0;
+    const lastCap = this._lastCaptures;
 
     for (let i = 0; i < 4; i++) {
       const ni  = nbr[base + i];
@@ -588,18 +560,13 @@ class Game2 {
       else if (c2 === -1) c2 = gid;
       else                c3 = gid;
       if (ls[gid] === 0) {
-        if (ss[gid] === 1) {
-          const gb = gid * W;
-          for (let wi = 0; wi < W; wi++) {
-            if (sw[gb + wi]) {
-              capturedIdx = wi * 32 + (31 - Math.clz32(sw[gb + wi] & -sw[gb + wi]));
-              break;
-            }
-          }
-        }
-        capturedCount += this._remove(gid);
+        const nCapBefore = nCap;
+        nCap = this._remove(gid, lastCap, nCap);
+        if (ss[gid] === 1) capturedIdx = lastCap[nCapBefore];
       }
     }
+    const capturedCount = nCap;
+    this._lastCaptureCount = nCap;
 
     this.ko = PASS;
     if (capturedCount === 1 && capturedIdx !== PASS) {
@@ -734,6 +701,8 @@ class Game2 {
     g.moveCount         = this.moveCount;
     g.lastMove          = this.lastMove;
     g.emptyCount        = this.emptyCount;
+    g._lastCaptures     = this._lastCaptures;   // shared; safe since JS is single-threaded
+    g._lastCaptureCount = this._lastCaptureCount;
     return g;
   }
 

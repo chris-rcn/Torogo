@@ -76,12 +76,11 @@ let lastMoveCount = 0;
 
 function makeBuf(area) {
   return {
-    idxs:   new Int32Array(area),
-    n:      0,
-    sum:    0,
-    slotA:  new Int32Array(area).fill(-1),  // slot index for position j (-1 if none)
-    posOf:  new Int32Array(area),           // posOf[s] = board index of slot s
-    capBuf: new Int32Array(area),           // scratch for inlined capture enumeration
+    idxs:  new Int32Array(area),
+    n:     0,
+    sum:   0,
+    slotA: new Int32Array(area).fill(-1),  // slot index for position j (-1 if none)
+    posOf: new Int32Array(area),           // posOf[s] = board index of slot s
   };
 }
 
@@ -165,33 +164,26 @@ function findFeaturesInit(game, buf, ctx) {
   }
 }
 
-// Update buf incrementally after nextMove is played (1×1 features only).
-// Must be called BEFORE game.play(nextMove); restores cells afterward.
-// Uses captureListInto to avoid per-call array allocation.
+// Update buf incrementally for the move just played via game.play(nextMove).
+// Must be called AFTER game.play(nextMove); reads captures from game._lastCaptures.
 function findFeaturesIncremental(game, buf, ctx, nextMove) {
-  const cells = game.cells;
-  const cap   = buf.capBuf;
-  const nCap  = game.captureListInto(nextMove, cap);
+  const nCap = game._lastCaptureCount;
+  const cap  = game._lastCaptures;
 
-  // Remove features for captured stones.
+  // Remove features for captured stones (now EMPTY on the board).
   for (let ci = 0; ci < nCap; ci++) {
     const p = cap[ci];
     if (buf.slotA[p] >= 0) _removeSlot(buf, buf.slotA[p], p);
   }
 
-  // Apply changes temporarily.
-  for (let ci = 0; ci < nCap; ci++) cells[cap[ci]] = EMPTY;
-  cells[nextMove] = game.current;
-
-  // Add feature for the new stone.
-  const s = buf.n++;
-  buf.idxs[s]         = resolveKey(Math.imul(835 + nextMove, 691 + game.current), ctx);
-  buf.slotA[nextMove] = s;
-  buf.posOf[s]        = nextMove;
-
-  // Restore cells; game.play will apply changes permanently.
-  for (let ci = 0; ci < nCap; ci++) cells[cap[ci]] = -game.current;
-  cells[nextMove] = EMPTY;
+  // Add feature for the new stone (cells already updated by game.play).
+  const v0 = game.cells[nextMove];
+  if (v0) {
+    const s = buf.n++;
+    buf.idxs[s]         = resolveKey(Math.imul(835 + nextMove, 691 + v0), ctx);
+    buf.slotA[nextMove] = s;
+    buf.posOf[s]        = nextMove;
+  }
 }
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
@@ -220,8 +212,8 @@ function playTracked(game2, node, td, played) {
       continue;
     }
     if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
-    findFeaturesIncremental(game2, td.primary, td.ctx, idx);
     game2.play(idx);
+    findFeaturesIncremental(game2, td.primary, td.ctx, idx);
     moves++;
     weight -= weightStep;
     if (!game2.gameOver) tdStep(td);
@@ -364,10 +356,10 @@ function selectAndExpand(root, rootGame2, N, td) {
     }
 
     const move = node.legalMoves[best];
+    game2.play(move);
     if (move !== PASS) {
       findFeaturesIncremental(game2, td.primary, td.ctx, move);
     }
-    game2.play(move);
     if (!game2.gameOver) {
       tdStep(td);
       node.tdVals[best] = td.prev1.val;
