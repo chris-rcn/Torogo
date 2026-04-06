@@ -8,7 +8,7 @@
 // features are active.
 
 function runTests(
-  { makeBuf, resolveKey, findFeatures, findFeaturesInit, applyMoveIncremental,
+  { makeBuf, resolveKey, findFeatures, findFeaturesInit, findFeaturesIncremental,
     evaluate, evaluateDelta, search1ply, tdUpdate, getMove },
   { Game2, BLACK, WHITE, PASS }
 ) {
@@ -342,7 +342,7 @@ function runTests(
     check(slotsOk, 'findFeaturesInit: slot arrays internally consistent');
   }
 
-  // ── applyMoveIncremental matches findFeatures after play ─────────────────────
+  // ── findFeaturesIncremental matches findFeatures after play ─────────────────────
   {
     const N = 5, area = N * N;
 
@@ -383,21 +383,21 @@ function runTests(
       pCopy.posTypeOf.set(primary.posTypeOf.subarray(0, primary.n));
 
       const captures = g.captureList(m);
-      applyMoveIncremental(g, pCopy, ctx, m, captures);
+      findFeaturesIncremental(g, pCopy, ctx, m, captures);
 
       const incSet = new Set();
       pCopy.idxs.subarray(0, pCopy.n).forEach(wi => incSet.add(wi));
 
       check(pCopy.n === refN,
-        `applyMoveIncremental: move ${m} feature count ${pCopy.n} matches findFeatures ${refN}`);
+        `findFeaturesIncremental: move ${m} feature count ${pCopy.n} matches findFeatures ${refN}`);
       let setOk = refSet.size === incSet.size && [...refSet].every(k => incSet.has(k));
       check(setOk,
-        `applyMoveIncremental: move ${m} feature set matches findFeatures`);
+        `findFeaturesIncremental: move ${m} feature set matches findFeatures`);
 
       // Check cells are restored.
       let cellsOk = true;
       for (let i = 0; i < area; i++) if (g.cells[i] !== g.cells[i]) { cellsOk = false; break; }
-      check(true, `applyMoveIncremental: cells restored after move ${m}`);  // trivially true above
+      check(true, `findFeaturesIncremental: cells restored after move ${m}`);  // trivially true above
 
       break;  // one move is enough for the loop; full coverage via a chain below
     }
@@ -412,7 +412,7 @@ function runTests(
     for (const m of moves) {
       if (!gChain.isLegal(m)) continue;
       const captures = gChain.captureList(m);
-      applyMoveIncremental(gChain, pChain, ctxChain, m, captures);
+      findFeaturesIncremental(gChain, pChain, ctxChain, m, captures);
       gChain.play(m);
 
       // Compare with fresh findFeatures on the same game.
@@ -448,7 +448,7 @@ function runTests(
       const capMove = 17;
       check(gCap.captureList(capMove).length > 0, 'capture chain: setup has captures');
       const capCaptures = gCap.captureList(capMove);
-      applyMoveIncremental(gCap, pCap, ctxCap, capMove, capCaptures);
+      findFeaturesIncremental(gCap, pCap, ctxCap, capMove, capCaptures);
       gCap.play(capMove);
       const bufCapRef = makeBuf(area);
       findFeatures(gCap, bufCapRef, { keyToIdx: ctxCap.keyToIdx, weightsArr: ctxCap.weightsArr });

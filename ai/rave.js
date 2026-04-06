@@ -23,7 +23,7 @@ const Util = _isNode ? require('../util.js') : window.Util;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 
-const RAVE_K = Util.envFloat('RAVE_K', 600);
+const RAVE_K = Util.envFloat('RAVE_K', 800);
 
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
@@ -36,14 +36,14 @@ const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-// Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2, node) {
+// Returns { winner, played }.
+// played: reused Float32Array(cap) — caller zeroes it each call.
+function playTracked(game2, node, played) {
   const wasAlreadyOver = game2.gameOver;
   const N   = game2.N;
   const cap = N * N;
-  // Signed weight per cell: positive = played by BLACK, negative = played by WHITE.
-  // Zero means not yet played.  First play on a cell wins; recaptures are ignored.
-  const played = new Float32Array(cap);
+
+  played.fill(0, 0, cap);
 
   const moveLimit = 3 * game2.emptyCount + 20;
   const weightStep = 1 / cap;
@@ -52,7 +52,6 @@ function playTracked(game2, node) {
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
-    const raveNode = current !== node.mover ? node : node.parent;
     const idx = game2.randomLegalMove();
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
     if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
@@ -295,14 +294,17 @@ function getMove(game, timeBudgetMs) {
 
   const root = makeNode(null, null, -1, game2, N);
 
+  // Pre-allocate played buffer — reused across all playouts.
+  const played = new Float32Array(N * N);
+
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
   do {
     playouts++;
     const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, played } = playTracked(simGame2, node);
-    backpropagate(node, winner, played, rootPlayer);
+    const { winner, played: p } = playTracked(simGame2, node, played);
+    backpropagate(node, winner, p, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
   // Best child: most playout visits; ties broken by RAVE-blended score.

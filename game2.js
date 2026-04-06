@@ -98,8 +98,13 @@ class Game2 {
     this.lastMove = PASS;
     this.emptyCount = N * N;
 
-    this._lastCaptures     = new Int32Array(cap);
-    this._lastCaptureCount = 0;
+    this._lastCaptures      = new Int32Array(cap);
+    this._lastCaptureCount  = 0;
+    this._lastCaptureChains = 0;
+
+    this._emptyCells = new Int32Array(cap);
+    this._emptySlot  = new Int32Array(cap);
+    for (let i = 0; i < cap; i++) { this._emptyCells[i] = i; this._emptySlot[i] = i; }
 
     if (applyFirstMove) {
       const center = (N >> 1) * N + (N >> 1);
@@ -127,6 +132,7 @@ class Game2 {
     this.gameOver = false;
     this.moveCount = 0;
     this.emptyCount = this.N * this.N;
+    for (let i = 0; i < cap; i++) { this._emptyCells[i] = i; this._emptySlot[i] = i; }
     const center = (this.N >> 1) * this.N + (this.N >> 1);
     this._place(center, BLACK);
     this.current   = WHITE;
@@ -148,6 +154,18 @@ class Game2 {
 
     cells[idx] = color;
     this.emptyCount--;
+
+    // Remove idx from empty-cell list (swap-and-pop).
+    const eSlot  = this._emptySlot;
+    const eCells = this._emptyCells;
+    const _es = eSlot[idx];
+    const _el = this.emptyCount;   // new count = old last index
+    eSlot[idx] = -1;
+    if (_es !== _el) {
+      const _em = eCells[_el];
+      eCells[_es] = _em;
+      eSlot[_em]  = _es;
+    }
 
     // Remove idx from liberties of adjacent groups
     let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
@@ -276,8 +294,11 @@ class Game2 {
     const cells  = this.cells;
     const gidArr = this._gid;
     const nbr    = this._nbr;
+    const eCells = this._emptyCells;
+    const eSlot  = this._emptySlot;
     const sb     = gid * W;
     let nCap = nCap0;
+    let ec   = this.emptyCount;
 
     for (let wi = 0; wi < W; wi++) {
       let w = sw[sb + wi];
@@ -287,6 +308,8 @@ class Game2 {
         lastCap[nCap++] = idx;
         cells[idx] = EMPTY;
         gidArr[idx] = -1;
+        eSlot[idx]    = ec;
+        eCells[ec++]  = idx;
         const base = idx * 4;
         for (let i = 0; i < 4; i++) {
           const nGid = gidArr[nbr[base + i]];
@@ -300,7 +323,7 @@ class Game2 {
         w &= w - 1;
       }
     }
-    this.emptyCount += nCap - nCap0;
+    this.emptyCount = ec;
     return nCap;
   }
 
@@ -529,7 +552,8 @@ class Game2 {
       this.ko = PASS;
       this.moveCount++;
       this.lastMove = PASS;
-      this._lastCaptureCount = 0;
+      this._lastCaptureCount  = 0;
+      this._lastCaptureChains = 0;
       return { success: true };
     }
 
@@ -547,7 +571,7 @@ class Game2 {
     const W      = this._W;
     let c0 = -1, c1 = -1, c2 = -1, c3 = -1;
     let capturedIdx = PASS;
-    let nCap = 0;
+    let nCap = 0, nChains = 0;
     const lastCap = this._lastCaptures;
 
     for (let i = 0; i < 4; i++) {
@@ -563,10 +587,12 @@ class Game2 {
         const nCapBefore = nCap;
         nCap = this._remove(gid, lastCap, nCap);
         if (ss[gid] === 1) capturedIdx = lastCap[nCapBefore];
+        nChains++;
       }
     }
     const capturedCount = nCap;
-    this._lastCaptureCount = nCap;
+    this._lastCaptureCount  = nCap;
+    this._lastCaptureChains = nChains;
 
     this.ko = PASS;
     if (capturedCount === 1 && capturedIdx !== PASS) {
@@ -701,8 +727,11 @@ class Game2 {
     g.moveCount         = this.moveCount;
     g.lastMove          = this.lastMove;
     g.emptyCount        = this.emptyCount;
-    g._lastCaptures     = this._lastCaptures;   // shared; safe since JS is single-threaded
-    g._lastCaptureCount = this._lastCaptureCount;
+    g._lastCaptures      = this._lastCaptures;   // shared; safe since JS is single-threaded
+    g._lastCaptureCount  = this._lastCaptureCount;
+    g._lastCaptureChains = this._lastCaptureChains;
+    g._emptyCells = new Int32Array(this._emptyCells);
+    g._emptySlot  = new Int32Array(this._emptySlot);
     return g;
   }
 
@@ -754,19 +783,20 @@ class Game2 {
   }
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
-  // Fast path: try random cells.  Fallback: incremental Fisher-Yates over
-  // _allCells in-place (no allocation; order on entry is irrelevant).
+  // Fisher-Yates over the empty-cell list in-place; _emptySlot kept consistent.
   randomLegalMove() {
-    const cap = this._allCells.length;
-
-    // Fallback: shuffle _allCells in-place, test each cell.
-    const allCells = this._allCells;
-    for (let end = cap - 1; end >= 0; end--) {
-      const ri  = Math.floor(Math.random() * (end + 1));
-      const idx = allCells[ri];
-      if (this.isLegal(idx) && !this.isTrueEye(idx)) return idx;
-      allCells[ri]  = allCells[end];
-      allCells[end] = idx;
+    const ec     = this.emptyCount;
+    const eCells = this._emptyCells;
+    const eSlot  = this._emptySlot;
+    for (let end = ec - 1; end >= 0; end--) {
+      const ri  = (Math.random() * (end + 1)) | 0;
+      const idx = eCells[ri];
+      if (!this.isTrueEye(idx) && this.isLegal(idx)) return idx;
+      const t     = eCells[end];
+      eCells[ri]  = t;
+      eCells[end] = idx;
+      eSlot[t]   = ri;
+      eSlot[idx] = end;
     }
     return PASS;
   }
