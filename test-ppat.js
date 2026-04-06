@@ -1,6 +1,8 @@
 'use strict';
 
 const { createState, extractFeatures, evaluate, NUM_PATTERNS } = require('./ppat.js');
+// NUM_PATTERNS is the count of canonical IDs under D4 spatial symmetry only
+// (color swap is NOT applied since the encoding is already mover-relative).
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 
 let passed = 0, failed = 0;
@@ -10,7 +12,7 @@ function check(label, ok) {
 }
 
 // ── 1. Pattern count ─────────────────────────────────────────────────────────
-check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
+check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
 
 // ── 2. Lookup-table internal consistency ─────────────────────────────────────
 // For every raw index, the canonical form should be its own canonical (idempotent):
@@ -72,7 +74,7 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
     const st = createState(N);
     extractFeatures(g, st);
     for (let i = 0; i < st.count; i++) {
-      if (st.moves[i] === candidateCell) return { patId: st.patIds[i], patPol: st.patPols[i] };
+      if (st.moves[i] === candidateCell) return { patId: st.patIds[i] };
     }
     return null;
   }
@@ -89,8 +91,7 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
   check('D4 Rot90: N and E rotations same patId', fN && fE && fN.patId === fE.patId);
   check('D4 Rot180: N and S rotations same patId', fN && fS && fN.patId === fS.patId);
   check('D4 Rot270: N and W rotations same patId', fN && fW && fN.patId === fW.patId);
-  check('D4 rotations same polarity', fN && fE && fS && fW &&
-    fN.patPol === fE.patPol && fN.patPol === fS.patPol && fN.patPol === fW.patPol);
+
 
   // Flip: FRIEND at NE (diagonal) and FRIEND at NW should share patId (FlipH symmetry).
   const fNE = makeGameWithFriendAt(8,  center, N);  // NE of center (row-1, col+1)=(1,3)=8?
@@ -117,7 +118,7 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
   gA.play(northOf); gA.play(PASS); // BLACK at north, pass (now BLACK's turn again)
   const stA = createState(N); extractFeatures(gA, stA);
   let rA = null;
-  for (let i = 0; i < stA.count; i++) if (stA.moves[i] === center) { rA = { id: stA.patIds[i], pol: stA.patPols[i] }; break; }
+  for (let i = 0; i < stA.count; i++) if (stA.moves[i] === center) { rA = { id: stA.patIds[i] }; break; }
 
   // B: WHITE stone at northOf (FOE for BLACK)
   // Place WHITE there: BLACK passes, then WHITE plays, then it's BLACK's turn.
@@ -125,10 +126,11 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
   gB.play(PASS); gB.play(northOf); // pass by BLACK, WHITE plays at north
   const stB = createState(N); extractFeatures(gB, stB);
   let rB = null;
-  for (let i = 0; i < stB.count; i++) if (stB.moves[i] === center) { rB = { id: stB.patIds[i], pol: stB.patPols[i] }; break; }
+  for (let i = 0; i < stB.count; i++) if (stB.moves[i] === center) { rB = { id: stB.patIds[i] }; break; }
 
-  check('color symmetry: same patId', rA && rB && rA.id === rB.id);
-  check('color symmetry: opposite polarity', rA && rB && rA.pol === -rB.pol);
+  // FRIEND at N and FOE at N are genuinely different patterns in a mover-relative
+  // encoding — no color-swap symmetry is applied, so they must have different patIds.
+  check('mover-relative: FRIEND at N vs FOE at N have different patIds', rA && rB && rA.id !== rB.id);
 }
 
 // ── 5. Atari encoding ─────────────────────────────────────────────────────────
@@ -165,7 +167,7 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
 
   const st = createState(N); extractFeatures(g, st);
   let got = null;
-  for (let i = 0; i < st.count; i++) if (st.moves[i] === cand) { got = { id: st.patIds[i], pol: st.patPols[i] }; break; }
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === cand) { got = { id: st.patIds[i] }; break; }
   check('atari candidate found', got !== null);
 
   // Compare with the same position but cell 31 has 2+ liberties (not in atari).
@@ -178,7 +180,7 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
 
   const st2 = createState(N); extractFeatures(g2, st2);
   let got2 = null;
-  for (let i = 0; i < st2.count; i++) if (st2.moves[i] === cand) { got2 = { id: st2.patIds[i], pol: st2.patPols[i] }; break; }
+  for (let i = 0; i < st2.count; i++) if (st2.moves[i] === cand) { got2 = { id: st2.patIds[i] }; break; }
   check('non-atari candidate found', got2 !== null);
 
   // The atari version should have a different patId than the non-atari version
@@ -476,7 +478,6 @@ check('NUM_PATTERNS is 3436', NUM_PATTERNS === 3436);
   let allValid = true;
   for (let i = 0; i < st.count; i++) {
     if (st.patIds[i] < 0 || st.patIds[i] >= NUM_PATTERNS) { allValid = false; break; }
-    if (st.patPols[i] !== 1 && st.patPols[i] !== -1) { allValid = false; break; }
   }
   check('all patIds in [0, NUM_PATTERNS) and pols ±1', allValid);
   check('at least 1 move found in mid-game', st.count > 0);
