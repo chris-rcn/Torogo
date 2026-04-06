@@ -354,7 +354,7 @@ function scheduleComputerMove() {
         computerBusy = false;
         return;
       }
-      const move = getMove(game, UI_BUDGET_MS);
+      const move = getMove(game, UI_BUDGET_MS, { polite: true });
       if (move.rootWinRatio !== undefined) lastRootWinRatio = move.rootWinRatio;
 
       const applyMove = () => {

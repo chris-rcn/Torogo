@@ -12,8 +12,10 @@ const { performance } = require('perf_hooks');
  *   --size    <n>        Board size: 9, 13, or 19    (required)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
- *   --verbose            Print the board after every move
  *   --help               Show this help message
+ *
+ * Env variables:
+ *   VERBOSE=1            Print the board after every move
  *
  * Colors alternate each game: p1 is black in odd games, white in even games.
  * Policy names are filenames without the .js extension inside the ai/ folder.
@@ -28,10 +30,12 @@ const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
+const VERBOSE = Util.envInt('VERBOSE', 0);
+
+const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>] [--verbose]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>]`);
   process.exit(0);
 }
 
@@ -66,7 +70,6 @@ function printBoard(game) {
 const tally = { p1: 0, p2: 0 };
 const stats  = { p1: { ms: 0, moves: 0 }, p2: { ms: 0, moves: 0 } };
 const startTime = performance.now();
-const verboseBoard = !!opts.verbose;
 
 // Column widths for the summary table.
 const GW = 6;   // games
@@ -113,6 +116,10 @@ function printStats(gamesPlayed) {
 }
 
 function maybePrint(gamesPlayed) {
+  if (VERBOSE) {
+    printStats(gamesPlayed);
+    return;
+  }
   const now = performance.now();
   if (now - lastPrintTime < printPeriodMs) return;
   if (gamesPlayed === lastPrintGames) return;
@@ -229,7 +236,7 @@ for (let g = 0; g < gameLimit; g++) {
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  if (verboseBoard) {
+  if (VERBOSE) {
     console.log(`${names[0]} ● vs ${names[1]} ○`);
   }
 
@@ -248,7 +255,7 @@ for (let g = 0; g < gameLimit; g++) {
       console.error(`Illegal move from ${mover} (${p1IsBlack ? p1Name : p2Name}): ${JSON.stringify(move)}`);
       process.exit(1);
     }
-    if (verboseBoard) {
+    if (VERBOSE) {
       console.log(`${names[isBlackTurn?0:1]}:`);
       printBoard(game);
       console.log(`Agent info: ${move.info}`);

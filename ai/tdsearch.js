@@ -311,7 +311,7 @@ function _removeSlot(buf, s, slotForJ, j) {
 }
 
 // Full extraction with slot tracking. Call once per simulation to initialise
-// the primary buffer; applyMoveIncremental maintains it thereafter.
+// the primary buffer; findFeaturesIncremental maintains it thereafter.
 function findFeaturesInit(game, buf, ctx) {
   const N    = game.N;
   const area = N * N;
@@ -358,7 +358,7 @@ function findFeaturesInit(game, buf, ctx) {
 // Update the primary buffer incrementally after nextMove is played.
 // Must be called BEFORE game.play(nextMove); restores cells afterward.
 // primary.scratchA is permanently updated to match the post-move board.
-function applyMoveIncremental(game, buf, ctx, nextMove, captures) {
+function findFeaturesIncremental(game, buf, ctx, nextMove, captures) {
   const N    = game.N;
   const area = N * N;
   const cells = game.cells;
@@ -579,7 +579,7 @@ function ponder(game, budgetMs, ctx) {
       // Update primary incrementally before playing (cells still in pre-move state).
       if (nextMove !== PASS) {
         const captures = g.captureList(nextMove);
-        applyMoveIncremental(g, primary, ctx, nextMove, captures);
+        findFeaturesIncremental(g, primary, ctx, nextMove, captures);
       }
 
       g.play(nextMove);
@@ -669,7 +669,7 @@ function getMove(game, budgetMs = 1000) {
 if (typeof module !== 'undefined') {
   module.exports = { getMove };
   require('./tdsearch.test.js').runTests(
-    { makeBuf, resolveKey, findFeatures, findFeaturesInit, applyMoveIncremental,
+    { makeBuf, resolveKey, findFeatures, findFeaturesInit, findFeaturesIncremental,
       evaluate, evaluateDelta, search1ply, tdUpdate, getMove },
     require('../game2.js')
   );

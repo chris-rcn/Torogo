@@ -27,7 +27,7 @@ const EXPLORATION_C = 1.4;
 const RAVE_EQUIV = 5000;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
+const PLAYOUTS = Util.envInt('PROD_PLAYOUTS', 0);
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = 3;

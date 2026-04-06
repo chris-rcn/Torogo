@@ -54,8 +54,10 @@ function playTracked(game2) {
   return { winner: game2.estimateWinner(), played };
 }
 
-function getMove(game, timeBudgetMs, playoutLimit = PLAYOUTS) {
+function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS };
+
+  const playoutLimit = options.playoutLimit || PLAYOUTS;
 
   const game2  = game.cells ? game.clone() : game.toGame2();
   const player = game2.current;

@@ -476,6 +476,42 @@ class Game2 {
     return result;
   }
 
+  // Like captureList but writes into a pre-allocated Int32Array and returns the count.
+  // Avoids allocation in hot paths (separate implementation to stay monomorphic).
+  captureListInto(idx, result) {
+    if (idx === PASS) return 0;
+    const opp    = -this.current;
+    const nbr    = this._nbr;
+    const cells  = this.cells;
+    const gidArr = this._gid;
+    const ls     = this._ls;
+    const sw     = this._sw;
+    const W      = this._W;
+    let n = 0;
+    let seen0 = -1, seen1 = -1, seen2 = -1, seen3 = -1;
+    for (let d = 0; d < 4; d++) {
+      const ni  = nbr[idx * 4 + d];
+      if (cells[ni] !== opp) continue;
+      const gid = gidArr[ni];
+      if (ls[gid] !== 1) continue;
+      if (gid === seen0 || gid === seen1 || gid === seen2 || gid === seen3) continue;
+      if      (seen0 === -1) seen0 = gid;
+      else if (seen1 === -1) seen1 = gid;
+      else if (seen2 === -1) seen2 = gid;
+      else                   seen3 = gid;
+      const gb = gid * W;
+      for (let wi = 0; wi < W; wi++) {
+        let w = sw[gb + wi];
+        while (w) {
+          const lsb = w & -w;
+          result[n++] = wi * 32 + (31 - Math.clz32(lsb));
+          w ^= lsb;
+        }
+      }
+    }
+    return n;
+  }
+
   isTrueEye(idx) {
     const color  = this.current;
     const cells  = this.cells;

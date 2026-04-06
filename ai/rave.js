@@ -21,16 +21,14 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
+const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 
-// Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = Util.envFloat('RAVE_EQUIV', 2000);
+const RAVE_K = Util.envFloat('RAVE_K', 600);
 
-// Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 5);
+const N_EXPAND = Util.envInt('N_EXPAND', 2);
 
 // Fraction of parent RAVE stats inherited by a newly created child node.
 // Must be < 1 to prevent unbounded growth down the tree.
@@ -130,7 +128,7 @@ function makeNode(move, parent, ci, game2, N) {
     parent,
     ci,           // this node's index in parent.children / parent.child* arrays (-1 for root)
     mover,        // player who made `move` to reach this node
-    totalVisits:  1,  // sum of visits; incremented each playout
+    totalVisits:  0.1,  // sum of visits; incremented each playout
     selectedChild: -1,  // set by selectAndExpand; read by backpropagate
 
     legalMoves,   // Int32Array(M)
@@ -162,12 +160,14 @@ function ucbScore(moveIdx, node) {
   const realV = node.visits[moveIdx];
   const realWR = realW / realV;
 
+  const raveWeight = RAVE_K / (RAVE_K + realV);
+  const realWeight = 1 - raveWeight;
+
   // Combined win ratio
-  const wr = (raveWR * RAVE_EQUIV + realWR * realV)
-           / (       + RAVE_EQUIV +          realV);
+  const wr = realWeight * realWR + raveWeight * raveWR;
 
   const scoreBase = wr + 0.001 * Math.random();
-  return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / (1 + realV));
+  return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
@@ -330,7 +330,7 @@ function getMove(game, timeBudgetMs) {
 
   let totalChildWins = 0;
   for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
-  const rootWinRatio = root.totalVisits > 0 ? totalChildWins / root.totalVisits : 0.5;
+  const rootWinRatio = totalChildWins / root.totalVisits;
 
   if (root.wins[bestIdx] === 0 && game.moveCount >= N * N / 2) {
     return { type: 'pass', move: PASS, info: 'no winning line found', children, rootWinRatio };
