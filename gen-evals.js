@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-// replay-eval.js — play full games, pick a random position, re-evaluate with a longer dwell,
+// gen-evals.js — play full games, pick a random position, re-evaluate with a longer dwell,
 // and emit one line per sample: <size> <move-sequence> <rootWinRatio>
 //
 // Usage:
-//   node replay-eval.js --agent <name> --size <n> --budget <ms> --dwell <ms>
+//   node gen-evals.js --agent <name> --size <n> --budget <ms> --dwell <ms>
 //
 //   --agent   agent name under ai/ (e.g. rave)
 //   --size    board size (e.g. 9)
@@ -24,7 +24,7 @@ const budgetMs  = parseInt(get('--budget', '100'),  10);
 const dwellMs   = parseInt(get('--dwell',  '1000'), 10);
 
 if (!agentName) {
-  process.stderr.write('Usage: node replay-eval.js --agent <name> --size <n> --budget <ms> --dwell <ms>\n');
+  process.stderr.write('Usage: node gen-evals.js --agent <name> --size <n> --budget <ms> --dwell <ms>\n');
   process.exit(1);
 }
 
@@ -51,10 +51,15 @@ for (;;) {
     moves.push(idx);
   }
 
-  if (moves.length === 0) continue;
+  // Find the index of the first pass.
+  const firstPass = moves.indexOf(PASS);
 
-  // Pick a random position within the game (0 = just the auto-placed center stone).
-  const pos = Math.floor(Math.random() * moves.length);
+  // Valid sample range: at least 5 moves in, at least 10 before the first pass.
+  const lo = 5;
+  const hi = (firstPass === -1 ? moves.length : firstPass) - 10;
+  if (hi < lo) continue;
+
+  const pos = lo + Math.floor(Math.random() * (hi - lo + 1));
 
   // Replay the game up to that position.
   const replay = new Game2(size);
