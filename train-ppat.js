@@ -32,16 +32,17 @@ const Util = require('./util.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 if (opts.help || !opts.file) {
   console.error('Usage: node train-ppat.js --file <datafile> [--alpha <f>] [--M <n>] [--N <n>]');
-  console.error('                          [--iteration-limit <n>] [--position-limit <n>]');
+  console.error('                          [--iteration-limit <n>] [--position-limit <n>] [--batch-size <n>]');
   process.exit(1);
 }
 
 const dataFile      = opts.file;
 const alpha         = opts.alpha            !== undefined ? parseFloat(opts.alpha)                    : 10;
-const M             = opts.M                !== undefined ? parseInt(opts.M, 10)                      : 50;
+let   M             = opts.M                !== undefined ? parseInt(opts.M, 10)                      : 50;
 const N             = opts.N                !== undefined ? parseInt(opts.N, 10)                      : M;
 const iterLimit     = opts['iteration-limit'] !== undefined ? parseInt(opts['iteration-limit'], 10)   : Infinity;
 const positionLimit = opts['position-limit']  !== undefined ? parseInt(opts['position-limit'], 10)    : Infinity;
+const batchSize     = opts['batch-size']      !== undefined ? parseInt(opts['batch-size'], 10)        : 1;
 
 // ── Parameter vector ──────────────────────────────────────────────────────────
 // theta[0..NUM_PATTERNS-1]  : pattern weights
@@ -55,6 +56,8 @@ const theta  = new Float32Array(TOTAL);
 const rolloutFeatSt  = createState(19);
 const rolloutGradBuf = new Float32Array(TOTAL);  // per-rollout gradient accumulator
 const gBuf           = new Float32Array(TOTAL);  // g across N rollouts
+const batchBuf       = new Float32Array(TOTAL);  // accumulated bias*g across batch
+let   batchCount     = 0;
 
 let rolloutLogits = new Float32Array(512);
 let rolloutProbs  = new Float32Array(512);
@@ -126,98 +129,162 @@ function rollout(game, player, gradAcc) {
 
 // ── Core update (Algorithm 1) ─────────────────────────────────────────────────
 
+// Compute bias*g for one position and accumulate into batchBuf.
+// Applies theta update and resets batchBuf every batchSize positions.
 function updateTheta(game, vStar) {
   const player = game.current;
 
   // ── V: M rollouts, no gradient tracking ─────────────────────────────────────
   let V = 0;
   for (let i = 0; i < M; i++) V += rollout(game, player, null);
+  let rolloutSum = V;
   V /= M;
 
   // ── g: N rollouts with gradient tracking ─────────────────────────────────────
+  let Vaux = 0;
   gBuf.fill(0);
   for (let j = 0; j < N; j++) {
     rolloutGradBuf.fill(0);
     const z = rollout(game, player, rolloutGradBuf);
+    rolloutSum += z;
     const scale = z / N;
     for (let k = 0; k < TOTAL; k++) gBuf[k] += scale * rolloutGradBuf[k];
   }
 
-  // ── θ ← θ + α(V* − V)·g ─────────────────────────────────────────────────────
+  // ── Accumulate bias*g into batch buffer ──────────────────────────────────────
   const bias = vStar - V;
-  const ascale = alpha * bias;
-  for (let k = 0; k < TOTAL; k++) theta[k] += ascale * gBuf[k];
-  return bias;
+  for (let k = 0; k < TOTAL; k++) {
+    const error = bias * gBuf[k];
+    batchBuf[k] += error;
+  }
+  batchCount++;
+
+  // ── Flush: θ ← θ + (α/B)·Σ bias_i·g_i ──────────────────────────────────────
+  if (batchCount >= batchSize) {
+    const scale = alpha / batchCount;
+    for (let k = 0; k < TOTAL; k++) { theta[k] += scale * batchBuf[k]; batchBuf[k] = 0; }
+    batchCount = 0;
+  }
+
+  const delta = vStar - rolloutSum / (M + N);
+  return { delta };
 }
 
 // ── Load data ─────────────────────────────────────────────────────────────────
 
 const lines      = fs.readFileSync(dataFile, 'utf8').split('\n').filter(l => l.trim()).slice(0, positionLimit);
-const weightsFile = dataFile.replace(/(\.[^.]+)?$/, '-weights.js');
+const weightsFile = `out/ppat-data-${Math.random().toString(36).slice(2, 10)}.js`;
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 const startTime = performance.now();
 let totalPositions = 0;
 let iterations     = 0;
-let nextPrint      = 1;
+let nextPrint      = 0;
 let passDeltaSum   = 0;
 let passDeltaCount = 0;
+let errorSqSum     = 0;
+let errorSqCount   = 0;
 
-console.log(`${'iters'.padStart(6)}  ${'positions'.padStart(9)}  ${'|ΔV|'.padStart(6)}  ${'elapsed'.padStart(8)}`);
+console.log(`output: ${weightsFile}`);
+console.log(`${'iters'.padStart(6)}  ${'positions'.padStart(9)}  ${'|ΔV|'.padStart(6)}  ${'rms'.padStart(6)}  ${'elapsed'.padStart(8)}`);
+
+// ── Iteration 0: baseline |ΔV| under uniform random policy ───────────────────
+if (false) {
+  let deltaSum = 0, deltaCount = 0;
+  for (const line of lines) {
+    const { boardSize: bsz, history, candidates } = JSON.parse(line);
+    const game = new Game2(bsz);
+    let ok = true;
+    for (const c of history) { if (!game.play(parseMove(c, bsz))) { ok = false; break; } }
+    if (!ok || game.gameOver) continue;
+    const best = candidates.find(c => c.kwr !== null);
+    if (!best) continue;
+    const vStar = 2 * (best.kwr / 1000) - 1;
+    const player = game.current;
+    let V = 0;
+    for (let i = 0; i < M; i++) {
+      const sim = game.clone();
+      while (!sim.gameOver) sim.play(sim.randomLegalMove());
+      V += sim.estimateWinner() === player ? 1 : -1;
+    }
+    deltaSum += Math.abs(vStar - V / M);
+    deltaCount++;
+  }
+  const meanDelta = deltaCount > 0 ? (deltaSum / deltaCount).toFixed(3) : '  n/a';
+  const featWeights = '   0.000'.repeat(7);
+  console.log(
+    `${'0'.padStart(6)}  ` +
+    `${'0'.padStart(9)}  ` +
+    `${String(meanDelta).padStart(6)}  ` +
+    `${(0).toFixed(3).padStart(6)}  ` +
+    `${'0.0s'.padStart(8)}  ` +
+    `[${featWeights}]`
+  );
+}
 
 function printStats() {
-  const elapsed   = ((performance.now() - startTime) / 1000).toFixed(1) + 's';
+  const elapsedS   = ((performance.now() - startTime) / 1000).toFixed(1) + 's';
   const meanDelta = passDeltaCount > 0 ? (passDeltaSum / passDeltaCount).toFixed(3) : '  n/a';
-  passDeltaSum   = 0;
-  passDeltaCount = 0;
   const featWeights = Array.from(theta.subarray(NUM_PATTERNS, NUM_PATTERNS + 7))
-    .map(w => w.toFixed(3)).join('  ');
+    .map(w => w.toFixed(3).padStart(8)).join('');
   console.log(
     `${String(iterations).padStart(6)}  ` +
     `${String(totalPositions).padStart(9)}  ` +
     `${String(meanDelta).padStart(6)}  ` +
-    `${elapsed.padStart(8)}  ` +
+    `${Math.sqrt(errorSqSum).toFixed(3).padStart(6)}  ` +
+    `${elapsedS.padStart(8)}  ` +
     `[${featWeights}]`
   );
+  passDeltaSum   *= 0.5;
+  passDeltaCount *= 0.5;
+  errorSqSum     *= 0.5;
+  errorSqCount   *= 0.5;
 
   const patArr  = JSON.stringify(Array.from(theta.subarray(0, NUM_PATTERNS)));
   const prevArr = JSON.stringify(Array.from(theta.subarray(NUM_PATTERNS, NUM_PATTERNS + 7)));
   const js = `'use strict';
-// Generated by train-ppat.js — iterations: ${iterations}, positions: ${totalPositions}, elapsed: ${elapsed}
+// Generated by train-ppat.js — iterations: ${iterations}, positions: ${totalPositions}, elapsed: ${elapsedS}
 const _w = { pat: new Float32Array(${patArr}), prev: new Float32Array(${prevArr}) };
 if (typeof module !== 'undefined') module.exports = _w;
 else window.PPATWeights = _w;
 `;
   fs.writeFileSync(weightsFile, js);
+  nextPrint = performance.now() + 0.5 * (performance.now() - startTime);
 }
 
 while (true) {
   for (const line of lines) {
-    const { boardSize: N, history, candidates } = JSON.parse(line);
+    const { boardSize: bSize, history, candidates } = JSON.parse(line);
 
-    const game = new Game2(N);
+    const game = new Game2(bSize);
     let ok = true;
     for (const c of history) {
-      if (!game.play(parseMove(c, N))) { ok = false; break; }
+      if (!game.play(parseMove(c, bSize))) { ok = false; break; }
     }
     if (!ok || game.gameOver) continue;
 
     // V*(s) = value of the best candidate (pre-sorted descending by kwr).
     const best = candidates.find(c => c.kwr !== null);
     if (!best) continue;
-    const vStar = best.kwr / 1000;
+    const vStar = 2 * (best.kwr / 1000) - 1;
 
-    const delta = updateTheta(game, vStar);
-    passDeltaSum   += Math.abs(delta);
+    const result = updateTheta(game, vStar);
+    passDeltaSum   += Math.abs(result.delta);
     passDeltaCount++;
     totalPositions++;
+    errorSqSum += result.delta * result.delta;
+    errorSqCount += 1;
+
+    if (performance.now() > nextPrint) {
+      printStats();
+    }
+
   }
 
   iterations++;
-  if (iterations >= iterLimit) { printStats(); break; }
-  if (iterations >= nextPrint) {
-    printStats();
-    nextPrint = Math.ceil(nextPrint * 1.5);
+  if (iterations >= iterLimit) { 
+    printStats(); 
+    break; 
   }
 }
