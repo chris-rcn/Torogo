@@ -53,14 +53,7 @@ function matchesMove(s, move) {
 // ── Position builder ────────────────────────────────────────────────────────
 
 function buildPosition(pos) {
-  const { size, stones } = parseBoard(pos.board);
-  const g = new Game2(size, false);
-  g.current   = pos.toPlay === '●' ? BLACK : WHITE;
-  g.moveCount = 0;
-  for (const [x, y, color] of stones) {
-    g._place(y * size + x, color);
-  }
-  return g;
+  return parseBoard(pos.board, pos.toPlay === '●' ? BLACK : WHITE);
 }
 
 // ── Positions ──────────────────────────────────────────────────────────────

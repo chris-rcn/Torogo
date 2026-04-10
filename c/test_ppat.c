@@ -224,12 +224,44 @@ static void test_feature3_capture_self_atari(void) {
     }
 }
 
+static void test_feature23_realistic(void) {
+    /* Realistic F2/F3: W@F6 creates new atari on E6 group.
+     * G6 saves by capture (not self-atari) = Feature 2.
+     * C6 saves by capture (self-atari) but outside 8-nbr of F6. */
+    Game2 g;
+    g2_parse_board(&g,
+        "9 . . . . . . . . .  \n"
+        "8 . O O O O . . . .  \n"
+        "7 . O X X O X . . .  \n"
+        "6 . O . O X . . . .  \n"
+        "5 . O X X X O X . .  \n"
+        "4 . . O O O X . . .  \n"
+        "3 . . . . . . . . .  \n"
+        "2 . . . . . . . . .  \n"
+        "1 . . . . . . . . .  \n",
+        WHITE);
+    g2_play(&g, 50); /* W@F6, puts E6 group in atari */
+
+    check("F2/3 setup: E6 group in atari", g.ls[g.gid[49]] == 1);
+
+    int maskG6 = get_mask(&g, 51); /* G6 */
+    check("F2c: G6 bit 0 set", maskG6 != -1 && (maskG6 & 1));
+    check("F2c: G6 bit 1 set (save by capture)", maskG6 != -1 && (maskG6 & 2));
+    check("F2c: G6 bit 2 not set", maskG6 != -1 && !(maskG6 & 4));
+
+    /* C6 is save-by-capture + self-atari, but not in 8-nbr of F6.
+     * TODO: enable when 8-neighborhood gate is relaxed for features 2-5.
+     * int maskC6 = get_mask(&g, 47);
+     * check("F3c: C6 bit 2 set (save by capture, self-atari)", maskC6 != -1 && (maskC6 & 4)); */
+}
+
 static void test_feature4_extend(void) {
-    /* 4a: B@31 in atari (lib=40). lastMove=W@39. Extend at 40, not self-atari. */
+    /* 4a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal).
+     * Candidate 40 (SE of 30, in 8-nbr) extends B@31. Not self-atari. */
     {
         Game2 g; g2_new_empty(&g);
-        int32_t seq[] = {31, 22, 0, 30, 1, 32, 2, 39};
-        play_seq(&g, seq, 8);
+        int32_t seq[] = {31, 22, 0, 32, 1, 30};
+        play_seq(&g, seq, 6);
         check("F4a setup: B@31 atari", g.ls[g.gid[31]] == 1);
         int mask = get_mask(&g, 40);
         check("F4a: bit 0 set", mask != -1 && (mask & 1));
@@ -250,10 +282,11 @@ static void test_feature4_extend(void) {
 }
 
 static void test_feature5_extend_self_atari(void) {
-    /* 5a: B@31 in atari (lib=40). W@49 blocks. Extend at 40 = self-atari. */
+    /* 5a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal). W@49,W@39 block.
+     * Extend at 40 = self-atari (only lib=41 after). */
     {
         Game2 g; g2_new_empty(&g);
-        int32_t seq[] = {31, 22, 0, 30, 1, 32, 2, 49, 3, 39};
+        int32_t seq[] = {31, 22, 0, 32, 1, 49, 2, 39, 3, 30};
         play_seq(&g, seq, 10);
         check("F5a setup: B@31 atari", g.ls[g.gid[31]] == 1);
         int mask = get_mask(&g, 40);
@@ -275,30 +308,36 @@ static void test_feature5_extend_self_atari(void) {
 }
 
 static void test_feature6_ko_solve(void) {
-    /* 6a: Ko at 40. B@34 has 1 lib at 33 (NE of lastMove=41). */
-    {
-        Game2 g; g2_new_empty(&g);
-        int32_t seq[] = {31, 40, 49, 32, 39, 50, 34, 42, 0, 25, 1, 43, 2, 35};
-        play_seq(&g, seq, 14);
-        check("F6a setup: W@40 atari", g.ls[g.gid[40]] == 1);
-        g2_play(&g, 41); /* B captures → ko */
-        check("F6a setup: ko at 40", g.ko == 40);
-        int mask = get_mask(&g, 33);
-        check("F6a: bit 0 set", mask != -1 && (mask & 1));
-        check("F6a: bit 5 set", mask != -1 && (mask & 32));
-    }
-    /* 6b: Ko at 50. B@44 has 1 lib at 43 (NE of lastMove=51). */
-    {
-        Game2 g; g2_new_empty(&g);
-        int32_t seq[] = {41, 50, 59, 42, 49, 60, 44, 52, 0, 35, 1, 53, 2, 36};
-        play_seq(&g, seq, 14);
-        check("F6b setup: W@50 atari", g.ls[g.gid[50]] == 1);
-        g2_play(&g, 51);
-        check("F6b setup: ko at 50", g.ko == 50);
-        int mask = get_mask(&g, 43);
-        check("F6b: bit 0 set", mask != -1 && (mask & 1));
-        check("F6b: bit 5 set", mask != -1 && (mask & 32));
-    }
+    /* Realistic ko-solving scenario.
+     * B@C3 captures W@C4, creating ko at C4. W@F9 is a ko threat.
+     * B@B2 captures B3(O) adjacent to the ko area — solves the ko.
+     * Uses ko_stone tracking to detect the active ko fight. */
+    Game2 g;
+    g2_parse_board(&g,
+        "9 . . . . . . . . .  \n"
+        "8 . . . . . X O O .  \n"
+        "7 . . . . X . X O .  \n"
+        "6 . . . . . . X O .  \n"
+        "5 . . X O . . . X O  \n"
+        "4 . X O X X . . X O  \n"
+        "3 X O . O . . . X .  \n"
+        "2 . . O . . . . . .  \n"
+        "1 . . . . . . . . .  \n",
+        BLACK);
+
+    /* C3=20 captures W@C4=29 (ko); then W@F9=77 (ko threat) */
+    check("F6c setup: C4 is WHITE", g.cells[29] == WHITE);
+    check("F6c setup: C3 is empty", g.cells[20] == EMPTY);
+    g2_play(&g, 20);  /* B@C3: captures W@C4, ko at C4 */
+    check("F6c setup: ko at C4", g.ko == 29);
+    g2_play(&g, 77);  /* W@F9: ko threat */
+    check("F6c setup: ko cleared by F9", g.ko == PASS);
+    check("F6c setup: B@B2 is a capture", g2_is_capture(&g, 10));
+    check("F6c setup: B3 has 1 lib", g.ls[g.gid[19]] == 1);
+
+    int mask = get_mask(&g, 10);
+    check("F6c: bit 0 set (contiguous)", mask != -1 && (mask & 1));
+    check("F6c: bit 5 set (ko-solve capture)", mask != -1 && (mask & 32));
 }
 
 static void test_feature7_semeai(void) {
@@ -324,6 +363,35 @@ static void test_feature7_semeai(void) {
         check("F7b: bit 0 set", mask != -1 && (mask & 1));
         check("F7b: bit 6 set", mask != -1 && (mask & 64));
     }
+}
+static void test_feature7_realistic(void) {
+    /* Realistic F7: B@H2 leaves WHITE H3 group with 2 libs.
+     * E4 BLACK group has 2 libs (D5, E5). W@E5 kills, W@D5 doesn't.
+     * Neither in 8-nbr of H2.
+     * KNOWN LIMITATION: Feature 7 gated by 8-neighborhood of prev.
+     * Also: code doesn't distinguish killing vs non-killing atari. */
+    Game2 g;
+    g2_parse_board(&g,
+        "9 . . . . . . . . .  \n"
+        "8 . . . . . X . . .  \n"
+        "7 . . O O O O X . .  \n"
+        "6 . O X X X O X . .  \n"
+        "5 . O X . . X X X .  \n"
+        "4 . O X X X O O X .  \n"
+        "3 X . O O O X O O O  \n"
+        "2 . . . . O X X . .  \n"
+        "1 . . . . . . . . .  \n",
+        BLACK);
+    g2_play(&g, 16); /* B@H2 */
+
+    check("F7c setup: H3 group 2 libs", g.ls[g.gid[25]] == 2);
+    check("F7c setup: E4 group 2 libs", g.ls[g.gid[31]] == 2);
+
+    /* TODO: enable when 8-neighborhood gate is relaxed and kill detection is added.
+     * int maskE5 = get_mask(&g, 40);
+     * int maskD5 = get_mask(&g, 39);
+     * check("F7c: E5 bit 6 set (kills)", maskE5 != -1 && (maskE5 & 64));
+     * check("F7c: D5 bit 6 NOT set (does not kill)", maskD5 != -1 && !(maskD5 & 64)); */
 }
 #endif /* BOARD_SIZE == 9 */
 
@@ -415,10 +483,12 @@ int main(void) {
 #if BOARD_SIZE == 9
     test_feature2_save_by_capture();
     test_feature3_capture_self_atari();
+    test_feature23_realistic();
     test_feature4_extend();
     test_feature5_extend_self_atari();
     test_feature6_ko_solve();
     test_feature7_semeai();
+    test_feature7_realistic();
 #endif
 
     test_policy_move();

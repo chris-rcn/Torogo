@@ -92,6 +92,7 @@ class Game2 {
 
     this.current = BLACK;
     this.ko      = PASS;
+    this.koStone = [PASS, PASS, PASS]; // indexed by color+1: [0]=WHITE, [2]=BLACK
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.moveCount = 0;
@@ -128,6 +129,7 @@ class Game2 {
     this._nextGid = 0;
     this.current = BLACK;
     this.ko = PASS;
+    this.koStone[0] = this.koStone[1] = this.koStone[2] = PASS;
     this.consecutivePasses = 0;
     this.gameOver = false;
     this.moveCount = 0;
@@ -550,6 +552,7 @@ class Game2 {
       if (this.consecutivePasses >= 2) this.gameOver = true;
       this.current = opp;
       this.ko = PASS;
+      this.koStone[color + 1] = PASS;
       this.moveCount++;
       this.lastMove = PASS;
       this._lastCaptureCount  = 0;
@@ -595,12 +598,14 @@ class Game2 {
     this._lastCaptureChains = nChains;
 
     this.ko = PASS;
+    this.koStone[color + 1] = PASS;
     if (capturedCount === 1 && capturedIdx !== PASS) {
       const myGid = gidArr[idx];
       const lw    = this._lw;
       if (ss[myGid] === 1 && ls[myGid] === 1 &&
           ((lw[myGid * W + (capturedIdx >> 5)] >>> (capturedIdx & 31)) & 1)) {
         this.ko = capturedIdx;
+        this.koStone[color + 1] = idx;
       }
     }
 
@@ -722,6 +727,7 @@ class Game2 {
     g.nbr       = this._nbr;      // public alias
     g.current           = this.current;
     g.ko                = this.ko;
+    g.koStone           = [this.koStone[0], this.koStone[1], this.koStone[2]];
     g.consecutivePasses = this.consecutivePasses;
     g.gameOver          = this.gameOver;
     g.moveCount         = this.moveCount;
@@ -851,21 +857,25 @@ function agentMoveToIdx(agentMove, N) {
   return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
-// Parse a ● ○ · board string.  Mark decoration and alphanumeric labels are
-// stripped.  Returns { size, stones } where stones is [[x, y, color], ...]
-// and color is BLACK or WHITE.
-function parseBoard(boardStr) {
+// Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation.
+// Rows are top-to-bottom (row N..1).  Row numbers and letter labels are stripped.
+// toMove defaults to BLACK.
+function parseBoard(boardStr, toMove = BLACK) {
+  const valid = new Set(['●','○','·','X','O','.']);
   const rows = boardStr.trim().split('\n')
-    .map(r => r.trim().replace(/[()a-zA-Z0-9]/g, ' ').split(/\s+/).filter(t => t))
-    .filter(row => row.some(t => t === '●' || t === '○' || t === '·'));
+    .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
+    .filter(row => row.length > 0);
   const size = rows.length;
-  const stones = [];
+  const g = new Game2(size, false);
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++) {
-      if (rows[y][x] === '●') stones.push([x, y, BLACK]);
-      else if (rows[y][x] === '○') stones.push([x, y, WHITE]);
+      const ch = rows[y][x];
+      const idx = (size - 1 - y) * size + x;
+      if (ch === '●' || ch === 'X') g._place(idx, BLACK);
+      else if (ch === '○' || ch === 'O') g._place(idx, WHITE);
     }
-  return { size, stones };
+  g.current = toMove;
+  return g;
 }
 
 const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard };

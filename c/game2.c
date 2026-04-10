@@ -325,6 +325,7 @@ static void g2_init_common(Game2 *g) {
     g->empty_count = CAP;
     g->current = BLACK;
     g->ko = PASS;
+    g->ko_stone[0] = g->ko_stone[1] = g->ko_stone[2] = PASS;
     g->consecutive_passes = 0;
     g->game_over = false;
     g->move_count = 0;
@@ -348,6 +349,34 @@ void g2_clone(Game2 *dst, const Game2 *src) {
     memcpy(dst, src, sizeof(Game2));
 }
 
+/* ── Parse ASCII board ─────────────────────────────────────────────────────── */
+
+void g2_parse_board(Game2 *g, const char *board, int8_t to_move) {
+    g2_init_common(g);
+    /* Parse rows top-to-bottom (row N down to row 1). */
+    const char *p = board;
+    int row = BOARD_SIZE - 1;
+    while (*p && row >= 0) {
+        /* Skip leading whitespace and optional row number */
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p >= '0' && *p <= '9') { while (*p >= '0' && *p <= '9') p++; while (*p == ' ') p++; }
+        int col = 0;
+        while (*p && *p != '\n' && col < BOARD_SIZE) {
+            if (*p == 'X' || *p == 'O' || *p == '.') {
+                if (*p == 'X') g2_place(g, row * BOARD_SIZE + col, BLACK);
+                else if (*p == 'O') g2_place(g, row * BOARD_SIZE + col, WHITE);
+                col++;
+            }
+            p++;
+        }
+        if (*p == '\n') p++;
+        if (col > 0) row--;
+    }
+    g->current = to_move;
+    g->ko = PASS;
+    g->last_move = PASS;
+}
+
 /* ── Main move interface ───────────────────────────────────────────────────── */
 
 bool g2_play(Game2 *g, int32_t idx) {
@@ -360,6 +389,7 @@ bool g2_play(Game2 *g, int32_t idx) {
         if (g->consecutive_passes >= 2) g->game_over = true;
         g->current = opp;
         g->ko = PASS;
+        g->ko_stone[color + 1] = PASS;
         g->move_count++;
         g->last_move = PASS;
         g->last_capture_count = 0;
@@ -396,11 +426,13 @@ bool g2_play(Game2 *g, int32_t idx) {
 
     /* Ko detection */
     g->ko = PASS;
+    g->ko_stone[color + 1] = PASS;
     if (ncap == 1 && captured_idx != PASS) {
         int32_t my_gid = g->gid[idx];
         if (g->ss[my_gid] == 1 && g->ls[my_gid] == 1 &&
             ((g->lw[my_gid * BW + (captured_idx >> 5)] >> (captured_idx & 31)) & 1)) {
             g->ko = captured_idx;
+            g->ko_stone[color + 1] = idx;
         }
     }
 

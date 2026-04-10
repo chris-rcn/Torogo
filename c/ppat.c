@@ -173,9 +173,14 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     int8_t foe = -cur;
     int32_t prev = g->last_move;
     bool has_prev = (prev != PASS);
-    int32_t ko_point = g->ko;
+    int32_t my_ko_stone = g->ko_stone[cur + 1];  /* cell that created ko on our last turn */
 
-    /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings */
+    /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings.
+     * KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
+     * adjacent to prev, but don't verify that prev *caused* the atari. The spec says
+     * "new atari" — the string should have had >1 liberty before the opponent's move.
+     * KNOWN LIMITATION (Feature 7): Same issue — we find strings with 2 liberties but
+     * don't verify prev reduced them to 2. */
     int32_t atari_gids[8];
     int n_atari = 0;
     int32_t atari_libs[8];  /* single liberty for each atari group */
@@ -186,30 +191,43 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     if (has_prev) {
         int pb4 = prev * 4;
         for (int d = 0; d < 4; d++) {
-            int32_t n1 = g2_nbr[pb4 + d];
-            int32_t n2 = g2_dnbr[pb4 + d];
-            st->prev_neighbor_set[n1] = 1;
-            st->prev_neighbor_set[n2] = 1;
-            for (int k = 0; k < 2; k++) {
-                int32_t ni = (k == 0) ? n1 : n2;
-                if (g->cells[ni] != cur) continue;
-                int32_t gid = g->gid[ni];
-                int32_t ls  = g->ls[gid];
-                if (ls == 1) {
-                    /* Deduplicate */
-                    bool dup = false;
-                    for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
-                    if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
-                } else if (ls == 2) {
-                    bool dup = false;
-                    for (int j = 0; j < n_two; j++) if (two_lib_gids[j] == gid) { dup = true; break; }
-                    if (!dup && n_two < 8) two_lib_gids[n_two++] = gid;
-                }
+            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 1;
+            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 1;
+            /* Only orthogonal neighbors can have had a liberty removed by prev. */
+            int32_t ni = g2_nbr[pb4 + d];
+            if (g->cells[ni] != cur) continue;
+            int32_t gid = g->gid[ni];
+            int32_t ls  = g->ls[gid];
+            if (ls == 1) {
+                bool dup = false;
+                for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
+                if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
+            } else if (ls == 2) {
+                bool dup = false;
+                for (int j = 0; j < n_two; j++) if (two_lib_gids[j] == gid) { dup = true; break; }
+                if (!dup && n_two < 8) two_lib_gids[n_two++] = gid;
             }
         }
         /* Cache single liberty for each atari group */
         for (int i = 0; i < n_atari; i++)
             atari_libs[i] = first_lib(atari_gids[i], g);
+    }
+
+    /* Feature 6 pre-scan: find liberty cells that would capture an enemy group
+     * adjacent to our ko stone. */
+    int32_t ko_solve_libs[4];
+    int n_ko_solve = 0;
+    if (my_ko_stone != PASS) {
+        int ks4 = my_ko_stone * 4;
+        for (int d = 0; d < 4; d++) {
+            int32_t ni = g2_nbr[ks4 + d];
+            if (g->cells[ni] != foe) continue;
+            int32_t egid = g->gid[ni];
+            if (g->ls[egid] == 1) {
+                int32_t lib = first_lib(egid, g);
+                if (lib >= 0) ko_solve_libs[n_ko_solve++] = lib;
+            }
+        }
     }
 
     int count = 0;
@@ -265,13 +283,20 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                 }
             }
 
-            /* Feature 6: ko-solve capture */
-            if (ko_point != PASS && g2_is_capture(g, idx))
-                mask |= 32;
-
-            /* Feature 7: 2-point semeai */
+            /* Feature 7: 2-point semeai.
+             * KNOWN LIMITATION: The spec says the candidate should "kill" the
+             * neighboring string, but we only check that it gives atari. In a
+             * real semeai, only one of the atari-giving moves may actually win
+             * the capturing race; the other may be self-defeating. */
             if (n_two > 0 && gives_2lib_atari(idx, two_lib_gids, n_two, g, foe))
                 mask |= 64;
+        }
+
+        /* Feature 6: ko-solve capture.
+         * We created a ko on our last turn. A capture of any enemy group
+         * adjacent to our ko stone solves the ko. */
+        for (int ki = 0; ki < n_ko_solve; ki++) {
+            if (idx == ko_solve_libs[ki]) { mask |= 1 | 32; break; }
         }
 
         st->prev_masks[count] = mask;

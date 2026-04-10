@@ -82,9 +82,9 @@ function _firstLib(gid, lw, W, cap) {
 }
 
 // Returns true if playing at idx would capture an enemy group that is adjacent to
-// any of the friendly groups in newAtariGids, saving them from atari.
-function _canSaveByCapture(idx, newAtariGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
-  for (const sgid of newAtariGids) {
+// any of the friendly groups in new1LibGids, saving them from atari.
+function _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
+  for (const sgid of new1LibGids) {
     // Walk all stones of the atari'd string.
     const sb = sgid * W;
     for (let wi = 0; wi < W; wi++) {
@@ -110,9 +110,9 @@ function _canSaveByCapture(idx, newAtariGids, nbr, cells, gidArr, lsArr, lw, sw,
 }
 
 // Returns true if playing at idx gives atari (reduces to 1 liberty) to an enemy group
-// that is adjacent to any of the friendly 2-liberty groups in twoLibGids.
-function _gives2LibAtari(idx, twoLibGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
-  for (const sgid of twoLibGids) {
+// that is adjacent to any of the friendly 2-liberty groups in new2LibGids.
+function _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
+  for (const sgid of new2LibGids) {
     const sb = sgid * W;
     for (let wi = 0; wi < W; wi++) {
       let w = sw[sb + wi];
@@ -205,34 +205,55 @@ function extractFeatures(game, state) {
   const ec     = game.emptyCount;
   const prev   = game.lastMove;
   const hasPrev = prev !== PASS;
-  const koPoint = game.ko;
+  const myKoStone = game.koStone[cur + 1];
 
-  // ── Pre-scan: build prevNeighborSet + find friendly strings in new atari or with 2 libs ──
+  // ── Pre-scan: build prevNeighborSet + find friendly strings in atari or with 2 libs ──
+  // KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
+  // adjacent to prev, but don't verify that prev *caused* the atari. The spec says
+  // "new atari" — the string should have had >1 liberty before the opponent's move.
+  // KNOWN LIMITATION (Feature 7): Same issue — we find strings with 2 liberties but
+  // don't verify prev reduced them to 2.
   const prevNeighborSet = state.prevNeighborSet;
-  let newAtariGids = null;  // Set<gid>: friendly groups with 1 liberty adjacent to prev
-  let twoLibGids   = null;  // Set<gid>: friendly groups with 2 liberties adjacent to prev
+  let new1LibGids = null;  // Set<gid>: friendly groups with 1 liberty adjacent to prev
+  let new2LibGids = null;  // Set<gid>: friendly groups with 2 liberties adjacent to prev
   if (hasPrev) {
     const pb4 = prev * 4;
     for (let di = 0; di < 4; di++) {
-      const n1 = nbr[pb4 + di], n2 = dnbr[pb4 + di];
-      prevNeighborSet[n1] = 1;
-      prevNeighborSet[n2] = 1;
-      for (let k = 0; k < 2; k++) {
-        const ni = k === 0 ? n1 : n2;
-        if (cells[ni] !== cur) continue;
-        const gid = gidArr[ni];
-        const ls  = lsArr[gid];
-        if (ls === 1) { if (!newAtariGids) newAtariGids = new Set(); newAtariGids.add(gid); }
-        else if (ls === 2) { if (!twoLibGids) twoLibGids = new Set(); twoLibGids.add(gid); }
-      }
+      prevNeighborSet[nbr[pb4 + di]]  = 1;
+      prevNeighborSet[dnbr[pb4 + di]] = 1;
+      // Only orthogonal neighbors can have had a liberty removed by prev.
+      const ni = nbr[pb4 + di];
+      if (cells[ni] !== cur) continue;
+      const gid = gidArr[ni];
+      const ls  = lsArr[gid];
+      if (ls === 1) { if (!new1LibGids) new1LibGids = new Set(); new1LibGids.add(gid); }
+      else if (ls === 2) { if (!new2LibGids) new2LibGids = new Set(); new2LibGids.add(gid); }
     }
   }
 
   // Cache single liberty for each new-atari group (for Feature 4/5 check).
   let atariLibs = null;
-  if (newAtariGids) {
+  if (new1LibGids) {
     atariLibs = new Map();
-    for (const gid of newAtariGids) atariLibs.set(gid, _firstLib(gid, lwArr, W, cap));
+    for (const gid of new1LibGids) atariLibs.set(gid, _firstLib(gid, lwArr, W, cap));
+  }
+
+  // Feature 6 pre-scan: find liberty cells that capture enemy groups adjacent to our ko stone.
+  let koSolveLibs = null;
+  if (myKoStone !== PASS) {
+    const ks4 = myKoStone * 4;
+    for (let d = 0; d < 4; d++) {
+      const ni = nbr[ks4 + d];
+      if (cells[ni] !== foe) continue;
+      const egid = gidArr[ni];
+      if (lsArr[egid] === 1) {
+        const lib = _firstLib(egid, lwArr, W, cap);
+        if (lib >= 0) {
+          if (!koSolveLibs) koSolveLibs = [];
+          koSolveLibs.push(lib);
+        }
+      }
+    }
   }
 
   let count = 0;
@@ -272,15 +293,15 @@ function extractFeatures(game, state) {
       mask = 1; // bit 0 = Feature 1
 
       // Features 2–5: save a string in new atari by capture or extension.
-      if (newAtariGids) {
+      if (new1LibGids) {
         // Feature 4/5: idx is the single liberty of an atari'd string (extension).
         let feat4 = false;
-        for (const gid of newAtariGids) {
+        for (const gid of new1LibGids) {
           if (atariLibs.get(gid) === idx) { feat4 = true; break; }
         }
 
         // Feature 2/3: idx captures an adjacent enemy group, freeing an atari'd string.
-        let feat2 = !feat4 && _canSaveByCapture(idx, newAtariGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe);
+        let feat2 = !feat4 && _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe);
 
         if (feat2 || feat4) {
           // Cheap check: if 2+ guaranteed liberties, definitely not self-atari.
@@ -296,12 +317,20 @@ function extractFeatures(game, state) {
         }
       }
 
-      // Feature 6: there is a new ko and this move is a capture (solves the ko).
-      if (koPoint !== PASS && game.isCapture(idx)) mask |= 32; // bit 5
-
       // Feature 7: 2-point semeai — give atari to an enemy group adjacent to our 2-lib string.
-      if (twoLibGids && _gives2LibAtari(idx, twoLibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe))
+      // KNOWN LIMITATION: The spec says the candidate should "kill" the neighboring
+      // string, but we only check that it gives atari (reduces enemy to 1 liberty).
+      // In a real semeai, only one of the atari-giving moves may actually win the
+      // capturing race; the other may be self-defeating.
+      if (new2LibGids && _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe))
         mask |= 64; // bit 6
+    }
+
+    // Feature 6: ko-solve capture (outside prev-neighborhood gate).
+    if (koSolveLibs) {
+      for (let ki = 0; ki < koSolveLibs.length; ki++) {
+        if (idx === koSolveLibs[ki]) { mask |= 1 | 32; break; }
+      }
     }
 
     state.prevMasks[count] = mask;
@@ -349,7 +378,7 @@ function evaluate(game, state, patWeights, prevWeights) {
 let _logits = new Float32Array(512);
 let _probs  = new Float32Array(512);
 
-function policyMove(game, state, weights) {
+function ppatMove(game, state, weights) {
   extractFeatures(game, state);
   const n = state.count;
   if (n === 0) return PASS;
@@ -380,7 +409,7 @@ function policyMove(game, state, weights) {
   return state.moves[chosen];
 }
 
-const PPatterns = { createState, extractFeatures, evaluate, policyMove, NUM_PATTERNS };
+const PPatterns = { createState, extractFeatures, evaluate, ppatMove, NUM_PATTERNS };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;
 

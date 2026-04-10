@@ -634,12 +634,7 @@ const { getLadderStatus2, getAllLadderStatuses } = require('./ladder2.js');
 // Helper: build a Game2 from a board string (uses game2.js parseBoard).
 // toPlay is '●' (black) or '○' (white).
 function _buildGame2Pos(boardStr, toPlay) {
-  const { size, stones } = parseBoard(boardStr);
-  const g = new Game2(size, false);
-  for (const [x, y, color] of stones) g._place(y * size + x, color);
-  g.current = toPlay === '●' ? BLACK : WHITE;
-  g.moveCount = 0;
-  return g;
+  return parseBoard(boardStr, toPlay === '●' ? BLACK : WHITE);
 }
 
 // Helper: build a simple synthetic Game2 position from a list of stone placements.

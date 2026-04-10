@@ -44,6 +44,7 @@ static float  cfg_filter       = 0.0f;
 static int    cfg_iter_limit   = 0;      /* 0 = infinite */
 static int    cfg_overfit      = 0;
 static int    cfg_init         = 0;
+static int    cfg_policy_moves = -1;  /* -1 = unlimited; else ppat for first N moves, then uniform */
 static const char *cfg_file    = NULL;
 
 /* ── Training data ─────────────────────────────────────────────────────────── */
@@ -55,6 +56,7 @@ typedef struct {
     int32_t history[MAX_HISTORY];
     int     history_len;
     float   value;       /* in [-1,1] */
+    int32_t best_move;   /* preferred next move from eval, or PASS if absent */
 } Position;
 
 static Position all_positions[MAX_LINES];
@@ -112,10 +114,13 @@ static int32_t parse_move(const char *s) {
 static int parse_position(const char *line, Position *pos) {
     int size;
     char moves_buf[4096];
+    char best_buf[16];
     double value;
-    if (sscanf(line, "%d %4095s %lf", &size, moves_buf, &value) != 3) return 0;
+    int fields = sscanf(line, "%d %4095s %lf %15s", &size, moves_buf, &value, best_buf);
+    if (fields < 3) return 0;
     if (size != BOARD_SIZE) return 0;
     pos->value = 2.0f * (float)value - 1.0f;
+    pos->best_move = (fields >= 4) ? parse_move(best_buf) : PASS;
     pos->history_len = 0;
     char *tok = strtok(moves_buf, ",");
     while (tok && pos->history_len < MAX_HISTORY) {
@@ -254,8 +259,9 @@ static int policy_select(Game2 *g) {
 static int rollout(const Game2 *game, int8_t player, float *grad_acc) {
     Game2 sim;
     g2_clone(&sim, game);
+    int pm = cfg_policy_moves;
 
-    while (!sim.game_over) {
+    for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
         if (chosen == -1) { g2_play(&sim, PASS); continue; }
 
@@ -278,6 +284,9 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc) {
 
         g2_play(&sim, rollout_feat_st.moves[chosen]);
     }
+
+    /* Finish game with uniform random play */
+    while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim));
 
     return g2_estimate_winner(&sim) == player ? 1 : -1;
 }
@@ -326,29 +335,41 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 
 /* ── Measure test ──────────────────────────────────────────────────────────── */
 
-typedef struct { float mean_abs; float rms; } TestResult;
+typedef struct { float mean_abs; float rms; float move_match; } TestResult;
 
 static TestResult measure_test(int use_uniform) {
+    PpatState mm_st;
+    memset(&mm_st, 0, sizeof(mm_st));
+    PpatWeights mm_w = { theta, theta + ppat_num_patterns };
     float abs_sum = 0, sq_sum = 0;
-    int count = 0;
+    int count = 0, mm_match = 0, mm_total = 0;
     for (int ti = 0; ti < n_test; ti++) {
+        Position *pos = &all_positions[test_idx[ti]];
         Game2 g;
         int bad = -1;
-        int rp = replay_position(&all_positions[test_idx[ti]], &g, &bad);
-        if (rp < 0) { fprintf(stderr, "warning: illegal move #%d (idx %d) in test position %d, skipping\n", bad, all_positions[test_idx[ti]].history[bad], test_idx[ti]); continue; }
+        int rp = replay_position(pos, &g, &bad);
+        if (rp < 0) { fprintf(stderr, "warning: illegal move #%d (idx %d) in test position %d, skipping\n", bad, pos->history[bad], test_idx[ti]); continue; }
         if (rp == 0) continue;
+
+        /* Move match */
+        if (pos->best_move != PASS) {
+            if (ppat_policy_move(&g, &mm_st, &mm_w) == pos->best_move) mm_match++;
+            mm_total++;
+        }
+
+        /* RMS */
         int8_t player = g.current;
-        float v_star = all_positions[test_idx[ti]].value;
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
             sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL);
-        float d = v_star - sum / cfg_test_playouts;
+        float d = pos->value - sum / cfg_test_playouts;
         abs_sum += fabsf(d);
         sq_sum += d * d;
         count++;
     }
-    if (count == 0) return (TestResult){0, 0};
-    return (TestResult){ abs_sum / count, sqrtf(sq_sum / count) };
+    float mm = mm_total > 0 ? (float)mm_match / mm_total : 0;
+    if (count == 0) return (TestResult){0, 0, mm};
+    return (TestResult){ abs_sum / count, sqrtf(sq_sum / count), mm };
 }
 
 /* ── Policy vs random ──────────────────────────────────────────────────────── */
@@ -406,19 +427,25 @@ static void save_weights(int iterations, int total_positions, const char *elapse
 
 static clock_t start_time;
 static double  next_print;
+static double  cumulative_test_s = 0;
 
-static void print_stats(int iterations, int total_positions, float mean_abs, float rms, int show_weights) {
+static void print_stats(int iterations, int total_positions, int use_uniform, int show_weights) {
+    clock_t test_t0 = clock();
+    TestResult tr = measure_test(use_uniform);
     float pvr = policy_vs_random();
+    cumulative_test_s += (double)(clock() - test_t0) / CLOCKS_PER_SEC;
+    float mean_abs = tr.mean_abs, rms = tr.rms;
     double elapsed_s = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     char elapsed_buf[32];
     snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fs", elapsed_s);
 
-    printf("%6d  %9d  %6.3f  %6.3f  %5.1f%%  %8s",
-           iterations, total_positions, mean_abs, rms, pvr * 100.0f, elapsed_buf);
+    printf("%6d  %9d  %6.3f  %6.3f  %5.1f%%  %5.1f%%  %5.1fs  %8s",
+           iterations, total_positions, mean_abs, rms, pvr * 100.0f, tr.move_match * 100.0f,
+           cumulative_test_s, elapsed_buf);
     if (show_weights) {
         printf("  [");
         for (int i = 0; i < 7; i++)
-            printf("%8.3f", theta[ppat_num_patterns + i]);
+            printf("%8.3f", expf(theta[ppat_num_patterns + i]));
         printf("]");
     }
     printf("\n");
@@ -455,6 +482,7 @@ int main(int argc, char **argv) {
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
     cfg_init         = get_int_arg(argc, argv, "--init", 0);
+    cfg_policy_moves = get_int_arg(argc, argv, "--policy-moves", -1);
 
     g2_seed((uint32_t)time(NULL));
     g2_init_topology();
@@ -464,7 +492,7 @@ int main(int argc, char **argv) {
     theta           = calloc(TOTAL, sizeof(float));
     if (cfg_init) {
         static const float init_prev[7] = {7.43f, 151.04f, 0.53f, 23.11f, 0.02f, 6.37f, 141.80f};
-        for (int i = 0; i < 7; i++) theta[ppat_num_patterns + i] = init_prev[i];
+        for (int i = 0; i < 7; i++) theta[ppat_num_patterns + i] = logf(init_prev[i]);
     }
     rollout_grad_buf = calloc(TOTAL, sizeof(float));
     g_buf           = calloc(TOTAL, sizeof(float));
@@ -477,14 +505,14 @@ int main(int argc, char **argv) {
     /* Output filename */
     snprintf(weights_file, sizeof(weights_file), "out/ppat-data-%08x.js", g2_rand());
 
-    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s\n",
+    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  policy-moves: %d\n",
            cfg_file, n_train, cfg_lr, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_filter,
-           cfg_init ? "true" : "false");
+           cfg_init ? "true" : "false", cfg_policy_moves);
     printf("test: %d positions  test-playouts: %d  output: %s\n",
            n_test, cfg_test_playouts, weights_file);
-    printf("%6s  %9s  %6s  %6s  %6s  %8s\n",
-           "iters", "positions", "|ΔV|", "RMS", "vsRand", "elapsed");
+    printf("%6s  %9s  %6s  %6s  %6s  %6s  %6s  %8s\n",
+           "iters", "positions", "|ΔV|", "RMS", "vsRand", "move%", "test", "elapsed");
 
     start_time = clock();
     int total_positions = 0;
@@ -492,18 +520,13 @@ int main(int argc, char **argv) {
     next_print = 0;
 
     /* Iteration 0: baseline using fast uniform rollouts */
-    {
-        TestResult tr = measure_test(1);
-        print_stats(iterations, total_positions, tr.mean_abs, tr.rms, 0);
-    }
+    print_stats(iterations, total_positions, 1, 0);
 
     for (;;) {
         for (int li = 0; li < n_train; li++) {
             double elapsed = (double)(clock() - start_time) / CLOCKS_PER_SEC;
-            if (elapsed > next_print) {
-                TestResult tr = measure_test(0);
-                print_stats(iterations, total_positions, tr.mean_abs, tr.rms, 1);
-            }
+            if (elapsed > next_print)
+                print_stats(iterations, total_positions, 0, 1);
 
             Position *pos = &all_positions[train_idx[li]];
             Game2 g;
@@ -519,8 +542,7 @@ int main(int argc, char **argv) {
         shuffle_train();
 
         if (cfg_iter_limit > 0 && iterations >= cfg_iter_limit) {
-            TestResult tr = measure_test(0);
-            print_stats(iterations, total_positions, tr.mean_abs, tr.rms, 1);
+            print_stats(iterations, total_positions, 0, 1);
             break;
         }
     }

@@ -53,6 +53,8 @@ typedef struct {
     /* Game state */
     int8_t   current;            /* BLACK or WHITE */
     int32_t  ko;                 /* PASS or board index */
+    int32_t  ko_stone[3];        /* per-color: cell that created a ko on that color's last turn, or PASS.
+                                  * Indexed by color+1: [0]=WHITE(-1+1), [1]=unused, [2]=BLACK(1+1). */
     int32_t  consecutive_passes;
     bool     game_over;
     int32_t  move_count;
@@ -103,6 +105,14 @@ static inline float g2_randf(void) {
 }
 
 void g2_seed(uint32_t seed);
+
+/* Parse an ASCII board diagram into a Game2.  Expects lines like:
+ *   "9 . X O . . . . . ."
+ * or without row numbers:
+ *   ". X O . . . . . ."
+ * X=BLACK, O=WHITE, .=empty.  Rows are top-to-bottom (row N..1).
+ * Sets current to `to_move` (BLACK or WHITE).  ko and lastMove are PASS. */
+void g2_parse_board(Game2 *g, const char *board, int8_t to_move);
 
 static inline float g2_komi(void) {
 #if BOARD_SIZE == 5

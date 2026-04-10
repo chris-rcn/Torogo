@@ -3,7 +3,7 @@
 const { createState, extractFeatures, evaluate, NUM_PATTERNS } = require('./ppat-lib.js');
 // NUM_PATTERNS is the count of canonical IDs under D4 spatial symmetry only
 // (color swap is NOT applied since the encoding is already mover-relative).
-const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { Game2, BLACK, WHITE, PASS, parseBoard } = require('./game2.js');
 
 let passed = 0, failed = 0;
 function check(label, ok) {
@@ -337,13 +337,42 @@ function getMask(game, cell) {
   check('F3b: bit 1 not set', mask !== -1 && (mask & 2) === 0);
 }
 
+// 9c: Realistic F2/F3 scenario using board parser.
+// W@F6 creates new atari on the E6 group. G6 saves by capture (not self-atari).
+// C6 saves by capture (self-atari) but is outside 8-nbr of F6.
+{
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . O O O O . . . .
+    7 . O X X O X . . .
+    6 . O . O X . . . .
+    5 . O X X X O X . .
+    4 . . O O O X . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(50); // W@F6, puts E6 group in atari
+
+  check('F2/3 setup: E6 group in atari', g._ls[g._gid[49]] === 1);
+
+  const maskG6 = getMask(g, 51); // G6
+  check('F2c: G6 bit 0 set', maskG6 !== -1 && (maskG6 & 1) !== 0);
+  check('F2c: G6 bit 1 set (save by capture, not self-atari)', maskG6 !== -1 && (maskG6 & 2) !== 0);
+  check('F2c: G6 bit 2 not set', maskG6 !== -1 && (maskG6 & 4) === 0);
+
+  // C6 is a save-by-capture + self-atari, but not in 8-nbr of F6 (lastMove).
+  // TODO: enable when 8-neighborhood gate is relaxed for features 2-5.
+  // const maskC6 = getMask(g, 47); // C6
+  // check('F3c: C6 bit 2 set (save by capture, self-atari)', maskC6 !== -1 && (maskC6 & 4) !== 0);
+}
+
 // ── 10. Feature 4: save by extension, not self-atari (bit 3) ────────────────
-// 10a: B@31 in atari (lib=40). lastMove=W@39. Candidate 40 extends B@31.
-//      After B@40: group {31,40} has libs {49,41} — not self-atari.
-//      31=(3,4) 22=(2,4) 30=(3,3) 32=(3,5) 39=(4,3) 40=(4,4)
+// 10a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal).
+//      Candidate 40 (SE of 30, in 8-nbr) extends B@31. Not self-atari.
 {
   const g = new Game2(9, false);
-  g.play(31); g.play(22); g.play(0); g.play(30); g.play(1); g.play(32); g.play(2); g.play(39);
+  g.play(31); g.play(22); g.play(0); g.play(32); g.play(1); g.play(30);
   check('F4a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
   const mask = getMask(g, 40);
   check('F4a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
@@ -365,12 +394,12 @@ function getMask(game, cell) {
 }
 
 // ── 11. Feature 5: save by extension, IS self-atari (bit 4) ─────────────────
-// 11a: B@31 in atari (lib=40). lastMove=W@39. W@49 blocks S of 40.
+// 11a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal). W@49,W@39 block S,W of 40.
 //      After B@40: group {31,40} has only lib=41 — self-atari.
 {
   const g = new Game2(9, false);
-  g.play(31); g.play(22); g.play(0); g.play(30); g.play(1); g.play(32);
-  g.play(2);  g.play(49); g.play(3);  g.play(39);
+  g.play(31); g.play(22); g.play(0); g.play(32); g.play(1); g.play(49);
+  g.play(2);  g.play(39); g.play(3);  g.play(30);
   check('F5a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
   const mask = getMask(g, 40);
   check('F5a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
@@ -392,42 +421,34 @@ function getMask(game, cell) {
 }
 
 // ── 12. Feature 6: ko-solve (bit 5) ─────────────────────────────────────────
-// Ko setup: B captures W creating ko. Separate B group with 1 lib provides the
-// capturable target for the ko-solving feature.
-
-// 12a: Ko at 40. B@41 captures W@40. B@34 has 1 lib at 33 (NE of lastMove=41).
-//      WHITE plays at 33 → captures B@34. ko≠PASS → bit 5.
+// Realistic ko-solving scenario.
+// B@C3 captures W@C4, creating ko at C4. W@F9 is a ko threat.
+// B@B2 captures B3(O) adjacent to the ko area — solves the ko.
 {
-  const g = new Game2(9, false);
-  // Ko frame: B@31,B@49,B@39 surround W@40; W@32,W@50,W@42 surround B@41.
-  // Capturable group: B@34 with W@25,W@43,W@35 leaving lib=33.
-  g.play(31); g.play(40); g.play(49); g.play(32); g.play(39); g.play(50);
-  g.play(34); g.play(42); g.play(0);  g.play(25); g.play(1);  g.play(43);
-  g.play(2);  g.play(35);
-  check('F6a setup: W@40 in atari', g._ls[g._gid[40]] === 1);
-  g.play(41); // B captures W@40 → ko
-  check('F6a setup: ko at 40', g.ko === 40);
-  // WHITE's turn. lastMove=41. Candidate 33 captures B@34.
-  const mask = getMask(g, 33);
-  check('F6a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
-  check('F6a: bit 5 set (ko-solve capture)', mask !== -1 && (mask & 32) !== 0);
-}
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . X O O .
+    7 . . . . X . X O .
+    6 . . . . . . X O .
+    5 . . X O . . . X O
+    4 . X O X X . . X O
+    3 X O . O . . . X .
+    2 . . O . . . . . .
+    1 . . . . . . . . .
+  `, BLACK);
 
-// 12b: Ko at 50. B@51 captures W@50. B@44 has 1 lib at 43 (NE of lastMove=51).
-{
-  const g = new Game2(9, false);
-  // Ko frame: B@41,B@59,B@49 surround W@50; W@42,W@60,W@52 surround B@51.
-  // Capturable group: B@44 (4,8) with W@35,W@53,W@36 leaving lib=43.
-  //   44=(4,8): N=35, S=53, W=43, E=(4,0)=36 (toroidal).
-  g.play(41); g.play(50); g.play(59); g.play(42); g.play(49); g.play(60);
-  g.play(44); g.play(52); g.play(0);  g.play(35); g.play(1);  g.play(53);
-  g.play(2);  g.play(36);
-  check('F6b setup: W@50 in atari', g._ls[g._gid[50]] === 1);
-  g.play(51); // B captures W@50 → ko
-  check('F6b setup: ko at 50', g.ko === 50);
-  const mask = getMask(g, 43);
-  check('F6b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
-  check('F6b: bit 5 set (ko-solve capture)', mask !== -1 && (mask & 32) !== 0);
+  check('F6 setup: C4 is WHITE', g.cells[29] === WHITE);
+  check('F6 setup: C3 is empty', g.cells[20] === 0);
+  g.play(20);  // B@C3: captures W@C4, ko at C4
+  check('F6 setup: ko at C4', g.ko === 29);
+  g.play(77);  // W@F9: ko threat
+  check('F6 setup: ko cleared by F9', g.ko === PASS);
+  check('F6 setup: B@B2 is capture', g.isCapture(10));
+  check('F6 setup: B3 has 1 lib', g._ls[g._gid[19]] === 1);
+
+  const mask = getMask(g, 10);
+  check('F6: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F6: bit 5 set (ko-solve capture)', mask !== -1 && (mask & 32) !== 0);
 }
 
 // ── 13. Feature 7: 2-point semeai (bit 6) ───────────────────────────────────
@@ -457,6 +478,35 @@ function getMask(game, cell) {
   const mask = getMask(g, 31);
   check('F7b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F7b: bit 6 set (2-point semeai)', mask !== -1 && (mask & 64) !== 0);
+}
+
+// 13c: Realistic F7 scenario. B@H2 leaves WHITE group H3 with 2 libs.
+// E4 BLACK group has 2 libs (D5, E5). W@E5 kills (B@D5 response is self-atari).
+// W@D5 does not kill (B@E5 response joins). Neither is in 8-nbr of H2.
+// KNOWN LIMITATION: Feature 7 gated by 8-neighborhood of prev.
+// Also: our code doesn't distinguish killing vs non-killing atari.
+{
+  const g = parseBoard(`
+    9 . . . . . . . . .  \n
+    8 . . . . . X . . .  \n
+    7 . . O O O O X . .  \n
+    6 . O X X X O X . .  \n
+    5 . O X . . X X X .  \n
+    4 . O X X X O O X .  \n
+    3 X . O O O X O O O  \n
+    2 . . . . O X X . .  \n
+    1 . . . . . . . . .  \n
+  `, BLACK);
+  g.play(16); // B@H2
+
+  check('F7c setup: H3 group has 2 libs', g._ls[g._gid[25]] === 2);
+  check('F7c setup: E4 group has 2 libs', g._ls[g._gid[31]] === 2);
+
+  const maskE5 = getMask(g, 40);
+  const maskD5 = getMask(g, 39);
+  // TODO: enable when 8-neighborhood gate is relaxed and kill detection is added.
+  // check('F7c: E5 bit 6 set (kills)', maskE5 !== -1 && (maskE5 & 64) !== 0);
+  // check('F7c: D5 bit 6 NOT set (does not kill)', maskD5 !== -1 && (maskD5 & 64) === 0);
 }
 
 // ── 11. All moves have valid patIds ────────────────────────────────────────────
