@@ -109,8 +109,41 @@ function _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lw, sw, 
   return false;
 }
 
-// Returns true if playing at idx gives atari (reduces to 1 liberty) to an enemy group
-// that is adjacent to any of the friendly 2-liberty groups in new2LibGids.
+// Find both liberties of a group with exactly 2 libs.
+function _twoLibs(gid, lw, W, cap) {
+  const lb = gid * W;
+  const libs = [-1, -1];
+  let found = 0;
+  for (let wi = 0; wi < W && found < 2; wi++) {
+    let w = lw[lb + wi];
+    while (w && found < 2) {
+      const i = wi * 32 + (31 - Math.clz32(w & -w));
+      if (i < cap) libs[found++] = i;
+      w &= w - 1;
+    }
+  }
+  return libs;
+}
+
+// Check if the other liberty of egid (not idx) connects to a same-color group
+// (excluding egid) with ≥2 liberties. If so, the opponent can save by joining.
+function _opponentCanSave(idx, egid, nbr, cells, gidArr, lsArr, lw, W, cap, foe) {
+  const [l0, l1] = _twoLibs(egid, lw, W, cap);
+  const other = (l0 === idx) ? l1 : l0;
+  const ob4 = other * 4;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[ob4 + d];
+    if (cells[ni] !== foe) continue;
+    const ngid = gidArr[ni];
+    if (ngid === egid) continue;
+    if (lsArr[ngid] >= 2) return true;
+  }
+  return false;
+}
+
+// Returns true if playing at idx gives atari to an enemy group adjacent to
+// any of the friendly 2-liberty groups in new2LibGids, AND the opponent
+// cannot save by joining at the other liberty.
 function _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
   for (const sgid of new2LibGids) {
     const sb = sgid * W;
@@ -125,8 +158,9 @@ function _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lw, sw, W,
             const ni = nbr[b4 + di];
             if (cells[ni] !== foe) continue;
             const egid = gidArr[ni];
-            // Enemy group with 2 liberties where idx is one of them → playing idx gives atari.
-            if (lsArr[egid] === 2 && (lw[egid * W + (idx >> 5)] & (1 << (idx & 31)))) return true;
+            if (lsArr[egid] === 2 && (lw[egid * W + (idx >> 5)] & (1 << (idx & 31)))
+                && !_opponentCanSave(idx, egid, nbr, cells, gidArr, lsArr, lw, W, cap, foe))
+              return true;
           }
         }
         w ^= lsb;
@@ -289,49 +323,48 @@ function extractFeatures(game, state) {
     // ── Previous-move features ────────────────────────────────────────────────
     let mask = 0;
 
+    // Feature 1: 8-neighborhood of prev.
     if (hasPrev && prevNeighborSet[idx]) {
-      mask = 1; // bit 0 = Feature 1
+      mask = 1;
+    }
 
-      // Features 2–5: save a string in new atari by capture or extension.
-      if (new1LibGids) {
-        // Feature 4/5: idx is the single liberty of an atari'd string (extension).
-        let feat4 = false;
+    // Features 2–5: save a string in new atari by capture or extension.
+    // Capture (F2/3) takes priority over extension (F4/5).
+    if (new1LibGids) {
+      let feat2 = _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe);
+      let feat4 = false;
+      if (!feat2) {
         for (const gid of new1LibGids) {
           if (atariLibs.get(gid) === idx) { feat4 = true; break; }
         }
-
-        // Feature 2/3: idx captures an adjacent enemy group, freeing an atari'd string.
-        let feat2 = !feat4 && _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe);
-
-        if (feat2 || feat4) {
-          // Cheap check: if 2+ guaranteed liberties, definitely not self-atari.
-          let sa = false;
-          if (!_notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lwArr, W, cur, foe)) {
-            const cg = game.clone();
-            cg.play(idx);
-            const cid = cg._gid[idx];
-            sa = cid !== -1 && cg._ls[cid] === 1;
-          }
-          if (feat2) mask |= sa ? 4 : 2;   // bit 2 or bit 1
-          if (feat4) mask |= sa ? 16 : 8;  // bit 4 or bit 3
-        }
       }
-
-      // Feature 7: 2-point semeai — give atari to an enemy group adjacent to our 2-lib string.
-      // KNOWN LIMITATION: The spec says the candidate should "kill" the neighboring
-      // string, but we only check that it gives atari (reduces enemy to 1 liberty).
-      // In a real semeai, only one of the atari-giving moves may actually win the
-      // capturing race; the other may be self-defeating.
-      if (new2LibGids && _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe))
-        mask |= 64; // bit 6
+      if (feat2 || feat4) {
+        let sa = false;
+        if (!_notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lwArr, W, cur, foe)) {
+          const cg = game.clone();
+          cg.play(idx);
+          const cid = cg._gid[idx];
+          sa = cid !== -1 && cg._ls[cid] === 1;
+        }
+        if (feat2) mask |= sa ? 4 : 2;
+        if (feat4) mask |= sa ? 16 : 8;
+      }
     }
 
-    // Feature 6: ko-solve capture (outside prev-neighborhood gate).
+    // Feature 7: 2-point semeai — give atari to an enemy group adjacent to our 2-lib string.
+    // Only fires if the atari likely kills (opponent's other liberty doesn't join to a non-atari group).
+    if (new2LibGids && _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe))
+      mask |= 64;
+
+    // Feature 6: ko-solve capture.
     if (koSolveLibs) {
       for (let ki = 0; ki < koSolveLibs.length; ki++) {
-        if (idx === koSolveLibs[ki]) { mask |= 1 | 32; break; }
+        if (idx === koSolveLibs[ki]) { mask |= 32; break; }
       }
     }
+
+    // Bit 0 piggyback: active for all features 2-7.
+    if (mask & 0x7E) mask |= 1;
 
     state.prevMasks[count] = mask;
     count++;

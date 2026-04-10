@@ -333,16 +333,39 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
     return g2_estimate_winner(&sim) == player ? 1 : -1;
 }
 
+/* ── Move probability ──────────────────────────────────────────────────────── */
+
+/* Returns the softmax probability the current policy assigns to `move`. */
+static float move_probability(const Game2 *g, int32_t move) {
+    static PpatState st;
+    static float logits[CAP];
+    ppat_extract(g, &st);
+    int n = st.count;
+    if (n == 0) return 0;
+    float mx = -1e30f;
+    int target = -1;
+    for (int i = 0; i < n; i++) {
+        float v = theta[st.pat_ids[i]];
+        uint8_t m = st.prev_masks[i];
+        for (int b = 0; m; b++, m >>= 1)
+            if (m & 1) v += theta[ppat_num_patterns + b];
+        logits[i] = v;
+        if (v > mx) mx = v;
+        if (st.moves[i] == move) target = i;
+    }
+    if (target < 0) return 0;
+    float sum = 0;
+    for (int i = 0; i < n; i++) sum += expf(logits[i] - mx);
+    return expf(logits[target] - mx) / sum;
+}
+
 /* ── Measure test ──────────────────────────────────────────────────────────── */
 
 typedef struct { float mean_abs; float rms; float move_match; } TestResult;
 
 static TestResult measure_test(int use_uniform) {
-    PpatState mm_st;
-    memset(&mm_st, 0, sizeof(mm_st));
-    PpatWeights mm_w = { theta, theta + ppat_num_patterns };
-    float abs_sum = 0, sq_sum = 0;
-    int count = 0, mm_match = 0, mm_total = 0;
+    float abs_sum = 0, sq_sum = 0, prob_sum = 0;
+    int count = 0, prob_n = 0;
     for (int ti = 0; ti < n_test; ti++) {
         Position *pos = &all_positions[test_idx[ti]];
         Game2 g;
@@ -351,13 +374,11 @@ static TestResult measure_test(int use_uniform) {
         if (rp < 0) { fprintf(stderr, "warning: illegal move #%d (idx %d) in test position %d, skipping\n", bad, pos->history[bad], test_idx[ti]); continue; }
         if (rp == 0) continue;
 
-        /* Move match */
         if (pos->best_move != PASS) {
-            if (ppat_policy_move(&g, &mm_st, &mm_w) == pos->best_move) mm_match++;
-            mm_total++;
+            prob_sum += move_probability(&g, pos->best_move);
+            prob_n++;
         }
 
-        /* RMS */
         int8_t player = g.current;
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
@@ -367,35 +388,11 @@ static TestResult measure_test(int use_uniform) {
         sq_sum += d * d;
         count++;
     }
-    float mm = mm_total > 0 ? (float)mm_match / mm_total : 0;
-    if (count == 0) return (TestResult){0, 0, mm};
-    return (TestResult){ abs_sum / count, sqrtf(sq_sum / count), mm };
+    float mp = prob_n > 0 ? prob_sum / prob_n : 0;
+    if (count == 0) return (TestResult){0, 0, mp};
+    return (TestResult){ abs_sum / count, sqrtf(sq_sum / count), mp };
 }
 
-/* ── Policy vs random ──────────────────────────────────────────────────────── */
-
-static float policy_vs_random(void) {
-    PpatState pvr_st;
-    memset(&pvr_st, 0, sizeof(pvr_st));
-    PpatWeights w = { theta, theta + ppat_num_patterns };
-
-    int wins = 0, games = 0;
-    clock_t deadline = clock() + CLOCKS_PER_SEC;
-    while (clock() < deadline) {
-        int8_t policy_color = (games % 2 == 0) ? BLACK : WHITE;
-        Game2 g;
-        g2_new(&g);
-        while (!g.game_over) {
-            if (g.current == policy_color)
-                g2_play(&g, ppat_policy_move(&g, &pvr_st, &w));
-            else
-                g2_play(&g, g2_random_legal_move(&g));
-        }
-        if (g2_estimate_winner(&g) == policy_color) wins++;
-        games++;
-    }
-    return games > 0 ? (float)wins / games : 0.5f;
-}
 
 /* ── Save weights ──────────────────────────────────────────────────────────── */
 
@@ -432,15 +429,14 @@ static double  cumulative_test_s = 0;
 static void print_stats(int iterations, int total_positions, int use_uniform, int show_weights) {
     clock_t test_t0 = clock();
     TestResult tr = measure_test(use_uniform);
-    float pvr = policy_vs_random();
     cumulative_test_s += (double)(clock() - test_t0) / CLOCKS_PER_SEC;
     float mean_abs = tr.mean_abs, rms = tr.rms;
     double elapsed_s = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     char elapsed_buf[32];
     snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fs", elapsed_s);
 
-    printf("%6d  %9d  %6.3f  %6.3f  %5.1f%%  %5.1f%%  %5.1fs  %8s",
-           iterations, total_positions, mean_abs, rms, pvr * 100.0f, tr.move_match * 100.0f,
+    printf("%6d  %9d  %6.3f  %6.3f  %5.1f%%  %5.1fs  %8s",
+           iterations, total_positions, mean_abs, rms, tr.move_match * 100.0f,
            cumulative_test_s, elapsed_buf);
     if (show_weights) {
         printf("  [");
@@ -511,8 +507,8 @@ int main(int argc, char **argv) {
            cfg_init ? "true" : "false", cfg_policy_moves);
     printf("test: %d positions  test-playouts: %d  output: %s\n",
            n_test, cfg_test_playouts, weights_file);
-    printf("%6s  %9s  %6s  %6s  %6s  %6s  %6s  %8s\n",
-           "iters", "positions", "|ΔV|", "RMS", "vsRand", "move%", "test", "elapsed");
+    printf("%6s  %9s  %6s  %6s  %6s  %6s  %8s\n",
+           "iters", "positions", "|ΔV|", "RMS", "move%", "test", "elapsed");
 
     start_time = clock();
     int total_positions = 0;

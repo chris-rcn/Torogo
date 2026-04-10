@@ -116,6 +116,41 @@ static bool can_save_by_capture(int32_t idx, const int32_t *atari_gids, int n_at
     return false;
 }
 
+/* Find both liberties of a group with exactly 2 libs. */
+static void two_libs(int32_t gid, const Game2 *g, int32_t *lib0, int32_t *lib1) {
+    int32_t lb = gid * BW;
+    int found = 0;
+    for (int wi = 0; wi < BW && found < 2; wi++) {
+        uint32_t w = g->lw[lb + wi];
+        while (w && found < 2) {
+            int bit = __builtin_ctz(w);
+            int32_t cell = wi * 32 + bit;
+            if (cell < CAP) {
+                if (found == 0) *lib0 = cell; else *lib1 = cell;
+                found++;
+            }
+            w &= w - 1;
+        }
+    }
+}
+
+/* Check if the other liberty of egid (not idx) connects to a same-color group
+ * (excluding egid) with ≥2 liberties. If so, the opponent can save by joining. */
+static bool opponent_can_save(int32_t idx, int32_t egid, const Game2 *g, int8_t foe) {
+    int32_t l0 = -1, l1 = -1;
+    two_libs(egid, g, &l0, &l1);
+    int32_t other = (l0 == idx) ? l1 : l0;
+    int ob4 = other * 4;
+    for (int d = 0; d < 4; d++) {
+        int32_t ni = g2_nbr[ob4 + d];
+        if (g->cells[ni] != foe) continue;
+        int32_t ngid = g->gid[ni];
+        if (ngid == egid) continue;  /* same group, skip */
+        if (g->ls[ngid] >= 2) return true;
+    }
+    return false;
+}
+
 static bool gives_2lib_atari(int32_t idx, const int32_t *two_lib_gids, int n_two,
                               const Game2 *g, int8_t foe) {
     uint32_t m = 1u << (idx & 31);
@@ -134,7 +169,8 @@ static bool gives_2lib_atari(int32_t idx, const int32_t *two_lib_gids, int n_two
                         int32_t ni = g2_nbr[b4 + d];
                         if (g->cells[ni] != foe) continue;
                         int32_t egid = g->gid[ni];
-                        if (g->ls[egid] == 2 && (g->lw[egid * BW + wi] & m))
+                        if (g->ls[egid] == 2 && (g->lw[egid * BW + wi] & m)
+                            && !opponent_can_save(idx, egid, g, foe))
                             return true;
                     }
                 }
@@ -255,49 +291,46 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         /* ── Previous-move features ───────────────────────────────────────── */
         uint8_t mask = 0;
 
-        if (has_prev && st->prev_neighbor_set[idx]) {
-            mask = 1; /* bit 0 = contiguous */
+        /* Feature 1: 8-neighborhood of prev */
+        if (has_prev && st->prev_neighbor_set[idx])
+            mask = 1;
 
-            /* Features 2–5: save atari by capture or extension */
-            if (n_atari > 0) {
-                /* Feature 4/5: extension (idx is single liberty of atari'd string) */
-                bool feat4 = false;
+        /* Features 2–5: save atari by capture or extension.
+         * Capture (F2/3) takes priority over extension (F4/5). */
+        if (n_atari > 0) {
+            bool feat2 = can_save_by_capture(idx, atari_gids, n_atari, g, foe);
+            bool feat4 = false;
+            if (!feat2) {
                 for (int i = 0; i < n_atari; i++) {
                     if (atari_libs[i] == idx) { feat4 = true; break; }
                 }
-
-                /* Feature 2/3: capture saves atari'd string */
-                bool feat2 = !feat4 && can_save_by_capture(idx, atari_gids, n_atari, g, foe);
-
-                if (feat2 || feat4) {
-                    bool sa = false;
-                    if (!not_self_atari_cheap(idx, b4, g, cur)) {
-                        Game2 cg;
-                        g2_clone(&cg, g);
-                        g2_play(&cg, idx);
-                        int32_t cid = cg.gid[idx];
-                        sa = (cid != -1 && cg.ls[cid] == 1);
-                    }
-                    if (feat2) mask |= sa ? 4 : 2;
-                    if (feat4) mask |= sa ? 16 : 8;
-                }
             }
-
-            /* Feature 7: 2-point semeai.
-             * KNOWN LIMITATION: The spec says the candidate should "kill" the
-             * neighboring string, but we only check that it gives atari. In a
-             * real semeai, only one of the atari-giving moves may actually win
-             * the capturing race; the other may be self-defeating. */
-            if (n_two > 0 && gives_2lib_atari(idx, two_lib_gids, n_two, g, foe))
-                mask |= 64;
+            if (feat2 || feat4) {
+                bool sa = false;
+                if (!not_self_atari_cheap(idx, b4, g, cur)) {
+                    Game2 cg;
+                    g2_clone(&cg, g);
+                    g2_play(&cg, idx);
+                    int32_t cid = cg.gid[idx];
+                    sa = (cid != -1 && cg.ls[cid] == 1);
+                }
+                if (feat2) mask |= sa ? 4 : 2;
+                if (feat4) mask |= sa ? 16 : 8;
+            }
         }
 
-        /* Feature 6: ko-solve capture.
-         * We created a ko on our last turn. A capture of any enemy group
-         * adjacent to our ko stone solves the ko. */
+        /* Feature 7: 2-point semeai. Only fires if the atari likely kills
+         * (opponent's other liberty doesn't join to a non-atari group). */
+        if (n_two > 0 && gives_2lib_atari(idx, two_lib_gids, n_two, g, foe))
+            mask |= 64;
+
+        /* Feature 6: ko-solve capture */
         for (int ki = 0; ki < n_ko_solve; ki++) {
-            if (idx == ko_solve_libs[ki]) { mask |= 1 | 32; break; }
+            if (idx == ko_solve_libs[ki]) { mask |= 32; break; }
         }
+
+        /* Bit 0 piggyback: active for all features 2-7 */
+        if (mask & 0x7E) mask |= 1;
 
         st->prev_masks[count] = mask;
         count++;

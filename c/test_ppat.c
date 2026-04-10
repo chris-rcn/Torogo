@@ -249,10 +249,11 @@ static void test_feature23_realistic(void) {
     check("F2c: G6 bit 1 set (save by capture)", maskG6 != -1 && (maskG6 & 2));
     check("F2c: G6 bit 2 not set", maskG6 != -1 && !(maskG6 & 4));
 
-    /* C6 is save-by-capture + self-atari, but not in 8-nbr of F6.
-     * TODO: enable when 8-neighborhood gate is relaxed for features 2-5.
-     * int maskC6 = get_mask(&g, 47);
-     * check("F3c: C6 bit 2 set (save by capture, self-atari)", maskC6 != -1 && (maskC6 & 4)); */
+    /* C6 captures W@D3 (saving E6 group) but is self-atari = Feature 3. */
+    int maskC6 = get_mask(&g, 47);
+    check("F3c: C6 bit 0 set", maskC6 != -1 && (maskC6 & 1));
+    check("F3c: C6 bit 2 set (save by capture, self-atari)", maskC6 != -1 && (maskC6 & 4));
+    check("F3c: C6 bit 1 not set", maskC6 != -1 && !(maskC6 & 2));
 }
 
 static void test_feature4_extend(void) {
@@ -387,11 +388,11 @@ static void test_feature7_realistic(void) {
     check("F7c setup: H3 group 2 libs", g.ls[g.gid[25]] == 2);
     check("F7c setup: E4 group 2 libs", g.ls[g.gid[31]] == 2);
 
-    /* TODO: enable when 8-neighborhood gate is relaxed and kill detection is added.
-     * int maskE5 = get_mask(&g, 40);
-     * int maskD5 = get_mask(&g, 39);
-     * check("F7c: E5 bit 6 set (kills)", maskE5 != -1 && (maskE5 & 64));
-     * check("F7c: D5 bit 6 NOT set (does not kill)", maskD5 != -1 && !(maskD5 & 64)); */
+    int maskE5 = get_mask(&g, 40);
+    int maskD5 = get_mask(&g, 39);
+    check("F7c: E5 bit 0 set", maskE5 != -1 && (maskE5 & 1));
+    check("F7c: E5 bit 6 set (kills)", maskE5 != -1 && (maskE5 & 64));
+    check("F7c: D5 bit 6 NOT set (does not kill)", !(maskD5 & 64));
 }
 #endif /* BOARD_SIZE == 9 */
 

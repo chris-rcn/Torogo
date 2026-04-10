@@ -24,9 +24,8 @@ TD search
 
 Unify move notation in files.  Use A1 or AA ?
 
-$ node eval-uniform.js --file movedetails_5059.tmp --N 200
-positions: 5059,  N: 200  mean |ΔV|: 0.1015  stddev: 0.0799
 
+https://www.remi-coulom.fr/CG2010-Simulation-Balancing/SimulationBalancing.pdf
 
 tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # baseline A'
 tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # baseline B'
@@ -41,98 +40,6 @@ tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --te
 C
 tmuxw 'c/train_ppat out/evals-s9-100k.txt --M 200 --train-pos 0 --test-pos 0 --lr 10 --test-playouts 1000 --batch  10'
 tmuxw 'c/train_ppat out/evals-s9-200k.txt --M 200 --train-pos 0 --test-pos 0 --lr 10 --test-playouts 1000 --batch  10'
-
-
-Feature value initializations
-1: 7.43
-2: 151.04
-3: 0.53
-4: 23.11
-5: 0.02
-6: 6.37
-7: 141.80
-
-And it looks like feature 7 is incorrect in two ways!
-
-Feature 7:  2-point semeai. If the previous move reduces the liberties of a string to only
-two, then the candidate move that is able to kill its neighboring string by
-giving atari has this feature.
-
-
-Feature 7 test case:
-  A B C D E F G H J
-9 . . . . . . . . .
-8 . . . . . X . . .
-7 . . O O O O X . .
-6 . O X X X O X . .
-5 . O X . . X X X .
-4 . O X X X O O X .
-3 X . O O O X O O O
-2 . . . . O X X . .
-1 . . . . . . . . .
-Black/X plays H2, leaving group H3 with 2 liberties.
-E4 is an adjacent 2-lib group.
-White/O at E5 kills group E4 because the subsequent Black/X capture move at D5 is self-atari.
-
-
-X played H2.  Now we have two liberties on which to attack black -- D5 and E5.  But only one of them succeeds, thus only one of them should have feature 7.
-
-Add this feature 6 test case:
-Last move was E9.  A2 captures and solves the ko.
-  A B C D E F G H J
-9 . . . . O . . . .
-8 . . . . X O O . .
-7 . . . X . X O . .
-6 . . . . . X O . .
-5 . X O . . . X O .
-4 X . X X . . X O .
-3 O X O . . . X . .
-2 . O . . . . . . .
-1 . . . . . . . . .
-
-For toroidal board:
-Last two moves were C3 (ko) then F9.
-  A B C D E F G H J
-9 . . . . . O . . .
-8 . . . . . X O O .
-7 . . . . X . X O .
-6 . . . . . . X O .
-5 . . X O . . . X O
-4 . X . X X . . X O
-3 X O X O . . . X .
-2 . . O . . . . . .
-1 . . . . . . . . .
-The ko is considered "new" because it was created on our last turn.  B3 is local to the ko, and so capturing it would satisfy feature 6, and that can be done with a play at B2.
-
-  A B C D E F G H J
-9 . . . . . . . . .
-8 . . . . . X O O .
-7 . . . . X . X O .
-6 . . . . . . X O .
-5 . . X O . . . X O
-4 . X O X X . . X O
-3 X O . O . . . X .
-2 . . O . . . . . .
-1 . . . . . . . . .
-Black (X) to move.
-Then play C3 and F9.
-
-
-Feature 2,3 test case:
-  A B C D E F G H J
-9 . . . . . . . . .
-8 . O O O O . . . .
-7 . O X X O X . . .
-6 . O . O X . . . .
-5 . O X X X O X . .
-4 . . O O O X . . .
-3 . . . . . . . . .
-2 . . . . . . . . .
-1 . . . . . . . . .
-White/O plays F6, which creates a new atari on the E6 group.
-The E6 group can be saved by Black/X playing capture moves at G6 or C6.
-G6 is not self-atari (feature 2).
-C6 is self-atari (feature 3).
 
 
 Feature definitions:
@@ -154,4 +61,12 @@ two, then the candidate move that is able to kill its neighboring string by
 giving atari has this feature. Fig. 1 gives an example. This feature deals with
 the most basic type of semeai.
 
-So the "8 neighboring points" clause is only relevant for feature 1.  It is completely irrelevant for the other features.  Let's make a plan for how to fix this in our detection of features 2-7.
+Expected feature e^x:
+1: 7.43
+2: 151.04
+3: 0.53
+4: 23.11
+5: 0.02
+6: 6.37
+7: 141.80
+

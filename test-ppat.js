@@ -361,10 +361,11 @@ function getMask(game, cell) {
   check('F2c: G6 bit 1 set (save by capture, not self-atari)', maskG6 !== -1 && (maskG6 & 2) !== 0);
   check('F2c: G6 bit 2 not set', maskG6 !== -1 && (maskG6 & 4) === 0);
 
-  // C6 is a save-by-capture + self-atari, but not in 8-nbr of F6 (lastMove).
-  // TODO: enable when 8-neighborhood gate is relaxed for features 2-5.
-  // const maskC6 = getMask(g, 47); // C6
-  // check('F3c: C6 bit 2 set (save by capture, self-atari)', maskC6 !== -1 && (maskC6 & 4) !== 0);
+  // C6 captures W@D3 (saving E6 group) but is self-atari = Feature 3.
+  const maskC6 = getMask(g, 47); // C6
+  check('F3c: C6 bit 0 set', maskC6 !== -1 && (maskC6 & 1) !== 0);
+  check('F3c: C6 bit 2 set (save by capture, self-atari)', maskC6 !== -1 && (maskC6 & 4) !== 0);
+  check('F3c: C6 bit 1 not set', maskC6 !== -1 && (maskC6 & 2) === 0);
 }
 
 // ── 10. Feature 4: save by extension, not self-atari (bit 3) ────────────────
@@ -504,9 +505,9 @@ function getMask(game, cell) {
 
   const maskE5 = getMask(g, 40);
   const maskD5 = getMask(g, 39);
-  // TODO: enable when 8-neighborhood gate is relaxed and kill detection is added.
-  // check('F7c: E5 bit 6 set (kills)', maskE5 !== -1 && (maskE5 & 64) !== 0);
-  // check('F7c: D5 bit 6 NOT set (does not kill)', maskD5 !== -1 && (maskD5 & 64) === 0);
+  check('F7c: E5 bit 0 set', maskE5 !== -1 && (maskE5 & 1) !== 0);
+  check('F7c: E5 bit 6 set (kills)', maskE5 !== -1 && (maskE5 & 64) !== 0);
+  check('F7c: D5 bit 6 NOT set (does not kill)', (maskD5 & 64) === 0);
 }
 
 // ── 11. All moves have valid patIds ────────────────────────────────────────────
