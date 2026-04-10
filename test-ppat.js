@@ -1,6 +1,6 @@
 'use strict';
 
-const { createState, extractFeatures, evaluate, NUM_PATTERNS } = require('./ppat.js');
+const { createState, extractFeatures, evaluate, NUM_PATTERNS } = require('./ppat-lib.js');
 // NUM_PATTERNS is the count of canonical IDs under D4 spatial symmetry only
 // (color swap is NOT applied since the encoding is already mover-relative).
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
@@ -271,202 +271,192 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   check('F4/5: also has bit 0 (contiguous)', (libMask & 1) !== 0);
 }
 
-// ── 8. Feature 2: save string in new atari by capture ────────────────────────
-{
-  // Setup: BLACK stone at 40. WHITE stone at 31 (N of 40) with only 1 liberty.
-  // WHITE's last move puts BLACK at 40 in atari (by placing at 39, W of 40).
-  // BLACK can save string at 40 by capturing WHITE at 31 (if WHITE at 31 has 1 lib).
-  //
-  // Make WHITE@31 have 1 liberty = 22 (N of 31). Fill others: 30(W),32(E),41(S? 31's S=40=BLACK, ok).
-  // Actually 31's neighbors: N=22, S=40(BLACK), W=30, E=32.
-  // Fill 22(N), 30(W), 32(E) with BLACK so WHITE@31 has 1 liberty=22? No wait — 31's S=40 is BLACK.
-  // So WHITE@31's neighbors: N=22(empty), W=30(empty), E=32(empty), S=40(BLACK).
-  // To make WHITE@31 have 1 liberty, we need to fill N=22, E=32 (leaving W=30 as liberty).
-  // Then WHITE@31 has 1 liberty = 30.
-  //
-  // BLACK@40 is in atari after WHITE plays somewhere adjacent. Let's not go into full setup here.
-  // We'll just verify that _canSaveByCapture logic works correctly via game construction.
-  //
-  // Simpler test: verify Feature 2 triggers when expected via a known position.
-
-  const N = 9;
-  const g = new Game2(N, false);
-  // BLACK chain at 40,41 with liberty at 31 only.
-  // WHITE chain at 31 with liberty at 22 only.
-  // Setup: BLACK@40, WHITE@31, BLACK@41, WHITE@22... need to alternate.
-  // Sequence: B40, W31, B41, W22, B50(dummy), W30, B2(dummy), W32, B3(dummy), W49
-  // After: BLACK chain {40,41} neighbors: 31(WHITE),32(WHITE),39,42,49(WHITE) — not right.
-  //
-  // This is getting complex on a toroidal board. Let me do a simpler single-stone test.
-  // BLACK at 40 (alone). WHITE at 31 (alone, 1 liberty = 22). WHITE last move is 39.
-  // BLACK at 40 has 1 liberty = ?
-  // Neighbors of 40: N=31(WHITE), E=41(empty), S=49(empty), W=39(WHITE).
-  // After placing B40, W31, B0(dummy), W39: BLACK@40 has neighbors 31(W),39(W),41(emp),49(emp) → 2 libs.
-  // Need to fill 41 and 49 too: B0,W41,B1,W49 gives 40 one liberty... let's see:
-  // After B40, W31, B0, W39, B1, W41, B2, W49: BLACK@40 has neighbors 31(W),39(W),41(W),49(W) = 0 libs?
-  // That's capture territory — BLACK@40 gets captured when W49 is played. Not what we want.
-  //
-  // For save-by-capture: need BLACK string in atari AND adjacent WHITE string also in atari.
-  // Let's use a 5x5 board for simpler indexing.
-  //
-  // 5x5: BLACK@12(center), WHITE@7(N of 12), then surround WHITE@7 to have 1 lib.
-  // White@7 neighbors: N=2, S=12(BLACK), W=6, E=8. Fill N=2,E=8 with BLACK to give WHITE@7 lib=W=6.
-  // Also surround BLACK@12: put WHITE at E=13, W=11, S=17 to give BLACK@12 1 lib = N=7? No,
-  //  N of 12 is occupied by WHITE@7, not empty. So BLACK@12's S,E,W are WHITE; N is WHITE too.
-  //  That would mean 0 liberties for BLACK@12, which is illegal.
-  //
-  // Let me try a different setup. This is too involved for a unit test.
-  // Skip the full Feature 2 test for now; just verify it doesn't crash and gives
-  // a reasonable value when we know it should be false.
-
-  const st = createState(N); extractFeatures(g, st);
-  let anyBit1 = false;
-  for (let i = 0; i < st.count; i++) if (st.prevMasks[i] & 2) { anyBit1 = true; break; }
-  // After just a few moves with no atari, Feature 2 should not be active.
-  g.play(40); g.play(31);
-  extractFeatures(g, st);
-  // Feature 2 inactive unless we have a real save-by-capture situation.
-  let bit1Count = 0;
-  for (let i = 0; i < st.count; i++) if (st.prevMasks[i] & 2) bit1Count++;
-  // We can't easily assert 0 here since some coincidental ataris might exist.
-  // Just verify no crash.
-  check('Feature 2: no crash', true);
+// ── Helper: extract prevMask for a specific candidate cell ───────────────────
+function getMask(game, cell) {
+  const st = createState(game.N);
+  extractFeatures(game, st);
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === cell) return st.prevMasks[i];
+  return -1;
 }
 
-// ── 9. Feature 6: ko-solve ────────────────────────────────────────────────────
+// ── 8. Feature 2: save by capture, not self-atari (bit 1) ───────────────────
+// 8a: B@31 in atari (lib=22). W@32 in atari (lib=41). lastMove=W@40.
+//     Candidate 41 captures W@32, saving B@31. Not self-atari.
+//     9×9 cells: 31=(3,4) 32=(3,5) 23=(2,5) 30=(3,3) 33=(3,6) 40=(4,4) 41=(4,5)
 {
-  // Create a ko position: after a specific move sequence, game.ko should be set.
-  // Then verify the ko-solving capture triggers Feature 6 (bit 5).
-  //
-  // Ko setup on 9×9 (standard ko pattern):
-  // Place stones to create a ko. After the ko move, game.ko is the recapture point.
-  // Simple ko: a single WHITE stone captured by BLACK, leaving BLACK in a position
-  // where WHITE can't immediately recapture.
-  //
-  // Standard ko formation:
-  //   .B.      after WHITE plays at *, BLACK can capture at X creating ko at *:
-  //   BWB      * = W = the ko point
-  //   .B.
-  //
-  // Let's build this. Center=40 (4,4).
-  // B: 31(N), 49(S), 39(W), 41(E) form a diamond around 40.
-  // W: at 40 (surrounded by B on N/S/E/W? But 40's W=39 already black = no, that would be capture).
-  //
-  // Actually for a ko: need single white stone captured by a single black stone,
-  // where the capturing black stone itself has only 1 liberty (= the just-captured point).
-  //
-  // Simpler: verify game.ko gets set after a capture, then check Feature 6 behavior.
-  // We'll force a known position.
-
-  const N = 9;
-  const g = new Game2(N, false);
-  // Build ko: B@31(3,4), B@49(5,4), B@39(4,3), W@40(4,4), B@42(4,6? no, E of 41=E of 40+1=41)
-  // W@40 is surrounded by B31,B49,B39 and needs only 1 more B neighbor to be captured.
-  // If B plays at 41(E of 40), W@40 is captured if W@40 has only 1 lib = 41.
-  // Neighbors of 40: N=31(B), S=49(B), W=39(B), E=41(empty). Yes! W@40 has 1 lib = 41.
-  // After B plays 41, W@40 is captured. Now B@41 has neighbors: N=32, S=50, W=40(empty=ko), E=42.
-  // B@41 alone: if 32,50,42 are all occupied by WHITE... let's check:
-  // For ko: after capture, B@41 should have exactly 1 liberty = 40 (the captured point).
-  // So 32,50,42 must be occupied by WHITE.
-  //
-  // Setup sequence (alternating B/W starting with B):
-  // B@31, W@32(N+1 of 41, i.e. (3,5)=32), B@49, W@50(5,5=50), B@39, W@42(4,6=42), then B@41 captures W@40.
-  // But we haven't placed W@40 yet. Order:
-  // B@31, W@40, B@49, W@32, B@39, W@50, B@0(dummy), W@42, B@41(captures W@40 → ko at 40)
-  g.play(31);  // B
-  g.play(40);  // W
-  g.play(49);  // B
-  g.play(32);  // W
-  g.play(39);  // B
-  g.play(50);  // W
-  g.play(0);   // B dummy
-  g.play(42);  // W
-  // Now it's BLACK's turn. W@40 has 1 liberty = 41.
-  const before = g._gid[40] >= 0 && g._ls[g._gid[40]] === 1;
-  check('Ko setup: W@40 in atari', before);
-  g.play(41);  // B captures W@40 → ko point set at 40
-  check('Ko setup: ko point set at 40', g.ko === 40);
-
-  // Now it's WHITE's turn. lastMove=41 (B's capture). Feature 6 checks: game.ko !== PASS.
-  // Wait — extractFeatures is called for the CURRENT player, which is WHITE.
-  // Feature 6: "solve a new ko by capturing". WHITE would be solving the ko.
-  // Actually we said features are relative to the current mover. Let's check WHITE's features.
-  const st = createState(N); extractFeatures(g, st);
-  let bit5Count = 0;
-  for (let i = 0; i < st.count; i++) if (st.prevMasks[i] & 32) bit5Count++;
-  // Feature 6 triggers when game.isCapture(idx) is true with ko set.
-  // There might not be an obvious capture for WHITE here (B stones around the area
-  // have 2+ liberties), so bit5Count might be 0. Just verify no crash.
-  check('Feature 6: no crash with ko position', true);
-  // If there IS a capture, it should have bit 5.
-  // (We can't easily assert the exact count without more setup.)
+  const g = new Game2(9, false);
+  g.play(31); g.play(32); g.play(23); g.play(30); g.play(33); g.play(40);
+  check('F2a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
+  check('F2a setup: W@32 in atari', g._ls[g._gid[32]] === 1);
+  const mask = getMask(g, 41);
+  check('F2a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F2a: bit 1 set (save by capture)', mask !== -1 && (mask & 2) !== 0);
+  check('F2a: bit 2 not set (not self-atari)', mask !== -1 && (mask & 4) === 0);
 }
 
-// ── 10. Feature 7: 2-point semeai ────────────────────────────────────────────
+// 8b: B@40 in atari (lib=31). W@39 in atari (lib=48). lastMove=W@49.
+//     Candidate 48 captures W@39, saving B@40. Not self-atari.
+//     40=(4,4) 39=(4,3) 30=(3,3) 41=(4,5) 38=(4,2) 49=(5,4) 48=(5,3)
 {
-  // Need: a friendly string with 2 libs adjacent to lastMove,
-  //       AND an enemy string with 2 libs adjacent to the friendly string,
-  //       with the candidate being one of the enemy string's liberties.
-  //
-  // Setup on 9×9:
-  // B string at 40, 2 libs = 31 and 41 (N and E).
-  // W string at 30(W of 40), with 2 libs = 20 and 31 (say).
-  //   W@30 neighbors: N=21? No: 30=(3,3). N=(2,3)=21, S=(4,3)=39, W=(3,2)=29, E=(3,4)=31(empty).
-  // Let's say W string at 30 has 2 libs = 21 and 31.
-  // We want: B@40 has 2 libs (after WHITE's last move placed something near B@40).
-  // WHITE's last move places at 39 (W of 40), reducing B@40's libs from 3 to 2 (31, 41, 49→occupied).
-  // Then B@31 would be adjacent to W@30, and playing at 31 gives W@30 atari (since 31 is one of W@30's libs).
-  //
-  // This requires W@30 to have libs {21, 31}. So 29(W of 30) and 39 (E of... no, S of 30) occupied.
-  // W@30: N=21(empty), S=39(WHITE itself? no, S of 30=(4,3)=39, we're placing WHITE there!).
-  // Hmm: placing WHITE at 39 is one of W@30's stone positions, not a neighbor.
-  // I'm confusing myself. Let me restart.
-  //
-  // 9×9, cell 30 = (3,3):
-  //   nbr: N=(2,3)=21, S=(4,3)=39, W=(3,2)=29, E=(3,4)=31 (all by modular arithmetic since toroidal)
-  //
-  // WHITE string at cell 30. Want it to have 2 libs = {21, 31}.
-  // So 29 and 39 must be occupied (by something other than WHITE@30's group).
-  //
-  // BLACK string at 40. After WHITE's last move at 49 (S of 40), B@40 has 2 libs = {31, 41}.
-  //   40=(4,4): N=31, S=49(now WHITE), W=39(occupied?), E=41.
-  //
-  // Let's build: B@40, then fill 39 and 29 with BLACK (dummies), W@30, W@49,
-  //   then WHITE plays at 49... wait that's confusing.
-  //
-  // Let me try an explicit sequence:
-  // B@40, W@30, B@0(dummy), W@29, B@1, W@39, B@2, W@49
-  // After this: it's BLACK's turn. lastMove=49.
-  // B@40 neighbors: N=31(empty), S=49(W), W=39(W), E=41(empty) → 2 liberties: 31, 41. ✓
-  // W@30 neighbors: N=21(empty), S=39(W), W=29(W), E=31(empty).
-  //   But W@30, W@39, W@29 might be one connected group?
-  //   30's neighbors: 29(W),39(W)→ W@30,W@39,W@29 are connected! That's 3 stones.
-  //   Group {30,29,39}: size=3, liberties = 21, 31, 40=empty? 40 is BLACK.
-  //   Neighbors of {30,29,39,49} (if 49 is also connected to 39? 49=(4,3+1?no: 39=(4,3),49=(5,4)).
-  //   39=(4,3): N=30(W), S=48=(5,3), W=38=(4,2), E=40(B).
-  //   So 39 and 30 are connected. 29=(3,2): N=20, S=38, W=28, E=30(W). 39 and 29 are NOT neighbors.
-  //   So W group = {30, 29}? 29's E=30(W) ✓. 30's W=29(W) ✓.
-  //   Group {29,30}: libs = N(29)=20, S(29)=38, W(29)=28, N(30)=21, S(30)=39(W another group), E(30)=31.
-  //   Wait, 39 is also WHITE. Is 39 connected to {29,30}? 39's W=38, N=30(W). Yes! 39's N=30 → connected.
-  //   So group = {29,30,39}. 49 is also WHITE. Is 49 connected? 49=(5,4): N=40(B), S=58, W=48, E=50.
-  //   49 is not adjacent to 29,30,39. So W group {29,30,39} has liberties:
-  //     29: N=20, S=38, W=28 (E=30=own)
-  //     30: N=21, E=31 (W=29=own, S=39=own)
-  //     39: S=48, W=38, E=40(B) (N=30=own)
-  //   Unique liberties: {20,38,28,21,31,48} = 6 liberties. Too many, not 2.
-  //
-  // This setup is getting messy. Let me just verify Feature 7 doesn't crash and
-  // write a comment that a dedicated test needs a more carefully constructed position.
+  const g = new Game2(9, false);
+  g.play(40); g.play(39); g.play(30); g.play(41); g.play(38); g.play(49);
+  check('F2b setup: B@40 in atari', g._ls[g._gid[40]] === 1);
+  check('F2b setup: W@39 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 48);
+  check('F2b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F2b: bit 1 set (save by capture)', mask !== -1 && (mask & 2) !== 0);
+  check('F2b: bit 2 not set (not self-atari)', mask !== -1 && (mask & 4) === 0);
+}
 
-  const N = 9;
-  const g = new Game2(N, false);
-  g.play(40); g.play(30); g.play(0); g.play(29); g.play(1); g.play(39); g.play(2); g.play(49);
-  const st = createState(N);
-  extractFeatures(g, st);
-  let any7 = false;
-  for (let i = 0; i < st.count; i++) if (st.prevMasks[i] & 64) { any7 = true; break; }
-  check('Feature 7: no crash', true);
-  // any7 may or may not be set depending on the exact position; just ensure no throw.
+// ── 9. Feature 3: save by capture, IS self-atari (bit 2) ────────────────────
+// 9a: Same as 8a but W@50,W@42 surround cell 41, making the capture self-atari.
+//     After capturing W@32, B@41 has only lib=32 (N=32 empty, S=50(W), W=40(W), E=42(W)).
+{
+  const g = new Game2(9, false);
+  g.play(31); g.play(32); g.play(23); g.play(30); g.play(33); g.play(50);
+  g.play(0);  g.play(42); g.play(1);  g.play(40);
+  check('F3a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
+  check('F3a setup: W@32 in atari', g._ls[g._gid[32]] === 1);
+  const mask = getMask(g, 41);
+  check('F3a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F3a: bit 2 set (capture + self-atari)', mask !== -1 && (mask & 4) !== 0);
+  check('F3a: bit 1 not set', mask !== -1 && (mask & 2) === 0);
+}
+
+// 9b: Same as 8b but W@57,W@47 surround cell 48, making the capture self-atari.
+//     After capturing W@39, B@48 has only lib=39 (N=39 empty, S=57(W), W=47(W), E=49(W)).
+{
+  const g = new Game2(9, false);
+  g.play(40); g.play(39); g.play(30); g.play(41); g.play(38); g.play(57);
+  g.play(0);  g.play(47); g.play(1);  g.play(49);
+  check('F3b setup: B@40 in atari', g._ls[g._gid[40]] === 1);
+  check('F3b setup: W@39 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 48);
+  check('F3b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F3b: bit 2 set (capture + self-atari)', mask !== -1 && (mask & 4) !== 0);
+  check('F3b: bit 1 not set', mask !== -1 && (mask & 2) === 0);
+}
+
+// ── 10. Feature 4: save by extension, not self-atari (bit 3) ────────────────
+// 10a: B@31 in atari (lib=40). lastMove=W@39. Candidate 40 extends B@31.
+//      After B@40: group {31,40} has libs {49,41} — not self-atari.
+//      31=(3,4) 22=(2,4) 30=(3,3) 32=(3,5) 39=(4,3) 40=(4,4)
+{
+  const g = new Game2(9, false);
+  g.play(31); g.play(22); g.play(0); g.play(30); g.play(1); g.play(32); g.play(2); g.play(39);
+  check('F4a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
+  const mask = getMask(g, 40);
+  check('F4a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F4a: bit 3 set (extend, not self-atari)', mask !== -1 && (mask & 8) !== 0);
+  check('F4a: bit 4 not set', mask !== -1 && (mask & 16) === 0);
+}
+
+// 10b: Multi-stone string {40,41} in atari (lib=42). lastMove=W@50.
+//      After B@42: group {40,41,42} has libs {33,51,43} — not self-atari.
+{
+  const g = new Game2(9, false);
+  g.play(40); g.play(31); g.play(41); g.play(32); g.play(0); g.play(39);
+  g.play(1);  g.play(49); g.play(2);  g.play(50);
+  check('F4b setup: {40,41} in atari', g._ls[g._gid[40]] === 1);
+  const mask = getMask(g, 42);
+  check('F4b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F4b: bit 3 set (extend, not self-atari)', mask !== -1 && (mask & 8) !== 0);
+  check('F4b: bit 4 not set', mask !== -1 && (mask & 16) === 0);
+}
+
+// ── 11. Feature 5: save by extension, IS self-atari (bit 4) ─────────────────
+// 11a: B@31 in atari (lib=40). lastMove=W@39. W@49 blocks S of 40.
+//      After B@40: group {31,40} has only lib=41 — self-atari.
+{
+  const g = new Game2(9, false);
+  g.play(31); g.play(22); g.play(0); g.play(30); g.play(1); g.play(32);
+  g.play(2);  g.play(49); g.play(3);  g.play(39);
+  check('F5a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
+  const mask = getMask(g, 40);
+  check('F5a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F5a: bit 4 set (extend + self-atari)', mask !== -1 && (mask & 16) !== 0);
+  check('F5a: bit 3 not set', mask !== -1 && (mask & 8) === 0);
+}
+
+// 11b: B@39 in atari (lib=40). lastMove=W@48. W@31,W@49 block N,S of 40.
+//      After B@40: group {39,40} has only lib=41 — self-atari.
+{
+  const g = new Game2(9, false);
+  g.play(39); g.play(30); g.play(0); g.play(38); g.play(1); g.play(31);
+  g.play(2);  g.play(49); g.play(3);  g.play(48);
+  check('F5b setup: B@39 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 40);
+  check('F5b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F5b: bit 4 set (extend + self-atari)', mask !== -1 && (mask & 16) !== 0);
+  check('F5b: bit 3 not set', mask !== -1 && (mask & 8) === 0);
+}
+
+// ── 12. Feature 6: ko-solve (bit 5) ─────────────────────────────────────────
+// Ko setup: B captures W creating ko. Separate B group with 1 lib provides the
+// capturable target for the ko-solving feature.
+
+// 12a: Ko at 40. B@41 captures W@40. B@34 has 1 lib at 33 (NE of lastMove=41).
+//      WHITE plays at 33 → captures B@34. ko≠PASS → bit 5.
+{
+  const g = new Game2(9, false);
+  // Ko frame: B@31,B@49,B@39 surround W@40; W@32,W@50,W@42 surround B@41.
+  // Capturable group: B@34 with W@25,W@43,W@35 leaving lib=33.
+  g.play(31); g.play(40); g.play(49); g.play(32); g.play(39); g.play(50);
+  g.play(34); g.play(42); g.play(0);  g.play(25); g.play(1);  g.play(43);
+  g.play(2);  g.play(35);
+  check('F6a setup: W@40 in atari', g._ls[g._gid[40]] === 1);
+  g.play(41); // B captures W@40 → ko
+  check('F6a setup: ko at 40', g.ko === 40);
+  // WHITE's turn. lastMove=41. Candidate 33 captures B@34.
+  const mask = getMask(g, 33);
+  check('F6a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F6a: bit 5 set (ko-solve capture)', mask !== -1 && (mask & 32) !== 0);
+}
+
+// 12b: Ko at 50. B@51 captures W@50. B@44 has 1 lib at 43 (NE of lastMove=51).
+{
+  const g = new Game2(9, false);
+  // Ko frame: B@41,B@59,B@49 surround W@50; W@42,W@60,W@52 surround B@51.
+  // Capturable group: B@44 (4,8) with W@35,W@53,W@36 leaving lib=43.
+  //   44=(4,8): N=35, S=53, W=43, E=(4,0)=36 (toroidal).
+  g.play(41); g.play(50); g.play(59); g.play(42); g.play(49); g.play(60);
+  g.play(44); g.play(52); g.play(0);  g.play(35); g.play(1);  g.play(53);
+  g.play(2);  g.play(36);
+  check('F6b setup: W@50 in atari', g._ls[g._gid[50]] === 1);
+  g.play(51); // B captures W@50 → ko
+  check('F6b setup: ko at 50', g.ko === 50);
+  const mask = getMask(g, 43);
+  check('F6b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F6b: bit 5 set (ko-solve capture)', mask !== -1 && (mask & 32) !== 0);
+}
+
+// ── 13. Feature 7: 2-point semeai (bit 6) ───────────────────────────────────
+// Friendly string with 2 libs adjacent to lastMove; enemy string with 2 libs
+// where candidate gives it atari.
+
+// 13a: B@31 has 2 libs {22,32}. W@30 has 2 libs {39,29}. lastMove=W@40.
+//      Candidate 39 (W of 40, in 8-nbr) gives W@30 atari.
+//      31=(3,4) 30=(3,3) 21=(2,3) 40=(4,4) 39=(4,3)
+{
+  const g = new Game2(9, false);
+  g.play(31); g.play(30); g.play(21); g.play(40);
+  check('F7a setup: B@31 has 2 libs', g._ls[g._gid[31]] === 2);
+  check('F7a setup: W@30 has 2 libs', g._ls[g._gid[30]] === 2);
+  const mask = getMask(g, 39);
+  check('F7a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F7a: bit 6 set (2-point semeai)', mask !== -1 && (mask & 64) !== 0);
+}
+
+// 13b: B@39 has 2 libs {48,38}. W@30 has 2 libs {29,31}. lastMove=W@40.
+//      Candidate 31 (N of 40, in 8-nbr) gives W@30 atari.
+{
+  const g = new Game2(9, false);
+  g.play(39); g.play(30); g.play(21); g.play(40);
+  check('F7b setup: B@39 has 2 libs', g._ls[g._gid[39]] === 2);
+  check('F7b setup: W@30 has 2 libs', g._ls[g._gid[30]] === 2);
+  const mask = getMask(g, 31);
+  check('F7b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
+  check('F7b: bit 6 set (2-point semeai)', mask !== -1 && (mask & 64) !== 0);
 }
 
 // ── 11. All moves have valid patIds ────────────────────────────────────────────

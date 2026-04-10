@@ -49,6 +49,9 @@ const Util = (() => {
       if (bools.has(key)) { opts[key] = true; continue; }
       opts[key] = argv[++i];
     }
+    opts.get      = (key, def) => opts[key] !== undefined ? opts[key] : def;
+    opts.getInt   = (key, def) => opts[key] !== undefined ? parseInt(opts[key], 10) : def;
+    opts.getFloat = (key, def) => opts[key] !== undefined ? parseFloat(opts[key]) : def;
     return opts;
   }
 

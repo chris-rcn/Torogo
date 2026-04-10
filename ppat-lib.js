@@ -339,7 +339,48 @@ function evaluate(game, state, patWeights, prevWeights) {
   return out.sort((a, b) => b.score - a.score);
 }
 
-const PPatterns = { createState, extractFeatures, evaluate, NUM_PATTERNS };
+// ── Policy move selection ─────────────────────────────────────────────────────
+//
+// Extract features, compute softmax over logits, sample an action.
+// weights: { pat: Float32Array(NUM_PATTERNS), prev: Float32Array(7) }
+// Returns the flat board index of the chosen move, or PASS if no legal non-eye moves.
+// After return, state is populated with the extracted features.
+
+let _logits = new Float32Array(512);
+let _probs  = new Float32Array(512);
+
+function policyMove(game, state, weights) {
+  extractFeatures(game, state);
+  const n = state.count;
+  if (n === 0) return PASS;
+
+  if (_logits.length < n) {
+    _logits = new Float32Array(n * 2);
+    _probs  = new Float32Array(n * 2);
+  }
+
+  const patW  = weights.pat;
+  const prevW = weights.prev;
+  for (let i = 0; i < n; i++) {
+    let v = patW[state.patIds[i]];
+    let m = state.prevMasks[i];
+    for (let b = 0; m; b++, m >>= 1) if (m & 1) v += prevW[b];
+    _logits[i] = v;
+  }
+
+  let max = _logits[0];
+  for (let i = 1; i < n; i++) if (_logits[i] > max) max = _logits[i];
+  let sum = 0;
+  for (let i = 0; i < n; i++) { _probs[i] = Math.exp(_logits[i] - max); sum += _probs[i]; }
+  const inv = 1 / sum;
+  for (let i = 0; i < n; i++) _probs[i] *= inv;
+
+  let r = Math.random(), chosen = n - 1;
+  for (let i = 0; i < n; i++) { r -= _probs[i]; if (r <= 0) { chosen = i; break; } }
+  return state.moves[chosen];
+}
+
+const PPatterns = { createState, extractFeatures, evaluate, policyMove, NUM_PATTERNS };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;
 

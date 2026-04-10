@@ -34,6 +34,13 @@ const N_EXPAND = Util.envInt('N_EXPAND', 2);
 // Must be < 1 to prevent unbounded growth down the tree.
 const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT', 0.2);
 
+// Prior pseudo-counts seeded into wins/visits for new children (50% win rate).
+const PRIOR_WINS   = 0.001;
+const PRIOR_VISITS = 2 * PRIOR_WINS;
+
+// Minimum playouts before the "no winning line" resignation triggers.
+const RESIGN_MIN_PLAYOUTS = 20000;
+
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
 // Returns { winner, played }.
@@ -104,14 +111,14 @@ function makeNode(move, parent, ci, game2, N) {
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
   const children   = new Array(M).fill(null);
-  const wins       = new Float32Array(M).fill(0.001);
-  const visits     = new Float32Array(M).fill(0.002);
+  const wins       = new Float32Array(M).fill(PRIOR_WINS);
+  const visits     = new Float32Array(M).fill(PRIOR_VISITS);
   const raveWins   = new Float32Array(area);
   const raveVisits = new Float32Array(area);
 
   if (parent === null || parent.parent === null) {
-    raveWins.fill(0.001);
-    raveVisits.fill(0.002);
+    raveWins.fill(PRIOR_WINS);
+    raveVisits.fill(PRIOR_VISITS);
   } else {
     const gparent = parent.parent;
     for (let m = 0; m < area; m++) {
@@ -280,7 +287,7 @@ function backpropagate(node, winner, played, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -297,6 +304,7 @@ function getMove(game, timeBudgetMs) {
   // Pre-allocate played buffer — reused across all playouts.
   const played = new Float32Array(N * N);
 
+  const playoutLimit = options.playoutLimit || PLAYOUTS;
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
@@ -305,7 +313,7 @@ function getMove(game, timeBudgetMs) {
     const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
     const { winner, played: p } = playTracked(simGame2, node, played);
     backpropagate(node, winner, p, rootPlayer);
-  } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
+  } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 
   // Best child: most playout visits; ties broken by RAVE-blended score.
   const M = root.legalMoves.length;
@@ -334,7 +342,7 @@ function getMove(game, timeBudgetMs) {
   for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
   const rootWinRatio = totalChildWins / root.totalVisits;
 
-  if (root.wins[bestIdx] === 0 && game.moveCount >= N * N / 2) {
+  if (playouts >= RESIGN_MIN_PLAYOUTS && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] <= PRIOR_WINS) {
     return { type: 'pass', move: PASS, info: 'no winning line found', children, rootWinRatio };
   }
 

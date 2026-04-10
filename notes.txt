@@ -28,3 +28,27 @@ $ node eval-uniform.js --file movedetails_5059.tmp --N 200
 positions: 5059,  N: 200  mean |ΔV|: 0.1015  stddev: 0.0799
 
 
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # baseline A'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # baseline B'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 200 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # M=200'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 300 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # M=300'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 500 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.0 # M=500'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.1 # filter=0.1'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.2 # filter=0.2'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  10 --filter 0.2 # filter=0.3'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch  30 --filter 0.0 # batch=30'
+tmuxw 'node train-ppat.js --file out/evals-s9-d20.txt --M 100 --train-pos 0 --test-pos 1000 --lr 10 --test-playouts 1000 --batch 100 --filter 0.0 # batch=100'
+C
+tmuxw 'c/train_ppat out/evals-s9-100k.txt --M 200 --train-pos 0 --test-pos 0 --lr 10 --test-playouts 1000 --batch  10'
+tmuxw 'c/train_ppat out/evals-s9-200k.txt --M 200 --train-pos 0 --test-pos 0 --lr 10 --test-playouts 1000 --batch  10'
+
+
+Feature value initializations
+1: 7.43
+2: 151.04
+3: 0.53
+4: 23.11
+5: 0.02
+6: 6.37
+7: 141.80
+

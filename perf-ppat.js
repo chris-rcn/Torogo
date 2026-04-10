@@ -1,6 +1,6 @@
 'use strict';
 
-const { createState, extractFeatures } = require('./ppat.js');
+const { createState, extractFeatures } = require('./ppat-lib.js');
 const { Game2 } = require('./game2.js');
 
 function xorshift32(seed) {

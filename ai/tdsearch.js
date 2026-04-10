@@ -9,7 +9,6 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const Playout = require('./playout.js');
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 const { makeIntMap } = _isNode ? require('../int-map.js') : window.IntMap;
@@ -26,7 +25,9 @@ const LR1           = Util.envFloat('TD_LR1', 0.3);
 const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 1);
 const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
 const EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
-const USE_PLAYOUT   = Util.envInt  ('TD_USE_PLAYOUT', '0');
+const USE_PPAT      = Util.envInt  ('TD_USE_PPAT', '0');
+
+const ppatAgent = USE_PPAT ? (_isNode ? require('./ppat.js') : window.PPatAgent) : null;
 
 let evalModel = null;
 if (_isNode && EVAL_DATA) evalModel = loadWeights(EVAL_DATA);
@@ -514,8 +515,8 @@ function selectTrainingMove(game, step, ctx, epsilon) {
   if (step < NARROW_DEPTH) 
     return search1ply(game, ctx, 2);
 
-  if (USE_PLAYOUT) {
-    return Playout.getMove(game);
+  if (USE_PPAT) {
+    return ppatAgent.getMove(game);
   }
   return { move: game.randomLegalMove() };
 }

@@ -3,7 +3,7 @@
 // Count the distinct canonical pattern IDs that appear at legal non-eye moves
 // across a large corpus of complete self-play games.
 
-const { createState, extractFeatures, NUM_PATTERNS } = require('./ppat.js');
+const { createState, extractFeatures, NUM_PATTERNS } = require('./ppat-lib.js');
 const { Game2 } = require('./game2.js');
 
 const N      = parseInt(process.argv[2], 10) || 9;
