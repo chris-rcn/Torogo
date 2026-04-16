@@ -249,6 +249,57 @@ function testConsecutivePasses() {
   console.log('✓ consecutivePasses works correctly');
 }
 
+function testIsValidMove() {
+  console.log('Testing isValidMove()...');
+
+  // Test 1: Valid move is legal and not a true eye
+  const game = new Game3Precise(9);
+  const move = 20;
+  console.assert(game.isLegal(move), 'Move should be legal initially');
+  console.assert(!game.isTrueEye(move), 'Move should not be true eye initially');
+  console.assert(game.isValidMove(move), 'isValidMove should be true for legal non-eye move');
+
+  // Test 2: Occupied position is invalid
+  game.play(20);
+  console.assert(!game.isLegal(20), 'Occupied position should be illegal');
+  console.assert(!game.isValidMove(20), 'isValidMove should be false for occupied position');
+
+  // Test 3: Ko position is invalid
+  const koGame = new Game3Precise(5);
+  koGame.play(6);   // W
+  koGame.play(11);  // B
+  koGame.play(7);   // W
+  koGame.play(2);   // B
+  koGame.play(1);   // W (captures at 11)
+  console.assert(!koGame.isValidMove(koGame.ko), 'Ko position should be invalid');
+
+  // Test 4: Build true eye and verify it's not valid
+  const eyeGame = new Game3Precise(9);
+  eyeGame.play(30);  // W at 30 (up-left diagonal)
+  eyeGame.play(PASS);
+  eyeGame.play(32);  // W at 32 (up-right diagonal)
+  eyeGame.play(PASS);
+  eyeGame.play(48);  // W at 48 (down-left diagonal)
+  eyeGame.play(PASS);
+  eyeGame.play(50);  // W at 50 (down-right diagonal)
+  eyeGame.play(PASS);
+  eyeGame.play(31);  // W at 31 (up)
+  eyeGame.play(PASS);
+  eyeGame.play(49);  // W at 49 (down)
+  eyeGame.play(PASS);
+  eyeGame.play(39);  // W at 39 (left)
+  eyeGame.play(PASS);
+  eyeGame.play(41);  // W at 41 (right)
+  eyeGame.play(PASS);
+
+  // Position 40 is now a true eye for WHITE
+  console.assert(eyeGame.isLegal(40), 'True eye position should be legal');
+  console.assert(eyeGame.isTrueEye(40), 'Position should be true eye');
+  console.assert(!eyeGame.isValidMove(40), 'isValidMove should be false for true eye');
+
+  console.log('✓ isValidMove() works correctly');
+}
+
 function testIsTrueEye() {
   console.log('Testing isTrueEye()...');
 
@@ -315,6 +366,7 @@ try {
   testToString();
   testClone();
   testConsecutivePasses();
+  testIsValidMove();
   testIsTrueEye();
 
   console.log('='.repeat(60));

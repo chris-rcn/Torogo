@@ -321,6 +321,10 @@ class Game3Precise {
     return true;
   }
 
+  isValidMove(idx, color = this.current) {
+    return this.isLegal(idx, color) && !this.isTrueEye(idx);
+  }
+
   _isSingleSuicide(idx, color) {
     const nbr = this._nbr;
     const base = idx * 4;
