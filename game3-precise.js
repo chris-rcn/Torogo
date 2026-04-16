@@ -68,6 +68,17 @@ class Game3Precise {
     this.cells[center] = BLACK;
     this._addStone(center, centerGid, BLACK);
     this.emptyCount--;
+
+    // Add liberties for the center stone (its 4 empty neighbors)
+    const nbr = this._nbr;
+    const base = center * 4;
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      if (this.cells[ni] === EMPTY) {
+        this._addLiberty_raw(centerGid, ni);
+      }
+    }
+
     this.current = WHITE;
     this.moveCount = 1;
   }
