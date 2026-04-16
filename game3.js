@@ -283,6 +283,7 @@ class Game3Precise {
     if (this.cells[idx] !== EMPTY) return false;
     if (this.ko === idx) return false;
     if (this._isSingleSuicide(idx, color)) return false;
+    if (this._isMultiSuicide(idx, color)) return false;
     return true;
   }
 
@@ -302,6 +303,39 @@ class Game3Precise {
       else             { if (this._ls[gid] === 1) return false; }
     }
     return true;
+  }
+
+  _isMultiSuicide(idx, color) {
+    // Checks if playing here would capture enemy stones but leave our own with 0 liberties
+    const cells = this.cells;
+    const gidArr = this._gid;
+    const nbr = this._nbr;
+    const base = idx * 4;
+    const ls = this._ls;
+    const lw = this._lw;
+    const W = this._W;
+    let hasFriendly = false;
+    let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
+
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const c = cells[ni];
+      if (c === EMPTY) return false;
+      const gid = gidArr[ni];
+      if (gid === s0 || gid === s1 || gid === s2 || gid === s3) continue;
+      if      (s0 === -1) s0 = gid;
+      else if (s1 === -1) s1 = gid;
+      else if (s2 === -1) s2 = gid;
+      else                s3 = gid;
+      if (c === color) {
+        hasFriendly = true;
+        if (ls[gid] > 1) return false;
+        if (ls[gid] === 1 && !((lw[gid * W + (idx >> 5)] >>> (idx & 31)) & 1)) return false;
+      } else {
+        if (ls[gid] === 1 && ((lw[gid * W + (idx >> 5)] >>> (idx & 31)) & 1)) return false;
+      }
+    }
+    return hasFriendly;
   }
 
   play(move) {
