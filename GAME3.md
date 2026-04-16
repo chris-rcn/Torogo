@@ -12,7 +12,7 @@
 - **No cloning overhead**: Each move just pushes a change record to a stack
 - **Memory efficient**: Same per-game memory usage as Game2 (~1.8KB per 5x5 board)
 
-## Why Game3 is Faster
+## Design Tradeoffs
 
 ### Game2 Approach (Clone-Based)
 ```javascript
@@ -27,18 +27,23 @@ Game2's clone allocates new typed arrays for:
 - `_gc`, `_sw`, `_ss`, `_lw`, `_ls` (group data)
 - `_emptyCells`, `_emptySlot` (empty cell tracking)
 - `koStone` array
-- Total: ~80KB per clone on 9x9 board
+- Total: ~1.8KB per clone on 7x7 board, ~8KB on 9x9 board
 
-### Game3 Approach (Incremental)
+### Game3 Approach (Undo Stack with Snapshots)
 ```javascript
-game.play(move);    // Push change to undo stack
-game.undo();        // Pop change from stack
+game.play(move);    // Push state snapshot to undo stack
+game.undo();        // Restore from snapshot
 ```
 
-Game3 never allocates large arrays per move:
-- Single `_undoStack` array (initially empty)
-- Each move just pushes a small change record
-- No deep copies, no array duplication
+Game3 stores snapshots in the undo stack:
+- Complete state snapshot for each move (same data as Game2 clone)
+- Stored in a single `_undoStack` array
+- Memory equivalent to Game2's clones but consolidated
+
+**Key Finding**: Both approaches allocate similar amounts of memory per move. Game3's advantage is:
+1. **No object allocation overhead**: One array vs. separate Game2 instances
+2. **Simpler API**: No need to manage clone objects, just play/undo
+3. **Effectively unlimited undo**: Depth limited by memory, not by design
 
 ## Usage
 
@@ -113,19 +118,25 @@ Undo works by:
 ## Performance Characteristics
 
 ### Initialization
-- **Game2**: ~0.1ms (5x5 board)
-- **Game3**: ~0.1ms (5x5 board)
+- **Game2**: ~0.1ms (7x7 board)
+- **Game3**: ~0.1ms (7x7 board)
 
-### Single Move + Undo
-- **Game2 (clone + play)**: ~0.34ms per cycle
-- **Game3 (play + undo)**: ~0.20ms per cycle
-- **Speedup**: ~1.7x faster
+### Single Move + Undo Cycle
+- **Game2 (clone + play)**: O(n) - allocates full arrays
+- **Game3 (play + undo)**: O(n) - stores/restores full snapshot
+- **Practical difference**: Negligible (both ~0.1ms per cycle on 7x7)
 
-### Deep Tactical Search (5 moves, 4 branches each)
-- **Game2**: ~0.33ms per position
-- **Game3**: ~0.20ms per position
-- **Speedup**: ~1.6x faster
-- **Cumulative benefit**: For 1000-node search, saves ~130ms
+### Tactical Search (Real-world benchmark)
+Testing on random 7x7 game positions with searchChain analysis:
+- **Game2**: ~70ms per position (avg), ~480ms max chain
+- **Game3**: Comparable performance (similar snapshot overhead)
+- **Advantage**: Simpler API, no clone object management
+
+### When Game3 Shines
+Game3's benefits are architectural, not micro-benchmark based:
+- **Cleaner search code**: `game.play(move); recurse(); game.undo();` vs separate clone objects
+- **Implicit undo safety**: Can't forget to discard clones
+- **Unified state management**: Single game object vs. multiple clones
 
 ## Migration from Game2
 
@@ -159,11 +170,25 @@ Undo works by:
    - `game.groupLibs(idx)`
    - `game.N` (board size)
 
-## Limitations
+## Limitations & Honest Assessment
 
-- **Single-threaded only**: Undo stack is not thread-safe
-- **No clones**: If you need a completely independent copy, you'd need to write a copy method
-- **Group reconstruction on undo**: Rebuilds group state from cells (still much faster than cloning)
+- **Memory efficiency**: Game3 stores full state snapshots, similar memory cost per move as Game2 clones
+- **Speed parity**: No speed advantage over Game2 for typical tactical searches
+- **Single-threaded only**: Undo stack is not thread-safe; can't safely share between threads
+- **Undo depth limit**: Capped at 50,000 moves to prevent memory issues
+
+## When to Use Game3 vs Game2
+
+**Use Game3 if you**:
+- Prefer the simpler play/undo API over clone/discard
+- Want safer code that can't leak clone objects
+- Need truly unlimited undo depth (not practical limits like snapshot count)
+- Appreciate cleaner recursive search code
+
+**Use Game2 if you**:
+- Only do shallow searches (no undo needed, just clone and throw away)
+- Want the most mature, battle-tested implementation
+- Prefer the explicit clone/discard pattern for clarity
 
 ## Testing
 
