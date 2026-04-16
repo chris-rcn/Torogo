@@ -106,16 +106,15 @@ class Game3Optimized {
     this._cachedCells.set(this.cells);
     this._cachedGid.set(this._gid);
     this._cachedNextGid = this._nextGid;
-    this._cachedGc.set(this._gc.slice(0, this._nextGid));
-    for (let g = 0; g < this._nextGid; g++) {
-      const gb = g * W;
-      for (let wi = 0; wi < W; wi++) {
-        this._cachedSw[gb + wi] = this._sw[gb + wi];
-        this._cachedLw[gb + wi] = this._lw[gb + wi];
-      }
-      this._cachedSs[g] = this._ss[g];
-      this._cachedLs[g] = this._ls[g];
-    }
+
+    // Use efficient bulk copy for group data
+    const dataSize = this._nextGid * W;
+    this._cachedSw.set(this._sw.subarray(0, dataSize));
+    this._cachedLw.set(this._lw.subarray(0, dataSize));
+    this._cachedGc.set(this._gc.subarray(0, this._nextGid));
+    this._cachedSs.set(this._ss.subarray(0, this._nextGid));
+    this._cachedLs.set(this._ls.subarray(0, this._nextGid));
+
     this._cachedCurrent = this.current;
     this._cachedKo = this.ko;
     this._cachedEmptyCount = this.emptyCount;
@@ -130,16 +129,15 @@ class Game3Optimized {
     this.cells.set(this._cachedCells);
     this._gid.set(this._cachedGid);
     this._nextGid = this._cachedNextGid;
-    this._gc.set(this._cachedGc.slice(0, this._nextGid));
-    for (let g = 0; g < this._nextGid; g++) {
-      const gb = g * W;
-      for (let wi = 0; wi < W; wi++) {
-        this._sw[gb + wi] = this._cachedSw[gb + wi];
-        this._lw[gb + wi] = this._cachedLw[gb + wi];
-      }
-      this._ss[g] = this._cachedSs[g];
-      this._ls[g] = this._cachedLs[g];
-    }
+
+    // Use efficient bulk copy for group data
+    const dataSize = this._nextGid * W;
+    this._sw.set(this._cachedSw.subarray(0, dataSize));
+    this._lw.set(this._cachedLw.subarray(0, dataSize));
+    this._gc.set(this._cachedGc.subarray(0, this._nextGid));
+    this._ss.set(this._cachedSs.subarray(0, this._nextGid));
+    this._ls.set(this._cachedLs.subarray(0, this._nextGid));
+
     this.current = this._cachedCurrent;
     this.ko = this._cachedKo;
     this.emptyCount = this._cachedEmptyCount;
