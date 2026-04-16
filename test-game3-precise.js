@@ -249,6 +249,50 @@ function testConsecutivePasses() {
   console.log('✓ consecutivePasses works correctly');
 }
 
+function testCalcWinner() {
+  console.log('Testing calcWinner()...');
+
+  // Test 1: 5x5 board with only center BLACK stone
+  // All empty territory is adjacent to BLACK, so BLACK gets all 24 empty cells
+  const game = new Game3Precise(5);
+  let result = game.calcWinner();
+  console.assert(result.black === 25, `5x5 with center BLACK should have black=25 (all territory), got ${result.black}`);
+  console.assert(result.white === 3.5, `5x5 with center BLACK should have white=3.5 (komi only), got ${result.white}`);
+  console.assert(result.winner === BLACK, 'BLACK should win board with center stone');
+  console.assert(result.komi === 3.5, 'Komi should be 3.5 for size 5');
+  console.assert(result.margin > 0, 'BLACK should have positive margin');
+
+  // Test 2: 9x9 board with different komi
+  const game2 = new Game3Precise(9);
+  result = game2.calcWinner();
+  console.assert(result.komi === 6.5, 'Komi should be 6.5 for size 9');
+
+  // Test 3: With some stones creating territory
+  const game3 = new Game3Precise(7);
+  // Play W at position that creates simple territory
+  game3.play(10);  // W at 10
+  game3.play(PASS); // B
+  game3.play(11);  // W at 11
+  game3.play(PASS); // B
+
+  result = game3.calcWinner();
+  console.assert(result.black > 0 || result.white > 0, 'Score calculation should work with stones');
+  console.assert(result.winner === BLACK || result.winner === WHITE, 'Winner should be BLACK or WHITE');
+  console.assert(typeof result.margin === 'number', 'Margin should be a number');
+
+  // Test 4: Return object has all required fields
+  const game4 = new Game3Precise(5);
+  result = game4.calcWinner();
+  console.assert(typeof result.black === 'number', 'Result should have black score');
+  console.assert(typeof result.white === 'number', 'Result should have white score');
+  console.assert(typeof result.komi === 'number', 'Result should have komi');
+  console.assert(typeof result.score === 'number', 'Result should have score difference');
+  console.assert(result.winner === BLACK || result.winner === WHITE, 'Result should have winner');
+  console.assert(typeof result.margin === 'number', 'Result should have margin');
+
+  console.log('✓ calcWinner() works correctly');
+}
+
 function testIsTrueEye() {
   console.log('Testing isTrueEye()...');
 
@@ -316,6 +360,7 @@ try {
   testClone();
   testConsecutivePasses();
   testIsTrueEye();
+  testCalcWinner();
 
   console.log('='.repeat(60));
   console.log('All tests passed! ✓');

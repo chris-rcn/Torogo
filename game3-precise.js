@@ -682,6 +682,94 @@ class Game3Precise {
     return score.black > score.white ? BLACK : WHITE;
   }
 
+  // Full territory detection using flood-fill for accurate final scoring
+  calcWinner() {
+    const N = this.N;
+    const cap = N * N;
+    const cells = this.cells;
+    const nbr = this._nbr;
+    const visited = new Uint8Array(cap);
+    const territory = { black: 0, white: 0, neutral: 0 };
+
+    // Count stones first
+    let blackStones = 0;
+    let whiteStones = 0;
+    for (let i = 0; i < cap; i++) {
+      if (cells[i] === BLACK) blackStones++;
+      else if (cells[i] === WHITE) whiteStones++;
+    }
+
+    // Flood-fill each empty region to determine territory
+    for (let idx = 0; idx < cap; idx++) {
+      if (cells[idx] !== EMPTY || visited[idx]) continue;
+
+      // BFS to find connected empty region
+      const region = [];
+      const queue = [idx];
+      visited[idx] = 1;
+      let surroundingColor = null;
+      let isMixed = false;
+
+      while (queue.length > 0) {
+        const pos = queue.shift();
+        region.push(pos);
+
+        // Check all 4 neighbors
+        const base = pos * 4;
+        for (let i = 0; i < 4; i++) {
+          const neighbor = nbr[base + i];
+          if (visited[neighbor]) continue;
+
+          const nbrColor = cells[neighbor];
+          if (nbrColor === EMPTY) {
+            visited[neighbor] = 1;
+            queue.push(neighbor);
+          } else {
+            // Neighbor has a stone - record surrounding color
+            if (surroundingColor === null) {
+              surroundingColor = nbrColor;
+            } else if (surroundingColor !== nbrColor) {
+              isMixed = true;
+            }
+          }
+        }
+      }
+
+      // Assign territory based on surrounding color
+      if (isMixed || surroundingColor === null) {
+        territory.neutral += region.length;
+      } else if (surroundingColor === BLACK) {
+        territory.black += region.length;
+      } else {
+        territory.white += region.length;
+      }
+    }
+
+    // Calculate final scores with komi
+    const komiOverrides = new Map([
+      [5, 3.5],
+      [7, 3.5],
+      [9, 6.5],
+      [11, 3.5],
+      [13, 7.5],
+      [19, 35.5],
+    ]);
+    const komi = komiOverrides.get(N) ?? 3.5;
+
+    const blackScore = blackStones + territory.black;
+    const whiteScore = whiteStones + territory.white + komi;
+    const scoreDiff = blackScore - whiteScore;
+
+    return {
+      black: blackScore,
+      white: whiteScore,
+      komi: komi,
+      score: scoreDiff,
+      winner: scoreDiff > 0 ? BLACK : WHITE,
+      margin: Math.abs(scoreDiff),
+    };
+  }
+
   // ── Eye Detection ─────────────────────────────────────────────────────────
 
   isTrueEye(idx) {
