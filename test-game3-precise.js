@@ -137,6 +137,37 @@ function testPlayUndoCycles() {
   console.log('✓ Play/undo cycles work');
 }
 
+function testToString() {
+  console.log('Testing toString() display...');
+  const game = new Game3Precise(7);
+
+  // Play a few moves
+  game.play(10);
+  game.play(11);
+  game.play(18);
+
+  // Test basic toString
+  const str = game.toString();
+  console.assert(typeof str === 'string', 'toString should return a string');
+  console.assert(str.length > 0, 'String should not be empty');
+  console.assert(str.includes('●'), 'Should contain black stones');
+  console.assert(str.includes('○'), 'Should contain white stones');
+  console.assert(str.includes('·'), 'Should contain empty cells');
+  console.assert(str.includes('\n'), 'Should contain newlines');
+
+  // Test with markIdx
+  const marked = game.toString(11);
+  console.assert(marked.includes('('), 'Marked stone should have parentheses');
+  console.assert(marked.includes(')'), 'Marked stone should have parentheses');
+
+  // Test with centerAt
+  const centered = game.toString(10, { centerAt: 10 });
+  console.assert(typeof centered === 'string', 'Centered toString should return a string');
+  console.assert(centered.length > 0, 'Centered string should not be empty');
+
+  console.log('✓ toString() works correctly');
+}
+
 // Run all tests
 console.log('Game3-Precise Unit Tests');
 console.log('='.repeat(60));
@@ -148,6 +179,7 @@ try {
   testMultipleUndos();
   testLegalityCheck();
   testPlayUndoCycles();
+  testToString();
 
   console.log('='.repeat(60));
   console.log('All tests passed! ✓');
