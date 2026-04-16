@@ -1,13 +1,13 @@
 'use strict';
 
-// ladder2.js — Ladder detection using Game3-Precise.
+// ladder2.js — Ladder detection using Game3-Precise with play/undo (no clone)
 
 (function() {
 
 const { PASS } = typeof require === 'function' ? require('./game3-precise.js') : window.Game3Precise;
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
-// attacker play.
+// attacker play. Uses play/undo instead of clone.
 function _canReach3Libs(game, idx) {
   const { count: lc, lib0, lib1 } = game.groupLibs2(idx);
   if (lc >= 3) return true;
@@ -19,10 +19,11 @@ function _canReach3Libs(game, idx) {
     // Defender's turn: play one of the liberties; succeed if any leads to safety.
     const libs = lc === 1 ? [lib0] : [lib0, lib1];
     for (const libIdx of libs) {
-      const g = game.clone();
-      if (!g.play(libIdx)) continue;      // suicide — skip
-      if (g.cells[idx] === 0) continue;   // captured — skip
-      if (_canReach3Libs(g, idx)) return true;
+      if (!game.play(libIdx)) continue;      // suicide — skip
+      const captured = game.cells[idx] === 0;
+      const result = !captured && _canReach3Libs(game, idx);
+      game.undo();
+      if (result) return true;
     }
     return false;
   }
@@ -30,12 +31,24 @@ function _canReach3Libs(game, idx) {
   // Attacker's turn (1 or 2 libs): tries each liberty; succeeds if any leads to capture.
   const libs = lc === 1 ? [lib0] : [lib0, lib1];
   for (const libIdx of libs) {
-    const g = game.clone();
-    if (!g.play(libIdx)) continue;        // illegal for attacker — skip
-    if (g.cells[idx] === 0) return false; // captured immediately
-    const afterLc = g.groupLibs2(idx).count;
-    if (afterLc === 0) return false;
-    if (afterLc === 1 && !_canReach3Libs(g, idx)) return false;
+    if (!game.play(libIdx)) continue;        // illegal for attacker — skip
+    const captured = game.cells[idx] === 0;
+    if (captured) {
+      game.undo();
+      return false;
+    }
+    const afterLc = game.groupLibs2(idx).count;
+    if (afterLc === 0) {
+      game.undo();
+      return false;
+    }
+    if (afterLc === 1) {
+      const result = !_canReach3Libs(game, idx);
+      game.undo();
+      if (result) return false;
+    } else {
+      game.undo();
+    }
   }
 
   return true;
@@ -87,9 +100,9 @@ function getLadderStatus(game, stoneIdx) {
   if (defending && atari) {
     escape = false;
   } else {
-    const g = game.clone();
-    g.play(PASS);
-    escape = _canReach3Libs(g, stoneIdx);
+    game.play(PASS);
+    escape = _canReach3Libs(game, stoneIdx);
+    game.undo();
   }
   if (defending === escape) {
     // group is not urgent
@@ -103,8 +116,11 @@ function getLadderStatus(game, stoneIdx) {
     if (!defending && atari) {
       escape = false;
     } else {
-      const g = game.clone();
-      escape = g.play(libIdx) && _canReach3Libs(g, stoneIdx);
+      if (!game.play(libIdx)) {
+        continue;
+      }
+      escape = _canReach3Libs(game, stoneIdx);
+      game.undo();
     }
     if (defending === escape) {
       moverSucceeds = true;

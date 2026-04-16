@@ -90,66 +90,6 @@ class Game3Precise {
     return { nbr, dnbr, allCells };
   }
 
-  clone() {
-    const cloned = new Game3Precise(this.N);
-    const cap = this.N * this.N;
-    const W = this._W;
-
-    // Copy board state
-    cloned.cells.set(this.cells);
-    cloned._gid.set(this._gid);
-    cloned.current = this.current;
-    cloned.ko = this.ko;
-    cloned.emptyCount = this.emptyCount;
-    cloned.moveCount = this.moveCount;
-    cloned.lastMove = this.lastMove;
-    cloned.gameOver = this.gameOver;
-    cloned.consecutivePasses = this.consecutivePasses;
-
-    // Copy group data
-    cloned._nextGid = this._nextGid;
-    cloned._gc.set(this._gc);
-    cloned._ss.set(this._ss);
-    cloned._ls.set(this._ls);
-
-    // Copy bitsets
-    const MAX_G = 4 * cap + 4;
-    cloned._sw.set(this._sw.subarray(0, MAX_G * W));
-    cloned._lw.set(this._lw.subarray(0, MAX_G * W));
-
-    // Copy operation stack
-    cloned._opStack = this._opStack.map(op => {
-      if (op.type === 'mergeGroups') {
-        return {
-          type: op.type,
-          mainGid: op.mainGid,
-          otherId: op.otherId,
-          otherStones: new Int32Array(op.otherStones),
-          otherLibs: new Int32Array(op.otherLibs),
-          otherSize: op.otherSize,
-          otherLibCount: op.otherLibCount,
-        };
-      } else if (op.type === 'move') {
-        return {
-          type: op.type,
-          move: op.move,
-          color: op.color,
-          previousCurrent: op.previousCurrent,
-          previousKo: op.previousKo,
-          previousEmptyCount: op.previousEmptyCount,
-          previousConsecutivePasses: op.previousConsecutivePasses,
-          previousLastMove: op.previousLastMove,
-          opsStart: op.opsStart,
-          captured: op.captured ? [...op.captured] : null,
-        };
-      } else {
-        return { ...op };
-      }
-    });
-
-    return cloned;
-  }
-
   _pop32(x) {
     x = x - ((x >>> 1) & 0x55555555);
     x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
