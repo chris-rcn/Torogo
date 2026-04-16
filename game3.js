@@ -134,23 +134,18 @@ class Game3 {
       previousCurrent: this.current === BLACK ? WHITE : BLACK,
       previousKo: this.ko,
       previousEmptyCount: this.emptyCount + 1,
-      affectedCells: [this.lastMove],  // cells that need group rebuild
     };
-    this._undoStack.push(change);
+    this._pushUndo(change);
   }
 
-  _recordMoveForUndo(idx, color, captured) {
-    const change = {
-      type: 'move',
-      idx: idx,
-      color: color,
-      previousCurrent: color,
-      previousKo: this.ko,
-      previousEmptyCount: this.emptyCount + (captured.length > 0 ? captured.flat().length : 0),
-      captures: captured.length > 0 ? captured : null,
-      affectedCells: [idx, ...captured.flat()],  // cells needing group rebuild
-    };
+  _pushUndo(change) {
+    // Maintain a reasonable undo depth limit (prevents memory explosion)
+    const MAX_UNDO_DEPTH = 50000;
     this._undoStack.push(change);
+    if (this._undoStack.length > MAX_UNDO_DEPTH) {
+      // Remove oldest entries to stay under limit
+      this._undoStack.splice(0, this._undoStack.length - MAX_UNDO_DEPTH);
+    }
   }
 
   // ── Core Stone Placement ───────────────────────────────────────────────────
@@ -382,7 +377,7 @@ class Game3 {
         type: 'pass',
         previousCurrent: prevCurrent,
       };
-      this._undoStack.push(change);
+      this._pushUndo(change);
       this.moveCount++;
       return true;
     }
@@ -393,6 +388,18 @@ class Game3 {
     const oppColor = -color;
     const oldKo = this.ko;
     const oldEmptyCount = this.emptyCount;
+
+    // Snapshot COMPLETE state BEFORE the move (for fast undo)
+    const stateSnapshot = {
+      cells: new Int8Array(this.cells),
+      gid: new Int32Array(this._gid),
+      nextGid: this._nextGid,
+      gc: new Uint8Array(this._gc.slice(0, this._nextGid)),
+      sw: new Int32Array(this._sw.slice(0, this._nextGid * this._W)),
+      ss: new Int32Array(this._ss.slice(0, this._nextGid)),
+      lw: new Int32Array(this._lw.slice(0, this._nextGid * this._W)),
+      ls: new Int32Array(this._ls.slice(0, this._nextGid)),
+    };
 
     this._placeStone(move, color);
 
@@ -410,7 +417,7 @@ class Game3 {
       }
     }
 
-    // Record move for undo
+    // Record move for undo with full state snapshot
     const change = {
       type: 'move',
       idx: move,
@@ -418,11 +425,10 @@ class Game3 {
       previousCurrent: color,
       previousKo: oldKo,
       previousEmptyCount: oldEmptyCount,
-      captures: captured.length > 0 ? captured : null,
-      affectedCells: [move, ...captured.flat()],  // cells needing group rebuild
+      stateSnapshot: stateSnapshot,
     };
 
-    this._undoStack.push(change);
+    this._pushUndo(change);
 
     // Update ko and current player
     if (captured.length === 1 && captured[0].length === 1) {
@@ -448,55 +454,100 @@ class Game3 {
     }
 
     if (change.type === 'move' || change.type === 'place') {
-      // Remove placed stone
-      const idx = change.idx;
-      this.cells[idx] = EMPTY;
-      this._gid[idx] = -1;
-
-      // Restore captured stones
-      if (change.captures) {
-        for (const stones of change.captures) {
-          for (const stoneIdx of stones) {
-            const oppColor = -change.color;
-            this.cells[stoneIdx] = oppColor;
+      // Restore full game state from snapshot (fast, no reconstruction needed)
+      if (change.stateSnapshot) {
+        const snap = change.stateSnapshot;
+        this.cells.set(snap.cells);
+        this._gid.set(snap.gid);
+        this._nextGid = snap.nextGid;
+        // Only restore used group data
+        const W = this._W;
+        for (let i = 0; i < snap.nextGid; i++) {
+          this._gc[i] = snap.gc[i];
+          this._ss[i] = snap.ss[i];
+          this._ls[i] = snap.ls[i];
+          for (let j = 0; j < W; j++) {
+            this._sw[i * W + j] = snap.sw[i * W + j];
+            this._lw[i * W + j] = snap.lw[i * W + j];
           }
         }
       }
 
-      // Update counts
+      // Restore game state
       this.emptyCount = change.previousEmptyCount;
       this.ko = change.previousKo;
       this.current = change.previousCurrent;
       this.lastMove = PASS;
 
-      // Rebuild groups for affected cells (cells that changed + their neighbors)
-      this._rebuildGroupsAround(change.affectedCells);
-
       this.moveCount--;
     }
   }
 
-  _rebuildGroupsAround(affectedCells) {
-    // For simplicity and correctness, do a full rebuild
-    // (still more efficient than cloning entire game state)
-    this._reconstructGroups();
-  }
-
   _reconstructGroups() {
-    // Full reconstruction from scratch
+    // Full reconstruction from scratch without side effects
+    const W = this._W;
+    const cap = this.N * this.N;
+    const nbr = this._nbr;
+
+    // Clear all group data
     this._gid.fill(-1);
     this._nextGid = 0;
-    const used = this._nextGid * this._W;
-    this._sw.fill(0, 0, used);
-    this._ss.fill(0, 0, this._nextGid);
-    this._lw.fill(0, 0, used);
-    this._ls.fill(0, 0, this._nextGid);
+    for (let g = 0; g < 4 * cap; g++) {
+      const wb = g * W;
+      this._sw.fill(0, wb, wb + W);
+      this._lw.fill(0, wb, wb + W);
+      this._ss[g] = 0;
+      this._ls[g] = 0;
+    }
 
-    // Rebuild groups
-    const cap = this.N * this.N;
+    // Assign group IDs via flood-fill
     for (let i = 0; i < cap; i++) {
       if (this.cells[i] !== EMPTY && this._gid[i] === -1) {
-        this._placeStone(i, this.cells[i]);
+        const color = this.cells[i];
+        const gid = this._nextGid++;
+        const gb = gid * W;
+
+        this._gc[gid] = color;
+        const queue = [i];
+        this._gid[i] = gid;
+
+        // Flood-fill to assign all stones in this group
+        while (queue.length > 0) {
+          const idx = queue.shift();
+          const m = 1 << (idx & 31);
+          const wi = idx >> 5;
+          this._sw[gb + wi] |= m;
+          this._ss[gid]++;
+
+          const base = idx * 4;
+          for (let j = 0; j < 4; j++) {
+            const ni = nbr[base + j];
+            if (this.cells[ni] === color && this._gid[ni] === -1) {
+              this._gid[ni] = gid;
+              queue.push(ni);
+            }
+          }
+        }
+      }
+    }
+
+    // Calculate liberties for all groups
+    for (let i = 0; i < cap; i++) {
+      if (this.cells[i] === EMPTY) {
+        const base = i * 4;
+        for (let j = 0; j < 4; j++) {
+          const ni = nbr[base + j];
+          const gid = this._gid[ni];
+          if (gid !== -1) {
+            const m = 1 << (i & 31);
+            const wi = i >> 5;
+            const lb = gid * W;
+            if (!(this._lw[lb + wi] & m)) {
+              this._lw[lb + wi] |= m;
+              this._ls[gid]++;
+            }
+          }
+        }
       }
     }
   }
