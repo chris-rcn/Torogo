@@ -682,6 +682,42 @@ class Game3Precise {
     return score.black > score.white ? BLACK : WHITE;
   }
 
+  // ── Eye Detection ─────────────────────────────────────────────────────────
+
+  isTrueEye(idx) {
+    const color = this.current;
+    const cells = this.cells;
+    const gidArr = this._gid;
+    const nbr = this._nbr;
+    const dnbr = this._dnbr;
+    const base = idx * 4;
+
+    // Check all 4 neighbors
+    let firstGid = -2, friendCount = 0, emptyCount = 0, sameGroup = 0;
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const c = cells[ni];
+      if (c === color) {
+        friendCount++;
+        const gid = gidArr[ni];
+        if (firstGid === -2) { firstGid = gid; sameGroup = 1; }
+        else if (gid === firstGid) sameGroup++;
+      } else if (c === EMPTY) {
+        emptyCount++;
+      }
+    }
+
+    // 3 same-group friends + 1 empty: proto-eye, treat as true eye
+    if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
+    if (friendCount < 4) return false;
+    if (sameGroup === 4) return true;
+
+    // Check diagonals for friendly color
+    let dc = 0;
+    for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === color) dc++;
+    return dc >= 3;
+  }
+
   // ── Group Query ────────────────────────────────────────────────────────────
 
   groupIdAt(idx) {

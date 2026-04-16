@@ -249,6 +249,58 @@ function testConsecutivePasses() {
   console.log('✓ consecutivePasses works correctly');
 }
 
+function testIsTrueEye() {
+  console.log('Testing isTrueEye()...');
+
+  // Test 1: Simple surrounded position (all 4 neighbors friendly, 3+ diagonals friendly)
+  const game = new Game3Precise(9);
+
+  // Build: W at (3,3), (3,5), (5,3), (5,5) and at diagonals (2,4), (4,2), (4,6), (6,4)
+  // This creates a cross pattern with position (4,4)=position 40 as center eye
+  // Position 40 neighbors: up=31, down=49, left=39, right=41
+  // Diagonals: ul=30, ur=32, dl=48, dr=50
+
+  game.play(30);  // W at 30 (up-left diagonal)
+  game.play(PASS); // B
+  game.play(32);  // W at 32 (up-right diagonal)
+  game.play(PASS); // B
+  game.play(48);  // W at 48 (down-left diagonal)
+  game.play(PASS); // B
+  game.play(50);  // W at 50 (down-right diagonal)
+  game.play(PASS); // B
+  game.play(31);  // W at 31 (up)
+  game.play(PASS); // B
+  game.play(49);  // W at 49 (down)
+  game.play(PASS); // B
+  game.play(39);  // W at 39 (left)
+  game.play(PASS); // B
+  game.play(41);  // W at 41 (right)
+  game.play(PASS); // B
+
+  // Now position 40 is surrounded by WHITE on all 4 sides and has 4 diagonal neighbors
+  // Should be a true eye for WHITE
+  const isEye = game.isTrueEye(40);
+  console.assert(isEye, 'Position surrounded by 4 friendly stones with 3+ friendly diagonals should be true eye');
+
+  // Test 2: Occupied position is not an eye
+  console.assert(!game.isTrueEye(30), 'Occupied position should not be eye');
+  console.assert(!game.isTrueEye(31), 'Occupied position should not be eye');
+
+  // Test 3: Position with opponent neighbors is not an eye
+  const game2 = new Game3Precise(7);
+  game2.play(17); // W at 17
+  game2.play(16); // B at 16 (adjacent)
+  game2.play(PASS); // W passes
+  game2.play(PASS); // B passes (current = WHITE)
+
+  // Position 18 has B to left, empty to right/above/below
+  // Should not be true eye for WHITE (not enough friendly neighbors)
+  const notEye = !game2.isTrueEye(18);
+  console.assert(notEye, 'Position with opponent neighbor and few friendly neighbors should not be eye');
+
+  console.log('✓ isTrueEye() works correctly');
+}
+
 // Run all tests
 console.log('Game3-Precise Unit Tests');
 console.log('='.repeat(60));
@@ -263,6 +315,7 @@ try {
   testToString();
   testClone();
   testConsecutivePasses();
+  testIsTrueEye();
 
   console.log('='.repeat(60));
   console.log('All tests passed! ✓');
