@@ -8,28 +8,21 @@ Three implementations of incremental game classes, each with different tradeoffs
 2. **game3-delta.js** - Meticulous delta-based undo (correct, complex, slower)
 3. **game3-optimized.js** - Dual-board cache for tactical search (fastest)
 
-## Recommended: Game3-Optimized
+## Verdict: Use Game2 for Tactical Search
 
-**Use this for tactical searches.** It's 1.33x faster than Game2.clone() and designed specifically for the play/undo pattern.
+**After testing with real bench-tactics.js on 13x13:**
 
-```javascript
-const { Game3Optimized } = require('./game3-optimized.js');
+### Synthetic Benchmark (Shallow, 5 levels deep):
+- Game2.clone(): 29.65µs per position
+- Game3-Optimized: 22.32µs per position  
+- **Claimed speedup: 1.33x**
 
-const game = new Game3Optimized(19);
+### Real Tactical Search (Deep, 20+ levels):
+- Game2.clone(): **3.18 seconds** (143 positions, 1721 chains)
+- Game3-Optimized: **TIMEOUT** at 300 seconds (did not complete first game)
+- **Actual result: Game2 is faster** ✗
 
-// Tactical search pattern
-for each move:
-  game.play(move);
-  result = evalPosition();
-  game.undo();   // O(n) but very fast!
-```
-
-### Performance
-
-On 7x7 board with tactical search workload:
-- **Game2.clone()**: 29.65µs per position
-- **Game3-Optimized**: 22.32µs per position
-- **Speedup: 1.33x faster**
+The synthetic benchmark was misleading because real tactical search has deep recursion with hundreds of play/undo operations per chain analysis. Each operation in Game3-Optimized triggers full state caching (O(n)), accumulating to O(n × calls) overhead.
 
 ## Design Insights
 
@@ -157,14 +150,33 @@ Result: game3-delta.js is theoretically elegant but practically slower than game
 - Want to understand state change mechanics
 - Need very sparse deltas (not practical for Go)
 
+## Important Lesson: Benchmarks Must Match Real Usage
+
+The synthetic benchmark showed 1.33x speedup, but real tactical search revealed the opposite pattern:
+
+**Why Game3-Optimized Lost:**
+1. Real tactical search recursively analyzes chains 20+ levels deep
+2. Each level does play/undo in Game3-Optimized calls `_cacheState()` 
+3. `_cacheState()` copies full board + all group bitsets (O(n))
+4. With 1000+ moves per chain analysis, this adds massive overhead
+5. Game2.clone() allocates objects (JIT-optimized, faster)
+
+**Why the Synthetic Benchmark Was Misleading:**
+- Only 5 levels deep, 3 branches per level = ~364 nodes
+- Real search: 20+ levels with pruning = 1000+ nodes per chain
+- At scale, O(n) repeated caching beats O(n) object allocation
+
+**Lesson:** Tactical search workloads are fundamentally different from general board exploration. Deep recursion makes state caching expensive.
+
 ## Files
 
-- `game3-optimized.js` - Production implementation (use this!)
-- `game3-delta.js` - Educational reference (meticulous design)
-- `game3.js` - Initial attempt (historical, ignore)
-- `bench-game3-optimized.js` - Performance benchmark
+- `game3-optimized.js` - Optimized dual-board cache (faster for shallow search only)
+- `game3-delta.js` - Educational reference (meticulous delta design)
+- `game3.js` - Initial attempt (snapshot-based, historical)
+- `bench-tactics-optimized.js` - Real bench-tactics.js comparison
+- `bench-game3-optimized.js` - Synthetic benchmark (misleading)
 - `test-game3-delta.js` - Unit tests
-- `tactics-game3.js` - Example tactical search usage
+- `tactics-game3-optimized.js` - Tactical search using Game3-Optimized
 
 ## API Compatibility
 
