@@ -29,6 +29,8 @@ const OP_MERGE_GROUPS = 4;
 const OP_MOVE = 5;
 const OP_PASS = 6;
 
+const _topologyCache = new Map();
+
 class Game3Precise {
   constructor(size) {
     this.N = size;
@@ -93,6 +95,10 @@ class Game3Precise {
   }
 
   _getTopology(N) {
+    if (_topologyCache.has(N)) {
+      return _topologyCache.get(N);
+    }
+
     const cap = N * N;
     const nbr = new Int32Array(cap * 4);
     const dnbr = new Int32Array(cap * 4);
@@ -107,7 +113,9 @@ class Game3Precise {
     }
     const allCells = new Int32Array(cap);
     for (let i = 0; i < cap; i++) allCells[i] = i;
-    return { nbr, dnbr, allCells };
+    const result = { nbr, dnbr, allCells };
+    _topologyCache.set(N, result);
+    return result;
   }
 
   _pop32(x) {
