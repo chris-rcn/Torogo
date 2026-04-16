@@ -2,7 +2,7 @@
 
 // Test ladder detection with Game3-Precise
 
-const { Game3Precise, PASS, BLACK, WHITE } = require('./game3-precise.js');
+const { Game3Precise, PASS, BLACK, WHITE } = require('./game3.js');
 const { getAllLadderStatuses, getLadderStatus } = require('./ladder2.js');
 
 function testLadderDetection() {

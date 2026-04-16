@@ -1,6 +1,6 @@
 'use strict';
 
-const { Game3Precise, BLACK, WHITE } = require('./game3-precise.js');
+const { Game3Precise, BLACK, WHITE } = require('./game3.js');
 const { getAllLadderStatuses } = require('./ladder2.js');
 
 // Test that ko rule works correctly after capturing with the fixed captured array format

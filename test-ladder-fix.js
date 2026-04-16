@@ -2,7 +2,7 @@
 
 // Test suite for the ladder detection bug fix
 
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 const { getAllLadderStatuses, getLadderStatus } = require('./ladder2.js');
 
 let passCount = 0;

@@ -6,7 +6,7 @@
 
 const { performance } = require('perf_hooks');
 const { Game2, PASS } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 function getRandomLegalMove(game) {
   const cap = game.N * game.N;

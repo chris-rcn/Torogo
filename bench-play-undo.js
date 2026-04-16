@@ -1,5 +1,5 @@
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 function buildPosition(GameClass, N) {
   const game = new GameClass(N);

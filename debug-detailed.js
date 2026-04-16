@@ -1,4 +1,4 @@
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 const game = new Game3Precise(13);
 const moves = [45, 46, 47, 57, 58, 59, 70, 71, 72, 82, 83, 84];

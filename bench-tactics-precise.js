@@ -10,7 +10,7 @@
 const { performance } = require('perf_hooks');
 const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 const { searchChain } = require('./tactics3.js');
 
 const args = process.argv.slice(2);

@@ -3,7 +3,7 @@
 // Final ladder benchmark: Game2 (clone-based) vs Game3-Precise (play/undo-based)
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise, PASS } = require('./game3-precise.js');
+const { Game3Precise, PASS } = require('./game3.js');
 
 // Game2-based ladder detection (original, uses clone)
 const Ladder2Game2 = (function() {

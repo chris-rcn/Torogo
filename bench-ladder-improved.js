@@ -1,7 +1,7 @@
 'use strict';
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise, PASS } = require('./game3-precise.js');
+const { Game3Precise, PASS } = require('./game3.js');
 const { getAllLadderStatuses } = require('./ladder2.js');
 
 // Create a position with actual ladder fights (more ladder scenarios)

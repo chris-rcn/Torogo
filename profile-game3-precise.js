@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-// profile-game3-precise.js — Detailed performance profiling of Game3Precise
+// profile-game3.js — Detailed performance profiling of Game3Precise
 
 const { performance } = require('perf_hooks');
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 function profileGame2() {
   console.log('\n=== Game2.clone() Profile ===');

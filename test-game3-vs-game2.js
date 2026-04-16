@@ -4,7 +4,7 @@
 // Verifies that both implementations produce identical results
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 let testsPassed = 0;
 let testsFailed = 0;

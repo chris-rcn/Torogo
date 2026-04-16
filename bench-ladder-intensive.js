@@ -3,7 +3,7 @@
 // Intensive ladder benchmark with actual fighting patterns
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 const Ladder2Game2 = (function() {
   function _canReach3Libs(game, idx) {

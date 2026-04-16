@@ -4,7 +4,7 @@
 
 (function() {
 
-const { PASS } = typeof require === 'function' ? require('./game3-precise.js') : window.Game3Precise;
+const { PASS } = typeof require === 'function' ? require('./game3.js') : window.Game3Precise;
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
 // attacker play. Uses play/undo instead of clone.

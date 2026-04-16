@@ -3,7 +3,7 @@
 // test-game3-precise-correctness.js — verify Game3Precise matches Game2 behavior
 
 const { Game2, PASS } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 function cellsEqual(c1, c2) {
   if (c1.length !== c2.length) return false;

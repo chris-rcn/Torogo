@@ -1,5 +1,5 @@
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 
 const game2 = new Game2(13);
 const game3 = new Game3Precise(13);

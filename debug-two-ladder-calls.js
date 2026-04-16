@@ -1,4 +1,4 @@
-const { Game3Precise, PASS } = require('./game3-precise.js');
+const { Game3Precise, PASS } = require('./game3.js');
 
 const game = new Game3Precise(13);
 

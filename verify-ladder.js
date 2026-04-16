@@ -3,7 +3,7 @@
 // Verify that Game2 and Game3-Precise ladder detection produce identical results
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3-precise.js');
+const { Game3Precise } = require('./game3.js');
 const { getAllLadderStatuses: getAllLadderStatusesG3 } = require('./ladder2.js');
 
 // Game2-based ladder detection

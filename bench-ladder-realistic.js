@@ -5,7 +5,7 @@
 // Repeat for ~200 games on 13x13
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise, PASS, BLACK, WHITE } = require('./game3-precise.js');
+const { Game3Precise, PASS, BLACK, WHITE } = require('./game3.js');
 const { getAllLadderStatuses } = require('./ladder2.js');
 
 // Game2-based ladder detection

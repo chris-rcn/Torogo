@@ -1,6 +1,6 @@
 'use strict';
 
-const { Game3Precise, PASS, BLACK, WHITE, EMPTY } = require('./game3-precise.js');
+const { Game3Precise, PASS, BLACK, WHITE, EMPTY } = require('./game3.js');
 
 function testBasicPlay() {
   console.log('Testing basic play...');
