@@ -295,6 +295,10 @@ class Game3Precise {
     // Record move start for grouping operations
     const opCountBefore = this._opStack.length;
 
+    // Save state before any modifications
+    const previousKo = this.ko;
+    const previousEmptyCount = this.emptyCount;
+
     // Step 1: Mark cell as occupied
     this.cells[move] = color;
     this.emptyCount--;
@@ -357,10 +361,6 @@ class Game3Precise {
     for (const lib of emptyNeighbors) {
       this._addLiberty(mainGid, lib);
     }
-
-    // Save state before capture
-    const previousKo = this.ko;
-    const previousEmptyCount = this.emptyCount;
 
     // Step 6: Capture opponent groups with 0 liberties
     const captured = [];
