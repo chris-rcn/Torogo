@@ -282,16 +282,7 @@ class Game3Precise {
   isLegal(idx, color = this.current) {
     if (this.cells[idx] !== EMPTY) return false;
     if (this.ko === idx) return false;
-    if (this._isSingleSuicide(idx, color)) {
-      const nbr = this._nbr;
-      const base = idx * 4;
-      for (let i = 0; i < 4; i++) {
-        const ni = nbr[base + i];
-        const c = this.cells[ni];
-        if (c === -color && this._ls[this._gid[ni]] === 1) return true;
-      }
-      return false;
-    }
+    if (this._isSingleSuicide(idx, color)) return false;
     return true;
   }
 
