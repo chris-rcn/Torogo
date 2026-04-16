@@ -420,19 +420,49 @@ static bool is_single_suicide(Game3 *game, int idx, int color) {
   return true;
 }
 
+static bool is_multi_suicide(Game3 *game, int idx, int color) {
+  int32_t *nbr = game->nbr;
+  int base = idx * 4;
+  int W = game->W;
+  bool hasFriendly = false;
+  int s0 = -1, s1 = -1, s2 = -1, s3 = -1;
+
+  for (int i = 0; i < 4; i++) {
+    int ni = nbr[base + i];
+    int c = game->cells[ni];
+    if (c == EMPTY) return false;
+
+    int gid = game->gid[ni];
+    if (gid == s0 || gid == s1 || gid == s2 || gid == s3) continue;
+
+    if      (s0 == -1) s0 = gid;
+    else if (s1 == -1) s1 = gid;
+    else if (s2 == -1) s2 = gid;
+    else                s3 = gid;
+
+    if (c == color) {
+      hasFriendly = true;
+      if (game->ls[gid] > 1) return false;
+      /* Check if this liberty is at idx */
+      if (game->ls[gid] == 1 && !((game->lw[gid * W + (idx >> 5)] >> (idx & 31)) & 1)) {
+        return false;
+      }
+    } else {
+      /* Enemy group - check if we can capture it */
+      if (game->ls[gid] == 1 && ((game->lw[gid * W + (idx >> 5)] >> (idx & 31)) & 1)) {
+        return false;
+      }
+    }
+  }
+
+  return hasFriendly;
+}
+
 bool game3_is_legal(Game3 *game, int idx, int color) {
   if (game->cells[idx] != EMPTY) return false;
   if (game->ko == idx) return false;
-  if (is_single_suicide(game, idx, color)) {
-    int32_t *nbr = game->nbr;
-    int base = idx * 4;
-    for (int i = 0; i < 4; i++) {
-      int ni = nbr[base + i];
-      int c = game->cells[ni];
-      if (c == -color && game->ls[game->gid[ni]] == 1) return true;
-    }
-    return false;
-  }
+  if (is_single_suicide(game, idx, color)) return false;
+  if (is_multi_suicide(game, idx, color)) return false;
   return true;
 }
 
