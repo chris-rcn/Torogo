@@ -194,6 +194,16 @@ class Game3Precise {
     const gb = mainGid * W;
     const ob = otherId * W;
 
+    // Snapshot the main group's data before merge (for exact reversal)
+    const mainStones = new Int32Array(W);
+    const mainLibs = new Int32Array(W);
+    for (let wi = 0; wi < W; wi++) {
+      mainStones[wi] = this._sw[gb + wi];
+      mainLibs[wi] = this._lw[gb + wi];
+    }
+    const mainSize = this._ss[mainGid];
+    const mainLibCount = this._ls[mainGid];
+
     // Snapshot the other group's data for reversal
     const otherStones = new Int32Array(W);
     const otherLibs = new Int32Array(W);
@@ -227,6 +237,10 @@ class Game3Precise {
       type: 'mergeGroups',
       mainGid: mainGid,
       otherId: otherId,
+      mainStones: mainStones,
+      mainLibs: mainLibs,
+      mainSize: mainSize,
+      mainLibCount: mainLibCount,
       otherStones: otherStones,
       otherLibs: otherLibs,
       otherSize: otherSize,
@@ -390,7 +404,8 @@ class Game3Precise {
             this.cells[stoneIdx] = EMPTY;
             this._gid[stoneIdx] = -1;
             this._removeStone(stoneIdx, oppGid);
-            captured.push(stoneIdx);
+            // Store both index and gid for proper restoration on undo
+            captured.push({ idx: stoneIdx, gid: oppGid });
             this.emptyCount++;
 
             // Add liberties to adjacent groups
@@ -409,7 +424,7 @@ class Game3Precise {
 
     // Step 7: Update ko rule
     if (captured.length === 1) {
-      this.ko = captured[0];
+      this.ko = captured[0].idx;
     } else {
       this.ko = PASS;
     }
@@ -461,11 +476,17 @@ class Game3Precise {
         this.cells[op.move] = EMPTY;
         this._gid[op.move] = -1;
 
-        // Restore captured stones
+        // Restore captured stones with their group IDs
         if (op.captured) {
-          for (const stoneIdx of op.captured) {
+          for (const stone of op.captured) {
+            const stoneIdx = stone.idx || stone;  // Handle both old and new format
+            const gid = stone.gid;
+            // op.color is always stored as 1 or -1, so negation is safe
+            // (op.color is the color that made the move, so opponent is -op.color)
             this.cells[stoneIdx] = -op.color; // Opponent color
-            // _gid will be set by mergeGroups undo
+            if (gid !== undefined) {
+              this._gid[stoneIdx] = gid;  // Restore group ID
+            }
           }
         }
 
@@ -499,9 +520,17 @@ class Game3Precise {
       // Undo: add liberty back
       this._addLiberty_raw(op.gid, op.idx);
     } else if (op.type === 'mergeGroups') {
-      // Undo: restore other group
+      // Undo: restore both main and other groups to pre-merge state
       const gb = op.mainGid * W;
       const ob = op.otherId * W;
+
+      // Restore main group's stones and liberties
+      for (let wi = 0; wi < W; wi++) {
+        // Restore main group stones (remove merged-in stones)
+        this._sw[gb + wi] = op.mainStones[wi];
+        // Restore main group liberties
+        this._lw[gb + wi] = op.mainLibs[wi];
+      }
 
       // Restore stones from other group
       for (let wi = 0; wi < W; wi++) {
@@ -511,18 +540,16 @@ class Game3Precise {
           this._gid[wi * 32 + bit] = op.otherId;
           w &= w - 1;
         }
-        // Remove merged stones from main group
-        this._sw[gb + wi] &= ~op.otherStones[wi];
         // Restore other group's stones
         this._sw[ob + wi] = op.otherStones[wi];
         // Restore other group's liberties
         this._lw[ob + wi] = op.otherLibs[wi];
       }
 
-      // Restore sizes and liberty counts
-      this._ss[op.mainGid] -= op.otherSize;
+      // Restore sizes and liberty counts exactly as they were before merge
+      this._ss[op.mainGid] = op.mainSize;
       this._ss[op.otherId] = op.otherSize;
-      this._ls[op.mainGid] = this._pop32Count(op.mainGid, W);
+      this._ls[op.mainGid] = op.mainLibCount;
       this._ls[op.otherId] = op.otherLibCount;
     }
   }
