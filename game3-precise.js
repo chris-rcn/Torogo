@@ -504,6 +504,44 @@ class Game3Precise {
     }
   }
 
+  // ── Display ────────────────────────────────────────────────────────────────
+
+  // Render the board as a ● ○ · string. Optional 'markIdx' marks that
+  // cell with bracket separators: · ·(●)· · — row width is unchanged.
+  toString(markIdx = this.lastMove, { centerAt = null } = {}) {
+    const N = this.N;
+    const cells = this.cells;
+    const markX = (markIdx !== PASS) ? markIdx % N : -1;
+    const markY = (markIdx !== PASS) ? (markIdx / N | 0) : -1;
+
+    const half = (N / 2) | 0;
+    const x0 = (centerAt !== null && centerAt !== PASS)
+      ? ((centerAt % N) - half + N) % N : 0;
+    const y0 = (centerAt !== null && centerAt !== PASS)
+      ? (((centerAt / N) | 0) - half + N) % N : 0;
+
+    // Convert board-space mark to display-space coordinates.
+    const dmx = markX >= 0 ? (markX - x0 + N) % N : -1;
+    const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
+
+    const rows = [];
+    for (let dy = 0; dy < N; dy++) {
+      const by = (y0 + dy) % N;
+      const mx = (dy === dmy) ? dmx : -1;
+      let row = (mx === 0) ? '(' : ' ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const c = cells[by * N + bx];
+        const ch = c === BLACK ? '●' : c === WHITE ? '○' : '·';
+        if (dx > 0) row += (dx === mx) ? '(' : (dx - 1 === mx) ? ')' : ' ';
+        row += ch;
+      }
+      row += (mx === N - 1) ? ')' : ' ';
+      rows.push(row);
+    }
+    return rows.join('\n');
+  }
+
   // ── Group Query ────────────────────────────────────────────────────────────
 
   groupIdAt(idx) {
