@@ -1,25 +1,25 @@
 'use strict';
 
-// ladder2.js — Ladder detection using Game2.
+// ladder2.js — Ladder detection using Game3-Precise.
 
 (function() {
 
-const { PASS } = typeof require === 'function' ? require('./game2.js') : window.Game2;
+const { PASS } = typeof require === 'function' ? require('./game3-precise.js') : window.Game3Precise;
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
 // attacker play.
-function _canReach3Libs(game2, idx) {
-  const { count: lc, lib0, lib1 } = game2.groupLibs2(idx);
+function _canReach3Libs(game, idx) {
+  const { count: lc, lib0, lib1 } = game.groupLibs2(idx);
   if (lc >= 3) return true;
   if (lc === 0) return false;
 
-  const defColor = game2.cells[idx];
+  const defColor = game.cells[idx];
 
-  if (game2.current === defColor) {
+  if (game.current === defColor) {
     // Defender's turn: play one of the liberties; succeed if any leads to safety.
     const libs = lc === 1 ? [lib0] : [lib0, lib1];
     for (const libIdx of libs) {
-      const g = game2.clone();
+      const g = game.clone();
       if (!g.play(libIdx)) continue;      // suicide — skip
       if (g.cells[idx] === 0) continue;   // captured — skip
       if (_canReach3Libs(g, idx)) return true;
@@ -30,7 +30,7 @@ function _canReach3Libs(game2, idx) {
   // Attacker's turn (1 or 2 libs): tries each liberty; succeeds if any leads to capture.
   const libs = lc === 1 ? [lib0] : [lib0, lib1];
   for (const libIdx of libs) {
-    const g = game2.clone();
+    const g = game.clone();
     if (!g.play(libIdx)) continue;        // illegal for attacker — skip
     if (g.cells[idx] === 0) return false; // captured immediately
     const afterLc = g.groupLibs2(idx).count;
@@ -41,24 +41,24 @@ function _canReach3Libs(game2, idx) {
   return true;
 }
 
-// getAllLadderStatuses(game2, minChainSize) — run getLadderStatus2 on every
+// getAllLadderStatuses(game, minChainSize) — run getLadderStatus on every
 // group with 1 or 2 liberties and return an array of { gid, color, status }
 // objects, one per group (groups with 0 or 3+ liberties are skipped).
 // minChainSize: skip groups smaller than this (default 1).
-function getAllLadderStatuses(game2, minChainSize = 1) {
-  const cap  = game2.N * game2.N;
+function getAllLadderStatuses(game, minChainSize = 1) {
+  const cap  = game.N * game.N;
   const results = [];
   const visited = new Set();
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] === 0) continue;
-    const gid = game2._gid[i];
+    if (game.cells[i] === 0) continue;
+    const gid = game._gid[i];
     if (visited.has(gid)) continue;
     visited.add(gid);
-    if (game2.groupSize(gid) < minChainSize) continue;
-    const { count: lc } = game2.groupLibs2(i);
+    if (game.groupSize(gid) < minChainSize) continue;
+    const { count: lc } = game.groupLibs2(i);
     if (lc === 0 || lc > 2) continue;
-    const status = getLadderStatus2(game2, i);
-    results.push({ gid, color: game2.cells[i], status });
+    const status = getLadderStatus(game, i);
+    results.push({ gid, color: game.cells[i], status });
   }
   return results;
 }
@@ -69,17 +69,17 @@ function getAllLadderStatuses(game2, minChainSize = 1) {
 // Returns { libs: [], moverSucceeds: boolean, urgentLibs: [] }
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
-function getLadderStatus2(game2, stoneIdx) {
-  const { count: lc, lib0, lib1 } = game2.groupLibs2(stoneIdx);
+function getLadderStatus(game, stoneIdx) {
+  const { count: lc, lib0, lib1 } = game.groupLibs2(stoneIdx);
   if (lc < 1 || lc > 2) {
-    const N = game2.N;
-    console.warn(`getLadderStatus2: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
+    const N = game.N;
+    console.warn(`getLadderStatus: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
     return null;
   }
   const atari = lc === 1;
   const libs = atari ? [lib0] : [lib0, lib1];
-  const gColor = game2.cells[stoneIdx];
-  const mover = game2.current;   // BLACK or WHITE
+  const gColor = game.cells[stoneIdx];
+  const mover = game.current;   // BLACK or WHITE
   const defending = gColor === mover;
 
   let escape;
@@ -87,7 +87,7 @@ function getLadderStatus2(game2, stoneIdx) {
   if (defending && atari) {
     escape = false;
   } else {
-    const g = game2.clone();
+    const g = game.clone();
     g.play(PASS);
     escape = _canReach3Libs(g, stoneIdx);
   }
@@ -103,7 +103,7 @@ function getLadderStatus2(game2, stoneIdx) {
     if (!defending && atari) {
       escape = false;
     } else {
-      const g = game2.clone();
+      const g = game.clone();
       escape = g.play(libIdx) && _canReach3Libs(g, stoneIdx);
     }
     if (defending === escape) {
@@ -114,7 +114,7 @@ function getLadderStatus2(game2, stoneIdx) {
   return { libs, moverSucceeds, urgentLibs };
 }
 
-const _exports = { getLadderStatus2, getAllLadderStatuses };
+const _exports = { getLadderStatus, getAllLadderStatuses };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Ladder2 = _exports;
 

@@ -754,6 +754,30 @@ class Game3Precise {
     }
     return out;
   }
+
+  groupLibs2(idx) {
+    const gid = this._gid[idx];
+    if (gid === -1) return { count: 0, lib0: -1, lib1: -1 };
+    const lc = this._ls[gid];
+    if (lc === 0) return { count: 0, lib0: -1, lib1: -1 };
+    const W = this._W;
+    const lb = gid * W;
+    const cap = this.N * this.N;
+    let lib0 = -1, lib1 = -1, found = 0;
+    for (let wi = 0; wi < W && found < 2; wi++) {
+      let w = this._lw[lb + wi];
+      while (w && found < 2) {
+        const i = wi * 32 + (31 - Math.clz32(w & -w));
+        if (i < cap) {
+          if (found === 0) lib0 = i;
+          else if (found === 1) lib1 = i;
+          found++;
+        }
+        w &= w - 1;
+      }
+    }
+    return { count: lc, lib0, lib1 };
+  }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
