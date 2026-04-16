@@ -20,6 +20,15 @@
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS = -1;
 
+// Operation types (integers, not strings)
+const OP_ADD_STONE = 0;
+const OP_REMOVE_STONE = 1;
+const OP_ADD_LIBERTY = 2;
+const OP_REMOVE_LIBERTY = 3;
+const OP_MERGE_GROUPS = 4;
+const OP_MOVE = 5;
+const OP_PASS = 6;
+
 class Game3Precise {
   constructor(size) {
     this.N = size;
@@ -151,7 +160,7 @@ class Game3Precise {
   _addStone(idx, gid, color) {
     this._addStone_raw(idx, gid);
     this._opStack.push({
-      type: 'addStone',
+      type: OP_ADD_STONE,
       idx: idx,
       gid: gid,
     });
@@ -160,7 +169,7 @@ class Game3Precise {
   _removeStone(idx, gid) {
     this._removeStone_raw(idx, gid);
     this._opStack.push({
-      type: 'removeStone',
+      type: OP_REMOVE_STONE,
       idx: idx,
       gid: gid,
     });
@@ -175,7 +184,7 @@ class Game3Precise {
     if (!wasSet) {
       this._addLiberty_raw(gid, idx);
       this._opStack.push({
-        type: 'addLiberty',
+        type: OP_ADD_LIBERTY,
         gid: gid,
         idx: idx,
       });
@@ -191,7 +200,7 @@ class Game3Precise {
     if (wasSet) {
       this._removeLiberty_raw(gid, idx);
       this._opStack.push({
-        type: 'removeLiberty',
+        type: OP_REMOVE_LIBERTY,
         gid: gid,
         idx: idx,
       });
@@ -245,7 +254,7 @@ class Game3Precise {
 
     // Record merge operation with snapshots for reversal
     this._opStack.push({
-      type: 'mergeGroups',
+      type: OP_MERGE_GROUPS,
       mainGid: mainGid,
       otherId: otherId,
       mainStones: mainStones,
@@ -308,7 +317,7 @@ class Game3Precise {
     if (move === PASS) {
       const previousConsecutivePasses = this.consecutivePasses;
       this._opStack.push({
-        type: 'pass',
+        type: OP_PASS,
         previousCurrent: this.current,
         previousConsecutivePasses: previousConsecutivePasses,
       });
@@ -442,7 +451,7 @@ class Game3Precise {
 
     // Wrap operations in a move record
     this._opStack.push({
-      type: 'move',
+      type: OP_MOVE,
       move: move,
       color: color,
       previousCurrent: color,
@@ -467,7 +476,7 @@ class Game3Precise {
     while (this._opStack.length > 0) {
       const op = this._opStack.pop();
 
-      if (op.type === 'pass') {
+      if (op.type === OP_PASS) {
         this.current = op.previousCurrent;
         this.consecutivePasses = op.previousConsecutivePasses;
         if (this.consecutivePasses < 2) {
@@ -477,7 +486,7 @@ class Game3Precise {
         return;
       }
 
-      if (op.type === 'move') {
+      if (op.type === OP_MOVE) {
         // Undo all operations from this move
         while (this._opStack.length > op.opsStart) {
           this._undoOperation(this._opStack.pop());
@@ -518,19 +527,19 @@ class Game3Precise {
   _undoOperation(op) {
     const W = this._W;
 
-    if (op.type === 'addStone') {
+    if (op.type === OP_ADD_STONE) {
       // Undo: remove stone (use raw to avoid pushing new operation)
       this._removeStone_raw(op.idx, op.gid);
-    } else if (op.type === 'removeStone') {
+    } else if (op.type === OP_REMOVE_STONE) {
       // Undo: add stone back (use raw to avoid pushing new operation)
       this._addStone_raw(op.idx, op.gid);
-    } else if (op.type === 'addLiberty') {
+    } else if (op.type === OP_ADD_LIBERTY) {
       // Undo: remove liberty
       this._removeLiberty_raw(op.gid, op.idx);
-    } else if (op.type === 'removeLiberty') {
+    } else if (op.type === OP_REMOVE_LIBERTY) {
       // Undo: add liberty back
       this._addLiberty_raw(op.gid, op.idx);
-    } else if (op.type === 'mergeGroups') {
+    } else if (op.type === OP_MERGE_GROUPS) {
       // Undo: restore both main and other groups to pre-merge state
       const gb = op.mainGid * W;
       const ob = op.otherId * W;
