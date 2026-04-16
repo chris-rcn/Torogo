@@ -33,6 +33,8 @@ class Game3Precise {
     this.emptyCount = cap;
     this.moveCount = 0;
     this.lastMove = PASS;
+    this.gameOver = false;
+    this.consecutivePasses = 0;
 
     // Group tracking
     this._gid = new Int32Array(cap).fill(-1);
@@ -86,6 +88,66 @@ class Game3Precise {
     const allCells = new Int32Array(cap);
     for (let i = 0; i < cap; i++) allCells[i] = i;
     return { nbr, dnbr, allCells };
+  }
+
+  clone() {
+    const cloned = new Game3Precise(this.N);
+    const cap = this.N * this.N;
+    const W = this._W;
+
+    // Copy board state
+    cloned.cells.set(this.cells);
+    cloned._gid.set(this._gid);
+    cloned.current = this.current;
+    cloned.ko = this.ko;
+    cloned.emptyCount = this.emptyCount;
+    cloned.moveCount = this.moveCount;
+    cloned.lastMove = this.lastMove;
+    cloned.gameOver = this.gameOver;
+    cloned.consecutivePasses = this.consecutivePasses;
+
+    // Copy group data
+    cloned._nextGid = this._nextGid;
+    cloned._gc.set(this._gc);
+    cloned._ss.set(this._ss);
+    cloned._ls.set(this._ls);
+
+    // Copy bitsets
+    const MAX_G = 4 * cap + 4;
+    cloned._sw.set(this._sw.subarray(0, MAX_G * W));
+    cloned._lw.set(this._lw.subarray(0, MAX_G * W));
+
+    // Copy operation stack
+    cloned._opStack = this._opStack.map(op => {
+      if (op.type === 'mergeGroups') {
+        return {
+          type: op.type,
+          mainGid: op.mainGid,
+          otherId: op.otherId,
+          otherStones: new Int32Array(op.otherStones),
+          otherLibs: new Int32Array(op.otherLibs),
+          otherSize: op.otherSize,
+          otherLibCount: op.otherLibCount,
+        };
+      } else if (op.type === 'move') {
+        return {
+          type: op.type,
+          move: op.move,
+          color: op.color,
+          previousCurrent: op.previousCurrent,
+          previousKo: op.previousKo,
+          previousEmptyCount: op.previousEmptyCount,
+          previousConsecutivePasses: op.previousConsecutivePasses,
+          previousLastMove: op.previousLastMove,
+          opsStart: op.opsStart,
+          captured: op.captured ? [...op.captured] : null,
+        };
+      } else {
+        return { ...op };
+      }
+    });
+
+    return cloned;
   }
 
   _pop32(x) {
@@ -275,10 +337,16 @@ class Game3Precise {
 
   play(move) {
     if (move === PASS) {
+      const previousConsecutivePasses = this.consecutivePasses;
       this._opStack.push({
         type: 'pass',
         previousCurrent: this.current,
+        previousConsecutivePasses: previousConsecutivePasses,
       });
+      this.consecutivePasses++;
+      if (this.consecutivePasses >= 2) {
+        this.gameOver = true;
+      }
       this.current = -this.current;
       this.moveCount++;
       return true;
@@ -298,6 +366,8 @@ class Game3Precise {
     // Save state before any modifications
     const previousKo = this.ko;
     const previousEmptyCount = this.emptyCount;
+    const previousConsecutivePasses = this.consecutivePasses;
+    const previousLastMove = this.lastMove;
 
     // Step 1: Mark cell as occupied
     this.cells[move] = color;
@@ -408,10 +478,13 @@ class Game3Precise {
       previousCurrent: color,
       previousKo: previousKo,
       previousEmptyCount: previousEmptyCount,
+      previousConsecutivePasses: previousConsecutivePasses,
+      previousLastMove: previousLastMove,
       opsStart: opCountBefore,
       captured: captured,
     });
 
+    this.consecutivePasses = 0;
     this.current = oppColor;
     this.moveCount++;
     return true;
@@ -426,6 +499,10 @@ class Game3Precise {
 
       if (op.type === 'pass') {
         this.current = op.previousCurrent;
+        this.consecutivePasses = op.previousConsecutivePasses;
+        if (this.consecutivePasses < 2) {
+          this.gameOver = false;
+        }
         this.moveCount--;
         return;
       }
@@ -451,6 +528,8 @@ class Game3Precise {
         this.current = op.previousCurrent;
         this.ko = op.previousKo;
         this.emptyCount = op.previousEmptyCount;
+        this.consecutivePasses = op.previousConsecutivePasses;
+        this.lastMove = op.previousLastMove;
         this.moveCount--;
         return;
       }
@@ -540,6 +619,67 @@ class Game3Precise {
       rows.push(row);
     }
     return rows.join('\n');
+  }
+
+  // ── Scoring ────────────────────────────────────────────────────────────────
+
+  // Fast 1-step area estimate plus komi.
+  // Returns { black, white } where white already includes komi.
+  estimateScore() {
+    const N = this.N;
+    const cap = N * N;
+    const cells = this.cells;
+    const nbr = this._nbr;
+    let black = 0;
+    let white = 0;
+
+    for (let i = 0; i < cap; i++) {
+      const c = cells[i];
+      if (c === BLACK) {
+        black++;
+        continue;
+      }
+      if (c === WHITE) {
+        white++;
+        continue;
+      }
+
+      // Empty cell - check adjacent stones
+      const base = i * 4;
+      let bAdj = false;
+      let wAdj = false;
+      for (let k = 0; k < 4; k++) {
+        const nc = cells[nbr[base + k]];
+        if (nc === BLACK) bAdj = true;
+        else if (nc === WHITE) wAdj = true;
+      }
+
+      // Territory: assign to color if only one color is adjacent
+      if (bAdj && !wAdj) black++;
+      else if (wAdj && !bAdj) white++;
+      // else: neutral territory (adjacent to both or neither)
+    }
+
+    // Add komi (board-size dependent)
+    // Standard komi values: 3.5 (default), 6.5 (9x9), 7.5 (13x13), 35.5 (19x19)
+    const komiOverrides = new Map([
+      [5, 3.5],
+      [7, 3.5],
+      [9, 6.5],
+      [11, 3.5],
+      [13, 7.5],
+      [19, 35.5],
+    ]);
+    const komi = komiOverrides.get(N) ?? 3.5;
+    white += komi;
+
+    return { black, white };
+  }
+
+  // Fast 1-step area estimate. Returns BLACK or WHITE.
+  estimateWinner() {
+    const score = this.estimateScore();
+    return score.black > score.white ? BLACK : WHITE;
   }
 
   // ── Group Query ────────────────────────────────────────────────────────────

@@ -168,6 +168,87 @@ function testToString() {
   console.log('✓ toString() works correctly');
 }
 
+function testClone() {
+  console.log('Testing clone()...');
+  const game = new Game3Precise(9);
+
+  // Play several moves
+  game.play(28);   // W moves
+  game.play(37);   // B moves
+  game.play(47);   // W moves
+  game.play(19);   // B moves
+
+  // Clone the game
+  const cloned = game.clone();
+
+  // Verify all properties are copied
+  console.assert(cloned.N === game.N, 'Board size should match');
+  console.assert(cloned.current === game.current, 'Current player should match');
+  console.assert(cloned.moveCount === game.moveCount, 'Move count should match');
+  console.assert(cloned.lastMove === game.lastMove, 'Last move should match');
+  console.assert(cloned.ko === game.ko, 'Ko position should match');
+  console.assert(cloned.emptyCount === game.emptyCount, 'Empty count should match');
+  console.assert(cloned.gameOver === game.gameOver, 'Game over flag should match');
+  console.assert(cloned.consecutivePasses === game.consecutivePasses, 'Consecutive passes should match');
+
+  // Verify board state is identical
+  for (let i = 0; i < game.N * game.N; i++) {
+    console.assert(cloned.cells[i] === game.cells[i], `Cell ${i} should match`);
+  }
+
+  // Clone should be independent: make a move in clone and verify original is unchanged
+  const clonedLastMove = cloned.lastMove;
+  cloned.play(20);
+  console.assert(game.lastMove === clonedLastMove, 'Original game should not change after clone move');
+  console.assert(game.moveCount === 5, 'Original game move count should be unchanged');
+  console.assert(cloned.moveCount === 6, 'Cloned game move count should be incremented');
+
+  // Verify undo works independently
+  cloned.undo();
+  console.assert(cloned.moveCount === 5, 'Cloned game move count should revert');
+  console.assert(cloned.lastMove === clonedLastMove, 'Cloned game last move should revert');
+
+  console.log('✓ clone() works correctly');
+}
+
+function testConsecutivePasses() {
+  console.log('Testing consecutivePasses...');
+  const game = new Game3Precise(5);
+
+  console.assert(game.consecutivePasses === 0, 'Initially should be 0');
+  console.assert(!game.gameOver, 'Game should not be over');
+
+  // Play one move
+  game.play(6);
+  console.assert(game.consecutivePasses === 0, 'After regular move should reset to 0');
+
+  // Pass
+  game.play(PASS);
+  console.assert(game.consecutivePasses === 1, 'After first pass should be 1');
+  console.assert(!game.gameOver, 'Game should not be over after 1 pass');
+
+  // Pass again
+  game.play(PASS);
+  console.assert(game.consecutivePasses === 2, 'After second pass should be 2');
+  console.assert(game.gameOver, 'Game should be over after 2 consecutive passes');
+
+  // Undo pass
+  game.undo();
+  console.assert(game.consecutivePasses === 1, 'After undo should be 1');
+  console.assert(!game.gameOver, 'Game should not be over after undo');
+
+  // Play a move instead of pass
+  game.play(7);
+  console.assert(game.consecutivePasses === 0, 'After regular move should reset to 0');
+  console.assert(!game.gameOver, 'Game should not be over');
+
+  // Verify undo restores consecutivePasses for moves
+  game.undo();
+  console.assert(game.consecutivePasses === 1, 'After undo should restore to 1');
+
+  console.log('✓ consecutivePasses works correctly');
+}
+
 // Run all tests
 console.log('Game3-Precise Unit Tests');
 console.log('='.repeat(60));
@@ -180,6 +261,8 @@ try {
   testLegalityCheck();
   testPlayUndoCycles();
   testToString();
+  testClone();
+  testConsecutivePasses();
 
   console.log('='.repeat(60));
   console.log('All tests passed! ✓');
