@@ -792,14 +792,12 @@ class Game3Precise {
   }
 }
 
+const Game3 = { Game3Precise, PASS, BLACK, WHITE, EMPTY };
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { Game3Precise, PASS, BLACK, WHITE, EMPTY };
+  module.exports = Game3;
 } else if (typeof window !== 'undefined') {
-  window.Game3Precise = Game3Precise;
-  window.PASS = PASS;
-  window.BLACK = BLACK;
-  window.WHITE = WHITE;
-  window.EMPTY = EMPTY;
+  window.Game3 = Game3;
 }
 
 })();
