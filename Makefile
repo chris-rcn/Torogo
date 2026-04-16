@@ -1,20 +1,23 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c99
+CFLAGS = -Wall -Wextra -O2 -std=c99 -Ic/
 LDFLAGS = -lm
+
+# C source directory
+C_DIR = c/
 
 # Test targets
 TEST_C_BIN = test-game3-c
-TEST_C_SRC = test-game3-c.c game3.c
-TEST_C_OBJ = $(TEST_C_SRC:.c=.o)
+TEST_C_SRC = $(C_DIR)test-game3-c.c $(C_DIR)game3.c
+TEST_C_OBJ = test-game3-c.o game3.o
 
 # Benchmark targets
 BENCH_C_BIN = bench-game3-c
-BENCH_C_SRC = bench-game3-c.c game3.c
-BENCH_C_OBJ = $(BENCH_C_SRC:.c=.o)
+BENCH_C_SRC = $(C_DIR)bench-game3-c.c $(C_DIR)game3.c
+BENCH_C_OBJ = bench-game3-c.o game3.o
 
 BENCH_LADDER_BIN = bench-ladder-c
-BENCH_LADDER_SRC = bench-ladder-c.c game3.c
-BENCH_LADDER_OBJ = $(BENCH_LADDER_SRC:.c=.o)
+BENCH_LADDER_SRC = $(C_DIR)bench-ladder-c.c $(C_DIR)game3.c
+BENCH_LADDER_OBJ = bench-ladder-c.o game3.o
 
 # Default target
 all: $(TEST_C_BIN) $(BENCH_C_BIN) $(BENCH_LADDER_BIN)
@@ -32,7 +35,7 @@ $(BENCH_LADDER_BIN): $(BENCH_LADDER_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # Compile C source files
-%.o: %.c
+%.o: $(C_DIR)%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Run C tests
