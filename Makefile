@@ -12,8 +12,12 @@ BENCH_C_BIN = bench-game3-c
 BENCH_C_SRC = bench-game3-c.c game3.c
 BENCH_C_OBJ = $(BENCH_C_SRC:.c=.o)
 
+BENCH_LADDER_BIN = bench-ladder-c
+BENCH_LADDER_SRC = bench-ladder-c.c game3.c
+BENCH_LADDER_OBJ = $(BENCH_LADDER_SRC:.c=.o)
+
 # Default target
-all: $(TEST_C_BIN) $(BENCH_C_BIN)
+all: $(TEST_C_BIN) $(BENCH_C_BIN) $(BENCH_LADDER_BIN)
 
 # Build C test executable
 $(TEST_C_BIN): $(TEST_C_OBJ)
@@ -21,6 +25,10 @@ $(TEST_C_BIN): $(TEST_C_OBJ)
 
 # Build C benchmark executable
 $(BENCH_C_BIN): $(BENCH_C_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+# Build C ladder benchmark executable
+$(BENCH_LADDER_BIN): $(BENCH_LADDER_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # Compile C source files
@@ -39,13 +47,21 @@ test-verbose: $(TEST_C_BIN)
 bench: $(BENCH_C_BIN)
 	./$(BENCH_C_BIN)
 
+# Run ladder benchmarks
+bench-ladder: $(BENCH_LADDER_BIN)
+	./$(BENCH_LADDER_BIN)
+
 # Run benchmarks with timing
 bench-timing: $(BENCH_C_BIN)
 	time ./$(BENCH_C_BIN)
 
+# Run ladder benchmarks with timing
+bench-ladder-timing: $(BENCH_LADDER_BIN)
+	time ./$(BENCH_LADDER_BIN)
+
 # Clean build artifacts
 clean:
-	rm -f $(TEST_C_BIN) $(BENCH_C_BIN) $(TEST_C_OBJ) $(BENCH_C_OBJ)
+	rm -f $(TEST_C_BIN) $(BENCH_C_BIN) $(BENCH_LADDER_BIN) $(TEST_C_OBJ) $(BENCH_C_OBJ) $(BENCH_LADDER_OBJ)
 
 # Rebuild everything
 rebuild: clean all
