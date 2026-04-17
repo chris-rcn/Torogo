@@ -826,7 +826,103 @@ class Game3Precise {
   }
 }
 
-const Game3 = { Game3Precise, PASS, BLACK, WHITE, EMPTY };
+// Parse board string and create Game3Precise with given position
+function parseBoard(boardStr, toMove = BLACK) {
+  const valid = new Set(['●','○','·','X','O','.']);
+  const rows = boardStr.trim().split('\n')
+    .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
+    .filter(row => row.length > 0);
+  const size = rows.length;
+  const g = new Game3Precise(size);
+
+  // Clear the board completely for parsing
+  g.cells.fill(EMPTY);
+  g._gid.fill(-1);
+  g._nextGid = 0;
+  g.emptyCount = size * size;
+  g._opStack = [];
+  g.moveCount = 0;
+  g.lastMove = PASS;
+
+  // Parse and place stones directly on the board
+  const W = g._W;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const ch = rows[y][x];
+      const idx = (size - 1 - y) * size + x;
+      const color = (ch === '●' || ch === 'X') ? BLACK : (ch === '○' || ch === 'O') ? WHITE : EMPTY;
+
+      if (color !== EMPTY) {
+        g.cells[idx] = color;
+        const gid = g._nextGid++;
+        g._gid[idx] = gid;
+        g._gc[gid] = color;
+        g._addStone_raw(idx, gid);
+        g.emptyCount--;
+
+        // Add liberties
+        const nbr = g._nbr;
+        const base = idx * 4;
+        for (let i = 0; i < 4; i++) {
+          const ni = nbr[base + i];
+          if (g.cells[ni] === EMPTY) {
+            g._addLiberty_raw(gid, ni);
+          }
+        }
+      }
+    }
+  }
+
+  // Merge adjacent groups of same color
+  const nbr = g._nbr;
+  for (let idx = 0; idx < size * size; idx++) {
+    if (g.cells[idx] === EMPTY) continue;
+    const gid = g._gid[idx];
+    const color = g.cells[idx];
+    const base = idx * 4;
+
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      if (g.cells[ni] === color) {
+        const neighborGid = g._gid[ni];
+        if (gid !== neighborGid) {
+          // Merge neighbor into current group
+          const W = g._W;
+          const gb = gid * W;
+          const nb = neighborGid * W;
+
+          // Merge stones
+          for (let wi = 0; wi < W; wi++) {
+            g._sw[gb + wi] |= g._sw[nb + wi];
+            g._sw[nb + wi] = 0;
+          }
+
+          // Merge liberties (and remove internal liberties)
+          for (let wi = 0; wi < W; wi++) {
+            g._lw[gb + wi] |= g._lw[nb + wi];
+            g._lw[nb + wi] = 0;
+          }
+
+          // Update group IDs
+          for (let j = 0; j < size * size; j++) {
+            if (g._gid[j] === neighborGid) {
+              g._gid[j] = gid;
+            }
+          }
+
+          // Recalculate counts
+          g._ss[gid] = g._pop32Count(gid, W);
+          g._ls[gid] = g._pop32Count(gid, W);
+        }
+      }
+    }
+  }
+
+  g.current = toMove;
+  return g;
+}
+
+const Game3 = { Game3Precise, parseBoard, PASS, BLACK, WHITE, EMPTY };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Game3;
