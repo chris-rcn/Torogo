@@ -32,6 +32,7 @@ const OP_PASS = 6;
 const _topologyCache = new Map();
 
 class Game3Precise {
+  // Initialize game with center black stone, ready for white's first move
   constructor(size) {
     this.N = size;
     this.boardSize = size;
@@ -94,6 +95,7 @@ class Game3Precise {
     this.moveCount = 1;
   }
 
+  // Get or compute neighbor tables and cell list for board size (with memoization)
   _getTopology(N) {
     if (_topologyCache.has(N)) {
       return _topologyCache.get(N);
@@ -118,6 +120,7 @@ class Game3Precise {
     return result;
   }
 
+  // Population count: count set bits in 32-bit integer
   _pop32(x) {
     x = x - ((x >>> 1) & 0x55555555);
     x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
@@ -128,6 +131,7 @@ class Game3Precise {
   // ── Precise Operations ─────────────────────────────────────────────────────
   // Raw versions that modify state without recording operations (for undo)
 
+  // Add stone to group's bitset without recording operation
   _addStone_raw(idx, gid) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -137,6 +141,7 @@ class Game3Precise {
     this._ss[gid]++;
   }
 
+  // Remove stone from group's bitset without recording operation
   _removeStone_raw(idx, gid) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -146,6 +151,7 @@ class Game3Precise {
     this._ss[gid]--;
   }
 
+  // Add liberty to group's bitset without recording operation
   _addLiberty_raw(gid, idx) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -155,6 +161,7 @@ class Game3Precise {
     this._ls[gid]++;
   }
 
+  // Remove liberty from group's bitset without recording operation
   _removeLiberty_raw(gid, idx) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -165,6 +172,7 @@ class Game3Precise {
   }
 
   // Recording versions that also push operations
+  // Add stone to group and record operation for undo
   _addStone(idx, gid, color) {
     this._addStone_raw(idx, gid);
     this._opStack.push({
@@ -174,6 +182,7 @@ class Game3Precise {
     });
   }
 
+  // Remove stone from group and record operation for undo
   _removeStone(idx, gid) {
     this._removeStone_raw(idx, gid);
     this._opStack.push({
@@ -183,6 +192,7 @@ class Game3Precise {
     });
   }
 
+  // Add liberty to group and record operation for undo
   _addLiberty(gid, idx) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -199,6 +209,7 @@ class Game3Precise {
     }
   }
 
+  // Remove liberty from group and record operation for undo
   _removeLiberty(gid, idx) {
     const W = this._W;
     const m = 1 << (idx & 31);
@@ -276,6 +287,7 @@ class Game3Precise {
     });
   }
 
+  // Count stones in group using bitset population count
   _pop32Count(gid, W) {
     let count = 0;
     const gb = gid * W;
@@ -287,6 +299,7 @@ class Game3Precise {
 
   // ── Play & Undo ────────────────────────────────────────────────────────────
 
+  // Check if move is legal (empty, not ko, not suicide)
   isLegal(idx, color = this.current) {
     if (this.cells[idx] !== EMPTY) return false;
     if (this.ko === idx) return false;
@@ -295,10 +308,12 @@ class Game3Precise {
     return true;
   }
 
+  // Check if move is legal and not a true eye
   isValidMove(idx, color = this.current) {
     return this.isLegal(idx, color) && !this.isTrueEye(idx);
   }
 
+  // Detect single suicide (all neighbors filled, none can help)
   _isSingleSuicide(idx, color) {
     const nbr = this._nbr;
     const base = idx * 4;
@@ -346,6 +361,7 @@ class Game3Precise {
     return hasFriendly;
   }
 
+  // Play a move (or pass), record operation, update game state
   play(move) {
     if (move === PASS) {
       const previousConsecutivePasses = this.consecutivePasses;
@@ -502,6 +518,7 @@ class Game3Precise {
     return true;
   }
 
+  // Undo last move by reversing all recorded operations
   undo() {
     if (this._opStack.length === 0) return;
 
@@ -557,6 +574,7 @@ class Game3Precise {
     }
   }
 
+  // Reverse a single recorded operation
   _undoOperation(op) {
     const W = this._W;
 
@@ -611,6 +629,7 @@ class Game3Precise {
 
   // Render the board as a ● ○ · string. Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
+  // Render board as ASCII string with optional marked position
   toString(markIdx = this.lastMove, { centerAt = null } = {}) {
     const N = this.N;
     const cells = this.cells;
@@ -649,6 +668,7 @@ class Game3Precise {
 
   // Fast 1-step area estimate plus komi.
   // Returns { black, white } where white already includes komi.
+  // Quick score estimate (empty cells + captured stones)
   estimateScore() {
     const N = this.N;
     const cap = N * N;
@@ -708,6 +728,7 @@ class Game3Precise {
 
   // ── Eye Detection ─────────────────────────────────────────────────────────
 
+  // Check if position is a true eye (solid border, not multi-color)
   isTrueEye(idx) {
     const color = this.current;
     const cells = this.cells;
@@ -744,18 +765,22 @@ class Game3Precise {
 
   // ── Group Query ────────────────────────────────────────────────────────────
 
+  // Get group ID at position
   groupIdAt(idx) {
     return this._gid[idx];
   }
 
+  // Get number of stones in group
   groupSize(gid) {
     return this._ss[gid];
   }
 
+  // Get number of liberties for group
   groupLibertyCount(gid) {
     return this._ls[gid];
   }
 
+  // Get array of liberty indices for group at position
   groupLibs(idx) {
     const gid = this._gid[idx];
     if (gid === -1) return new Int32Array(0);
@@ -775,6 +800,7 @@ class Game3Precise {
     return out;
   }
 
+  // Get up to 2 liberties and count for group (fast path)
   groupLibs2(idx) {
     const gid = this._gid[idx];
     if (gid === -1) return { count: 0, lib0: -1, lib1: -1 };
