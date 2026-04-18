@@ -18,12 +18,12 @@ function canReach4Libs(game, idx, credits) {
   if (credits <= 0) return [null, 0];
   credits--;
 
-  const { count: lc, lib0, lib1 } = game.groupLibs2(idx);
+  const libs = game.groupLibs(idx);
+  const lc = libs.length;
   if (lc >= 4) return [true,  credits];
   if (lc === 0) return [false, credits];
 
   const defColor = game.cells[idx];
-  const libs = lc === 1 ? [lib0] : [lib0, lib1];
 
   if (game.current === defColor) {
     // Defender's turn: succeed if any branch is definitely true; unknown if
@@ -64,7 +64,7 @@ function canReach4Libs(game, idx, credits) {
       game.undo();
       return [false, credits]; // captured immediately
     }
-    const { count: afterLc } = game.groupLibs2(idx);
+    const afterLc = game.groupLibs(idx).length;
     if (afterLc === 0) {
       game.undo();
       return [false, credits];
@@ -99,7 +99,7 @@ function searchChains(game, nodeLimit = Infinity) {
     const gid = game._gid[i];
     if (visited.has(gid)) continue;
     visited.add(gid);
-    const { count: lc } = game.groupLibs2(i);
+    const lc = game.groupLibs(i).length;
     if (lc === 0 || lc > 3) continue;
     const status = searchChain(game, i, nodeLimit);
     results.push({ gid, color: game.cells[i], status });
@@ -118,13 +118,13 @@ function searchChains(game, nodeLimit = Infinity) {
 // (one per liberty). Default Infinity (unbounded).
 // Logs a warning and returns null when the group has more than 3 liberties.
 function searchChain(game, stoneIdx, nodeLimit = Infinity) {
-  const { count: lc, lib0, lib1 } = game.groupLibs2(stoneIdx);
+  const libs = game.groupLibs(stoneIdx);
+  const lc = libs.length;
   if (lc < 1 || lc > 3) {
     const N = game.N;
     console.warn(`searchChain: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected 1–3)`);
     return null;
   }
-  const libs = lc === 1 ? [lib0] : [lib0, lib1];
   const gColor = game.cells[stoneIdx];
   const mover = game.current;
   const defending = gColor === mover;
