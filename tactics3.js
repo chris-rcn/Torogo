@@ -1,11 +1,11 @@
 'use strict';
 
-// tactics3.js — Tactical search using Game2.
+// tactics3.js — Tactical search using Game3.
 // Like ladder2.js but terminates when the chain reaches 4+ liberties (or is captured).
 
 (function() {
 
-const { PASS } = typeof require === 'function' ? require('./game2.js') : window.Game2;
+const { PASS } = typeof require === 'function' ? require('./game3.js') : window.Game3;
 
 // Returns [result, remainingCredits] where result is:
 //   true  — defender can reach 4+ liberties despite best attacker play
@@ -14,30 +14,37 @@ const { PASS } = typeof require === 'function' ? require('./game2.js') : window.
 //
 // Sibling branches share credits: each call returns what's left so the next
 // sibling can use it.
-function canReach4Libs(game2, idx, credits) {
+function canReach4Libs(game, idx, credits) {
   if (credits <= 0) return [null, 0];
   credits--;
 
-  const libs = game2.groupLibs(idx);
-  const lc = libs.length;
+  const { count: lc, lib0, lib1 } = game.groupLibs2(idx);
   if (lc >= 4) return [true,  credits];
   if (lc === 0) return [false, credits];
 
-  const defColor = game2.cells[idx];
+  const defColor = game.cells[idx];
+  const libs = lc === 1 ? [lib0] : [lib0, lib1];
 
-  if (game2.current === defColor) {
+  if (game.current === defColor) {
     // Defender's turn: succeed if any branch is definitely true; unknown if
     // any branch is null and none is true; false only if all are false.
     let hasUnknown = false;
     for (let k = 0; k < lc; k++) {
-      const g = game2.clone();
-      if (!g.play(libs[k])) continue;      // suicide — skip
-      if (g.cells[idx] === 0) continue;    // captured — skip
+      const libIdx = libs[k];
+      if (!game.play(libIdx)) {
+        game.undo();
+        continue;      // suicide — skip
+      }
+      if (game.cells[idx] === 0) {
+        game.undo();
+        continue;    // captured — skip
+      }
       const budget = Math.floor(credits / (lc - k));
       credits -= budget;
       let result, unused;
-      [result, unused] = canReach4Libs(g, idx, budget);
+      [result, unused] = canReach4Libs(game, idx, budget);
       credits += unused;
+      game.undo();
       if (result === true)  return [true,    credits];
       if (result === null)  hasUnknown = true;
     }
@@ -48,42 +55,54 @@ function canReach4Libs(game2, idx, credits) {
   // unknown if any branch is null and none captures; true only if all survive.
   let hasUnknown = false;
   for (let k = 0; k < lc; k++) {
-    const g = game2.clone();
-    if (!g.play(libs[k])) continue;        // illegal for attacker — skip
-    if (g.cells[idx] === 0) return [false, credits]; // captured immediately
-    const afterLc = g.groupLibs(idx).length;
-    if (afterLc === 0) return [false, credits];
+    const libIdx = libs[k];
+    if (!game.play(libIdx)) {
+      game.undo();
+      continue;        // illegal for attacker — skip
+    }
+    if (game.cells[idx] === 0) {
+      game.undo();
+      return [false, credits]; // captured immediately
+    }
+    const { count: afterLc } = game.groupLibs2(idx);
+    if (afterLc === 0) {
+      game.undo();
+      return [false, credits];
+    }
     if (afterLc < 4) {
       const budget = Math.floor(credits / (lc - k));
       credits -= budget;
       let result, unused;
-      [result, unused] = canReach4Libs(g, idx, budget);
+      [result, unused] = canReach4Libs(game, idx, budget);
       credits += unused;
+      game.undo();
       if (result === false) return [false, credits];
       if (result === null)  hasUnknown = true;
+    } else {
+      game.undo();
     }
   }
 
   return [hasUnknown ? null : true, credits];
 }
 
-// searchChains(game2, nodeLimit) — run searchChain on every group with 1–3
+// searchChains(game, nodeLimit) — run searchChain on every group with 1–3
 // liberties and return an array of { gid, color, status } objects, one per
 // group (groups with 0 or 4+ liberties are skipped).
 // nodeLimit: max nodes per sub-search per liberty in searchChain (default Infinity).
-function searchChains(game2, nodeLimit = Infinity) {
-  const cap  = game2.N * game2.N;
+function searchChains(game, nodeLimit = Infinity) {
+  const cap  = game.N * game.N;
   const results = [];
   const visited = new Set();
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] === 0) continue;
-    const gid = game2._gid[i];
+    if (game.cells[i] === 0) continue;
+    const gid = game._gid[i];
     if (visited.has(gid)) continue;
     visited.add(gid);
-    const lc = game2.groupLibs(i).length;
+    const { count: lc } = game.groupLibs2(i);
     if (lc === 0 || lc > 3) continue;
-    const status = searchChain(game2, i, nodeLimit);
-    results.push({ gid, color: game2.cells[i], status });
+    const status = searchChain(game, i, nodeLimit);
+    results.push({ gid, color: game.cells[i], status });
   }
   return results;
 }
@@ -98,16 +117,16 @@ function searchChains(game2, nodeLimit = Infinity) {
 // nodeLimit: fresh credit budget given to each canReach4Libs sub-search
 // (one per liberty). Default Infinity (unbounded).
 // Logs a warning and returns null when the group has more than 3 liberties.
-function searchChain(game2, stoneIdx, nodeLimit = Infinity) {
-  const libs = game2.groupLibs(stoneIdx);
-  const lc = libs.length;
+function searchChain(game, stoneIdx, nodeLimit = Infinity) {
+  const { count: lc, lib0, lib1 } = game.groupLibs2(stoneIdx);
   if (lc < 1 || lc > 3) {
-    const N = game2.N;
+    const N = game.N;
     console.warn(`searchChain: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected 1–3)`);
     return null;
   }
-  const gColor = game2.cells[stoneIdx];
-  const mover = game2.current;
+  const libs = lc === 1 ? [lib0] : [lib0, lib1];
+  const gColor = game.cells[stoneIdx];
+  const mover = game.current;
   const defending = gColor === mover;
   const atari = lc === 1;
 
@@ -125,11 +144,11 @@ function searchChain(game2, stoneIdx, nodeLimit = Infinity) {
     const budget = Math.floor(credits / callsLeft);
     credits -= budget;
     callsLeft--;
-    const g = game2.clone();
-    g.play(PASS);
+    game.play(PASS);
     let unused;
-    [escape, unused] = canReach4Libs(g, stoneIdx, budget);
+    [escape, unused] = canReach4Libs(game, stoneIdx, budget);
     credits += unused;
+    game.undo();
   }
   // escape===null means inconclusive; skip the early-return optimisation.
   if (escape !== null && defending === escape) {
@@ -149,16 +168,16 @@ function searchChain(game2, stoneIdx, nodeLimit = Infinity) {
       const budget = Math.floor(credits / callsLeft);
       credits -= budget;
       callsLeft--;
-      const g = game2.clone();
-      const played = g.play(libIdx);
+      const played = game.play(libIdx);
       if (played) {
         let unused;
-        [escape, unused] = canReach4Libs(g, stoneIdx, budget);
+        [escape, unused] = canReach4Libs(game, stoneIdx, budget);
         credits += unused;
       } else {
         escape = false;
         credits += budget;  // return unspent budget to pool
       }
+      game.undo();
     }
     if (escape !== null && defending === escape) {
       moverSucceeds = true;
