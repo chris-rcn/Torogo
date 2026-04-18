@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { Game3Precise, BLACK, WHITE, EMPTY, PASS } = require('./game3.js');
+const { Game3, BLACK, WHITE, EMPTY, PASS } = require('./game3.js');
 const { execSync } = require('child_process');
 const fs = require('fs');
 
@@ -27,7 +27,7 @@ function assertEqual(actual, expected, message) {
 function test_js_basic() {
   console.log('\nTest: JS Implementation Basic Correctness');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   assertEqual(game.N, 9, 'Board size');
   assertEqual(game.boardSize, 9, 'Board size field');
@@ -50,7 +50,7 @@ function test_js_basic() {
 function test_js_groups() {
   console.log('\nTest: JS Group Handling');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Place stones that should merge
   // For 13x13: idx = row*13 + col
@@ -72,7 +72,7 @@ function test_js_groups() {
 function test_js_captures() {
   console.log('\nTest: JS Capture Detection');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Create a simple capture scenario
   game.play(45);  // BLACK
@@ -93,7 +93,7 @@ function test_js_captures() {
 function test_js_undo_redo() {
   console.log('\nTest: JS Undo/Redo Cycles');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 57, 58, 70, 71, 69, 72];
 
   for (const move of moves) {
@@ -131,7 +131,7 @@ function test_js_undo_redo() {
 function test_js_scoring() {
   console.log('\nTest: JS Scoring');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   const score = game.estimateScore();
   assert(typeof score.black === 'number', 'Black score is a number');
@@ -145,7 +145,7 @@ function test_js_scoring() {
 function test_js_eye_detection() {
   console.log('\nTest: JS Eye Detection');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   game.play(45);
   game.play(46);
@@ -165,13 +165,13 @@ function test_js_multiple_games() {
   const moves = [45, 46, 57, 58, 70, 71, 69, 72, 82, 83];
 
   // Game 1
-  const game1 = new Game3Precise(13);
+  const game1 = new Game3(13);
   for (const move of moves) {
     game1.play(move);
   }
 
   // Game 2 (should be identical)
-  const game2 = new Game3Precise(13);
+  const game2 = new Game3(13);
   for (const move of moves) {
     game2.play(move);
   }
@@ -196,7 +196,7 @@ function test_js_multiple_games() {
 function test_js_stress() {
   console.log('\nTest: JS Stress Test (many operations)');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [];
 
   // Generate sequence of moves
@@ -228,7 +228,7 @@ function test_js_stress() {
 function test_js_ko() {
   console.log('\nTest: JS Ko Rule');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   game.play(45);
   game.play(46);
@@ -244,7 +244,7 @@ function test_js_ko() {
 function test_js_passes() {
   console.log('\nTest: JS Pass Moves');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   const initialPasses = game.consecutivePasses;
   game.play(PASS);

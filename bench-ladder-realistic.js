@@ -5,7 +5,7 @@
 // Repeat for ~200 games on 13x13
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise, PASS, BLACK, WHITE } = require('./game3.js');
+const { Game3, PASS, BLACK, WHITE } = require('./game3.js');
 const { getAllLadderStatuses } = require('./ladder2.js');
 
 // Game2-based ladder detection
@@ -148,7 +148,7 @@ for (let gameNum = 0; gameNum < numGames; gameNum++) {
   const { game: game2, moveCount: moves2 } = playRandomGame(Game2);
 
   // Replay same moves with Game3-Precise
-  const game3 = new Game3Precise(13);
+  const game3 = new Game3(13);
   for (const move of moves2) {
     game3.play(move);
   }
@@ -158,7 +158,7 @@ for (let gameNum = 0; gameNum < numGames; gameNum++) {
 
   // For a more realistic test, let's analyze at every move
   const game2Copy = new Game2(13);
-  const game3Copy = new Game3Precise(13);
+  const game3Copy = new Game3(13);
 
   for (const move of moves2) {
     game2Copy.play(move);

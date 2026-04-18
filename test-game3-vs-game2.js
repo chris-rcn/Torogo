@@ -4,7 +4,7 @@
 // Verifies that both implementations produce identical results
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3.js');
+const { Game3 } = require('./game3.js');
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -88,7 +88,7 @@ function compareGroups(game2, game3, label) {
 function testSequence(moves, label) {
   console.log(`\nTest: ${label}`);
   const game2 = new Game2(13);
-  const game3 = new Game3Precise(13);
+  const game3 = new Game3(13);
 
   // Play all moves
   for (let moveIdx = 0; moveIdx < moves.length; moveIdx++) {
@@ -148,7 +148,7 @@ testSequence(
 // Test 5: Random game (first 30 moves)
 console.log('\nTest: Random game simulation');
 const game2Random = new Game2(13);
-const game3Random = new Game3Precise(13);
+const game3Random = new Game3(13);
 let randomMoves = [];
 
 for (let move = 0; move < 169 && randomMoves.length < 30; move++) {
@@ -165,7 +165,7 @@ console.log(`  ✓ Random game passed (${randomMoves.length} moves)`);
 
 // Test 6: Undo/redo cycles (Game3-Precise only, since Game2 doesn't support undo)
 console.log('\nTest: Undo/redo cycles');
-const gameUndoTest3 = new Game3Precise(13);
+const gameUndoTest3 = new Game3(13);
 const undoTestMoves = [66, 67, 55, 57, 69, 79, 59];
 
 for (const move of undoTestMoves) {
@@ -188,7 +188,7 @@ console.log(`  ✓ Undo/redo cycles passed`);
 console.log('\nTest: Various board sizes');
 for (const N of [5, 7, 9, 13, 19]) {
   const g2 = new Game2(N);
-  const g3 = new Game3Precise(N);
+  const g3 = new Game3(N);
 
   compareBoardState(g2, g3, `Initial ${N}x${N}`);
   compareGroups(g2, g3, `Initial ${N}x${N}`);

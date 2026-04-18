@@ -2,7 +2,7 @@
 
 // Test suite for the ladder detection bug fix
 
-const { Game3Precise } = require('./game3.js');
+const { Game3 } = require('./game3.js');
 const { getAllLadderStatuses, getLadderStatus } = require('./ladder2.js');
 
 let passCount = 0;
@@ -24,7 +24,7 @@ console.log('=====================================\n');
 // Test 1: Single getLadderStatus call preserves state
 console.log('Test 1: Single getLadderStatus call preserves state');
 {
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 47, 57, 58, 59, 70, 71, 72, 82, 83, 84];
   for (const move of moves) game.play(move);
 
@@ -40,7 +40,7 @@ console.log('Test 1: Single getLadderStatus call preserves state');
 // Test 2: Multiple getLadderStatus calls preserve all groups
 console.log('\nTest 2: Multiple getLadderStatus calls preserve all groups');
 {
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 47, 57, 58, 59, 70, 71, 72, 82, 83, 84];
   for (const move of moves) game.play(move);
 
@@ -82,7 +82,7 @@ console.log('\nTest 2: Multiple getLadderStatus calls preserve all groups');
 // Test 3: getAllLadderStatuses preserves state
 console.log('\nTest 3: getAllLadderStatuses preserves state');
 {
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 47, 57, 58, 59, 70, 71, 72, 82, 83, 84];
   for (const move of moves) game.play(move);
 
@@ -113,7 +113,7 @@ console.log('\nTest 3: getAllLadderStatuses preserves state');
 // Test 4: Multiple getAllLadderStatuses calls are consistent
 console.log('\nTest 4: Multiple getAllLadderStatuses calls are consistent');
 {
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 47, 57, 58, 59, 70, 71, 72, 82, 83, 84];
   for (const move of moves) game.play(move);
 
@@ -140,7 +140,7 @@ console.log('\nTest 4: Multiple getAllLadderStatuses calls are consistent');
 // Test 5: Complex position with many groups
 console.log('\nTest 5: Complex position with many groups');
 {
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Play a more complex game
   const moves = [
@@ -160,7 +160,7 @@ console.log('\nTest 5: Complex position with many groups');
 // Test 6: Ko rule is properly set
 console.log('\nTest 6: Ko rule is properly set');
 {
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Play moves to create a capture
   game.play(40);
@@ -178,7 +178,7 @@ console.log('\nTest 6: Ko rule is properly set');
 // Test 7: State consistency after deep recursion
 console.log('\nTest 7: State consistency after deep recursion');
 {
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Play a game to near end
   const moves = [40, 41, 49, 48, 32, 31, 23, 24, 33, 34, 42, 43, 50, 51];

@@ -31,7 +31,7 @@ const OP_PASS = 6;
 
 const _topologyCache = new Map();
 
-class Game3Precise {
+class Game3 {
   // Initialize game with center black stone, ready for white's first move
   constructor(size) {
     this.N = size;
@@ -768,12 +768,12 @@ class Game3Precise {
   }
 }
 
-const Game3 = { Game3Precise, PASS, BLACK, WHITE, EMPTY };
+const _exports = { Game3, PASS, BLACK, WHITE, EMPTY };
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = Game3;
+  module.exports = _exports;
 } else if (typeof window !== 'undefined') {
-  window.Game3 = Game3;
+  window.Game3 = _exports;
 }
 
 })();

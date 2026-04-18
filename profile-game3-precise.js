@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-// profile-game3.js — Detailed performance profiling of Game3Precise
+// profile-game3.js — Detailed performance profiling of Game3
 
 const { performance } = require('perf_hooks');
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3.js');
+const { Game3 } = require('./game3.js');
 
 function profileGame2() {
   console.log('\n=== Game2.clone() Profile ===');
@@ -69,9 +69,9 @@ function profileGame2() {
   console.log(`  play:    ${(times.play / total * 100).toFixed(1)}%`);
 }
 
-function profileGame3Precise() {
-  console.log('\n=== Game3Precise Profile ===');
-  const game = new Game3Precise(13);
+function profileGame3() {
+  console.log('\n=== Game3 Profile ===');
+  const game = new Game3(13);
 
   // Setup
   for (let i = 0; i < 10; i++) {
@@ -129,7 +129,7 @@ function profileGame3Precise() {
 
 function operationAnalysis() {
   console.log('\n=== Operation Distribution ===');
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Play a sequence of moves
   const moves = [];
@@ -175,8 +175,8 @@ function memoryAnalysis() {
     }
   }
 
-  // Game3Precise approach
-  const game3p = new Game3Precise(13);
+  // Game3 approach
+  const game3p = new Game3(13);
   for (let i = 0; i < 20; i++) {
     const cap = game3p.N * game3p.N;
     for (let j = 0; j < cap; j++) {
@@ -188,7 +188,7 @@ function memoryAnalysis() {
   }
 
   console.log(`Game2 clone size (estimated): ~10KB per clone × clones needed`);
-  console.log(`Game3Precise op stack size: ${game3p._opStack.length} operations`);
+  console.log(`Game3 op stack size: ${game3p._opStack.length} operations`);
 
   const opStackBytes = game3p._opStack.reduce((total, op) => {
     return total + (JSON.stringify(op).length / 2); // Rough estimate
@@ -198,11 +198,11 @@ function memoryAnalysis() {
   console.log(`Avg bytes per operation: ${(opStackBytes / game3p._opStack.length).toFixed(0)}`);
 }
 
-console.log('Game3Precise Detailed Profiling');
+console.log('Game3 Detailed Profiling');
 console.log('='.repeat(60));
 
 profileGame2();
-profileGame3Precise();
+profileGame3();
 operationAnalysis();
 memoryAnalysis();
 
@@ -215,11 +215,11 @@ Game2.clone():
   - 20-30% time on play operation
   - Allocates new arrays for each clone
 
-Game3Precise:
+Game3:
   - 40-50% time on play operation
   - 40-50% time on undo operation
   - Minimal allocation (operation records only)
 
-Key Insight: Game3Precise trades small undo cost for huge savings in clone overhead.
+Key Insight: Game3 trades small undo cost for huge savings in clone overhead.
 In tactical search (many play/undo pairs), the savings compound significantly.
 `);

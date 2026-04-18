@@ -5,7 +5,7 @@
 // This directly validates that both implementations agree on which moves are legal
 
 const { Game2 } = require('./game2.js');
-const { Game3Precise } = require('./game3.js');
+const { Game3 } = require('./game3.js');
 
 let testsRun = 0;
 let testsPassed = 0;
@@ -52,7 +52,7 @@ function testSequence(moves, label) {
   console.log(`\nTest: ${label}`);
 
   const game2 = new Game2(13);
-  const game3 = new Game3Precise(13);
+  const game3 = new Game3(13);
 
   for (let i = 0; i < moves.length; i++) {
     const move = moves[i];
@@ -84,7 +84,7 @@ console.log('='.repeat(70));
 // Test 1: Initial position
 console.log('\nTest: Initial position');
 const g2_init = new Game2(13);
-const g3_init = new Game3Precise(13);
+const g3_init = new Game3(13);
 testLegalMoves(g2_init, g3_init, 'Initial position');
 
 // Test 2: Simple sequence
@@ -106,7 +106,7 @@ testSequence(
 // Test 5: Random moves (deterministic)
 console.log('\nTest: Random moves (first 30 legal moves)');
 const game2_random = new Game2(13);
-const game3_random = new Game3Precise(13);
+const game3_random = new Game3(13);
 let moveCount = 0;
 for (let i = 0; i < 169 && moveCount < 30; i++) {
   if (game2_random.isLegal(i)) {
@@ -125,7 +125,7 @@ for (let i = 0; i < 169 && moveCount < 30; i++) {
 // Test 6: After captures
 console.log('\nTest: After captures');
 const game2_cap = new Game2(13);
-const game3_cap = new Game3Precise(13);
+const game3_cap = new Game3(13);
 const capMoves = [45, 46, 57, 58, 70, 71];
 for (const move of capMoves) {
   game2_cap.play(move);

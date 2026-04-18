@@ -2,14 +2,14 @@
 
 // Test ladder detection with Game3-Precise
 
-const { Game3Precise, PASS, BLACK, WHITE } = require('./game3.js');
+const { Game3, PASS, BLACK, WHITE } = require('./game3.js');
 const { getAllLadderStatuses, getLadderStatus } = require('./ladder2.js');
 
 function testLadderDetection() {
   console.log('Testing ladder detection with Game3-Precise...');
 
   // Create a simple position
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Play some moves to create ladder scenarios
   game.play(10);  // W
@@ -42,7 +42,7 @@ function testLadderDetection() {
 function testGroupLibs2() {
   console.log('Testing groupLibs2() method...');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Play some stones
   game.play(10);  // W

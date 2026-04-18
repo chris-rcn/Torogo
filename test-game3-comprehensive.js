@@ -9,7 +9,7 @@
 // 4. Stress tests with deep undo/redo
 // 5. Edge cases and special scenarios
 
-const { Game3Precise, BLACK, WHITE, EMPTY, PASS } = require('./game3.js');
+const { Game3, BLACK, WHITE, EMPTY, PASS } = require('./game3.js');
 const { getAllLadderStatuses } = require('./ladder2.js');
 
 let testsRun = 0;
@@ -41,8 +41,8 @@ function assertArrayEqual(a, b, message) {
 
 function test_board_state_consistency() {
   console.log('\nTest: Board State Consistency');
-  const game1 = new Game3Precise(13);
-  const game2 = new Game3Precise(13);
+  const game1 = new Game3(13);
+  const game2 = new Game3(13);
 
   const moves = [45, 46, 57, 58, 70, 71, 69, 72, 82, 83, 84, 85];
 
@@ -77,7 +77,7 @@ function test_board_state_consistency() {
 
 function test_undo_redo_states() {
   console.log('\nTest: Undo/Redo State Restoration');
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 57, 58, 70, 71, 69, 72, 82, 83];
 
   for (const move of moves) {
@@ -125,7 +125,7 @@ function test_capture_correctness() {
   console.log('\nTest: Capture Correctness');
 
   // Scenario 1: Simple capture scenario
-  const game1 = new Game3Precise(9);
+  const game1 = new Game3(9);
   game1.play(0);   // BLACK at (0,0)
   game1.play(1);   // WHITE at (0,1)
   game1.play(9);   // BLACK at (1,0)
@@ -162,7 +162,7 @@ function test_capture_correctness() {
 function test_ladder_consistency() {
   console.log('\nTest: Ladder Search Consistency');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [45, 46, 57, 58, 70, 71, 69, 72, 82, 83];
 
   for (const move of moves) {
@@ -194,7 +194,7 @@ function test_ladder_consistency() {
 function test_deep_recursion() {
   console.log('\nTest: Deep Recursion Stress (100 levels)');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [];
 
   // Play moves to set up board
@@ -242,7 +242,7 @@ function test_deep_recursion() {
 function test_group_merging() {
   console.log('\nTest: Group Merging Correctness');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Create two separate black groups
   game.play(45);  // BLACK at (3,6)
@@ -277,7 +277,7 @@ function test_group_merging() {
 function test_ko_rule() {
   console.log('\nTest: Ko Rule Correctness');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
 
   // Play some moves
   for (let i = 0; i < 10; i++) {
@@ -301,7 +301,7 @@ function test_board_sizes() {
   console.log('\nTest: Various Board Sizes');
 
   for (const size of [5, 7, 9, 13, 19]) {
-    const game = new Game3Precise(size);
+    const game = new Game3(size);
     assertEqual(game.N, size, `Board size ${size}`);
     assertEqual(game.emptyCount, size * size - 1, `Empty count for ${size}x${size}`);
 
@@ -331,7 +331,7 @@ function test_board_sizes() {
 function test_pass_moves() {
   console.log('\nTest: Pass Move Handling');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
   assertEqual(game.consecutivePasses, 0, 'Initial passes: 0');
   assert(!game.gameOver, 'Game not over initially');
 
@@ -362,7 +362,7 @@ function test_pass_moves() {
 function test_eye_detection() {
   console.log('\nTest: Eye Detection');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   game.play(45);
   game.play(46);
   game.play(57);
@@ -386,7 +386,7 @@ function test_eye_detection() {
 function test_legality_edge_cases() {
   console.log('\nTest: Legality Edge Cases');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Occupied cell should be illegal
   game.play(0);
@@ -410,7 +410,7 @@ function test_legality_edge_cases() {
 function test_string_rendering() {
   console.log('\nTest: String Rendering');
 
-  const game = new Game3Precise(5);
+  const game = new Game3(5);
   const str = game.toString();
 
   assert(typeof str === 'string', 'toString returns string');
@@ -437,7 +437,7 @@ function test_string_rendering() {
 function test_multi_suicide() {
   console.log('\nTest: Multi-Suicide Detection');
 
-  const game = new Game3Precise(9);
+  const game = new Game3(9);
 
   // Set up a position where a move would be multi-suicide:
   // - All 4 neighbors are occupied
@@ -472,7 +472,7 @@ function test_multi_suicide() {
 function test_long_sequence() {
   console.log('\nTest: 100+ Move Sequence Consistency');
 
-  const game = new Game3Precise(13);
+  const game = new Game3(13);
   const moves = [];
 
   // Play 100+ moves
