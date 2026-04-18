@@ -32,8 +32,8 @@ const OP_PASS = 6;
 const _topologyCache = new Map();
 
 class Game3Precise {
-  // Initialize game with optional center black stone, ready for white's first move
-  constructor(size, placeCenterStone = true) {
+  // Initialize game with center black stone, ready for white's first move
+  constructor(size) {
     this.N = size;
     this.boardSize = size;
     const cap = size * size;
@@ -72,19 +72,7 @@ class Game3Precise {
     // Operation stack - stores reversible operations
     this._opStack = [];
 
-    // Store settings for reset
-    this._placeCenterStone = placeCenterStone;
-
-    if (placeCenterStone) {
-      this._initializeCenterStone();
-    } else {
-      this.current = BLACK;
-    }
-  }
-
-  // Initialize center stone and set ready for white's first move
-  _initializeCenterStone() {
-    const size = this.N;
+    // Initialize center stone
     const center = ((size >> 1) * size) + (size >> 1);
     const centerGid = this._nextGid++;
     this._gc[centerGid] = BLACK;
@@ -586,39 +574,6 @@ class Game3Precise {
     }
   }
 
-  // Reset game to initial state
-  reset() {
-    const cap = this.N * this.N;
-
-    // Clear board state
-    this.cells.fill(EMPTY);
-    this._gid.fill(-1);
-    this._nextGid = 0;
-    this.ko = PASS;
-    this.emptyCount = cap;
-    this.moveCount = 0;
-    this.lastMove = PASS;
-    this.gameOver = false;
-    this.consecutivePasses = 0;
-    this._opStack = [];
-
-    // Clear group data (reuse same arrays for efficiency)
-    const W = this._W;
-    const MAX_G = 4 * cap + 4;
-    this._gc.fill(0);
-    this._sw.fill(0);
-    this._ss.fill(0);
-    this._lw.fill(0);
-    this._ls.fill(0);
-
-    // Restore initial configuration
-    if (this._placeCenterStone) {
-      this._initializeCenterStone();
-    } else {
-      this.current = BLACK;
-    }
-  }
-
   // Reverse a single recorded operation
   _undoOperation(op) {
     const W = this._W;
@@ -713,65 +668,7 @@ class Game3Precise {
 
   // Fast 1-step area estimate plus komi.
   // Returns { black, white } where white already includes komi.
-  // Quick score estimate (empty cells + captured stones)
-  estimateScore() {
-    const N = this.N;
-    const cap = N * N;
-    const cells = this.cells;
-    const nbr = this._nbr;
-    let black = 0;
-    let white = 0;
-
-    for (let i = 0; i < cap; i++) {
-      const c = cells[i];
-      if (c === BLACK) {
-        black++;
-        continue;
-      }
-      if (c === WHITE) {
-        white++;
-        continue;
-      }
-
-      // Empty cell - check adjacent stones
-      const base = i * 4;
-      let bAdj = false;
-      let wAdj = false;
-      for (let k = 0; k < 4; k++) {
-        const nc = cells[nbr[base + k]];
-        if (nc === BLACK) bAdj = true;
-        else if (nc === WHITE) wAdj = true;
-      }
-
-      // Territory: assign to color if only one color is adjacent
-      if (bAdj && !wAdj) black++;
-      else if (wAdj && !bAdj) white++;
-      // else: neutral territory (adjacent to both or neither)
-    }
-
-    // Add komi (board-size dependent)
-    // Standard komi values: 3.5 (default), 6.5 (9x9), 7.5 (13x13), 35.5 (19x19)
-    const komiOverrides = new Map([
-      [5, 3.5],
-      [7, 3.5],
-      [9, 6.5],
-      [11, 3.5],
-      [13, 7.5],
-      [19, 35.5],
-    ]);
-    const komi = komiOverrides.get(N) ?? 3.5;
-    white += komi;
-
-    return { black, white };
-  }
-
-  // Fast 1-step area estimate. Returns BLACK or WHITE.
-  estimateWinner() {
-    const score = this.estimateScore();
-    return score.black > score.white ? BLACK : WHITE;
-  }
-
-  // ── Eye Detection ─────────────────────────────────────────────────────────
+  // ── Eye Detection ─────────────────────────────────────────────────────
 
   // Check if position is a true eye (solid border, not multi-color)
   isTrueEye(idx) {
@@ -871,103 +768,7 @@ class Game3Precise {
   }
 }
 
-// Parse board string and create Game3Precise with given position
-function parseBoard(boardStr, toMove = BLACK) {
-  const valid = new Set(['●','○','·','X','O','.']);
-  const rows = boardStr.trim().split('\n')
-    .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
-    .filter(row => row.length > 0);
-  const size = rows.length;
-  const g = new Game3Precise(size);
-
-  // Clear the board completely for parsing
-  g.cells.fill(EMPTY);
-  g._gid.fill(-1);
-  g._nextGid = 0;
-  g.emptyCount = size * size;
-  g._opStack = [];
-  g.moveCount = 0;
-  g.lastMove = PASS;
-
-  // Parse and place stones directly on the board
-  const W = g._W;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const ch = rows[y][x];
-      const idx = (size - 1 - y) * size + x;
-      const color = (ch === '●' || ch === 'X') ? BLACK : (ch === '○' || ch === 'O') ? WHITE : EMPTY;
-
-      if (color !== EMPTY) {
-        g.cells[idx] = color;
-        const gid = g._nextGid++;
-        g._gid[idx] = gid;
-        g._gc[gid] = color;
-        g._addStone_raw(idx, gid);
-        g.emptyCount--;
-
-        // Add liberties
-        const nbr = g._nbr;
-        const base = idx * 4;
-        for (let i = 0; i < 4; i++) {
-          const ni = nbr[base + i];
-          if (g.cells[ni] === EMPTY) {
-            g._addLiberty_raw(gid, ni);
-          }
-        }
-      }
-    }
-  }
-
-  // Merge adjacent groups of same color
-  const nbr = g._nbr;
-  for (let idx = 0; idx < size * size; idx++) {
-    if (g.cells[idx] === EMPTY) continue;
-    const gid = g._gid[idx];
-    const color = g.cells[idx];
-    const base = idx * 4;
-
-    for (let i = 0; i < 4; i++) {
-      const ni = nbr[base + i];
-      if (g.cells[ni] === color) {
-        const neighborGid = g._gid[ni];
-        if (gid !== neighborGid) {
-          // Merge neighbor into current group
-          const W = g._W;
-          const gb = gid * W;
-          const nb = neighborGid * W;
-
-          // Merge stones
-          for (let wi = 0; wi < W; wi++) {
-            g._sw[gb + wi] |= g._sw[nb + wi];
-            g._sw[nb + wi] = 0;
-          }
-
-          // Merge liberties (and remove internal liberties)
-          for (let wi = 0; wi < W; wi++) {
-            g._lw[gb + wi] |= g._lw[nb + wi];
-            g._lw[nb + wi] = 0;
-          }
-
-          // Update group IDs
-          for (let j = 0; j < size * size; j++) {
-            if (g._gid[j] === neighborGid) {
-              g._gid[j] = gid;
-            }
-          }
-
-          // Recalculate counts
-          g._ss[gid] = g._pop32Count(gid, W);
-          g._ls[gid] = g._pop32Count(gid, W);
-        }
-      }
-    }
-  }
-
-  g.current = toMove;
-  return g;
-}
-
-const Game3 = { Game3Precise, parseBoard, PASS, BLACK, WHITE, EMPTY };
+const Game3 = { Game3Precise, PASS, BLACK, WHITE, EMPTY };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Game3;

@@ -356,44 +356,7 @@ function test_pass_moves() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Test 10: Scoring calculation
-// ────────────────────────────────────────────────────────────────────────────
-
-function test_scoring() {
-  console.log('\nTest: Scoring Calculation');
-
-  const game = new Game3Precise(9);
-  const score1 = game.estimateScore();
-
-  // Play some moves
-  game.play(0);
-  game.play(1);
-  game.play(9);
-
-  const score2 = game.estimateScore();
-
-  // Score should change after moves
-  assert(score1.black !== score2.black || score1.white !== score2.white,
-    'Score changes after moves');
-
-  // Both colors should have positive scores
-  assert(score2.black >= 0, 'Black score non-negative');
-  assert(score2.white >= 0, 'White score non-negative');
-
-  // Undo and verify score reverts
-  game.undo();
-  game.undo();
-  game.undo();
-
-  const score3 = game.estimateScore();
-  assertEqual(score3.black, score1.black, 'Black score reverted after undo');
-  assertEqual(score3.white, score1.white, 'White score reverted after undo');
-
-  console.log('  ✓ Scoring calculation passed');
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Test 11: Eye detection
+// Test 10: Eye detection
 // ────────────────────────────────────────────────────────────────────────────
 
 function test_eye_detection() {
@@ -559,7 +522,6 @@ function runTests() {
   test_ko_rule();
   test_board_sizes();
   test_pass_moves();
-  test_scoring();
   test_eye_detection();
   test_legality_edge_cases();
   test_string_rendering();
