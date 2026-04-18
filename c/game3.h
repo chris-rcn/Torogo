@@ -134,14 +134,6 @@ GroupLibs2 game3_group_libs2(Game3 *game, int idx);
 char* game3_to_string(Game3 *game, int markIdx);
 void game3_free_string(char *str);
 
-// Scoring
-typedef struct {
-  float black;
-  float white;
-} Score;
-Score game3_estimate_score(Game3 *game);
-int game3_estimate_winner(Game3 *game);
-
 // Eye detection
 bool game3_is_true_eye(Game3 *game, int idx);
 

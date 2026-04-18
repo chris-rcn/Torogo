@@ -151,22 +151,7 @@ void test_passes() {
   printf("  ✓ Pass moves passed\n");
 }
 
-// Test 7: Scoring
-void test_scoring() {
-  printf("\nTest: Scoring\n");
-  Game3 *game = game3_new(9);
-
-  Score initial_score = game3_estimate_score(game);
-  // Center black stone (1) + 4 adjacent empty cells = 5 black
-  assert_float_eq(initial_score.black, 5.0f, 0.1f, "Initial black score");
-  // White score is 0 stones + 6.5 komi (for 9x9)
-  assert_float_eq(initial_score.white, 6.5f, 0.1f, "Initial white score");
-
-  game3_free(game);
-  printf("  ✓ Scoring passed\n");
-}
-
-// Test 8: Eye detection
+// Test 7: Eye detection
 void test_eye_detection() {
   printf("\nTest: Eye detection\n");
   Game3 *game = game3_new(13);
@@ -383,7 +368,6 @@ int main() {
   test_undo();
   test_legality();
   test_passes();
-  test_scoring();
   test_eye_detection();
   test_undo_redo_cycles();
   test_group_queries();
