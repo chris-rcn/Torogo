@@ -32,8 +32,8 @@ const OP_PASS = 6;
 const _topologyCache = new Map();
 
 class Game3Precise {
-  // Initialize game with center black stone, ready for white's first move
-  constructor(size) {
+  // Initialize game with optional center black stone, ready for white's first move
+  constructor(size, placeCenterStone = true) {
     this.N = size;
     this.boardSize = size;
     const cap = size * size;
@@ -72,7 +72,19 @@ class Game3Precise {
     // Operation stack - stores reversible operations
     this._opStack = [];
 
-    // Initialize center stone
+    // Store settings for reset
+    this._placeCenterStone = placeCenterStone;
+
+    if (placeCenterStone) {
+      this._initializeCenterStone();
+    } else {
+      this.current = BLACK;
+    }
+  }
+
+  // Initialize center stone and set ready for white's first move
+  _initializeCenterStone() {
+    const size = this.N;
     const center = ((size >> 1) * size) + (size >> 1);
     const centerGid = this._nextGid++;
     this._gc[centerGid] = BLACK;
@@ -571,6 +583,39 @@ class Game3Precise {
 
       // Undo individual operation
       this._undoOperation(op);
+    }
+  }
+
+  // Reset game to initial state
+  reset() {
+    const cap = this.N * this.N;
+
+    // Clear board state
+    this.cells.fill(EMPTY);
+    this._gid.fill(-1);
+    this._nextGid = 0;
+    this.ko = PASS;
+    this.emptyCount = cap;
+    this.moveCount = 0;
+    this.lastMove = PASS;
+    this.gameOver = false;
+    this.consecutivePasses = 0;
+    this._opStack = [];
+
+    // Clear group data (reuse same arrays for efficiency)
+    const W = this._W;
+    const MAX_G = 4 * cap + 4;
+    this._gc.fill(0);
+    this._sw.fill(0);
+    this._ss.fill(0);
+    this._lw.fill(0);
+    this._ls.fill(0);
+
+    // Restore initial configuration
+    if (this._placeCenterStone) {
+      this._initializeCenterStone();
+    } else {
+      this.current = BLACK;
     }
   }
 
