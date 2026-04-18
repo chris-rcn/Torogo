@@ -768,7 +768,108 @@ class Game3 {
   }
 }
 
-const _exports = { Game3, PASS, BLACK, WHITE, EMPTY };
+// Convert a Game2 instance to a Game3 instance
+function game3FromGame2(game2) {
+  const N = game2.N;
+  const game3 = new Game3(N);
+  const cap = N * N;
+
+  // Clear the initial center stone
+  const center = ((N >> 1) * N) + (N >> 1);
+  game3.cells[center] = EMPTY;
+  game3._gid[center] = -1;
+  game3._gc[0] = EMPTY;
+  game3._ss[0] = 0;
+  game3._ls[0] = 0;
+  game3.emptyCount = cap;
+  game3._nextGid = 0;
+  game3.moveCount = 0;
+  game3.current = BLACK;
+  game3.ko = PASS;
+  game3.lastMove = PASS;
+  game3.consecutivePasses = 0;
+  game3.gameOver = false;
+
+  // Clear bitsets
+  for (let i = 0; i < game3._gc.length; i++) game3._gc[i] = EMPTY;
+  for (let i = 0; i < game3._ss.length; i++) game3._ss[i] = 0;
+  for (let i = 0; i < game3._ls.length; i++) game3._ls[i] = 0;
+  for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
+  for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
+
+  // Track which cells have been assigned to groups
+  const visited = new Uint8Array(cap);
+
+  // Helper: flood-fill to find connected component of same color
+  function floodFill(startIdx, color) {
+    const stack = [startIdx];
+    const component = [];
+    visited[startIdx] = 1;
+
+    while (stack.length > 0) {
+      const idx = stack.pop();
+      component.push(idx);
+      const base = idx * 4;
+      for (let i = 0; i < 4; i++) {
+        const ni = game3._nbr[base + i];
+        if (!visited[ni] && game2.cells[ni] === color) {
+          visited[ni] = 1;
+          stack.push(ni);
+        }
+      }
+    }
+    return component;
+  }
+
+  // Rebuild groups from Game2 board state
+  for (let i = 0; i < cap; i++) {
+    if (game2.cells[i] !== EMPTY && !visited[i]) {
+      const color = game2.cells[i];
+      const component = floodFill(i, color);
+
+      // Create a group for this component
+      const gid = game3._nextGid++;
+      game3._gc[gid] = color;
+
+      // Add stones to group
+      for (const idx of component) {
+        game3.cells[idx] = color;
+        game3._gid[idx] = gid;
+        game3._addStone_raw(idx, gid);
+        game3.emptyCount--;
+      }
+
+      // Calculate liberties for this group
+      const liberties = new Set();
+      for (const idx of component) {
+        const base = idx * 4;
+        for (let i = 0; i < 4; i++) {
+          const ni = game3._nbr[base + i];
+          if (game2.cells[ni] === EMPTY) {
+            liberties.add(ni);
+          }
+        }
+      }
+
+      // Add liberties to group
+      for (const libIdx of liberties) {
+        game3._addLiberty_raw(gid, libIdx);
+      }
+    }
+  }
+
+  // Copy game state from Game2
+  game3.current = game2.current;
+  game3.ko = game2.ko;
+  game3.consecutivePasses = game2.consecutivePasses;
+  game3.gameOver = game2.gameOver;
+  game3.moveCount = game2.moveCount;
+  game3.lastMove = game2.lastMove;
+
+  return game3;
+}
+
+const _exports = { Game3, game3FromGame2, PASS, BLACK, WHITE, EMPTY };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = _exports;
