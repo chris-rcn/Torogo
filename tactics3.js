@@ -33,8 +33,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 10) {
     for (let k = 0; k < lc; k++) {
       const libIdx = libs[k];
       if (!game.play(libIdx)) {
-        game.undo();
-        continue;      // suicide — skip
+        continue;      // suicide — skip, no undo needed (play failed)
       }
       if (game.cells[idx] === 0) {
         game.undo();
@@ -58,8 +57,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 10) {
   for (let k = 0; k < lc; k++) {
     const libIdx = libs[k];
     if (!game.play(libIdx)) {
-      game.undo();
-      continue;        // illegal for attacker — skip
+      continue;        // illegal for attacker — skip, no undo needed (play failed)
     }
     if (game.cells[idx] === 0) {
       game.undo();
