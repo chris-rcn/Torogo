@@ -4,7 +4,7 @@
 // Find a chain that requires depth 15 to solve
 // (inconclusive at depth 10, definitive at depth 15)
 
-const { Game2 } = require('./game2.js');
+const { Game2, coordStr } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const { searchChains } = require('./tactics3.js');
 
@@ -90,7 +90,7 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
             // Find a stone in the group for details
             for (let i = 0; i < 169; i++) {
               if (g3._gid[i] === gid) {
-                console.log(`\nChain position: ${i % 13},${Math.floor(i / 13)}`);
+                console.log(`\nChain position: ${coordStr(i, 13)}`);
                 break;
               }
             }

@@ -665,7 +665,7 @@ class Game3 {
 
       // Add row label if requested
       if (axisLabels) {
-        const rowNum = N - by;  // High numbers at top, low at bottom
+        const rowNum = by + 1;  // 1-based row numbers matching coordStr
         row = rowNum.toString().padStart(2) + '  ';
       }
 
