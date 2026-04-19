@@ -131,6 +131,32 @@ testPosition(
   ]
 );
 
+// Test 3: Position from find-depth-15-chain requiring depth 15
+// Game 1, Move 55: BLACK group at g9 with 3 liberties
+// Depth 10: inconclusive, Depth 15: wins
+// NOTE: parseBoard inverts rows, so first row in string becomes bottom row on board
+const problemBoard = `
+· · · · · · · · · · · · ·
+· · · · · · · · · · · · ·
+· · · · · · · · · · · · ·
+● · · ○ · · ● · · · · · ·
+· · · · · · ● ○ ○ · · · ·
+○ · · · · · ● · · ○ ○ · ·
+· ● · · · ● ● · · · · · ·
+● · · · · · · · · ○ ○ · ○
+○ · · · · · · ○ · ○ · · ·
+○ ● · · · · · ● ○ ○ · · ○
+· ● · ○ ○ ● · ● · · · ● ·
+○ ○ · ○ · ● · · · · ○ · ○
+· · ● ● · ● · · · · · · ●
+`;
+
+testPosition(
+  'Found problematic position: BLACK group at g9, depth 10 inconclusive, depth 15 wins',
+  problemBoard,
+  WHITE
+);
+
 console.log(`\n${'='.repeat(70)}`);
 console.log('Tests completed');
 console.log(`${'='.repeat(70)}\n`);
