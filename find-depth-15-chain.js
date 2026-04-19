@@ -88,19 +88,14 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
       }
     }
 
-    // Play a move
-    let moved = false;
-    for (let i = 0; i < 169; i++) {
-      if (g2.isLegal(i)) {
-        g2.play(i);
-        consecutivePasses = 0;
-        moved = true;
-        moveCount++;
-        break;
-      }
-    }
-
-    if (!moved) {
+    // Play a random move
+    const move = g2.randomLegalMove();
+    if (move !== -1) {
+      g2.play(move);
+      consecutivePasses = 0;
+      moveCount++;
+    } else {
+      // No legal moves, play pass
       g2.play(-1);
       consecutivePasses++;
       moveCount++;
