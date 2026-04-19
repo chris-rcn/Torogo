@@ -24,7 +24,7 @@ while (!foundOverflow && gameNum < 20) {
         try {
           const g3 = game3FromGame2(g2);
           const startTime = Date.now();
-          searchChains(g3, 10000);
+          searchChains(g3);  // NO nodeLimit - let it overflow if it will
           const elapsed = Date.now() - startTime;
 
           if (elapsed > 100) {
