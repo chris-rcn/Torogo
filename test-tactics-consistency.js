@@ -327,6 +327,56 @@ function testStatusTransitions() {
   console.log('  ✓ Status transitions test passed');
 }
 
+// Test: Performance benchmark for searchChains
+function testPerformanceBenchmark() {
+  console.log('\nTest: Performance Benchmark');
+
+  const benchmarks = [];
+
+  // Test on boards with varying complexity
+  const configurations = [
+    { size: 9, moves: 20, label: '9x9 early' },
+    { size: 9, moves: 40, label: '9x9 mid' },
+    { size: 13, moves: 30, label: '13x13 early' },
+    { size: 13, moves: 60, label: '13x13 mid' },
+  ];
+
+  for (const config of configurations) {
+    const g2 = new Game2(config.size);
+
+    // Play moves
+    let movesPlayed = 0;
+    for (let i = 0; i < config.size * config.size && movesPlayed < config.moves; i++) {
+      if (g2.isLegal(i)) {
+        g2.play(i);
+        movesPlayed++;
+      }
+    }
+
+    // Benchmark searchChains
+    const g3 = game3FromGame2(g2);
+    const startTime = Date.now();
+    const tactics = searchChains(g3, 10000);
+    const elapsed = Date.now() - startTime;
+
+    benchmarks.push({
+      config: config.label,
+      elapsed,
+      groupsFound: tactics.length,
+      movesPlayed,
+    });
+
+    console.log(`  ${config.label}: ${elapsed}ms, ${tactics.length} groups in ${movesPlayed} moves`);
+  }
+
+  // Verify no benchmark took excessively long
+  for (const bm of benchmarks) {
+    assert(bm.elapsed < 5000, `${bm.config} should complete in reasonable time (< 5000ms)`);
+  }
+
+  console.log('  ✓ Performance benchmark test passed');
+}
+
 // Test: Compare results with different node limits
 function testNodeLimitVariation() {
   console.log('\nTest: Node Limit Variation Impact');
@@ -396,6 +446,7 @@ function runTests() {
   testConversionAccuracy();
   testUrgentMoves();
   testStatusTransitions();
+  testPerformanceBenchmark();
   testNodeLimitVariation();
 
   console.log('\n' + '='.repeat(70));
