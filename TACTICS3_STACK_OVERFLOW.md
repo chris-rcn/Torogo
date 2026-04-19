@@ -1,55 +1,57 @@
 # Tactics3 Stack Overflow - Isolated Position
 
-## Position
-Playing the first 30 legal moves on a 13×13 board creates an alternating pattern in the top row:
+## Random Game Position
 
-```
-○●○●○●○●○●○●○
-●·●·●○●○●○●○●
-○●○●·········
-·············
-·············
-·············
-······●······
-·············
-·············
-·············
-·············
-·············
-·············
-```
+**Game 0, Move 11** - After random moves: 117, 23, 86, 12, 81, 40, 27, 112, 18, 8, 22
 
-Move sequence: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+Total moves played: 65 (moveCount shows board at position 65)
+Current player: BLACK
+
+Board state:
+```
+●·······●●●●●
+·····○·●○○●··
+·○·····●○○●··
+·●·····●○○●··
+·······●○○○●·
+········●○○●·
+···○··●·○●○●·
+·········●○○●
+········●●○○●
+○········●○○●
+·········●○○●
+●·······●○○·○
+○········●○○○
+```
 
 ## Problematic Chain
 
-**Position 2 (WHITE stone at coordinate 0,2)**
+**Position 22 (WHITE group at coordinate 9,1)**
 
-- Group ID: 2
+- Group ID: 3
 - Color: WHITE  
-- Liberty count: 1 (in ATARI)
-- Single liberty: index 158 (location not on visible board)
-- Current player: BLACK (attacker)
+- Liberty count: 3
+- Liberties: indices 9, 21, and one more
 
-Nearby board detail:
+Board detail around position 22:
 ```
-○●[○]
-●·●
-○●○
+   ●●●●
+   ●○[○]●·
+   ●○○●·
+   ●○○●·
 ```
+
+This chain has 3 liberties (not in atari), yet still causes stack overflow.
 
 ## Why Stack Overflow Occurs
 
-1. **searchChain()** is called on the WHITE stone at position 2
-2. Because current player (BLACK) ≠ defending color (WHITE) and atari is true:
-   - Evaluates if BLACK can force capture (moverSucceeds)
-3. **canReach4Libs()** recursively explores moves with unlimited depth:
-   - Each liberty creates branches in the search tree
-   - No budget limit means recursion continues until finding conclusion
-4. **The alternating row pattern** creates complex ladder-like positions where:
-   - Each move creates new groups with limited liberties
-   - Both capture and escape scenarios require deep exploration
-   - Recursion depth exceeds JavaScript call stack (~10,000 calls)
+1. **searchChain()** is called on position 22
+2. Current player is BLACK, defending color is WHITE (not defending)
+3. **canReach4Libs()** recursively explores both capture and escape scenarios
+4. **Key insight**: Even with 3 liberties (not atari), the complex board position 
+   with many Black and White groups creates a very deep decision tree
+5. The alternating pattern of stones forces the search to explore many branches
+6. Without nodeLimit, recursion depth exceeds JavaScript call stack
 
 ## Solution
 
@@ -58,4 +60,5 @@ Always use `nodeLimit` parameter in `searchChains()` calls:
 searchChains(game3, 10000);  // Instead of searchChains(game3)
 ```
 
-This limits recursion depth and prevents stack overflow on complex ladder positions while still providing useful tactical analysis for most practical board positions.
+This limits recursion depth and prevents stack overflow on complex positions while still providing useful tactical analysis.
+
