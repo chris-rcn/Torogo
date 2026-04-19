@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Compare solve ratio (definitive vs inconclusive) with different depth limits
+// Compare solve ratio and performance across depth limits 1-15
 
 const { Game2 } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
@@ -53,8 +53,6 @@ function runTestWithDepthLimit(depthLimit, numGames = 5) {
         totalMoves++;
       }
     }
-
-    console.log(`  Game ${gameNum}: ${movesThisGame} moves`);
   }
 
   return {
@@ -63,42 +61,44 @@ function runTestWithDepthLimit(depthLimit, numGames = 5) {
     definitive: definitiveCount,
     inconclusive: inconclusiveCount,
     totalMoves,
-    definitiveRate: totalGroups > 0 ? ((definitiveCount / totalGroups) * 100).toFixed(2) : 0,
-    inconclusiveRate: totalGroups > 0 ? ((inconclusiveCount / totalGroups) * 100).toFixed(2) : 0,
+    solveRatio: totalGroups > 0 ? (definitiveCount / totalGroups) : 0,
   };
 }
 
-console.log('Comparing solve ratio with different depth limits...\n');
+console.log('Comparing solve ratio and performance across depth limits 1-15...\n');
 console.log('Testing with 5 games, playing until first pass...\n');
 
-const results20 = runTestWithDepthLimit(20);
-const results15 = runTestWithDepthLimit(15);
-const results10 = runTestWithDepthLimit(10);
+const results = [];
+const startOverall = Date.now();
 
-console.log('\n====== DEPTH LIMIT 20 ======');
-console.log(`Total groups: ${results20.totalGroups}`);
-console.log(`Total moves: ${results20.totalMoves}`);
-console.log(`Definitive: ${results20.definitive} (${results20.definitiveRate}%)`);
-console.log(`Inconclusive: ${results20.inconclusive} (${results20.inconclusiveRate}%)`);
+console.log('Depth | Time (ms) | Solve Ratio | Total Groups | Definitive | Inconclusive');
+console.log('------|-----------|------------|--------------|------------|-------------');
 
-console.log('\n====== DEPTH LIMIT 15 ======');
-console.log(`Total groups: ${results15.totalGroups}`);
-console.log(`Total moves: ${results15.totalMoves}`);
-console.log(`Definitive: ${results15.definitive} (${results15.definitiveRate}%)`);
-console.log(`Inconclusive: ${results15.inconclusive} (${results15.inconclusiveRate}%)`);
+for (let depth = 1; depth <= 15; depth++) {
+  const startTime = Date.now();
+  const result = runTestWithDepthLimit(depth);
+  const elapsed = Date.now() - startTime;
 
-console.log('\n====== DEPTH LIMIT 10 ======');
-console.log(`Total groups: ${results10.totalGroups}`);
-console.log(`Total moves: ${results10.totalMoves}`);
-console.log(`Definitive: ${results10.definitive} (${results10.definitiveRate}%)`);
-console.log(`Inconclusive: ${results10.inconclusive} (${results10.inconclusiveRate}%)`);
+  result.elapsed = elapsed;
+  results.push(result);
 
-console.log('\n====== COMPARISON (15 vs 20) ======');
-const defDiff15 = results15.definitive - results20.definitive;
-const rateDiff15 = parseFloat(results15.definitiveRate) - parseFloat(results20.definitiveRate);
-console.log(`Definitive change: ${defDiff15 > 0 ? '+' : ''}${defDiff15} (${rateDiff15 > 0 ? '+' : ''}${rateDiff15.toFixed(2)}%)`);
+  const solveRatioPercent = (result.solveRatio * 100).toFixed(2);
+  console.log(
+    `${String(depth).padStart(5)} | ${String(elapsed).padStart(9)} | ${solveRatioPercent.padStart(10)}% | ${String(result.totalGroups).padStart(12)} | ${String(result.definitive).padStart(10)} | ${String(result.inconclusive).padStart(12)}`
+  );
+}
 
-console.log('\n====== COMPARISON (10 vs 20) ======');
-const defDiff10 = results10.definitive - results20.definitive;
-const rateDiff10 = parseFloat(results10.definitiveRate) - parseFloat(results20.definitiveRate);
-console.log(`Definitive change: ${defDiff10 > 0 ? '+' : ''}${defDiff10} (${rateDiff10 > 0 ? '+' : ''}${rateDiff10.toFixed(2)}%)`);
+const elapsedOverall = Date.now() - startOverall;
+console.log(`\nTotal elapsed time: ${elapsedOverall}ms\n`);
+
+// Analysis
+console.log('====== ANALYSIS ======');
+const fastest = results.reduce((a, b) => a.elapsed < b.elapsed ? a : b);
+const slowest = results.reduce((a, b) => a.elapsed > b.elapsed ? a : b);
+const bestSolve = results.reduce((a, b) => a.solveRatio > b.solveRatio ? a : b);
+const worstSolve = results.reduce((a, b) => a.solveRatio < b.solveRatio ? a : b);
+
+console.log(`Fastest: Depth ${fastest.depthLimit} (${fastest.elapsed}ms)`);
+console.log(`Slowest: Depth ${slowest.depthLimit} (${slowest.elapsed}ms)`);
+console.log(`Best solve: Depth ${bestSolve.depthLimit} (${(bestSolve.solveRatio * 100).toFixed(2)}%)`);
+console.log(`Worst solve: Depth ${worstSolve.depthLimit} (${(worstSolve.solveRatio * 100).toFixed(2)}%)`);
