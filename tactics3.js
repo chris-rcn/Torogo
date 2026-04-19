@@ -10,11 +10,12 @@ const { PASS } = typeof require === 'function' ? require('./game3.js') : window.
 // Returns [result, remainingCredits] where result is:
 //   true  — defender can reach 4+ liberties despite best attacker play
 //   false — attacker can capture the chain
-//   null  — budget exhausted before a conclusion
+//   null  — budget exhausted before a conclusion, or depth limit reached
 //
-// Sibling branches share credits: each call returns what's left so the next
-// sibling can use it.
-function canReach4Libs(game, idx, credits) {
+// Enforces both nodeLimit (via credits) and depth limit (max 20) to prevent
+// excessive recursion.
+function canReach4Libs(game, idx, credits, depth = 0) {
+  if (depth > 20) return [null, credits];  // Depth limit
   if (credits <= 0) return [null, 0];
   credits--;
 
@@ -42,7 +43,7 @@ function canReach4Libs(game, idx, credits) {
       const budget = Math.floor(credits / (lc - k));
       credits -= budget;
       let result, unused;
-      [result, unused] = canReach4Libs(game, idx, budget);
+      [result, unused] = canReach4Libs(game, idx, budget, depth + 1);
       credits += unused;
       game.undo();
       if (result === true)  return [true,    credits];
@@ -73,7 +74,7 @@ function canReach4Libs(game, idx, credits) {
       const budget = Math.floor(credits / (lc - k));
       credits -= budget;
       let result, unused;
-      [result, unused] = canReach4Libs(game, idx, budget);
+      [result, unused] = canReach4Libs(game, idx, budget, depth + 1);
       credits += unused;
       game.undo();
       if (result === false) return [false, credits];
