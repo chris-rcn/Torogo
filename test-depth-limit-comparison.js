@@ -32,20 +32,14 @@ function runTestWithDepthLimit(depthLimit, numGames = 5) {
         }
       }
 
-      // Play a move (prefer legal moves, otherwise pass)
-      let moved = false;
-      for (let i = 0; i < 169; i++) {
-        if (g2.isLegal(i)) {
-          g2.play(i);
-          consecutivePasses = 0;
-          moved = true;
-          movesThisGame++;
-          totalMoves++;
-          break;
-        }
-      }
-
-      if (!moved) {
+      // Play a random move
+      const move = g2.randomLegalMove();
+      if (move !== -1) {
+        g2.play(move);
+        consecutivePasses = 0;
+        movesThisGame++;
+        totalMoves++;
+      } else {
         // No legal moves, play pass
         g2.play(-1);
         consecutivePasses++;
