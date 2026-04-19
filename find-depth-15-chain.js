@@ -64,8 +64,8 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
             found = true;
 
             // Display the board
-            console.log('Board (13x13):');
-            displayBoard(g3, gid);
+            console.log('Board:');
+            console.log(g3.toString());
 
             // Show the status
             console.log(`\nChain Analysis:`);
@@ -110,79 +110,6 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
   }
 }
 
-function displayBoard(game, highlightGid) {
-  const N = game.N;
-  const size = N;
-
-  // First, find all liberties of the highlighted group
-  const groupStones = new Set();
-  const libertySet = new Set();
-
-  for (let i = 0; i < size * size; i++) {
-    if (game._gid[i] === highlightGid) {
-      groupStones.add(i);
-      // Check adjacent cells for liberties
-      const x = i % size;
-      const y = Math.floor(i / size);
-      const adjacent = [
-        (y - 1) * size + x,      // up
-        (y + 1) * size + x,      // down
-        y * size + (x - 1),      // left
-        y * size + (x + 1),      // right
-      ];
-      for (const adj of adjacent) {
-        if (adj >= 0 && adj < size * size && game.cells[adj] === 0) {
-          libertySet.add(adj);
-        }
-      }
-    }
-  }
-
-  // Top axis
-  process.stdout.write('    ');
-  for (let x = 0; x < size; x++) {
-    process.stdout.write(x.toString().padStart(2));
-  }
-  console.log();
-
-  // Rows
-  for (let y = 0; y < size; y++) {
-    process.stdout.write(`${y.toString().padStart(2)}  `);
-
-    for (let x = 0; x < size; x++) {
-      const idx = y * size + x;
-      const cell = game.cells[idx];
-      const gid = game._gid[idx];
-      let char = '·';
-      let prefix = ' ';
-      let suffix = ' ';
-
-      if (cell === 1) {
-        char = '●';
-      } else if (cell === -1) {
-        char = '○';
-      }
-
-      // Highlight if this is part of the target group
-      if (groupStones.has(idx)) {
-        prefix = '[';
-        suffix = ']';
-      } else if (libertySet.has(idx)) {
-        // Mark liberties with *
-        char = '*';
-        prefix = '(';
-        suffix = ')';
-      }
-
-      process.stdout.write(`${prefix}${char}${suffix}`);
-    }
-    console.log();
-  }
-
-  console.log('\nLegend:');
-  console.log('[●] or [○] = stones in the highlighted group');
-  console.log('(*) = liberty of the group');
-}
 
 if (!found) {
   console.log(`\nNo chains found requiring depth 15 after checking ${gamesChecked} games`);
