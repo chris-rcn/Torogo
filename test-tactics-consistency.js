@@ -377,6 +377,48 @@ function testPerformanceBenchmark() {
   console.log('  ✓ Performance benchmark test passed');
 }
 
+// Test: Verify depth limit protects against stack overflow with extreme constraints
+function testDepthLimitProtection() {
+  console.log('\nTest: Depth Limit Protection');
+
+  const g2 = new Game2(13);
+
+  // Play enough moves to create complex position
+  let movesPlayed = 0;
+  for (let i = 0; i < 169 && movesPlayed < 40; i++) {
+    if (g2.isLegal(i)) {
+      g2.play(i);
+      movesPlayed++;
+    }
+  }
+
+  // Test with extreme node limits to verify depth limit prevents stack overflow
+  const extremeLimits = [1, 10, 50, 100];
+  let allCompleted = true;
+
+  for (const limit of extremeLimits) {
+    try {
+      const g3 = game3FromGame2(g2);
+      const tactics = searchChains(g3, limit);
+
+      assert(Array.isArray(tactics), `With limit ${limit}, should still return array`);
+      assert(tactics.length >= 0, `With limit ${limit}, should have valid group count`);
+
+      console.log(`  Limit ${limit}: ${tactics.length} groups analyzed without stack overflow`);
+    } catch (e) {
+      if (e instanceof RangeError && e.message.includes('stack')) {
+        console.log(`  ✗ Limit ${limit}: Stack overflow occurred!`);
+        allCompleted = false;
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  assert(allCompleted, 'All extreme limits should complete without stack overflow');
+  console.log('  ✓ Depth limit protection test passed');
+}
+
 // Test: Compare results with different node limits
 function testNodeLimitVariation() {
   console.log('\nTest: Node Limit Variation Impact');
@@ -447,6 +489,7 @@ function runTests() {
   testUrgentMoves();
   testStatusTransitions();
   testPerformanceBenchmark();
+  testDepthLimitProtection();
   testNodeLimitVariation();
 
   console.log('\n' + '='.repeat(70));
