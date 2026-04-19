@@ -5,184 +5,23 @@
 
 const { Game2 } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
+const { searchChains } = require('./tactics3.js');
 
-// Test with current depth limit (20) vs reduced limit (15)
-// We'll monkey-patch tactics3 to test different limits
-
-function runTestWithDepthLimit(depthLimit, numGames = 10, movesPerGame = 50) {
-  // Dynamically create canReach4Libs with specified depth limit
-  function createCanReach4Libs(limit) {
-    return function canReach4Libs(game, idx, credits, depth = 0) {
-      if (depth > limit) return [null, credits];
-      if (credits <= 0) return [null, 0];
-      credits--;
-
-      const libs = game.groupLibs(idx);
-      const lc = libs.length;
-      if (lc >= 4) return [true, credits];
-      if (lc === 0) return [false, credits];
-
-      const defColor = game.cells[idx];
-
-      if (game.current === defColor) {
-        let hasUnknown = false;
-        for (let k = 0; k < lc; k++) {
-          const libIdx = libs[k];
-          if (!game.play(libIdx)) {
-            game.undo();
-            continue;
-          }
-          if (game.cells[idx] === 0) {
-            game.undo();
-            continue;
-          }
-          const budget = Math.floor(credits / (lc - k));
-          credits -= budget;
-          let result, unused;
-          [result, unused] = canReach4Libs(game, idx, budget, depth + 1);
-          credits += unused;
-          game.undo();
-          if (result === true) return [true, credits];
-          if (result === null) hasUnknown = true;
-        }
-        return [hasUnknown ? null : false, credits];
-      }
-
-      let hasUnknown = false;
-      for (let k = 0; k < lc; k++) {
-        const libIdx = libs[k];
-        if (!game.play(libIdx)) {
-          game.undo();
-          continue;
-        }
-        if (game.cells[idx] === 0) {
-          game.undo();
-          return [false, credits];
-        }
-        const afterLc = game.groupLibs(idx).length;
-        if (afterLc === 0) {
-          game.undo();
-          return [false, credits];
-        }
-        if (afterLc < 4) {
-          const budget = Math.floor(credits / (lc - k));
-          credits -= budget;
-          let result, unused;
-          [result, unused] = canReach4Libs(game, idx, budget, depth + 1);
-          credits += unused;
-          game.undo();
-          if (result === false) return [false, credits];
-          if (result === null) hasUnknown = true;
-        } else {
-          game.undo();
-        }
-      }
-
-      return [hasUnknown ? null : true, credits];
-    };
-  }
-
-  function searchChain(game, stoneIdx, canReach4LibsFunc, nodeLimit = Infinity) {
-    const libs = game.groupLibs(stoneIdx);
-    const lc = libs.length;
-    if (lc < 1 || lc > 3) return null;
-
-    const gColor = game.cells[stoneIdx];
-    const mover = game.current;
-    const defending = gColor === mover;
-    const atari = lc === 1;
-
-    const opponentCalls = (defending && atari) ? 0 : 1;
-    const moverCalls = (!defending && atari) ? 0 : lc;
-    let callsLeft = opponentCalls + moverCalls;
-    let credits = nodeLimit;
-
-    let escape;
-    if (defending && atari) {
-      escape = false;
-    } else {
-      const budget = Math.floor(credits / callsLeft);
-      credits -= budget;
-      callsLeft--;
-      game.play(-1); // PASS
-      let unused;
-      [escape, unused] = canReach4LibsFunc(game, stoneIdx, budget);
-      credits += unused;
-      game.undo();
-    }
-
-    if (escape !== null && defending === escape) {
-      return { libs, moverSucceeds: true, urgentLibs: [] };
-    }
-
-    let moverSucceeds = false;
-    let hasUnknown = escape === null;
-    let urgentLibs = [];
-
-    for (let k = 0; k < lc; k++) {
-      const libIdx = libs[k];
-      if (!defending && atari) {
-        escape = false;
-      } else {
-        const budget = Math.floor(credits / callsLeft);
-        credits -= budget;
-        callsLeft--;
-        const played = game.play(libIdx);
-        if (played) {
-          let unused;
-          [escape, unused] = canReach4LibsFunc(game, stoneIdx, budget);
-          credits += unused;
-        } else {
-          escape = false;
-          credits += budget;
-        }
-        game.undo();
-      }
-      if (escape !== null && defending === escape) {
-        moverSucceeds = true;
-        urgentLibs.push(libIdx);
-      } else if (escape === null) {
-        hasUnknown = true;
-      }
-    }
-
-    return {
-      libs,
-      moverSucceeds: moverSucceeds ? true : (hasUnknown ? null : false),
-      urgentLibs,
-    };
-  }
-
-  function searchChains(game, canReach4LibsFunc, nodeLimit = Infinity) {
-    const cap = game.N * game.N;
-    const results = [];
-    const visited = new Set();
-    for (let i = 0; i < cap; i++) {
-      if (game.cells[i] === 0) continue;
-      const gid = game._gid[i];
-      if (visited.has(gid)) continue;
-      visited.add(gid);
-      const lc = game.groupLibs(i).length;
-      if (lc === 0 || lc > 3) continue;
-      const status = searchChain(game, i, canReach4LibsFunc, nodeLimit);
-      results.push({ gid, color: game.cells[i], status });
-    }
-    return results;
-  }
-
-  // Run tests
-  const canReach4LibsFunc = createCanReach4Libs(depthLimit);
+function runTestWithDepthLimit(depthLimit, numGames = 5) {
+  let totalGroups = 0;
   let definitiveCount = 0;
   let inconclusiveCount = 0;
-  let totalGroups = 0;
+  let totalMoves = 0;
 
   for (let gameNum = 0; gameNum < numGames; gameNum++) {
     const g2 = new Game2(13);
-    let movesPlayed = 0;
+    let consecutivePasses = 0;
+    let movesThisGame = 0;
 
-    while (movesPlayed < movesPerGame && !g2.gameOver) {
+    // Play until first pass (game end)
+    while (consecutivePasses < 1 && !g2.gameOver) {
       const g3 = game3FromGame2(g2);
-      const tactics = searchChains(g3, canReach4LibsFunc, 10000);
+      const tactics = searchChains(g3, 10000, depthLimit);
 
       for (const tactic of tactics) {
         totalGroups++;
@@ -193,15 +32,29 @@ function runTestWithDepthLimit(depthLimit, numGames = 10, movesPerGame = 50) {
         }
       }
 
-      // Play random move
+      // Play a move (prefer legal moves, otherwise pass)
+      let moved = false;
       for (let i = 0; i < 169; i++) {
         if (g2.isLegal(i)) {
           g2.play(i);
-          movesPlayed++;
+          consecutivePasses = 0;
+          moved = true;
+          movesThisGame++;
+          totalMoves++;
           break;
         }
       }
+
+      if (!moved) {
+        // No legal moves, play pass
+        g2.play(-1);
+        consecutivePasses++;
+        movesThisGame++;
+        totalMoves++;
+      }
     }
+
+    console.log(`  Game ${gameNum}: ${movesThisGame} moves`);
   }
 
   return {
@@ -209,39 +62,43 @@ function runTestWithDepthLimit(depthLimit, numGames = 10, movesPerGame = 50) {
     totalGroups,
     definitive: definitiveCount,
     inconclusive: inconclusiveCount,
+    totalMoves,
     definitiveRate: totalGroups > 0 ? ((definitiveCount / totalGroups) * 100).toFixed(2) : 0,
     inconclusiveRate: totalGroups > 0 ? ((inconclusiveCount / totalGroups) * 100).toFixed(2) : 0,
   };
 }
 
 console.log('Comparing solve ratio with different depth limits...\n');
-console.log('Testing with 10 games, 50 moves per game...\n');
+console.log('Testing with 5 games, playing until first pass...\n');
 
 const results20 = runTestWithDepthLimit(20);
 const results15 = runTestWithDepthLimit(15);
+const results10 = runTestWithDepthLimit(10);
 
-console.log('====== DEPTH LIMIT 20 ======');
+console.log('\n====== DEPTH LIMIT 20 ======');
 console.log(`Total groups: ${results20.totalGroups}`);
+console.log(`Total moves: ${results20.totalMoves}`);
 console.log(`Definitive: ${results20.definitive} (${results20.definitiveRate}%)`);
 console.log(`Inconclusive: ${results20.inconclusive} (${results20.inconclusiveRate}%)`);
 
 console.log('\n====== DEPTH LIMIT 15 ======');
 console.log(`Total groups: ${results15.totalGroups}`);
+console.log(`Total moves: ${results15.totalMoves}`);
 console.log(`Definitive: ${results15.definitive} (${results15.definitiveRate}%)`);
 console.log(`Inconclusive: ${results15.inconclusive} (${results15.inconclusiveRate}%)`);
 
-console.log('\n====== COMPARISON ======');
-const defDiff = results15.definitive - results20.definitive;
-const incDiff = results15.inconclusive - results20.inconclusive;
-const rateDiff = parseFloat(results15.definitiveRate) - parseFloat(results20.definitiveRate);
+console.log('\n====== DEPTH LIMIT 10 ======');
+console.log(`Total groups: ${results10.totalGroups}`);
+console.log(`Total moves: ${results10.totalMoves}`);
+console.log(`Definitive: ${results10.definitive} (${results10.definitiveRate}%)`);
+console.log(`Inconclusive: ${results10.inconclusive} (${results10.inconclusiveRate}%)`);
 
-console.log(`Definitive change: ${defDiff > 0 ? '+' : ''}${defDiff} (${rateDiff > 0 ? '+' : ''}${rateDiff}%)`);
-console.log(`Inconclusive change: ${incDiff > 0 ? '+' : ''}${incDiff} (${rateDiff < 0 ? '+' : ''}${-rateDiff}%)`);
+console.log('\n====== COMPARISON (15 vs 20) ======');
+const defDiff15 = results15.definitive - results20.definitive;
+const rateDiff15 = parseFloat(results15.definitiveRate) - parseFloat(results20.definitiveRate);
+console.log(`Definitive change: ${defDiff15 > 0 ? '+' : ''}${defDiff15} (${rateDiff15 > 0 ? '+' : ''}${rateDiff15.toFixed(2)}%)`);
 
-if (Math.abs(rateDiff) < 0.5) {
-  console.log('\n✓ Minimal difference - depth limit 15 is viable');
-} else if (rateDiff < -1.0) {
-  console.log('\n✗ Significant reduction in solve rate - depth limit 15 not recommended');
-} else {
-  console.log('\n⚠ Moderate change - depth limit 15 may be acceptable with trade-offs');
-}
+console.log('\n====== COMPARISON (10 vs 20) ======');
+const defDiff10 = results10.definitive - results20.definitive;
+const rateDiff10 = parseFloat(results10.definitiveRate) - parseFloat(results20.definitiveRate);
+console.log(`Definitive change: ${defDiff10 > 0 ? '+' : ''}${defDiff10} (${rateDiff10 > 0 ? '+' : ''}${rateDiff10.toFixed(2)}%)`);
