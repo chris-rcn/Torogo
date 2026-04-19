@@ -63,9 +63,22 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
             // Save this position
             found = true;
 
-            // Display the board
-            console.log('Board:');
-            console.log(g3.toString());
+            // Find a stone in the chain to mark
+            let chainStoneIdx = null;
+            for (let i = 0; i < 169; i++) {
+              if (g3._gid[i] === gid) {
+                chainStoneIdx = i;
+                break;
+              }
+            }
+
+            // Display the board with axis labels
+            console.log('\nBoard (13x13):');
+            displayBoardWithAxes(g3, chainStoneIdx);
+
+            // Show whose turn it is
+            console.log(`\nCurrent player: ${g3.current === 1 ? 'BLACK' : 'WHITE'}`);
+            console.log(`Defending color: ${tactic15.color === 1 ? 'BLACK' : 'WHITE'}`);
 
             // Show the status
             console.log(`\nChain Analysis:`);
@@ -110,6 +123,42 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
   }
 }
 
+
+function displayBoardWithAxes(game, markIdx) {
+  const N = game.N;
+
+  // Top axis
+  process.stdout.write('    ');
+  for (let x = 0; x < N; x++) {
+    process.stdout.write(x.toString().padStart(2));
+  }
+  console.log();
+
+  // Rows
+  for (let y = 0; y < N; y++) {
+    process.stdout.write(`${y.toString().padStart(2)}  `);
+
+    for (let x = 0; x < N; x++) {
+      const idx = y * N + x;
+      const cell = game.cells[idx];
+      let char = '·';
+
+      if (cell === 1) {
+        char = '●';
+      } else if (cell === -1) {
+        char = '○';
+      }
+
+      // Mark the chain stone of interest
+      if (idx === markIdx) {
+        process.stdout.write(`[${char}]`);
+      } else {
+        process.stdout.write(` ${char} `);
+      }
+    }
+    console.log();
+  }
+}
 
 if (!found) {
   console.log(`\nNo chains found requiring depth 15 after checking ${gamesChecked} games`);
