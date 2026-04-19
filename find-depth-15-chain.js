@@ -73,24 +73,8 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
             }
 
             // Display the board with axis labels, marking the chain stone
-            console.log('\nBoard (13x13):');
-            const boardStr = g3.toString(chainStoneIdx);
-            const lines = boardStr.split('\n');
-
-            // Add column labels at top
-            process.stdout.write('    ');
-            for (let x = 0; x < 13; x++) {
-              process.stdout.write(x.toString().padStart(2));
-            }
-            console.log();
-
-            // Add row labels to each line
-            lines.forEach((line, idx) => {
-              if (line.trim()) {
-                process.stdout.write(idx.toString().padStart(2) + '  ');
-                console.log(line);
-              }
-            });
+            console.log('\nBoard:');
+            console.log(g3.toString(chainStoneIdx, { axisLabels: true }));
 
             // Show whose turn it is
             console.log(`\nCurrent player: ${g3.current === 1 ? 'BLACK' : 'WHITE'}`);

@@ -630,7 +630,7 @@ class Game3 {
   // Render the board as a ● ○ · string. Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
   // Render board as ASCII string with optional marked position
-  toString(markIdx = this.lastMove, { centerAt = null } = {}) {
+  toString(markIdx = this.lastMove, { centerAt = null, axisLabels = false } = {}) {
     const N = this.N;
     const cells = this.cells;
     const markX = (markIdx !== PASS) ? markIdx % N : -1;
@@ -647,10 +647,29 @@ class Game3 {
     const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
 
     const rows = [];
+
+    // Add column labels if requested
+    if (axisLabels) {
+      let header = '    ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        header += String.fromCharCode(97 + bx) + ' ';
+      }
+      rows.push(header);
+    }
+
     for (let dy = 0; dy < N; dy++) {
       const by = (y0 + dy) % N;
       const mx = (dy === dmy) ? dmx : -1;
-      let row = (mx === 0) ? '(' : ' ';
+      let row = '';
+
+      // Add row label if requested
+      if (axisLabels) {
+        const rowNum = N - by;  // High numbers at top, low at bottom
+        row = rowNum.toString().padStart(2) + '  ';
+      }
+
+      row += (mx === 0) ? '(' : ' ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         const c = cells[by * N + bx];
