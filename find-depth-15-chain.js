@@ -87,6 +87,16 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
             console.log(`- Urgent liberties: ${tactic15.status.urgentLibs.join(', ') || 'none'}`);
             console.log(`- Color: ${tactic15.color === 1 ? 'BLACK' : 'WHITE'}`);
 
+            // Save position for debugging
+            const fs = require('fs');
+            const cells = Array.from(g3.cells);
+            const gids = Array.from(g3._gid);
+            fs.writeFileSync('debug-position.json', JSON.stringify({
+              gameNum, moveCount, gid, groupColor: tactic15.color,
+              groupSize: Array.from(gids).filter(g => g === gid).length,
+              cells, gids, board: g3.toString(undefined, { axisLabels: true })
+            }, null, 2));
+
             // Find a stone in the group for details
             for (let i = 0; i < 169; i++) {
               if (g3._gid[i] === gid) {
@@ -95,6 +105,7 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
               }
             }
 
+            console.log(`\nPosition saved to debug-position.json for verification`);
             break;
           }
         }
