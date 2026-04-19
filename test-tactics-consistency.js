@@ -272,6 +272,61 @@ function testUrgentMoves() {
   console.log('  ✓ Urgent moves test passed');
 }
 
+// Test: Verify logical transitions of tactical status as board changes
+function testStatusTransitions() {
+  console.log('\nTest: Tactical Status Transitions');
+
+  const g2 = new Game2(9);
+
+  // Create a specific scenario: build a chain gradually
+  const moves = [0, 1, 9, 10, 18, 19, 2, 3, 11];
+  for (const move of moves) {
+    if (g2.isLegal(move)) {
+      g2.play(move);
+    }
+  }
+
+  // Now play moves and track how tactical status changes
+  let previousLibCount = new Map();  // gid -> liberty count
+  let transitionCount = 0;
+
+  for (let moveIdx = 0; moveIdx < 15; moveIdx++) {
+    // Find legal moves
+    let played = false;
+    for (let i = 0; i < 81; i++) {
+      if (g2.isLegal(i)) {
+        const g3 = game3FromGame2(g2);
+        const currentTactics = searchChains(g3, 5000);
+
+        // Record liberty counts for each group
+        for (const tactic of currentTactics) {
+          const libertyCount = tactic.status && tactic.status.libs ? tactic.status.libs.length : 0;
+          const prevLibCount = previousLibCount.get(tactic.gid);
+
+          if (prevLibCount !== undefined && prevLibCount !== libertyCount) {
+            transitionCount++;
+            // If liberty count decreased from 3 to 2 or 1, group is getting more desperate
+            // If liberty count increased from 1 or 2 to 3, group is getting safer
+            assert(tactic.status && tactic.status.libs,
+              `Group ${tactic.gid}: Status should be defined when liberties change`);
+          }
+
+          previousLibCount.set(tactic.gid, libertyCount);
+        }
+
+        g2.play(i);
+        played = true;
+        break;
+      }
+    }
+
+    if (!played) break;
+  }
+
+  console.log(`  Observed ${transitionCount} liberty transitions`);
+  console.log('  ✓ Status transitions test passed');
+}
+
 // Test: Compare results with different node limits
 function testNodeLimitVariation() {
   console.log('\nTest: Node Limit Variation Impact');
@@ -340,6 +395,7 @@ function runTests() {
   testSpecificTactics();
   testConversionAccuracy();
   testUrgentMoves();
+  testStatusTransitions();
   testNodeLimitVariation();
 
   console.log('\n' + '='.repeat(70));
