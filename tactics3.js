@@ -14,7 +14,7 @@ const { PASS } = typeof require === 'function' ? require('./game3.js') : window.
 //
 // Enforces both nodeLimit (via credits) and depth limit to prevent
 // excessive recursion.
-function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 20) {
+function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 10) {
   if (depth > depthLimit) return [null, credits];  // Depth limit
   if (credits <= 0) return [null, 0];
   credits--;
@@ -92,7 +92,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 20) {
 // group (groups with 0 or 4+ liberties are skipped).
 // nodeLimit: max nodes per sub-search per liberty in searchChain (default Infinity).
 // depthLimit: maximum recursion depth for canReach4Libs (default 20).
-function searchChains(game, nodeLimit = Infinity, depthLimit = 20) {
+function searchChains(game, nodeLimit = Infinity, depthLimit = 10) {
   const cap  = game.N * game.N;
   const results = [];
   const visited = new Set();
@@ -118,9 +118,9 @@ function searchChains(game, nodeLimit = Infinity, depthLimit = 20) {
 //
 // nodeLimit: fresh credit budget given to each canReach4Libs sub-search
 // (one per liberty). Default Infinity (unbounded).
-// depthLimit: maximum recursion depth for canReach4Libs. Default 20.
+// depthLimit: maximum recursion depth for canReach4Libs. Default 10.
 // Logs a warning and returns null when the group has more than 3 liberties.
-function searchChain(game, stoneIdx, nodeLimit = Infinity, depthLimit = 20) {
+function searchChain(game, stoneIdx, nodeLimit = Infinity, depthLimit = 10) {
   const libs = game.groupLibs(stoneIdx);
   const lc = libs.length;
   if (lc < 1 || lc > 3) {
