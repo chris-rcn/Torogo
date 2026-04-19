@@ -36,16 +36,23 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
       map15.set(t.gid, t);
     }
 
-    // Find chains that differ between depth 10 and 15
-    for (const [gid, tactic15] of map15) {
-      const tactic10 = map10.get(gid);
+    // Search with depth 14 as well
+    const tactics14 = searchChains(g3, 10000, 14);
+    const map14 = new Map();
+    for (const t of tactics14) {
+      map14.set(t.gid, t);
+    }
 
-      if (tactic10 && tactic15.status && tactic10.status) {
-        const result10 = tactic10.status.moverSucceeds;
+    // Find chains that are inconclusive at depth 14 but definitive at depth 15
+    for (const [gid, tactic15] of map15) {
+      const tactic14 = map14.get(gid);
+
+      if (tactic14 && tactic15.status && tactic14.status) {
+        const result14 = tactic14.status.moverSucceeds;
         const result15 = tactic15.status.moverSucceeds;
 
-        // Check if depth 10 was inconclusive but depth 15 is definitive
-        if (result10 === null && result15 !== null) {
+        // Check if depth 14 was inconclusive but depth 15 is definitive
+        if (result14 === null && result15 !== null) {
           // Count stones in the group
           let groupSize = 0;
           for (let i = 0; i < 169; i++) {
@@ -54,10 +61,10 @@ for (let gameNum = 0; gameNum < 200 && !found; gameNum++) {
 
           // Prefer larger groups (size > 1)
           if (groupSize > 1 || gameNum > 150) {
-            console.log(`✓ Found chain requiring depth 15!`);
+            console.log(`✓ Found chain requiring depth 15 (unsolvable at depth 14)!`);
             console.log(`Game ${gameNum}, Move ${moveCount}`);
             console.log(`Group ID: ${gid}, Color: ${tactic15.color === 1 ? 'BLACK' : 'WHITE'}, Size: ${groupSize} stones`);
-            console.log(`Depth 10 result: inconclusive (null)`);
+            console.log(`Depth 14 result: inconclusive (null)`);
             console.log(`Depth 15 result: ${result15 ? 'wins' : 'loses'}\n`);
 
             // Save this position

@@ -157,6 +157,32 @@ testPosition(
   WHITE
 );
 
+// Test 4: Position requiring EXACTLY depth 15
+// Game 0, Move 62: WHITE group at b3 with 3 liberties
+// Depth 14: inconclusive, Depth 15: wins
+const depth15RequiredBoard = `
+· · · · · · · · · · · · ·
+· · · · · · · · · · · · ·
+· · · · · · · · · · · · ·
+· ● · · · · · · · · · · ·
+· · ● ● · · · · · · ● ○ ·
+○ · ● ○ ● ○ · · · · ○ · ·
+○ · · ○ · ○ ○ · ○ · · · ○
+· · ● ● · · · · · · ● ○ ·
+· · ● · · ○ · ● ● · · · ○
+· ● · · · · · · · · · · ·
+· ● ● · · · · · · · · · ·
+· (○) ○ · ○ ○ · · ○ · · ● ●
+· · ● · · · ● ● ○ · · · ·
+`;
+
+console.log('\n--- Testing depth 14 vs 15 specific positions ---');
+testPosition(
+  'DEPTH 15 REQUIRED: WHITE group at b3, inconclusive at 14, wins at 15',
+  depth15RequiredBoard,
+  BLACK
+);
+
 console.log(`\n${'='.repeat(70)}`);
 console.log('Tests completed');
 console.log(`${'='.repeat(70)}\n`);
