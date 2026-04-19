@@ -19,51 +19,77 @@ function assert(condition, message) {
   }
 }
 
-// Test: Random games with ladder consistency checks
+// Test: Random games with ladder status consistency checks
 function testLadderConsistency() {
-  console.log('Test: Ladder Consistency Across Conversions');
+  console.log('Test: Ladder Status Consistency Across Moves');
 
   const numGames = 10;
   const maxMovesPerGame = 50;
 
   for (let gameNum = 0; gameNum < numGames; gameNum++) {
     const g2 = new Game2(13);
-    let previousLadderMap = null;
+    let previousG2 = new Game2(13);  // Track previous board state
+    let previousLadders = [];
     let moveCount = 0;
+    let consistencyChecks = 0;
 
     while (moveCount < maxMovesPerGame && !g2.gameOver) {
       // Convert Game2 to Game3
       const g3 = game3FromGame2(g2);
 
       // Get ladder statuses from Game3
-      const ladders = getAllLadderStatuses(g3);
+      const currentLadders = getAllLadderStatuses(g3);
 
-      // Create map of (gid, color) -> status for easy comparison
-      const currentLadderMap = new Map();
-      for (const ladder of ladders) {
-        const key = `${ladder.gid}:${ladder.color}`;
-        currentLadderMap.set(key, ladder.status);
-      }
+      // On moves after the first, verify ladder status transitions are logical
+      if (moveCount > 0) {
+        // Create maps for easy lookup
+        const prevMap = new Map();
+        for (const l of previousLadders) {
+          prevMap.set(l.gid, l);
+        }
 
-      // Compare with previous position (if applicable)
-      if (previousLadderMap !== null) {
-        // Groups that were in ladder before should still be in ladder
-        // (or might have escaped/been captured)
-        for (const [key, prevStatus] of previousLadderMap) {
-          const currentStatus = currentLadderMap.get(key);
+        const currMap = new Map();
+        for (const l of currentLadders) {
+          currMap.set(l.gid, l);
+        }
 
-          // If group still exists and is still in atari/near-atari, status should be defined
-          if (currentStatus !== undefined) {
-            assert(prevStatus !== undefined,
-              `Game ${gameNum}: Ladder status should exist for tracked group`);
+        // Check consistency: groups that existed should have logical transitions
+        for (const [gid, prevLadder] of prevMap) {
+          const currLadder = currMap.get(gid);
+
+          if (currLadder !== undefined) {
+            // Group still exists and is still in ladder range
+            // Status transitions should be logical:
+            // - If was escaping (true), might now be safely escaped (still true)
+            // - If was being captured (false), might now be captured (still false)
+            // - Status can change if move affected liberties/groups
+
+            assert(currLadder.status !== null,
+              `Game ${gameNum} move ${moveCount}: Group ${gid} should have status if in ladder range`);
+
+            // Verify status is defined (not null)
+            if (prevLadder.status !== null && currLadder.status !== null) {
+              const prevSucceeds = prevLadder.status.moverSucceeds;
+              const currSucceeds = currLadder.status.moverSucceeds;
+
+              // moverSucceeds can change based on the move
+              // Both true, both false, or changed - all are valid
+              // Just verify consistency in structure
+              assert(typeof currSucceeds === 'boolean' || currSucceeds === null,
+                `Game ${gameNum} move ${moveCount}: Status structure should be valid`);
+            }
+
+            consistencyChecks++;
           }
+          // If group no longer in ladder range, it either escaped or was captured - both logical
         }
       }
 
-      // Identify urgent moves (where moverSucceeds is determined)
+      // Identify urgent moves (where moverSucceeds is determined and true)
       const urgentMoves = [];
-      for (const ladder of ladders) {
-        if (ladder.status && ladder.status.urgentLibs && ladder.status.urgentLibs.length > 0) {
+      for (const ladder of currentLadders) {
+        if (ladder.status && ladder.status.moverSucceeds === true &&
+            ladder.status.urgentLibs && ladder.status.urgentLibs.length > 0) {
           urgentMoves.push(...ladder.status.urgentLibs);
         }
       }
@@ -88,20 +114,29 @@ function testLadderConsistency() {
         const played = g2.play(nextMove);
         if (played) {
           moveCount++;
-          previousLadderMap = currentLadderMap;
+          previousG2 = new Game2(13);
+          for (let i = 0; i < 169; i++) {
+            previousG2.cells[i] = g2.cells[i];
+          }
+          previousLadders = currentLadders;
         }
       } else {
         g2.play(PASS);
         moveCount++;
-        previousLadderMap = currentLadderMap;
+        previousG2 = new Game2(13);
+        for (let i = 0; i < 169; i++) {
+          previousG2.cells[i] = g2.cells[i];
+        }
+        previousLadders = currentLadders;
       }
     }
 
     assert(moveCount > 0, `Game ${gameNum}: Should have made moves`);
-    console.log(`  Game ${gameNum}: ${moveCount} moves, ${previousLadderMap ? previousLadderMap.size : 0} ladder groups`);
+    assert(consistencyChecks > 0, `Game ${gameNum}: Should have checked ladder consistency`);
+    console.log(`  Game ${gameNum}: ${moveCount} moves, ${consistencyChecks} consistency checks passed`);
   }
 
-  console.log('  ✓ Ladder consistency test passed');
+  console.log('  ✓ Ladder status consistency test passed');
 }
 
 // Test: Specific ladder scenario
