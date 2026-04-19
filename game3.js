@@ -784,11 +784,6 @@ function game3FromGame2(game2) {
   game3.emptyCount = cap;
   game3._nextGid = 0;
   game3.moveCount = 0;
-  game3.current = BLACK;
-  game3.ko = PASS;
-  game3.lastMove = PASS;
-  game3.consecutivePasses = 0;
-  game3.gameOver = false;
 
   // Clear bitsets
   for (let i = 0; i < game3._gc.length; i++) game3._gc[i] = EMPTY;
@@ -797,63 +792,13 @@ function game3FromGame2(game2) {
   for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
   for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
 
-  // Track which cells have been assigned to groups
-  const visited = new Uint8Array(cap);
-
-  // Helper: flood-fill to find connected component of same color
-  function floodFill(startIdx, color) {
-    const stack = [startIdx];
-    const component = [];
-    visited[startIdx] = 1;
-
-    while (stack.length > 0) {
-      const idx = stack.pop();
-      component.push(idx);
-      const base = idx * 4;
-      for (let i = 0; i < 4; i++) {
-        const ni = game3._nbr[base + i];
-        if (!visited[ni] && game2.cells[ni] === color) {
-          visited[ni] = 1;
-          stack.push(ni);
-        }
-      }
-    }
-    return component;
-  }
-
-  // Rebuild groups from Game2 board state
+  // Place stones from Game2 board state using play()
+  // Set current player to the color we want to place before each play()
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY && !visited[i]) {
-      const color = game2.cells[i];
-      const component = floodFill(i, color);
-
-      // Create a group for this component
-      const gid = game3._nextGid++;
-      game3._gc[gid] = color;
-
-      // Add stones to group
-      for (const idx of component) {
-        game3.cells[idx] = color;
-        game3._gid[idx] = gid;
-        game3._addStone_raw(idx, gid);
-        game3.emptyCount--;
-      }
-
-      // Calculate liberties for this group
-      const liberties = new Set();
-      for (const idx of component) {
-        const base = idx * 4;
-        for (let i = 0; i < 4; i++) {
-          const ni = game3._nbr[base + i];
-          if (game2.cells[ni] === EMPTY) {
-            liberties.add(ni);
-          }
-        }
-      }
-
-      // Add liberties to group
-      for (const libIdx of liberties) {
-        game3._addLiberty_raw(gid, libIdx);
+    if (game2.cells[i] !== EMPTY) {
+      game3.current = game2.cells[i];
+      if (game3.isLegal(i)) {
+        game3.play(i);
       }
     }
   }
