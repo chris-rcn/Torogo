@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { Game2, BLACK, WHITE, PASS, coordStr } = require('./game2.js');
 const { Game3 } = require('./game3.js');
 
 console.log('Testing parallel gameplay with board comparison after each move\n');
@@ -19,9 +19,9 @@ class XorShift32 {
 }
 
 const rng = new XorShift32(12345);
-
-const g2 = new Game2(9, false);
-const g3 = new Game3(9);
+const N = 9;
+const g2 = new Game2(N, false);
+const g3 = new Game3(N);
 
 let moveCount = 0;
 
@@ -32,7 +32,7 @@ while (!g2.gameOver && !g3.gameOver) {
   const g3Result = g3.play(move);
 
   if (!g2Result || !g3Result) {
-    console.log(`✗ Move ${moveCount} (${move === PASS ? 'PASS' : move}) failed`);
+    console.log(`✗ Move ${moveCount} (${coordStr(move, N)}) failed`);
     console.log(`  Game2 result: ${g2Result}, Game3 result: ${g3Result}`);
     process.exit(1);
   }
