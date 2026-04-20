@@ -22,14 +22,14 @@ for (let test = 0; test < 500; test++) {
     g2_original.play(move);
   }
 
-  // Step 1: Get original toString from Game2 (no mark)
-  const original = g2_original.toString(PASS, { showAxes: false });
+  // Step 1: Get original toString from Game2
+  const original = g2_original.toString(PASS);
 
   // Step 2: Convert to Game3
   const g3 = game3FromGame2(g2_original);
 
-  // Step 3: Get converted toString from Game3 (no mark)
-  const converted = g3.toString(PASS, { showAxes: false });
+  // Step 3: Get converted toString from Game3
+  const converted = g3.toString(PASS);
 
   // Step 4: Check converted == original
   if (converted !== original) {
@@ -41,8 +41,8 @@ for (let test = 0; test < 500; test++) {
   // Step 5: Parse the converted string back to Game2
   const g2_parsed = parseBoard(converted, g3.current);
 
-  // Step 6: Get parsed toString from Game2 (no mark)
-  const parsed = g2_parsed.toString(PASS, { showAxes: false });
+  // Step 6: Get parsed toString from Game2
+  const parsed = g2_parsed.toString(PASS);
 
   // Step 7: Check parsed == original
   if (parsed !== original) {
