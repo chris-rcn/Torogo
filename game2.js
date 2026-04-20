@@ -877,6 +877,10 @@ class Game2 {
 
 // Flat index → coordinate string, e.g. 10 on a 9×9 board → "b2".  PASS → 'pass'.
 function coordStr(move, N) {
+  if (!N) {
+    console.log('coordStr requires N');
+    process.exit(1);
+  }
   if (move === PASS) return 'pass';
   return String.fromCharCode(97 + move % N) + ((move / N | 0) + 1);
 }
