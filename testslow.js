@@ -2,6 +2,9 @@
 
 const { Game2, PASS, BLACK, WHITE, KOMI } = require('./game2.js');
 const { performance } = require('perf_hooks');
+const { makeXorShift } = require('./xorshift.js');
+
+const rng = makeXorShift(1);
 
 let pass = 0, fail = 0;
 
@@ -33,7 +36,7 @@ function runMatch(p1Name, p2Name, games, size, budget) {
 
     while (!g.gameOver) {
       const agent = g.current === BLACK ? blackAgent : whiteAgent;
-      const move = agent(g, budget);
+      const move = agent(g, budget, { rng });
       g.play(move.type === 'place' ? move.y * size + move.x : PASS);
     }
 
@@ -53,7 +56,7 @@ section('MC playout throughput (7x7)', () => {
   const g = new Game2(7);
   const budgetMs = 200;
   const t0 = performance.now();
-  const move = mc(g, budgetMs);
+  const move = mc(g, budgetMs, { rng });
   const elapsed = performance.now() - t0;
   console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
   assert(elapsed < budgetMs * 1.5, `MC should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
@@ -65,7 +68,7 @@ section('MCTS playout throughput (7x7)', () => {
   const g = new Game2(7);
   const budgetMs = 200;
   const t0 = performance.now();
-  const move = mcts(g, budgetMs);
+  const move = mcts(g, budgetMs, { rng });
   const elapsed = performance.now() - t0;
   console.log(`  Budget: ${budgetMs}ms, actual: ${elapsed.toFixed(0)}ms`);
   assert(elapsed < budgetMs * 1.5, `MCTS should finish within 1.5x budget: took ${elapsed.toFixed(0)}ms`);
@@ -120,7 +123,7 @@ section('Winning agent passes after opponent passes (7x7)', () => {
   for (const [agentName, agent] of [['mcts', mcts], ['rave', rave]]) {
     const clone = g.clone();
     clone.play(PASS); // black passes (consecutivePasses = 1)
-    const result = agent(clone, 1000);
+    const result = agent(clone, 1000, { rng });
     console.log(`  ${agentName}: ${result.type}${result.info ? ' — ' + result.info : ''}`);
     assert(result.type === 'pass',
       `${agentName}: white should pass to end the winning game (got ${result.type})`);
@@ -139,7 +142,7 @@ section('AI legality stress test (all agents, 3 full games each)', () => {
       const g = new Game2(5);
       let moveNum = 0;
       while (!g.gameOver && moveNum < 200) {
-        const move = agent(g, 20);
+        const move = agent(g, 20, { rng });
         const idx = move.type === 'place' ? move.y * 5 + move.x : PASS;
         if (idx !== PASS) {
           const result = g.play(idx);

@@ -4,13 +4,14 @@
 const { getMove } = require('./ai/tdsearch.js');
 const { Game2 } = require('./game2.js');
 const Util = require('./util.js');
+const { makeXorShift } = require('./xorshift.js');
 
 const opts = Util.parseArgs(process.argv.slice(2));
 const size   = parseInt(opts.size   || '4',    10);
 const budget = parseInt(opts.budget || '1000', 10);
 
 const t0 = Date.now();
-const result = getMove(new Game2(size, false), budget);
+const result = getMove(new Game2(size, false), budget, { rng: makeXorShift(1) });
 const elapsed = (Date.now() - t0) / 1000;
 let magSum = 0, magMax = 0;
 for (const w of result.ctx.weightsArr) { 
