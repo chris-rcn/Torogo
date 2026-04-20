@@ -1,0 +1,72 @@
+#!/usr/bin/env node
+'use strict';
+
+const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { Game3 } = require('./game3.js');
+
+console.log('Testing parallel gameplay with board comparison after each move\n');
+
+class XorShift32 {
+  constructor(seed = 12345) {
+    this.state = seed >>> 0;
+  }
+  random() {
+    this.state ^= this.state << 13;
+    this.state ^= this.state >> 17;
+    this.state ^= this.state << 5;
+    return (this.state >>> 0) / 0x100000000;
+  }
+}
+
+const rng = new XorShift32(12345);
+
+const g2 = new Game2(9, false);
+const g3 = new Game3(9);
+
+let moveCount = 0;
+
+while (!g2.gameOver && !g3.gameOver) {
+  const move = g2.randomLegalMove(rng);
+
+  // Sync current player
+  g3.current = g2.current;
+
+  const g2Result = g2.play(move);
+  const g3Result = g3.play(move);
+
+  if (!g2Result || !g3Result) {
+    console.log(`✗ Move ${moveCount} (${move === PASS ? 'PASS' : move}) failed`);
+    console.log(`  Game2 result: ${g2Result}, Game3 result: ${g3Result}`);
+    process.exit(1);
+  }
+
+  // Compare boards after each move
+  const g2Board = g2.toString(PASS);
+  const g3Board = g3.toString(PASS);
+
+  if (g2Board !== g3Board) {
+    console.log(`✗ Move ${moveCount} (${move === PASS ? 'PASS' : move}) caused divergence\n`);
+    console.log(`Game2 board:\n${g2Board}\n`);
+    console.log(`Game3 board:\n${g3Board}\n`);
+
+    // Find which cells differ
+    const g2Lines = g2Board.split('\n');
+    const g3Lines = g3Board.split('\n');
+    console.log('Differences:');
+    for (let i = 0; i < g2Lines.length; i++) {
+      if (g2Lines[i] !== g3Lines[i]) {
+        console.log(`Line ${i}: "${g2Lines[i]}" vs "${g3Lines[i]}"`);
+      }
+    }
+
+    process.exit(1);
+  }
+
+  console.log(`✓ Move ${moveCount}: ${move === PASS ? 'PASS' : move} (boards match)`);
+  moveCount++;
+
+  // Stop after reasonable number of moves to see pattern
+  if (moveCount > 100) break;
+}
+
+console.log(`\nCompleted ${moveCount} moves with identical boards`);

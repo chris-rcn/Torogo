@@ -25,8 +25,8 @@ let failed = 0;
 for (let gameNum = 0; gameNum < 1000; gameNum++) {
   const rng = new XorShift32(12345 + gameNum);
 
-  // Create both game instances
-  const g2 = new Game2(9);
+  // Create both game instances with no initial center stone
+  const g2 = new Game2(9, false);
   const g3 = new Game3(9);
 
   let moveCount = 0;
@@ -35,6 +35,9 @@ for (let gameNum = 0; gameNum < 1000; gameNum++) {
   while (!g2.gameOver && !g3.gameOver) {
     // Get a legal move from game2
     const move = g2.randomLegalMove(rng);
+
+    // Sync current player
+    g3.current = g2.current;
 
     // Play on both games
     const g2Result = g2.play(move);
