@@ -611,7 +611,7 @@ class Game3 {
   // Render the board as a ● ○ · string. Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
   // Render board as ASCII string with optional marked position
-  toString(markIdx = this.lastMove, { centerAt = null, axisLabels = false } = {}) {
+  toString(markIdx = this.lastMove, { centerAt = null, showAxes = true } = {}) {
     const N = this.N;
     const cells = this.cells;
     const markX = (markIdx !== PASS) ? markIdx % N : -1;
@@ -630,8 +630,8 @@ class Game3 {
     const rows = [];
 
     // Add column labels if requested
-    if (axisLabels) {
-      let header = '    ';
+    if (showAxes) {
+      let header = '   ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         header += String.fromCharCode(97 + bx) + ' ';
@@ -645,9 +645,9 @@ class Game3 {
       let row = '';
 
       // Add row label if requested
-      if (axisLabels) {
+      if (showAxes) {
         const rowNum = by + 1;  // 1-based row numbers matching coordStr
-        row = rowNum.toString().padStart(2) + '  ';
+        row = rowNum.toString().padStart(2) + ' ';
       }
 
       row += (mx === 0) ? '(' : ' ';
@@ -659,8 +659,24 @@ class Game3 {
         row += ch;
       }
       row += (mx === N - 1) ? ')' : ' ';
+
+      if (showAxes) {
+        row += ' ' + (by + 1);
+      }
+
       rows.push(row);
     }
+
+    // Add bottom axis labels if requested
+    if (showAxes) {
+      let footer = '   ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        footer += String.fromCharCode(97 + bx) + ' ';
+      }
+      rows.push(footer);
+    }
+
     return rows.join('\n');
   }
 

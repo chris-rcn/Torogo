@@ -672,7 +672,7 @@ class Game2 {
 
   // Render the board as a ● ○ · string.  Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
-  toString(markIdx = this.lastMove, { centerAt = null } = {}) {
+  toString(markIdx = this.lastMove, { centerAt = null, showAxes = true } = {}) {
     const N = this.N;
     const cells = this.cells;
     const markX = (markIdx !== PASS) ? markIdx % N : -1;
@@ -689,10 +689,30 @@ class Game2 {
     const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
 
     const rows = [];
+
+    // Top axis labels
+    if (showAxes) {
+      let colLabel = '   ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const letter = String.fromCharCode(97 + bx);
+        colLabel += letter + ' ';
+      }
+      rows.push(colLabel);
+    }
+
+    // Board rows
     for (let dy = N - 1; dy >= 0; dy--) {
       const by = (y0 + dy) % N;
       const mx = (dy === dmy) ? dmx : -1;
-      let row = (mx === 0) ? '(' : ' ';
+
+      let row = '';
+      if (showAxes) {
+        const rowNum = (by + 1).toString().padStart(2, ' ');
+        row = rowNum + ' ';
+      }
+
+      row += (mx === 0) ? '(' : ' ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         const c = cells[by * N + bx];
@@ -701,8 +721,25 @@ class Game2 {
         row += ch;
       }
       row += (mx === N - 1) ? ')' : ' ';
+
+      if (showAxes) {
+        row += ' ' + (by + 1);
+      }
+
       rows.push(row);
     }
+
+    // Bottom axis labels
+    if (showAxes) {
+      let colLabel = '   ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const letter = String.fromCharCode(97 + bx);
+        colLabel += letter + ' ';
+      }
+      rows.push(colLabel);
+    }
+
     return rows.join('\n');
   }
 
