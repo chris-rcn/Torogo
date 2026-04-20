@@ -811,31 +811,29 @@ function game3FromGame2(game2) {
   for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
   for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
 
-  // Place stones from Game2 board state using play()
-  // Use multiple passes to handle order-dependent legality:
-  // stones may only become legal after their neighbors are placed
-  const toPlace = [];
+  // Copy board state directly from Game2 to ensure exact match.
+  // Using play() can cause captures due to order-dependent placement.
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY) {
-      toPlace.push(i);
-    }
+    game3.cells[i] = game2.cells[i];
+    game3._gid[i] = game2._gid[i];
   }
 
-  let pass = 0;
-  while (toPlace.length > 0 && pass < 100) {
-    let placed = false;
-    for (let i = toPlace.length - 1; i >= 0; i--) {
-      const idx = toPlace[i];
-      game3.current = game2.cells[idx];
-      if (game3.isLegal(idx)) {
-        game3.play(idx);
-        toPlace.splice(i, 1);
-        placed = true;
-      }
-    }
-    if (!placed) break;  // No progress made; remaining stones may have issues
-    pass++;
+  // Copy group metadata
+  const minGids = Math.min(game3._gc.length, game2._gc.length);
+  for (let gid = 0; gid < minGids; gid++) {
+    game3._gc[gid] = game2._gc[gid];
+    game3._ss[gid] = game2._ss[gid];
+    game3._ls[gid] = game2._ls[gid];
   }
+
+  // Copy libertybitsets
+  const minWords = Math.min(game3._lw.length, game2._lw.length);
+  for (let i = 0; i < minWords; i++) {
+    game3._lw[i] = game2._lw[i];
+    game3._sw[i] = game2._sw[i];
+  }
+
+  game3.emptyCount = game2.emptyCount;
 
   // Copy game state from Game2
   game3.current = game2.current;
