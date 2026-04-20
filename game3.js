@@ -798,6 +798,10 @@ function game3FromGame2(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
+      if (!game3.isLegal(i)) {
+        // TODO: show game3, show coordinate
+        process.exit(1);
+      }
 
       // Count stones before placement
       let stonesBefore = 0;
