@@ -39,7 +39,7 @@ function makeXorShift(seed) {
 
     // Returns an integer in [0, maxExclusive).
     int(maxExclusive) {
-      return (next() % maxExclusive + maxExclusive) % maxExclusive;
+      return (next() / 0x100000000 * maxExclusive) | 0;
     },
   };
 }
