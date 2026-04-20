@@ -859,44 +859,19 @@ function agentMoveToIdx(agentMove, N) {
 
 // Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation.
 // Rows are top-to-bottom (row N..1).  Row numbers and letter labels are stripped.
-// Marked positions (with parentheses like (●)) are tracked as lastMove.
+// Mark syntax (parentheses) is completely ignored.
 // toMove defaults to BLACK.
 function parseBoard(boardStr, toMove = BLACK) {
   const valid = new Set(['●','○','·','X','O','.']);
-  const lines = boardStr.trim().split('\n');
-  const rows = [];
-  let markIdx = PASS;
-
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    const line = lines[lineIdx].trim();
-    const row = [];
-    let charIdx = 0;
-
-    while (charIdx < line.length) {
-      const ch = line[charIdx];
-
-      // Check for mark syntax (sym)
-      if (ch === '(' && charIdx + 2 < line.length && line[charIdx + 2] === ')') {
-        const sym = line[charIdx + 1];
-        if (valid.has(sym)) {
-          row.push(sym);
-          markIdx = { x: row.length - 1, y: rows.length };
-          charIdx += 3;
-          continue;
-        }
+  const rows = boardStr.trim().split('\n')
+    .map(r => {
+      const row = [];
+      for (const ch of r) {
+        if (valid.has(ch)) row.push(ch);
       }
-
-      // Regular symbol
-      if (valid.has(ch)) {
-        row.push(ch);
-        charIdx++;
-      } else {
-        charIdx++;  // Skip whitespace, commas, digits, etc.
-      }
-    }
-
-    if (row.length > 0) rows.push(row);
-  }
+      return row;
+    })
+    .filter(row => row.length > 0);
 
   const size = rows.length;
   const g = new Game2(size, false);
@@ -907,13 +882,6 @@ function parseBoard(boardStr, toMove = BLACK) {
       if (ch === '●' || ch === 'X') g._place(idx, BLACK);
       else if (ch === '○' || ch === 'O') g._place(idx, WHITE);
     }
-
-  // Convert marked display coordinates to board index
-  if (markIdx !== PASS && typeof markIdx === 'object') {
-    const boardY = size - 1 - markIdx.y;
-    const boardX = markIdx.x;
-    g.lastMove = boardY * size + boardX;
-  }
 
   g.current = toMove;
   return g;
