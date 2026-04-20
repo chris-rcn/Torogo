@@ -1,0 +1,5 @@
+isolate-*.log
+*.o
+test-game3-c
+bench-game3-c
+bench-ladder-c

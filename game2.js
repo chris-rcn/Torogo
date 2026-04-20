@@ -672,7 +672,7 @@ class Game2 {
 
   // Render the board as a ● ○ · string.  Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
-  toString(markIdx = this.lastMove, { centerAt = null } = {}) {
+  toString(markIdx = this.lastMove, { centerAt = null, showAxes = true } = {}) {
     const N = this.N;
     const cells = this.cells;
     const markX = (markIdx !== PASS) ? markIdx % N : -1;
@@ -689,10 +689,30 @@ class Game2 {
     const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
 
     const rows = [];
-    for (let dy = 0; dy < N; dy++) {
+
+    // Top axis labels
+    if (showAxes) {
+      let colLabel = '    ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const letter = String.fromCharCode(97 + bx);
+        colLabel += letter + ' ';
+      }
+      rows.push(colLabel);
+    }
+
+    // Board rows
+    for (let dy = N - 1; dy >= 0; dy--) {
       const by = (y0 + dy) % N;
       const mx = (dy === dmy) ? dmx : -1;
-      let row = (mx === 0) ? '(' : ' ';
+
+      let row = '';
+      if (showAxes) {
+        const rowNum = (by + 1).toString().padStart(2, ' ');
+        row = rowNum + ' ';
+      }
+
+      row += (mx === 0) ? '(' : ' ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         const c = cells[by * N + bx];
@@ -701,8 +721,25 @@ class Game2 {
         row += ch;
       }
       row += (mx === N - 1) ? ')' : ' ';
+
+      if (showAxes) {
+        row += ' ' + (by + 1);
+      }
+
       rows.push(row);
     }
+
+    // Bottom axis labels
+    if (showAxes) {
+      let colLabel = '   ';
+      for (let dx = 0; dx < N; dx++) {
+        const bx = (x0 + dx) % N;
+        const letter = String.fromCharCode(97 + bx);
+        colLabel += letter + ' ';
+      }
+      rows.push(colLabel);
+    }
+
     return rows.join('\n');
   }
 
@@ -790,12 +827,12 @@ class Game2 {
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
   // Fisher-Yates over the empty-cell list in-place; _emptySlot kept consistent.
-  randomLegalMove() {
+  randomLegalMove(rng = Math) {
     const ec     = this.emptyCount;
     const eCells = this._emptyCells;
     const eSlot  = this._emptySlot;
     for (let end = ec - 1; end >= 0; end--) {
-      const ri  = (Math.random() * (end + 1)) | 0;
+      const ri  = (rng.random() * (end + 1)) | 0;
       const idx = eCells[ri];
       if (!this.isTrueEye(idx) && this.isLegal(idx)) return idx;
       const t     = eCells[end];
@@ -840,6 +877,10 @@ class Game2 {
 
 // Flat index → coordinate string, e.g. 10 on a 9×9 board → "b2".  PASS → 'pass'.
 function coordStr(move, N) {
+  if (!N) {
+    console.log('coordStr requires N');
+    process.exit(1);
+  }
   if (move === PASS) return 'pass';
   return String.fromCharCode(97 + move % N) + ((move / N | 0) + 1);
 }
@@ -859,12 +900,20 @@ function agentMoveToIdx(agentMove, N) {
 
 // Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation.
 // Rows are top-to-bottom (row N..1).  Row numbers and letter labels are stripped.
+// Mark syntax (parentheses) is completely ignored.
 // toMove defaults to BLACK.
 function parseBoard(boardStr, toMove = BLACK) {
   const valid = new Set(['●','○','·','X','O','.']);
   const rows = boardStr.trim().split('\n')
-    .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
+    .map(r => {
+      const row = [];
+      for (const ch of r) {
+        if (valid.has(ch)) row.push(ch);
+      }
+      return row;
+    })
     .filter(row => row.length > 0);
+
   const size = rows.length;
   const g = new Game2(size, false);
   for (let y = 0; y < size; y++)
@@ -874,6 +923,7 @@ function parseBoard(boardStr, toMove = BLACK) {
       if (ch === '●' || ch === 'X') g._place(idx, BLACK);
       else if (ch === '○' || ch === 'O') g._place(idx, WHITE);
     }
+
   g.current = toMove;
   return g;
 }
