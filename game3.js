@@ -483,10 +483,13 @@ class Game3 {
     }
 
     // Step 7: Update ko rule
+    this.ko = PASS;
     if (captured.length === 1) {
-      this.ko = captured[0].idx;
-    } else {
-      this.ko = PASS;
+      const capturedIdx = captured[0].idx;
+      if (this._ss[mainGid] === 1 && this._ls[mainGid] === 1 &&
+          ((this._lw[mainGid * W + (capturedIdx >> 5)] >>> (capturedIdx & 31)) & 1)) {
+        this.ko = capturedIdx;
+      }
     }
 
     // Wrap operations in a move record

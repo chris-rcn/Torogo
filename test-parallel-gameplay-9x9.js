@@ -41,7 +41,7 @@ for (let gameNum = 1; gameNum <= 1000; gameNum++) {
     const g3Result = g3.play(move);
 
     if (!g2Result || !g3Result) {
-      console.log(`✗ Game ${gameNum + 1} FAILED: Move ${moveCount} (${move === PASS ? 'PASS' : move}) failed`);
+      console.log(`✗ Game ${gameNum} FAILED: Move ${moveCount} (${move === PASS ? 'PASS' : move}) failed`);
       console.log(`  Game2 result: ${g2Result}, Game3 result: ${g3Result}`);
       console.log(`\nGame2 board:`);
       console.log(g2.toString(PASS));
@@ -58,14 +58,14 @@ for (let gameNum = 1; gameNum <= 1000; gameNum++) {
   const g3Board = g3.toString(PASS);
 
   if (g2Board !== g3Board) {
-    console.log(`✗ Game ${gameNum + 1} FAILED: Final board states don't match`);
+    console.log(`✗ Game ${gameNum} FAILED: Final board states don't match`);
     console.log(`  Moves played: ${moveCount}`);
     console.log(`\nGame2 board:\n${g2Board}\n`);
     console.log(`Game3 board:\n${g3Board}\n`);
     process.exit(1);
   }
 
-  console.log(`✓ Game ${gameNum + 1} passed (${moveCount} moves)`);
+  console.log(`✓ Game ${gameNum} passed (${moveCount} moves)`);
   passed++;
 }
 
