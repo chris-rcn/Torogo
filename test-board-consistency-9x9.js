@@ -12,21 +12,12 @@ let failed = 0;
 for (let test = 0; test < 500; test++) {
   // Generate a random position
   const g2_original = new Game2(9);
-  let consecutivePasses = 0;
   let moveCount = 0;
 
   // Play random moves until game ends
-  while (consecutivePasses < 1 && !g2_original.gameOver && moveCount < 50) {
+  while (g2_original.consecutivePasses < 1 && !g2_original.gameOver) {
     const move = g2_original.randomLegalMove();
-    if (move !== -1) {
-      g2_original.play(move);
-      consecutivePasses = 0;
-      moveCount++;
-    } else {
-      g2_original.play(-1);
-      consecutivePasses++;
-      moveCount++;
-    }
+    g2_original.play(move);
   }
 
   // Step 1: Get original toString from Game2 (no mark)
@@ -42,12 +33,11 @@ for (let test = 0; test < 500; test++) {
   if (converted !== original) {
     console.log(`✗ Test ${test + 1} FAILED: Game2.toString() != Game3.toString()`);
     console.log(`  Moves played: ${moveCount}`);
-    failed++;
-    continue;
+    process.exit(1);
   }
 
   // Step 5: Parse the converted string back to Game2
-  const g2_parsed = parseBoard(converted, BLACK);
+  const g2_parsed = parseBoard(converted, g3.current);
 
   // Step 6: Get parsed toString from Game2 (no mark)
   const parsed = g2_parsed.toString(PASS, { showAxes: false });
@@ -58,8 +48,7 @@ for (let test = 0; test < 500; test++) {
     console.log(`  Moves played: ${moveCount}`);
     console.log(`\nOriginal:\n${original}\n`);
     console.log(`Parsed:\n${parsed}\n`);
-    failed++;
-    continue;
+    process.exit(1);
   }
 
   console.log(`✓ Test ${test + 1} passed (${moveCount} moves)`);
@@ -68,10 +57,4 @@ for (let test = 0; test < 500; test++) {
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
-
-if (failed > 0) {
-  process.exit(1);
-} else {
-  console.log('All tests passed!');
-  process.exit(0);
-}
+console.log('All tests passed!');
