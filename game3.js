@@ -799,7 +799,13 @@ function game3FromGame2(game2) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
       if (!game3.isLegal(i)) {
-        // TODO: show game3, show coordinate
+        console.log('\n=== ILLEGAL MOVE ===');
+        console.log('Cell', coordStr(i, N), 'is not legal in Game3');
+        console.log('Game2 cell:', game2.cells[i] === BLACK ? 'BLACK' : 'WHITE');
+        console.log('\nGame2 board state:');
+        console.log(game2.toString(PASS));
+        console.log('\nGame3 board state:');
+        console.log(game3.toString(PASS));
         process.exit(1);
       }
 
