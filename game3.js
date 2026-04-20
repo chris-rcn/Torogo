@@ -35,7 +35,9 @@ const OP_PASS = 6;
 const _topologyCache = new Map();
 
 class Game3 {
-  // Initialize game with center black stone, ready for white's first move
+  // Initialize an empty game. Caller is responsible for any opening move:
+  // Game3 intentionally does NOT auto-place a Torogo-opening stone, so that
+  // game3FromGame2 and other replay entry points start from a clean board.
   constructor(size) {
     this.N = size;
     this.boardSize = size;
@@ -74,9 +76,28 @@ class Game3 {
 
     // Operation stack - stores reversible operations
     this._opStack = [];
+  }
 
+  // Clear all state back to a fresh empty board (matches constructor output).
+  reset() {
+    const cap = this.N * this.N;
+    this.cells.fill(0);
+    this._gid.fill(-1);
+    const used = this._nextGid * this._W;
+    this._sw.fill(0, 0, used);
+    this._ss.fill(0, 0, this._nextGid);
+    this._lw.fill(0, 0, used);
+    this._ls.fill(0, 0, this._nextGid);
+    this._gc.fill(0, 0, this._nextGid);
+    this._nextGid = 0;
     this.current = BLACK;
+    this.ko = PASS;
+    this.consecutivePasses = 0;
+    this.gameOver = false;
     this.moveCount = 0;
+    this.lastMove = PASS;
+    this.emptyCount = cap;
+    this._opStack.length = 0;
   }
 
   // Get or compute neighbor tables and cell list for board size (with memoization)
@@ -381,6 +402,7 @@ class Game3 {
     const previousEmptyCount = this.emptyCount;
     const previousConsecutivePasses = this.consecutivePasses;
     const previousLastMove = this.lastMove;
+    const previousNextGid = this._nextGid;
 
     // Step 1: Mark cell as occupied
     this.cells[move] = color;
@@ -502,6 +524,7 @@ class Game3 {
       previousEmptyCount: previousEmptyCount,
       previousConsecutivePasses: previousConsecutivePasses,
       previousLastMove: previousLastMove,
+      previousNextGid: previousNextGid,
       opsStart: opCountBefore,
       captured: captured,
     });
@@ -513,8 +536,9 @@ class Game3 {
   }
 
   // Undo last move by reversing all recorded operations
+  // Returns true if a move was undone, false when the stack was empty.
   undo() {
-    if (this._opStack.length === 0) return;
+    if (this._opStack.length === 0) return false;
 
     // Pop operations in reverse order until we hit a move marker
     while (this._opStack.length > 0) {
@@ -527,7 +551,7 @@ class Game3 {
           this.gameOver = false;
         }
         this.moveCount--;
-        return;
+        return true;
       }
 
       if (op.type === OP_MOVE) {
@@ -559,13 +583,15 @@ class Game3 {
         this.emptyCount = op.previousEmptyCount;
         this.consecutivePasses = op.previousConsecutivePasses;
         this.lastMove = op.previousLastMove;
+        this._nextGid = op.previousNextGid;
         this.moveCount--;
-        return;
+        return true;
       }
 
       // Undo individual operation
       this._undoOperation(op);
     }
+    return true;
   }
 
   // Reverse a single recorded operation
