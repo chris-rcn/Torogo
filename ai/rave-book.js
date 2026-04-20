@@ -20,7 +20,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 // ── Opening book ───────────────────────────────────────────────────────────────
 
@@ -302,7 +302,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs, options = {}) {
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;

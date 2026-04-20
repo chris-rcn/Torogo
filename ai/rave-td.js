@@ -21,7 +21,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE, EMPTY } = _isNode ? require('../game2.js') : window.Game2;
 const Util    = _isNode ? require('../util.js')    : window.Util;
 const IntMap  = _isNode ? require('../int-map.js') : window.IntMap;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 const { makeIntMap } = IntMap;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
@@ -462,7 +462,7 @@ function backpropagate(node, winner, played, rootPlayer) {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 function getMove(game, timeBudgetMs, options = {}) {
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;

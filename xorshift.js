@@ -8,7 +8,7 @@
 
 (function () {
 
-function makeXorShift(seed) {
+function makeRng(seed) {
   // Use current time (ms) as default seed; split into two 32-bit halves.
   if (seed === undefined) seed = Date.now();
   // Ensure non-zero state — zero is a fixed point for xorshift.
@@ -44,7 +44,7 @@ function makeXorShift(seed) {
   };
 }
 
-const XorShift = { makeXorShift };
+const XorShift = { makeRng };
 if (typeof module !== 'undefined') {
   module.exports = XorShift;
   require('./xorshift.test.js').runTests(XorShift);

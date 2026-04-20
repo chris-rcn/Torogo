@@ -20,7 +20,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 
@@ -308,7 +308,7 @@ function getMove(game, timeBudgetMs, options = {}) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   const root = makeNode(null, null, -1, game2, N);
 
   const deadline = performance.now() + timeBudgetMs;

@@ -8,7 +8,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
@@ -639,7 +639,7 @@ function getMove(game, budgetMs = 1000, options = {}) {
   }
   lastMoveCount = game.moveCount;
 
-  const rng  = options.rng || makeXorShift();
+  const rng  = options.rng || makeRng();
   const area = game.N * game.N;
   const ctx  = { keyToIdx, weightsArr, searchFeats: makeBuf(area) };
 

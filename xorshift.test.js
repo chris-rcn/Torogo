@@ -4,7 +4,7 @@
 // Called by xorshift.js at module load time (Node only) via runTests().
 // Silent on success; logs failures to stderr.
 
-function runTests({ makeXorShift }) {
+function runTests({ makeRng }) {
   let failures = 0;
 
   function check(cond, msg) {
@@ -13,7 +13,7 @@ function runTests({ makeXorShift }) {
 
   // ── random() range ────────────────────────────────────────────────────────
   {
-    const rng = makeXorShift(42);
+    const rng = makeRng(42);
     let allInRange = true;
     for (let i = 0; i < 10000; i++) {
       const v = rng.random();
@@ -24,7 +24,7 @@ function runTests({ makeXorShift }) {
 
   // ── random() is not constant ──────────────────────────────────────────────
   {
-    const rng = makeXorShift(1);
+    const rng = makeRng(1);
     const seen = new Set();
     for (let i = 0; i < 100; i++) seen.add(rng.random());
     check(seen.size > 50, 'random: produces varied output (not stuck)');
@@ -32,7 +32,7 @@ function runTests({ makeXorShift }) {
 
   // ── int() range ───────────────────────────────────────────────────────────
   {
-    const rng = makeXorShift(99);
+    const rng = makeRng(99);
     let allInRange = true;
     for (let i = 0; i < 10000; i++) {
       const v = rng.int(10);
@@ -43,7 +43,7 @@ function runTests({ makeXorShift }) {
 
   // ── int() covers all values ───────────────────────────────────────────────
   {
-    const rng = makeXorShift(7);
+    const rng = makeRng(7);
     const counts = new Array(6).fill(0);
     for (let i = 0; i < 60000; i++) counts[rng.int(6)]++;
     const allSeen = counts.every(c => c > 0);
@@ -55,7 +55,7 @@ function runTests({ makeXorShift }) {
 
   // ── int(1) always returns 0 ───────────────────────────────────────────────
   {
-    const rng = makeXorShift(5);
+    const rng = makeRng(5);
     let ok = true;
     for (let i = 0; i < 100; i++) { if (rng.int(1) !== 0) { ok = false; break; } }
     check(ok, 'int(1): always returns 0');
@@ -63,8 +63,8 @@ function runTests({ makeXorShift }) {
 
   // ── Deterministic with same seed ─────────────────────────────────────────
   {
-    const a = makeXorShift(12345);
-    const b = makeXorShift(12345);
+    const a = makeRng(12345);
+    const b = makeRng(12345);
     let same = true;
     for (let i = 0; i < 100; i++) {
       if (a.random() !== b.random()) { same = false; break; }
@@ -74,8 +74,8 @@ function runTests({ makeXorShift }) {
 
   // ── Different seeds produce different sequences ───────────────────────────
   {
-    const a = makeXorShift(1);
-    const b = makeXorShift(2);
+    const a = makeRng(1);
+    const b = makeRng(2);
     let diff = false;
     for (let i = 0; i < 20; i++) {
       if (a.random() !== b.random()) { diff = true; break; }
@@ -86,7 +86,7 @@ function runTests({ makeXorShift }) {
   // ── Default seed (no argument) does not throw ─────────────────────────────
   {
     let ok = false;
-    try { const rng = makeXorShift(); rng.random(); rng.int(10); ok = true; } catch (_) {}
+    try { const rng = makeRng(); rng.random(); rng.int(10); ok = true; } catch (_) {}
     check(ok, 'no-arg constructor: runs without error');
   }
 

@@ -14,9 +14,9 @@ const { performance } = require('perf_hooks');
 const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 const { searchChain } = require('./tactics3.js');
-const { makeXorShift } = require('./xorshift.js');
+const { makeRng } = require('./xorshift.js');
 
-const rng = makeXorShift(1);
+const rng = makeRng(1);
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };

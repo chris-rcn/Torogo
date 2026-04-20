@@ -2,9 +2,9 @@
 
 const { Game2, PASS, BLACK, WHITE, KOMI } = require('./game2.js');
 const { performance } = require('perf_hooks');
-const { makeXorShift } = require('./xorshift.js');
+const { makeRng } = require('./xorshift.js');
 
-const rng = makeXorShift(1);
+const rng = makeRng(1);
 
 let pass = 0, fail = 0;
 

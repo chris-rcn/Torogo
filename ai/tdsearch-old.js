@@ -8,7 +8,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const Playout = require('./playout.js');
 
@@ -170,7 +170,7 @@ function getMove(game, budgetMs = 1000, options = {}) {
     return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
   }
 
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   const area = game.N * game.N;
   const maxMoves = 3 * game.emptyCount + 20;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
@@ -203,7 +203,7 @@ function getMove(game, budgetMs = 1000, options = {}) {
       }
       step++;
 
-      moveSelection = selectTrainingMove(g, step, ctx);
+      moveSelection = selectTrainingMove(g, step, ctx, rng);
 
       findFeatures(g, feats, ctx);
       evaluate(feats, weightsArr);

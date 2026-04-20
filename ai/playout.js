@@ -21,7 +21,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const W_CAPTURE  = 6;
 const W_ESCAPE   = 4;
@@ -32,7 +32,7 @@ const W_OPEN_ADJ = 0.02;
 const W_OTHER    = 1;
 
 function getMove(game, _timeBudgetMs, options = {}) {
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { move: PASS };
 
   const game2  = game.cells ? game : game.toGame2();

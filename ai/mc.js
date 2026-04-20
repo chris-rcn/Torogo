@@ -24,7 +24,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 function playRandom(game2, rng) {
   const N   = game2.N;
@@ -75,7 +75,7 @@ function playRandom(game2, rng) {
 }
 
 function getMove(game, timeBudgetMs, options = {}) {
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS };
 
   const game2  = game.cells ? game.clone() : game.toGame2();

@@ -1,7 +1,7 @@
 'use strict';
 
-const { makeXorShift } = require('./xorshift.js');
-const rng = makeXorShift(1);
+const { makeRng } = require('./xorshift.js');
+const rng = makeRng(1);
 
 const { Game2, PASS, BLACK, WHITE, KOMI, setKomi, parseBoard } = require('./game2.js');
 const _BLACK = BLACK, _WHITE = WHITE; // aliases for pattern symmetry tests

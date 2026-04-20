@@ -26,7 +26,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
-const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const PLAYOUTS        = Util.envInt  ('PLAYOUTS', 0);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
@@ -58,7 +58,7 @@ function playTracked(game2) {
 function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS };
 
-  const rng = options.rng || makeXorShift();
+  const rng = options.rng || makeRng();
   const playoutLimit = options.playoutLimit || PLAYOUTS;
 
   const game2  = game.cells ? game.clone() : game.toGame2();
