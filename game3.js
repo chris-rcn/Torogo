@@ -271,7 +271,7 @@ class Game3 {
     });
   }
 
-  // Count stones in group using bitset population count
+  // Count liberties in group using bitset population count
   _pop32Count(gid, W) {
     let count = 0;
     const gb = gid * W;
