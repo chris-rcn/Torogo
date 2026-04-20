@@ -22,8 +22,8 @@ class XorShift32 {
 let passed = 0;
 let failed = 0;
 
-for (let gameNum = 0; gameNum < 1000; gameNum++) {
-  const rng = new XorShift32(12345 + gameNum);
+for (let gameNum = 1; gameNum <= 1000; gameNum++) {
+  const rng = new XorShift32(gameNum);
 
   // Create both game instances with no initial center stone
   const g2 = new Game2(9, false);
