@@ -134,6 +134,10 @@ class Game3 {
         nbr[i*4+1] = ((y+1  )%N)*N + x;
         nbr[i*4+2] = y*N + (x-1+N)%N;
         nbr[i*4+3] = y*N + (x+1  )%N;
+        dnbr[i*4+0] = ((y-1+N)%N)*N + (x-1+N)%N;
+        dnbr[i*4+1] = ((y-1+N)%N)*N + (x+1  )%N;
+        dnbr[i*4+2] = ((y+1  )%N)*N + (x-1+N)%N;
+        dnbr[i*4+3] = ((y+1  )%N)*N + (x+1  )%N;
       }
     }
     const allCells = new Int32Array(cap);
@@ -572,18 +576,11 @@ class Game3 {
         this.cells[op.move] = EMPTY;
         this._gid[op.move] = -1;
 
-        // Restore captured stones with their group IDs
-        if (op.captured) {
-          for (const stone of op.captured) {
-            const stoneIdx = stone.idx || stone;  // Handle both old and new format
-            const gid = stone.gid;
-            // op.color is always stored as 1 or -1, so negation is safe
-            // (op.color is the color that made the move, so opponent is -op.color)
-            this.cells[stoneIdx] = -op.color; // Opponent color
-            if (gid !== undefined) {
-              this._gid[stoneIdx] = gid;  // Restore group ID
-            }
-          }
+        // Restore captured stones with their group IDs.
+        // op.color is the color that made the move, so captured stones are -op.color.
+        for (const stone of op.captured) {
+          this.cells[stone.idx] = -op.color;
+          this._gid[stone.idx] = stone.gid;
         }
 
         this.current = op.previousCurrent;
