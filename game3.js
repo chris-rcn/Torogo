@@ -774,16 +774,29 @@ function game3FromGame2(game2) {
   const game3 = new Game3(N);
   const cap = N * N;
 
-  // Place stones from Game2 board state using play()
-  // Set current player to the color we want to place before each play()
+  // Copy board state directly from Game2, preserving exact group structure
+  // We cannot use play() for reconstruction because index-order placement
+  // creates different group connectivity than the original game sequence
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY) {
-      game3.current = game2.cells[i];
-      if (!game3.play(i)) {
-        console.log('illegal move in board position??', coordStr(i));
-      }
-    }
+    game3.cells[i] = game2.cells[i];
+    game3._gid[i] = game2._gid[i];
   }
+
+  // Copy all group metadata to preserve exact state
+  for (let gid = 0; gid < game2._gc.length && gid < game3._gc.length; gid++) {
+    game3._gc[gid] = game2._gc[gid];
+    game3._ss[gid] = game2._ss[gid];
+    game3._ls[gid] = game2._ls[gid];
+  }
+
+  // Copy liberty bitsets
+  for (let i = 0; i < game2._lw.length && i < game3._lw.length; i++) {
+    game3._lw[i] = game2._lw[i];
+    game3._sw[i] = game2._sw[i];
+  }
+
+  game3.emptyCount = game2.emptyCount;
+  game3._nextGid = game2._nextGid;
 
   // Copy game state from Game2
   game3.current = game2.current;
