@@ -438,6 +438,9 @@ class Game3 {
           this._mergeGroups(mainGid, otherId);
         }
       }
+
+      // Remove the newly placed stone from liberties (it was empty before placement)
+      this._removeLiberty(mainGid, move);
     }
 
     // Step 5: Add liberties
