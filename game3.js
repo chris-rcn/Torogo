@@ -285,7 +285,7 @@ class Game3 {
 
   // Check if move is legal (empty, not ko, not suicide)
   isLegal(idx, color = this.current) {
-    if (idx === PASS) return true;
+    if (idx === PASS) return !this.gameOver;
     if (this.cells[idx] !== EMPTY) return false;
     if (this.ko === idx) return false;
     if (this._isSingleSuicide(idx, color)) return false;
