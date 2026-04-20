@@ -1,4 +1,4 @@
-'use strict';
+#'use strict';
 
 // Game3-Precise — Fully reversible incremental game with NO reconstruction
 //
@@ -779,8 +779,8 @@ function game3FromGame2(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
-      if (game3.isLegal(i)) {
-        game3.play(i);
+      if (!game3.play(i)) {
+        console.log('illegal move in board position??', coordStr(i));
       }
     }
   }
