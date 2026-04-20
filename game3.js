@@ -798,7 +798,8 @@ function game3FromGame2(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
-      if (!game3.isLegal(i)) {
+      //if (!game3.isLegal(i)) 
+      {
         console.log('\n=== ILLEGAL MOVE ===');
         console.log('Cell', coordStr(i, N), 'is not legal in Game3');
         console.log('Game2 cell:', game2.cells[i] === BLACK ? 'BLACK' : 'WHITE');
