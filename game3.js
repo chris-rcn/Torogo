@@ -389,10 +389,12 @@ class Game3 {
     const oppGroupIds = [];
     for (let i = 0; i < 4; i++) {
       const ni = nbr[base + i];
-      const gid = this._gid[ni];
-      if (gid !== -1 && !oppGroupIds.includes(gid)) {
-        oppGroupIds.push(gid);
-        this._removeLiberty(gid, move);
+      if (this.cells[ni] === oppColor) {
+        const gid = this._gid[ni];
+        if (gid !== -1 && !oppGroupIds.includes(gid)) {
+          oppGroupIds.push(gid);
+          this._removeLiberty(gid, move);
+        }
       }
     }
 
