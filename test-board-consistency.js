@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { Game2, BLACK, WHITE, parseBoard } = require('./game2.js');
+const { Game2, BLACK, WHITE, parseBoard, PASS } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 
 console.log('Testing round-trip board representation consistency\n');
@@ -29,14 +29,14 @@ for (let test = 0; test < 100; test++) {
     }
   }
 
-  // Step 1: Get original toString from Game2
-  const original = g2_original.toString();
+  // Step 1: Get original toString from Game2 (no mark)
+  const original = g2_original.toString(PASS);
 
   // Step 2: Convert to Game3
   const g3 = game3FromGame2(g2_original);
 
-  // Step 3: Get converted toString from Game3 (without axis labels for comparison)
-  const converted = g3.toString();
+  // Step 3: Get converted toString from Game3 (no mark)
+  const converted = g3.toString(PASS);
 
   // Step 4: Check converted == original
   if (converted !== original) {
@@ -49,14 +49,11 @@ for (let test = 0; test < 100; test++) {
   // Step 5: Parse the converted string back to Game2
   const g2_parsed = parseBoard(converted, BLACK);
 
-  // Step 6: Get parsed toString from Game2
-  const parsed = g2_parsed.toString();
+  // Step 6: Get parsed toString from Game2 (no mark)
+  const parsed = g2_parsed.toString(PASS);
 
-  // Step 7: Check board state without marks (parseBoard ignores marks)
-  // Compare cell arrays directly to avoid spacing/formatting issues
-  const cellsMatch = g2_original.cells.every((c, i) => g2_parsed.cells[i] === c);
-
-  if (!cellsMatch) {
+  // Step 7: Check parsed == original
+  if (parsed !== original) {
     console.log(`✗ Test ${test + 1} FAILED: parseBoard() produced different board`);
     console.log(`  Moves played: ${moveCount}`);
     console.log(`\nOriginal:\n${original}\n`);
