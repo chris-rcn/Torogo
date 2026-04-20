@@ -9,7 +9,7 @@ console.log('Testing round-trip board representation consistency\n');
 let passed = 0;
 let failed = 0;
 
-for (let test = 0; test < 100; test++) {
+for (let test = 0; test < 200; test++) {
   // Generate a random position
   const g2_original = new Game2(13);
   let consecutivePasses = 0;
