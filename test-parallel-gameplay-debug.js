@@ -42,7 +42,7 @@ while (!g2.gameOver && !g3.gameOver) {
   const g3Board = g3.toString(PASS);
 
   if (g2Board !== g3Board) {
-    console.log(`✗ Move ${moveCount} (${move === PASS ? 'PASS' : move}) caused divergence\n`);
+    console.log(`✗ Move ${moveCount} (${coordStr(move, N)}) caused divergence\n`);
     console.log(`Game2 board:\n${g2Board}\n`);
     console.log(`Game3 board:\n${g3Board}\n`);
 
@@ -59,7 +59,7 @@ while (!g2.gameOver && !g3.gameOver) {
     process.exit(1);
   }
 
-  console.log(`✓ Move ${moveCount}: ${move === PASS ? 'PASS' : move} (boards match)`);
+  console.log(`✓ Move ${moveCount}: ${coordStr(move, N)} (boards match)`);
   moveCount++;
 
   // Stop after reasonable number of moves to see pattern
