@@ -36,9 +36,6 @@ for (let gameNum = 0; gameNum < 1000; gameNum++) {
     // Get a legal move from game2
     const move = g2.randomLegalMove(rng);
 
-    // Sync current player
-    g3.current = g2.current;
-
     // Play on both games
     const g2Result = g2.play(move);
     const g3Result = g3.play(move);

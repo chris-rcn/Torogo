@@ -75,8 +75,8 @@ class Game3 {
     // Operation stack - stores reversible operations
     this._opStack = [];
 
-    this.current = WHITE;
-    this.moveCount = 1;
+    this.current = BLACK;
+    this.moveCount = 0;
   }
 
   // Get or compute neighbor tables and cell list for board size (with memoization)

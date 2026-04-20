@@ -28,9 +28,6 @@ let moveCount = 0;
 while (!g2.gameOver && !g3.gameOver) {
   const move = g2.randomLegalMove(rng);
 
-  // Sync current player
-  g3.current = g2.current;
-
   const g2Result = g2.play(move);
   const g3Result = g3.play(move);
 
