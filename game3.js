@@ -811,16 +811,28 @@ function game3FromGame2(game2) {
   for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
   for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
 
-  // Place stones from Game2 board state using play()
-  // Set current player to the color we want to place before each play()
+  // Copy board state directly from Game2 to preserve exact final state
+  // Cannot use play() because it applies captures during index-order placement,
+  // causing unintended captures even though each move is individually legal
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY) {
-      game3.current = game2.cells[i];
-      if (game3.isLegal(i)) {
-        game3.play(i);
-      }
-    }
+    game3.cells[i] = game2.cells[i];
+    game3._gid[i] = game2._gid[i];
   }
+
+  // Copy all group metadata
+  for (let gid = 0; gid < game2._gc.length && gid < game3._gc.length; gid++) {
+    game3._gc[gid] = game2._gc[gid];
+    game3._ss[gid] = game2._ss[gid];
+    game3._ls[gid] = game2._ls[gid];
+  }
+
+  // Copy liberty bitsets
+  for (let i = 0; i < game2._lw.length && i < game3._lw.length; i++) {
+    game3._lw[i] = game2._lw[i];
+    game3._sw[i] = game2._sw[i];
+  }
+
+  game3.emptyCount = game2.emptyCount;
 
   // Copy game state from Game2
   game3.current = game2.current;
