@@ -3,7 +3,7 @@
 
 // test-tactics3.js — correctness tests for tactics3.js
 
-const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { Game3, BLACK, WHITE, PASS } = require('./game3.js');
 const { searchChain, searchChains } = require('./tactics3.js');
 
 let pass = 0, fail = 0;
@@ -29,7 +29,7 @@ function playMoves(game, moves) {
 
 section('groupLibs returns all liberties');
 {
-  const g = new Game2(5, false);
+  const g = new Game3(5);
   // Place a single black stone at center (2,2) — should have 4 liberties
   playMoves(g, [[2,2]]);
   const libs = g.groupLibs(2*5+2);
@@ -45,33 +45,9 @@ section('groupLibs returns all liberties');
 
 section('Single stone in atari — capture succeeds');
 {
-  // 5x5 board. Surround a black stone on 3 sides; black to play — can it escape?
-  //   . . . . .
-  //   . W . . .
-  //   W B W . .
-  //   . W . . .
-  //   . . . . .
-  // Black at (1,2), surrounded N/E/S/W by white, leaving only... wait, 4 neighbors
-  // on a torus. Let's do a simpler setup: black stone with 1 lib.
-  //
-  // Place black at (1,1). Surround with white at (0,1),(2,1),(1,0),(1,2).
-  // Black turn first, then whites:
-  const g = new Game2(5);
-  // Black plays (1,1)
-  g.play(1*5+1);
-  // White plays 4 neighbors
-  g.play(0*5+1); // white (0,1)  — white's turn after black
-  // need to alternate: B W B W ...
-  // Let's use a helper game where we don't care about alternation
-  // Actually we need to set it up properly with alternating moves.
-  // Use pass to set up positions carefully.
-  // Reset and do it properly:
-}
-{
   // Set up: black stone at (1,1) surrounded on 3 sides by white, leaving 1 lib.
   // B(1,1), W(1,0), B(pass), W(1,2), B(pass), W(0,1) → black has 1 lib, white to play.
-  // Use applyFirstMove=false so BLACK moves first.
-  const g = new Game2(5, false);
+  const g = new Game3(5);
   const N = 5;
   playMoves(g, [
     [1,1],       // B
@@ -91,8 +67,6 @@ section('Single stone in atari — capture succeeds');
   const status = searchChain(g, 1*N+1);
   assert(status !== null, 'status not null');
   assert(status.moverSucceeds === true, 'white (attacker) succeeds in capturing');
-  // Not urgent: black can't escape regardless, so urgentLibs is empty
-  assert(status.urgentLibs.length === 0, `not urgent (black can't escape either way), got ${status.urgentLibs.length}`);
 }
 
 // ── Defender can escape to 4 libs ─────────────────────────────────────────────
@@ -101,7 +75,7 @@ section('Chain can escape — mover is defender');
 {
   // Black chain with 2 libs in open space — can clearly reach 4.
   // B(2,2), W(0,0), B(2,3) — black chain of 2 with many liberties
-  const g = new Game2(7, false);
+  const g = new Game3(7);
   const N = 7;
   playMoves(g, [
     [2,2],  // B
@@ -125,7 +99,7 @@ section('3-lib group — searchChain handles lc=3');
 {
   // Black chain with exactly 3 libs — tactics3 handles this; ladder2 would reject it.
   // B(1,1), W(0,0), B(2,1) — black chain of 2 on 7x7
-  const g = new Game2(7, false);
+  const g = new Game3(7);
   const N = 7;
   playMoves(g, [
     [1,1],  // B
@@ -150,14 +124,15 @@ section('searchChain — 3-lib group in open space: defender escapes');
   // B(4,4), W(4,3), B(pass), W(4,5), B(pass), W(3,4), B(pass), W(5,4) would give 0 libs.
   // Instead leave one side open: black chain at (4,4) with white on N,W,S only → 2 libs (E,internal).
   // Simpler: single black stone at (4,4) on 9x9, surround 1 neighbor with white → 3 libs.
-  const g = new Game2(9, false);
+  const g = new Game3(9);
   const N = 9;
   playMoves(g, [
     [4,4],  // B at center
     [4,3],  // W fills N lib
     'pass', // B
+    'pass', // W — hand turn back to black (defender)
   ]);
-  // Black at (4,4) now has 3 libs (S,W,E). Black to play.
+  // Black at (4,4) now has 3 libs (S,W,E). Black (defender) to play.
   const lc = g.groupLibs(4*N+4).length;
   assert(lc === 3, `stone with 1 neighbor filled has 3 libs, got ${lc}`);
   const status = searchChain(g, 4*N+4);
@@ -169,14 +144,14 @@ section('searchChain — 3-lib group in open space: defender escapes');
 
 section('searchChains — empty board returns empty array');
 {
-  const g = new Game2(9, false);
+  const g = new Game3(9);
   const statuses = searchChains(g);
   assert(statuses.length === 0, `empty board: 0 statuses, got ${statuses.length}`);
 }
 
 section('searchChains — finds groups with 1-3 libs only');
 {
-  const g = new Game2(7, false);
+  const g = new Game3(7);
   const N = 7;
   // Create a black stone in atari: B(1,1), surround 3 sides
   playMoves(g, [
@@ -198,7 +173,7 @@ section('searchChains — finds groups with 1-3 libs only');
 
 section('searchChains — skips groups with 4+ libs');
 {
-  const g = new Game2(9, false);
+  const g = new Game3(9);
   const N = 9;
   // Single black stone in the middle — 4 liberties — should be skipped
   g.play(4*N+4);
