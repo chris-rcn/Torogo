@@ -26,12 +26,13 @@ const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = 1.4;
 
 // ── Playout helper ────────────────────────────────────────────────────────────
 
-function playRandom(game2) {
+function playRandom(game2, rng) {
   const N   = game2.N;
   const cap = N * N;
   const cells = game2.cells;
@@ -48,7 +49,7 @@ function playRandom(game2) {
     let end = empty.length;
 
     while (end > 0) {
-      const ri  = Math.floor(Math.random() * end);
+      const ri  = rng.int(end);
       const idx = empty[ri];
       empty[ri] = empty[end - 1];
       empty[end - 1] = idx;
@@ -121,7 +122,7 @@ function uctScore(child, parentVisits) {
 
 // ── MCTS core ─────────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2) {
+function selectAndExpand(root, rootGame2, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -139,7 +140,7 @@ function selectAndExpand(root, rootGame2) {
   if (!game2.gameOver) {
     if (node.untried === null) node.untried = getLegalMoves(game2);
     if (node.untried.length > 0) {
-      const idx = Math.floor(Math.random() * node.untried.length);
+      const idx = rng.int(node.untried.length);
       const move = node.untried[idx];
       node.untried[idx] = node.untried[node.untried.length - 1];
       node.untried.pop();
@@ -158,9 +159,9 @@ function selectAndExpand(root, rootGame2) {
   return { node, game2 };
 }
 
-function simulate(game2) {
+function simulate(game2, rng) {
   const wasAlreadyOver = game2.gameOver;
-  playRandom(game2);
+  playRandom(game2, rng);
   return wasAlreadyOver ? game2.calcWinner() : game2.estimateWinner();
 }
 
@@ -174,7 +175,8 @@ function backpropagate(node, winner) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const game2      = game.cells ? game.clone() : game.toGame2();
@@ -189,8 +191,8 @@ function getMove(game, timeBudgetMs) {
 
   const deadline = performance.now() + timeBudgetMs;
   while (performance.now() < deadline) {
-    const { node, game2: simGame2 } = selectAndExpand(root, game2);
-    const winner = simulate(simGame2);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, rng);
+    const winner = simulate(simGame2, rng);
     backpropagate(node, winner);
   }
 

@@ -20,6 +20,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 // ── Opening book ───────────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
 
-function ucbScore(moveIdx, node) {
+function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
   // RAVE
@@ -181,7 +182,7 @@ function ucbScore(moveIdx, node) {
   const wr = (raveWR * RAVE_EQUIV + realWR * realV)
            / (       + RAVE_EQUIV +          realV);
 
-  const scoreBase = wr + 0.001 * Math.random();
+  const scoreBase = wr + 0.001 * rng.random();
 //  if (realV < 1) {
 //    return scoreBase + 10;
 //  }
@@ -190,7 +191,7 @@ function ucbScore(moveIdx, node) {
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -201,7 +202,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -300,7 +301,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -325,7 +327,7 @@ function getMove(game, timeBudgetMs) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);

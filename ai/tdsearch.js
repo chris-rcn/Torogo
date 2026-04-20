@@ -8,6 +8,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
@@ -465,7 +466,7 @@ function findFeaturesIncremental(game, buf, ctx, nextMove, captures) {
 }
 
 // Custom 1-ply search with incremental moves and feature extraction.
-function search1ply(game, ctx, width = 0) {
+function search1ply(game, ctx, width = 0, rng) {
   const area = game.N * game.N;
   const searchFeats = ctx.searchFeats;
   const isBlack = game.current === BLACK;
@@ -489,7 +490,7 @@ function search1ply(game, ctx, width = 0) {
 
   const count = width > 0 ? Math.min(width, candidates.length) : candidates.length;
   for (let c = 0; c < count; c++) {
-    const j = c + Math.floor(Math.random() * (candidates.length - c));
+    const j = c + rng.int(candidates.length - c);
     const move = candidates[j];
     candidates[j] = candidates[c];
     // PASS leaves the board unchanged; all other moves use the incremental delta.
@@ -504,16 +505,16 @@ function search1ply(game, ctx, width = 0) {
   return { move: bestIdx, moveScore: bestScore };
 }
 
-function selectTrainingMove(game, step, ctx, epsilon) {
-  if (Math.random() < epsilon) 
+function selectTrainingMove(game, step, ctx, epsilon, rng) {
+  if (rng.random() < epsilon)
     return { move: game.randomLegalMove() };
 
   if (step < WIDE_DEPTH) {
-    return search1ply(game, ctx);
+    return search1ply(game, ctx, 0, rng);
   }
 
-  if (step < NARROW_DEPTH) 
-    return search1ply(game, ctx, 2);
+  if (step < NARROW_DEPTH)
+    return search1ply(game, ctx, 2, rng);
 
   if (USE_PPAT) {
     return ppatAgent.getMove(game);
@@ -532,7 +533,7 @@ let weightsArr = [];
 let lastMoveCount = 0;
 
 // Runs TD self-play simulations to train the model. Returns { ctx, sims, maxSteps }.
-function ponder(game, budgetMs, ctx) {
+function ponder(game, budgetMs, ctx, rng) {
   const area     = game.N * game.N;
   const maxMoves = 3 * game.emptyCount + 20;
   const tStart   = Date.now();
@@ -573,7 +574,7 @@ function ponder(game, budgetMs, ctx) {
     findFeaturesInit(g, primary, ctx);
     prev1.n = prev2.n = 0;
 
-    let moveSelection = selectTrainingMove(g, step, ctx, epsilon);
+    let moveSelection = selectTrainingMove(g, step, ctx, epsilon, rng);
     while (true) {
       const nextMove = moveSelection.move;
 
@@ -594,7 +595,7 @@ function ponder(game, budgetMs, ctx) {
         break;
       }
 
-      moveSelection = selectTrainingMove(g, step, ctx, epsilon);
+      moveSelection = selectTrainingMove(g, step, ctx, epsilon, rng);
 
       // Copy primary.idxs into feats (O(n) native copy) then evaluate.
       feats.n = primary.n;
@@ -621,7 +622,7 @@ function ponder(game, budgetMs, ctx) {
   return { sims, maxSteps };
 }
 
-function getMove(game, budgetMs = 1000) {
+function getMove(game, budgetMs = 1000, options = {}) {
   if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
     return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
   }
@@ -638,11 +639,12 @@ function getMove(game, budgetMs = 1000) {
   }
   lastMoveCount = game.moveCount;
 
+  const rng  = options.rng || makeRng();
   const area = game.N * game.N;
   const ctx  = { keyToIdx, weightsArr, searchFeats: makeBuf(area) };
 
   ///////////////////////////////////////////////////////
-  const { sims, maxSteps } = ponder(game, budgetMs, ctx);
+  const { sims, maxSteps } = ponder(game, budgetMs, ctx, rng);
   ///////////////////////////////////////////////////////
 
   if (game.moveCount === 1) {

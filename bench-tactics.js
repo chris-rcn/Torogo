@@ -14,6 +14,9 @@ const { performance } = require('perf_hooks');
 const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 const { searchChain } = require('./tactics3.js');
+const { makeRng } = require('./xorshift.js');
+
+const rng = makeRng(1);
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -62,7 +65,7 @@ while (gamesPlayed < gameLimit) {
   const game = new Game2(boardSize);
 
   while (!game.gameOver) {
-    if (Math.random() < 0.1) {
+    if (rng.random() < 0.1) {
       const N = game.N;
       const cap = N * N;
       const visited = new Set();
@@ -106,7 +109,7 @@ while (gamesPlayed < gameLimit) {
       }
     }
 
-    const result = getMove(game, 1);
+    const result = getMove(game, 1, { rng });
     const idx = result.type === 'place' ? result.y * boardSize + result.x : PASS;
     game.play(idx);
   }

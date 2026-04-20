@@ -25,6 +25,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = 1.4;
 // Equivalence parameter.  Override with RAVE_EQUIV=<n>.
@@ -47,7 +48,7 @@ const _patternTable = _isNode ? require(require('path').join(__dirname, '..', PA
 
 // Random playout using Game2.  Records the flat cell indices of every non-pass
 // move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2) {
+function playTracked(game2, rng) {
   const wasAlreadyOver = game2.gameOver;
   const N     = game2.N;
   const cap   = N * N;
@@ -70,7 +71,7 @@ function playTracked(game2) {
     const current = game2.current;
 
     while (end > 0) {
-      const ri  = Math.floor(Math.random() * end);
+      const ri  = rng.int(end);
       const idx = empty[ri];
       empty[ri] = empty[end - 1];
       empty[end - 1] = idx;
@@ -202,17 +203,17 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // priors) ranks them within the unvisited tier.
 // A separate priorBonus term decays as bonus/(1+realV), so ladder priors
 // guide early exploration without ever diluting the RAVE statistics.
-function raveScore(moveIdx, node) {
+function raveScore(moveIdx, node, rng) {
   const move   = node.legalMoves[moveIdx];
   const realV  = node.visits[moveIdx];
   const raveWR = move === PASS ? 0 : node.raveWins[move] / node.raveVisits[move];
   const prior  = move === PASS ? -PAT_PRIOR_WEIGHT : node.priorBonus[move];
   if (realV < 1) {
-    return 10 + raveWR + prior + 0.001 * Math.random();
+    return 10 + raveWR + prior + 0.001 * rng.random();
   }
   const realWR = node.wins[moveIdx] / realV;
   const beta = Math.sqrt(RAVE_EQUIV / (3 * realV + RAVE_EQUIV));
-  return 0.001 * Math.random() +
+  return 0.001 * rng.random() +
     (1 - beta) * realWR + beta * raveWR +
     prior / realV +
     EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
@@ -220,7 +221,7 @@ function raveScore(moveIdx, node) {
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -231,7 +232,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = raveScore(i, node);
+      const s = raveScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -325,7 +326,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -339,8 +341,8 @@ function getMove(game, timeBudgetMs) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
+    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2, rng);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 

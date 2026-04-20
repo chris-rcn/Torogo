@@ -21,6 +21,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 const RAVE_EQUIV    = Util.envFloat('RAVE_EQUIV', 2000);
@@ -110,20 +111,20 @@ function makeNode(move, parent, ci, mover, game2, N, allowPass = true) {
   };
 }
 
-function ucbScore(moveIdx, node, polarity) {
+function ucbScore(moveIdx, node, polarity, rng) {
   const move   = node.legalMoves[moveIdx];
   const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
   const realW  = node.wins[moveIdx];
   const realV  = node.visits[moveIdx];
   const realWR = realW / realV;
   const wr = (raveWR * RAVE_EQUIV + realWR * realV) / (RAVE_EQUIV + realV);
-  return polarity * wr + 0.001 * Math.random()
+  return polarity * wr + 0.001 * rng.random()
        + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / (1 + realV));
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -136,7 +137,7 @@ function selectAndExpand(root, rootGame2, N) {
 
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node, polarity);
+      const s = ucbScore(i, node, polarity, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -209,7 +210,8 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -225,7 +227,7 @@ function getMove(game, timeBudgetMs) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);

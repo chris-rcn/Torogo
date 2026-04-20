@@ -24,8 +24,9 @@ const performance = (typeof window !== 'undefined') ? window.performance
   : require('perf_hooks').performance;
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
-function playRandom(game2) {
+function playRandom(game2, rng) {
   const N   = game2.N;
   const cap = N * N;
   const cells = game2.cells;
@@ -42,7 +43,7 @@ function playRandom(game2) {
     let end = empty.length;
 
     while (end > 0) {
-      const ri  = Math.floor(Math.random() * end);
+      const ri  = rng.int(end);
       const idx = empty[ri];
       empty[ri] = empty[end - 1];
       empty[end - 1] = idx;
@@ -73,7 +74,8 @@ function playRandom(game2) {
   }
 }
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { type: 'pass', move: PASS };
 
   const game2  = game.cells ? game.clone() : game.toGame2();
@@ -96,7 +98,7 @@ function getMove(game, timeBudgetMs) {
   while (performance.now() < deadline) {
     const clone = game2.clone();
     clone.play(candidates[cidx]);
-    playRandom(clone);
+    playRandom(clone, rng);
 
     stats[cidx].plays++;
     if (clone.estimateWinner() === player) stats[cidx].wins++;

@@ -20,6 +20,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 
@@ -155,7 +156,7 @@ function makeNode(move, parent, ci, game2, N) {
 // A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
 
-function ucbScore(moveIdx, node) {
+function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
   // RAVE
@@ -172,13 +173,13 @@ function ucbScore(moveIdx, node) {
   // Combined win ratio
   const wr = realWeight * realWR + raveWeight * raveWR;
 
-  const scoreBase = wr + 0.001 * Math.random();
+  const scoreBase = wr + 0.001 * rng.random();
   return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -189,7 +190,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -299,6 +300,7 @@ function getMove(game, timeBudgetMs, options = {}) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
+  const rng = options.rng || makeRng();
   const root = makeNode(null, null, -1, game2, N);
 
   // Pre-allocate played buffer — reused across all playouts.
@@ -310,7 +312,7 @@ function getMove(game, timeBudgetMs, options = {}) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
     const { winner, played: p } = playTracked(simGame2, node, played);
     backpropagate(node, winner, p, rootPlayer);
   } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
@@ -320,9 +322,9 @@ function getMove(game, timeBudgetMs, options = {}) {
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root, rng) > bestScore)) {
       bestVisits = cv;
-      bestScore  = ucbScore(i, root);
+      bestScore  = ucbScore(i, root, rng);
       bestIdx    = i;
     }
   }

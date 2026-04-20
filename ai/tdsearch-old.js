@@ -8,6 +8,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const Playout = require('./playout.js');
 
@@ -110,7 +111,7 @@ function tdUpdate(buf, target, weightsArr) {
   }
 }
 
-function search1ply(game, ctx, width = 0) {
+function search1ply(game, ctx, width = 0, rng) {
   const area = game.N * game.N;
   const searchFeats = ctx.searchFeats;
   const isBlack = game.current === BLACK;
@@ -122,7 +123,7 @@ function search1ply(game, ctx, width = 0) {
   }
   const count = width > 0 ? Math.min(width, candidates.length) : candidates.length;
   for (let c = 0; c < count; c++) {
-    const j = c + Math.floor(Math.random() * (candidates.length - c));
+    const j = c + rng.int(candidates.length - c);
     const move = candidates[j];
     candidates[j] = candidates[c];
     if (game.isCapture(move)) {
@@ -141,15 +142,15 @@ function search1ply(game, ctx, width = 0) {
   return { move: bestIdx, moveScore: bestScore };
 }
 
-function selectTrainingMove(game, step, ctx) {
-  if (Math.random() < EPSILON) 
+function selectTrainingMove(game, step, ctx, rng) {
+  if (rng.random() < EPSILON)
     return { move: game.randomLegalMove() };
 
   if (step < WIDE_DEPTH) {
-    if (false && Math.random() < ctx.lastSearchMoveSame[step]) {
+    if (false && rng.random() < ctx.lastSearchMoveSame[step]) {
       return { move: ctx.lastSearchMove[step] };
     } else {
-      const move = search1ply(game, ctx).move;
+      const move = search1ply(game, ctx, 0, rng).move;
       const isSame = ctx.lastSearchMove[step] === move ? 1 : 0;
       ctx.lastSearchMoveSame[step] += 0.1 * (isSame - ctx.lastSearchMoveSame[step]);
       ctx.lastSearchMove[step] = move;
@@ -157,18 +158,19 @@ function selectTrainingMove(game, step, ctx) {
     }
   }
 
-  if (step < NARROW_DEPTH) 
-    return search1ply(game, ctx, 2);
+  if (step < NARROW_DEPTH)
+    return search1ply(game, ctx, 2, rng);
 
 //  return { move: game.randomLegalMove() };
   return Playout.getMove(game);
 }
 
-function getMove(game, budgetMs = 1000) {
+function getMove(game, budgetMs = 1000, options = {}) {
   if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
     return { move: PASS, type: 'pass', info: 'End the game; ahead in points.' };
   }
 
+  const rng = options.rng || makeRng();
   const area = game.N * game.N;
   const maxMoves = 3 * game.emptyCount + 20;
   const deadline = TD_SIMS <= 0 ? Date.now() + budgetMs : Infinity;
@@ -191,7 +193,7 @@ function getMove(game, budgetMs = 1000) {
     let step = 0;
 
     let outcome;
-    let moveSelection = selectTrainingMove(g, step, ctx);
+    let moveSelection = selectTrainingMove(g, step, ctx, rng);
     while (true) {
 
       g.play(moveSelection.move);
@@ -201,7 +203,7 @@ function getMove(game, budgetMs = 1000) {
       }
       step++;
 
-      moveSelection = selectTrainingMove(g, step, ctx);
+      moveSelection = selectTrainingMove(g, step, ctx, rng);
 
       findFeatures(g, feats, ctx);
       evaluate(feats, weightsArr);
@@ -223,7 +225,7 @@ function getMove(game, budgetMs = 1000) {
     maxSteps = Math.max(maxSteps, step);
   }
 
-  const searchResult = search1ply(game, ctx);
+  const searchResult = search1ply(game, ctx, 0, rng);
   const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore
   const move = myScore < 0.01 ? PASS : searchResult.move;
   const result = { move, ctx, sims, maxSteps }

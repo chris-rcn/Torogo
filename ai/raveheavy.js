@@ -25,6 +25,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 const RAVE_EQUIV    = Util.envFloat('RAVE_EQUIV', 2000);
@@ -47,7 +48,7 @@ const _patternTable  = _isNode ? require(require('path').join(__dirname, '..', P
 //
 // weightOf(hash) → logit weight (return 0 for unknown patterns).
 // Returns a flat cell index for the chosen move, or PASS if no legal moves exist.
-function selectPatternMove(game2, weightOf, hashFn) {
+function selectPatternMove(game2, weightOf, hashFn, rng) {
   const N       = game2.N;
   const current = game2.current;
   const lm      = game2.lastMove;
@@ -76,7 +77,7 @@ function selectPatternMove(game2, weightOf, hashFn) {
 
   for (const { idx, h } of local) {
     const w = Math.exp(weightOf(h));
-    if (Math.random() * (w + bestW) < w) { chosen = idx; isNonLocal = false; bestW = w; }
+    if (rng.random() * (w + bestW) < w) { chosen = idx; isNonLocal = false; bestW = w; }
   }
 
   if (!isNonLocal) return chosen;
@@ -90,7 +91,7 @@ function selectPatternMove(game2, weightOf, hashFn) {
 // Pattern-biased playout using local response patterns.
 // Records each player's moves for RAVE backpropagation.
 // Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2, weightOf) {
+function playTracked(game2, weightOf, rng) {
   const wasAlreadyOver = game2.gameOver;
   const N     = game2.N;
   const cap   = N * N;
@@ -103,7 +104,7 @@ function playTracked(game2, weightOf) {
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
 
-    const chosen = selectPatternMove(game2, weightOf, _patternHash2);
+    const chosen = selectPatternMove(game2, weightOf, _patternHash2, rng);
 
     if (chosen === PASS) { game2.play(PASS); moves++; continue; }
 
@@ -195,7 +196,7 @@ function makeNode(move, parent, ci, mover, game2, N) {
 // A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
 
-function ucbScore(moveIdx, node) {
+function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
   // RAVE
@@ -210,7 +211,7 @@ function ucbScore(moveIdx, node) {
   const wr = (raveWR * RAVE_EQUIV + realWR * realV)
            / (       + RAVE_EQUIV +          realV);
 
-  const scoreBase = wr + 0.001 * Math.random();
+  const scoreBase = wr + 0.001 * rng.random();
 //  if (realV < 1) {
 //    return scoreBase + 10;
 //  }
@@ -219,7 +220,7 @@ function ucbScore(moveIdx, node) {
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -230,7 +231,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -329,7 +330,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMoveWith(game, timeBudgetMs, weightOf) {
+function getMoveWith(game, timeBudgetMs, weightOf, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -341,6 +342,7 @@ function getMoveWith(game, timeBudgetMs, weightOf) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
+  const rng = options.rng || makeRng();
   const root = makeNode(null, null, -1, null, game2, N);
 
   const deadline = performance.now() + timeBudgetMs;
@@ -348,8 +350,8 @@ function getMoveWith(game, timeBudgetMs, weightOf) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2, weightOf);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
+    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2, weightOf, rng);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
@@ -358,9 +360,9 @@ function getMoveWith(game, timeBudgetMs, weightOf) {
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root, rng) > bestScore)) {
       bestVisits = cv;
-      bestScore  = ucbScore(i, root);
+      bestScore  = ucbScore(i, root, rng);
       bestIdx    = i;
     }
   }
@@ -396,15 +398,15 @@ function getMoveWith(game, timeBudgetMs, weightOf) {
 
 const _defaultWeightOf = h => _patternTable.has(h) ? _patternTable.get(h) : 0;
 
-function getMove(game, timeBudgetMs) {
-  return getMoveWith(game, timeBudgetMs, _defaultWeightOf);
+function getMove(game, timeBudgetMs, options = {}) {
+  return getMoveWith(game, timeBudgetMs, _defaultWeightOf, options);
 }
 
 // Returns a getMove function that uses a custom pattern table instead of the
 // module-level one.  Useful for evaluating candidate weight vectors during tuning.
 function makeGetMove(patternTable) {
   const weightOf = h => patternTable.has(h) ? patternTable.get(h) : 0;
-  return (game, timeBudgetMs) => getMoveWith(game, timeBudgetMs, weightOf);
+  return (game, timeBudgetMs, options = {}) => getMoveWith(game, timeBudgetMs, weightOf, options);
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove, makeGetMove, selectPatternMove };

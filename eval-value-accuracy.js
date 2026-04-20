@@ -21,6 +21,7 @@ const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
 const { extractFeatures, evaluateFeatures, loadWeights } = require('./vpatterns.js');
 const Util = require('./util.js');
+const { makeRng } = require('./xorshift.js');
 
 // ── Core ──────────────────────────────────────────────────────────────────────
 
@@ -36,12 +37,12 @@ function parseMoveToken(token, N) {
 // Returns { correct, total, accuracy }.
 //   nGames    — number of games to sample (default: all)
 //   sampleRate — fraction of positions per game to evaluate (default: 0.1)
-function evalValueAccuracy(filePath, model, { nGames = Infinity, sampleRate = 0.1 } = {}) {
+function evalValueAccuracy(filePath, model, { nGames = Infinity, sampleRate = 0.1, rng = makeRng(1) } = {}) {
   const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(l => l.trim());
 
   // Random selection of games.
   const selected = nGames < lines.length
-    ? Util.shuffle(lines.slice()).slice(0, nGames)
+    ? Util.shuffle(lines.slice(), rng).slice(0, nGames)
     : lines;
 
   let correct = 0, total = 0;
@@ -64,7 +65,7 @@ function evalValueAccuracy(filePath, model, { nGames = Infinity, sampleRate = 0.
     const game = new Game2(N, false);
     for (const token of tokens) {
       if (game.gameOver) break;
-      if (Math.random() < sampleRate)
+      if (rng.random() < sampleRate)
         sampledVs.push(evaluateFeatures(extractFeatures(game, model.preparedSpecs), model.weights));
       game.play(parseMoveToken(token, N));
     }

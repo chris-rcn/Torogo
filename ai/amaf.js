@@ -26,6 +26,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const PLAYOUTS        = Util.envInt  ('PLAYOUTS', 0);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
@@ -57,6 +58,7 @@ function playTracked(game2) {
 function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS };
 
+  const rng = options.rng || makeRng();
   const playoutLimit = options.playoutLimit || PLAYOUTS;
 
   const game2  = game.cells ? game.clone() : game.toGame2();
@@ -73,7 +75,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
     candidates.push(PASS);
   }
-  Util.shuffle(candidates);
+  Util.shuffle(candidates, rng);
 
   // AMAF stats indexed by cell (0..N*N-1); pass stored at N*N.
   const wins  = new Float32Array(cap + 1);
@@ -136,7 +138,7 @@ function getMove(game, timeBudgetMs, options = {}) {
       bestCount = 1;
     } else if (ratio === bestRatio) {
       bestCount++;
-      if (Math.random() * bestCount < 1) bestIdx = i;
+      if (rng.random() * bestCount < 1) bestIdx = i;
     }
   }
 
@@ -172,7 +174,7 @@ function getMove(game, timeBudgetMs, options = {}) {
           altCount = 1;
         } else if (ratio === altRatio) {
           altCount++;
-          if (Math.random() * altCount < 1) altIdx = i;
+          if (rng.random() * altCount < 1) altIdx = i;
         }
       }
       if (altIdx !== -1) bestIdx = altIdx;

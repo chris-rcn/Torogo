@@ -21,6 +21,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const W_CAPTURE  = 6;
 const W_ESCAPE   = 4;
@@ -30,7 +31,8 @@ const W_THREATEN = 6;
 const W_OPEN_ADJ = 0.02;
 const W_OTHER    = 1;
 
-function getMove(game, _timeBudgetMs) {
+function getMove(game, _timeBudgetMs, options = {}) {
+  const rng = options.rng || makeRng();
   if (game.gameOver) return { move: PASS };
 
   const game2  = game.cells ? game : game.toGame2();
@@ -85,7 +87,7 @@ function getMove(game, _timeBudgetMs) {
   if (candidates.length === 0) return { move: PASS };
 
   // Weighted random selection.
-  let r = Math.random() * totalWeight;
+  let r = rng.random() * totalWeight;
   for (let i = 0; i < candidates.length; i++) {
     r -= weights[i];
     if (r <= 0) {
@@ -95,7 +97,7 @@ function getMove(game, _timeBudgetMs) {
   }
 
   // Fallback (floating-point rounding edge case).
-  const move = candidates[Math.floor(Math.random() * candidates.length)];
+  const move = candidates[rng.int(candidates.length)];
   return { move };
 }
 

@@ -20,6 +20,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 
@@ -42,7 +43,7 @@ const RAVE_GUIDED = Util.envFloat('RAVE_GUIDED', 0);
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
 // Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2, node) {
+function playTracked(game2, node, rng) {
   const wasAlreadyOver = game2.gameOver;
   const N   = game2.N;
   const cap = N * N;
@@ -58,8 +59,8 @@ function playTracked(game2, node) {
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
     const raveNode = current !== node.mover ? node : node.parent;
-    const guided = raveNode !== null && Math.random() < RAVE_GUIDED;
-    const idx = guided ? guidedMove(game2, raveNode) : game2.randomLegalMove();
+    const guided = raveNode !== null && rng.random() < RAVE_GUIDED;
+    const idx = guided ? guidedMove(game2, raveNode, rng) : game2.randomLegalMove();
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
     if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
@@ -77,14 +78,14 @@ function playTracked(game2, node) {
 }
 
 // Use RAVE stats to guide playout move selection.
-function guidedMove(game2, node) {
+function guidedMove(game2, node, rng) {
   const c1 = game2.randomLegalMove();
   if (c1 === PASS) return PASS;
   const c2 = game2.randomLegalMove();
   const wr1 = node.raveWins[c1] / node.raveVisits[c1];
   const wr2 = node.raveWins[c2] / node.raveVisits[c2];
   const total = wr1 + wr2;
-  return Math.random() * total < wr1 ? c1 : c2;
+  return rng.random() * total < wr1 ? c1 : c2;
 }
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
@@ -165,7 +166,7 @@ function makeNode(move, parent, ci, game2, N) {
 // A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
 
-function ucbScore(moveIdx, node) {
+function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
   // RAVE
@@ -180,13 +181,13 @@ function ucbScore(moveIdx, node) {
   const wr = (raveWR * RAVE_EQUIV + realWR * realV)
            / (       + RAVE_EQUIV +          realV);
 
-  const scoreBase = wr + 0.001 * Math.random();
+  const scoreBase = wr + 0.001 * rng.random();
   return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / (1 + realV));
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N) {
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -197,7 +198,7 @@ function selectAndExpand(root, rootGame2, N) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -295,7 +296,7 @@ function backpropagate(node, winner, played, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
+function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -307,6 +308,7 @@ function getMove(game, timeBudgetMs) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
+  const rng = options.rng || makeRng();
   const root = makeNode(null, null, -1, game2, N);
 
   const deadline = performance.now() + timeBudgetMs;
@@ -314,8 +316,8 @@ function getMove(game, timeBudgetMs) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, played } = playTracked(simGame2, node);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
+    const { winner, played } = playTracked(simGame2, node, rng);
     backpropagate(node, winner, played, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
 
@@ -324,9 +326,9 @@ function getMove(game, timeBudgetMs) {
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root, rng) > bestScore)) {
       bestVisits = cv;
-      bestScore  = ucbScore(i, root);
+      bestScore  = ucbScore(i, root, rng);
       bestIdx    = i;
     }
   }

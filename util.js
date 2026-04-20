@@ -6,15 +6,10 @@
 
 const Util = (() => {
 
-  // Random integer in [0, n).
-  function randInt(n) {
-    return Math.floor(Math.random() * n);
-  }
-
   // Fisher-Yates in-place shuffle.  Returns arr.
-  function shuffle(arr) {
+  function shuffle(arr, rng) {
     for (let i = arr.length - 1; i > 0; i--) {
-      const j = randInt(i + 1);
+      const j = rng.int(i + 1);
       const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
     }
     return arr;
@@ -55,7 +50,7 @@ const Util = (() => {
     return opts;
   }
 
-  return { randInt, shuffle, envStr, envFloat, envInt, parseArgs };
+  return { shuffle, envStr, envFloat, envInt, parseArgs };
 
 })();
 
