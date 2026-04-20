@@ -774,24 +774,6 @@ function game3FromGame2(game2) {
   const game3 = new Game3(N);
   const cap = N * N;
 
-  // Clear the initial center stone
-  const center = ((N >> 1) * N) + (N >> 1);
-  game3.cells[center] = EMPTY;
-  game3._gid[center] = -1;
-  game3._gc[0] = EMPTY;
-  game3._ss[0] = 0;
-  game3._ls[0] = 0;
-  game3.emptyCount = cap;
-  game3._nextGid = 0;
-  game3.moveCount = 0;
-
-  // Clear bitsets
-  for (let i = 0; i < game3._gc.length; i++) game3._gc[i] = EMPTY;
-  for (let i = 0; i < game3._ss.length; i++) game3._ss[i] = 0;
-  for (let i = 0; i < game3._ls.length; i++) game3._ls[i] = 0;
-  for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
-  for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
-
   // Place stones from Game2 board state using play()
   // Set current player to the color we want to place before each play()
   for (let i = 0; i < cap; i++) {
