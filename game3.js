@@ -178,7 +178,7 @@ class Game3 {
 
   // Recording versions that also push operations
   // Add stone to group and record operation for undo
-  _addStone(idx, gid, color) {
+  _addStone(idx, gid) {
     this._addStone_raw(idx, gid);
     this._opStack.push({
       type: OP_ADD_STONE,
@@ -443,7 +443,7 @@ class Game3 {
       mainGid = this._nextGid++;
       this._gc[mainGid] = color;
       this._gid[move] = mainGid;
-      this._addStone(move, mainGid, color);
+      this._addStone(move, mainGid);
     } else {
       // Find largest group to merge into
       mainGid = sameColorGroupIds[0];
@@ -454,7 +454,7 @@ class Game3 {
       }
       // Add stone to main group
       this._gid[move] = mainGid;
-      this._addStone(move, mainGid, color);
+      this._addStone(move, mainGid);
 
       // Merge other groups
       for (const otherId of sameColorGroupIds) {
