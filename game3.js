@@ -1,4 +1,4 @@
-'use strict';
+#'use strict';
 
 // Game3-Precise — Fully reversible incremental game with NO reconstruction
 //
@@ -71,25 +71,6 @@ class Game3 {
 
     // Operation stack - stores reversible operations
     this._opStack = [];
-
-    // Initialize center stone
-    const center = ((size >> 1) * size) + (size >> 1);
-    const centerGid = this._nextGid++;
-    this._gc[centerGid] = BLACK;
-    this._gid[center] = centerGid;
-    this.cells[center] = BLACK;
-    this._addStone(center, centerGid, BLACK);
-    this.emptyCount--;
-
-    // Add liberties for the center stone (its 4 empty neighbors)
-    const nbr = this._nbr;
-    const base = center * 4;
-    for (let i = 0; i < 4; i++) {
-      const ni = nbr[base + i];
-      if (this.cells[ni] === EMPTY) {
-        this._addLiberty_raw(centerGid, ni);
-      }
-    }
 
     this.current = WHITE;
     this.moveCount = 1;
@@ -793,31 +774,13 @@ function game3FromGame2(game2) {
   const game3 = new Game3(N);
   const cap = N * N;
 
-  // Clear the initial center stone
-  const center = ((N >> 1) * N) + (N >> 1);
-  game3.cells[center] = EMPTY;
-  game3._gid[center] = -1;
-  game3._gc[0] = EMPTY;
-  game3._ss[0] = 0;
-  game3._ls[0] = 0;
-  game3.emptyCount = cap;
-  game3._nextGid = 0;
-  game3.moveCount = 0;
-
-  // Clear bitsets
-  for (let i = 0; i < game3._gc.length; i++) game3._gc[i] = EMPTY;
-  for (let i = 0; i < game3._ss.length; i++) game3._ss[i] = 0;
-  for (let i = 0; i < game3._ls.length; i++) game3._ls[i] = 0;
-  for (let i = 0; i < game3._sw.length; i++) game3._sw[i] = 0;
-  for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
-
   // Place stones from Game2 board state using play()
   // Set current player to the color we want to place before each play()
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
-      if (game3.isLegal(i)) {
-        game3.play(i);
+      if (!game3.play(i)) {
+        console.log('illegal move in board position??', coordStr(i));
       }
     }
   }
