@@ -20,6 +20,8 @@ const duration = parseFloat(get('--duration', 'Infinity'));
 
 const { Game2, PASS } = require('./game2.js');
 const { getLadderStatus2 } = require('./ladder2.js');
+const { makeXorShift } = require('./xorshift.js');
+const rng = makeXorShift(1);
 
 const N   = 13;
 const cap = N * N;
@@ -28,7 +30,7 @@ const cap = N * N;
 function playOneRandom(game2) {
   // Fast path: random probes.
   for (let k = 0; k < 32; k++) {
-    const idx = Math.floor(Math.random() * cap);
+    const idx = rng.int(cap);
     if (game2.cells[idx] !== 0) continue;
     if (game2.isTrueEye(idx))   continue;
     if (game2.isLegal(idx))     { game2.play(idx); return; }
@@ -39,7 +41,7 @@ function playOneRandom(game2) {
     if (game2.cells[i] === 0 && !game2.isTrueEye(i) && game2.isLegal(i)) cands.push(i);
   }
   for (let i = cands.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = rng.int(i + 1);
     const t = cands[i]; cands[i] = cands[j]; cands[j] = t;
   }
   if (cands.length > 0) { game2.play(cands[0]); return; }

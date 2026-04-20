@@ -1,5 +1,8 @@
 'use strict';
 
+const { makeXorShift } = require('./xorshift.js');
+const rng = makeXorShift(1);
+
 const { Game2, PASS, BLACK, WHITE, KOMI, setKomi, parseBoard } = require('./game2.js');
 const _BLACK = BLACK, _WHITE = WHITE; // aliases for pattern symmetry tests
 
@@ -936,7 +939,7 @@ section('getLadderStatus2 – sanity check on 50 random positions');
   for (let trial = 0; trial < 50; trial++) {
     const N = 9;
     const g = new Game2(N);
-    const moves = 20 + Math.floor(Math.random() * 21);
+    const moves = 20 + rng.int(21);
     for (let m = 0; m < moves && !g.gameOver; m++) g.play(g.randomLegalMove());
 
     const visitedGids = new Set();
@@ -1331,7 +1334,7 @@ section('Game3 random play/undo stress test');
         if (g3.cells[i] === 0 && !g3.isTrueEye(i) && g3.isLegal(i)) cands.push(i);
       }
       const idx = cands.length > 0
-        ? cands[Math.floor(Math.random() * cands.length)]
+        ? cands[rng.int(cands.length)]
         : PASS3;
       g3.play(idx);
       snaps.push(game2FromGame3(g3));
@@ -1560,7 +1563,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
       const cands = [];
       for (let i = 0; i < cap; i++) if (g.cells[i] === 0 && !g.isTrueEye(i) && g.isLegal(i)) cands.push(i);
       if (cands.length === 0) { g.play(-1); } else {
-        g.play(cands[Math.floor(Math.random() * cands.length)]);
+        g.play(cands[rng.int(cands.length)]);
       }
     }
     const tc = g.calcScore();
