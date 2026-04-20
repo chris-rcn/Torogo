@@ -359,6 +359,7 @@ class Game3 {
       if (this.consecutivePasses >= 2) {
         this.gameOver = true;
       }
+      this.ko = PASS;
       this.current = -this.current;
       this.moveCount++;
       return true;
