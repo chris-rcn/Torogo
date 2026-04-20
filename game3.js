@@ -779,8 +779,31 @@ function game3FromGame2(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
       game3.current = game2.cells[i];
+
+      // Count stones before placement
+      let stonesBefore = 0;
+      for (let j = 0; j < cap; j++) {
+        if (game3.cells[j] !== EMPTY) stonesBefore++;
+      }
+
       if (!game3.play(i)) {
-        console.log('illegal move in board position??', coordStr(i));
+        console.log('illegal move in board position??', i);
+      }
+
+      // Count stones after placement
+      let stonesAfter = 0;
+      for (let j = 0; j < cap; j++) {
+        if (game3.cells[j] !== EMPTY) stonesAfter++;
+      }
+
+      // Check if a capture occurred (more stones removed than the one we placed)
+      // After placing one stone, we should have exactly 1 more stone
+      // If we have fewer, a capture happened
+      if (stonesAfter < stonesBefore + 1) {
+        console.log('CAPTURE DETECTED during game3FromGame2!');
+        console.log('Placed stone at', i, 'but captures occurred');
+        console.log('Stones before:', stonesBefore, 'after:', stonesAfter);
+        process.exit(1);
       }
     }
   }
