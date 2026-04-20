@@ -12,9 +12,9 @@ const Util = (() => {
   }
 
   // Fisher-Yates in-place shuffle.  Returns arr.
-  function shuffle(arr) {
+  function shuffle(arr, rng) {
     for (let i = arr.length - 1; i > 0; i--) {
-      const j = randInt(i + 1);
+      const j = rng ? rng.int(i + 1) : randInt(i + 1);
       const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
     }
     return arr;

@@ -34,6 +34,7 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -170,9 +171,10 @@ function findRandom(game2, candidates) {
 
 // ── main ───────────────────────────────────────────────────────────────────
 
-function getMove(game, _timeBudgetMs) {
+function getMove(game, _timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass' };
 
+  const rng   = options.rng || makeRng();
   const game2 = game.cells ? game.clone() : game.toGame2();
   const N     = game2.N;
   const color = game2.current;
@@ -194,7 +196,7 @@ function getMove(game, _timeBudgetMs) {
     if (game2.isTrueEye(i)) continue;
     candidates.push(i);
   }
-  Util.shuffle(candidates);
+  Util.shuffle(candidates, rng);
 
   return findThreat(game2, candidates)
       || findRandom(game2, candidates)

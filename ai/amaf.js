@@ -75,7 +75,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   if (game2.moveCount >= cap / 2 || game2.consecutivePasses > 0) {
     candidates.push(PASS);
   }
-  Util.shuffle(candidates);
+  Util.shuffle(candidates, rng);
 
   // AMAF stats indexed by cell (0..N*N-1); pass stored at N*N.
   const wins  = new Float32Array(cap + 1);
