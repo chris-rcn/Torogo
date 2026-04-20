@@ -640,7 +640,7 @@ class Game3 {
 
     // Add column labels if requested
     if (showAxes) {
-      let header = '   ';
+      let header = '    ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         header += String.fromCharCode(97 + bx) + ' ';
