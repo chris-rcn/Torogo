@@ -827,12 +827,12 @@ class Game2 {
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
   // Fisher-Yates over the empty-cell list in-place; _emptySlot kept consistent.
-  randomLegalMove() {
+  randomLegalMove(rng = Math) {
     const ec     = this.emptyCount;
     const eCells = this._emptyCells;
     const eSlot  = this._emptySlot;
     for (let end = ec - 1; end >= 0; end--) {
-      const ri  = (Math.random() * (end + 1)) | 0;
+      const ri  = (rng.random() * (end + 1)) | 0;
       const idx = eCells[ri];
       if (!this.isTrueEye(idx) && this.isLegal(idx)) return idx;
       const t     = eCells[end];
