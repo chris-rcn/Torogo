@@ -25,6 +25,7 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
+const { makeXorShift } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
 
@@ -184,7 +185,7 @@ function makeNode(move, parent, ci, mover, game2, N, table) {
 // priors) ranks them within the unvisited tier.                                                                                                                                                             
 // A separate prior term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
 // guide early exploration without ever diluting the RAVE statistics.                                                                
-function ucbScore(moveIdx, node) {
+function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
   // Prior
@@ -205,13 +206,13 @@ function ucbScore(moveIdx, node) {
   const wr = (priorWR * patEquiv + raveWR * RAVE_EQUIV + realWR * realV)
            / (          patEquiv +        + RAVE_EQUIV +          realV);
 
-  const scoreBase = wr + 0.001 * Math.random();
+  const scoreBase = wr + 0.001 * rng.random();
   return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / (1 + realV));
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
 
-function selectAndExpand(root, rootGame2, N, table) {
+function selectAndExpand(root, rootGame2, N, table, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -222,7 +223,7 @@ function selectAndExpand(root, rootGame2, N, table) {
     // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = ucbScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
@@ -321,7 +322,7 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMoveWith(game, timeBudgetMs, table) {
+function getMoveWith(game, timeBudgetMs, table, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
@@ -333,6 +334,7 @@ function getMoveWith(game, timeBudgetMs, table) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
+  const rng = options.rng || makeXorShift();
   const root = makeNode(null, null, -1, null, game2, N, table);
 
   const deadline = performance.now() + timeBudgetMs;
@@ -340,7 +342,7 @@ function getMoveWith(game, timeBudgetMs, table) {
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, table);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, table, rng);
     const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
     backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
   } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
@@ -350,9 +352,9 @@ function getMoveWith(game, timeBudgetMs, table) {
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root, rng) > bestScore)) {
       bestVisits = cv;
-      bestScore  = ucbScore(i, root);
+      bestScore  = ucbScore(i, root, rng);
       bestIdx    = i;
     }
   }
@@ -386,10 +388,10 @@ function getMoveWith(game, timeBudgetMs, table) {
   return result;
 }
 
-function getMove(game, timeBudgetMs) { return getMoveWith(game, timeBudgetMs, patternTable); }
+function getMove(game, timeBudgetMs, options = {}) { return getMoveWith(game, timeBudgetMs, patternTable, options); }
 
 function makeGetMove(table) {
-  return (game, timeBudgetMs) => getMoveWith(game, timeBudgetMs, table);
+  return (game, timeBudgetMs, options = {}) => getMoveWith(game, timeBudgetMs, table, options);
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove, makeGetMove };
