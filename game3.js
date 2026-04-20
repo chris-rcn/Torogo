@@ -1,4 +1,4 @@
-#'use strict';
+'use strict';
 
 // Game3-Precise — Fully reversible incremental game with NO reconstruction
 //
