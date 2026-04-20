@@ -692,7 +692,7 @@ class Game2 {
 
     // Top axis labels
     if (showAxes) {
-      let colLabel = '   ';
+      let colLabel = '    ';
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
         const letter = String.fromCharCode(97 + bx);
