@@ -689,7 +689,7 @@ class Game2 {
     const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
 
     const rows = [];
-    for (let dy = 0; dy < N; dy++) {
+    for (let dy = N - 1; dy >= 0; dy--) {
       const by = (y0 + dy) % N;
       const mx = (dy === dmy) ? dmx : -1;
       let row = (mx === 0) ? '(' : ' ';
@@ -859,12 +859,45 @@ function agentMoveToIdx(agentMove, N) {
 
 // Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation.
 // Rows are top-to-bottom (row N..1).  Row numbers and letter labels are stripped.
+// Marked positions (with parentheses like (●)) are tracked as lastMove.
 // toMove defaults to BLACK.
 function parseBoard(boardStr, toMove = BLACK) {
   const valid = new Set(['●','○','·','X','O','.']);
-  const rows = boardStr.trim().split('\n')
-    .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
-    .filter(row => row.length > 0);
+  const lines = boardStr.trim().split('\n');
+  const rows = [];
+  let markIdx = PASS;
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx].trim();
+    const row = [];
+    let charIdx = 0;
+
+    while (charIdx < line.length) {
+      const ch = line[charIdx];
+
+      // Check for mark syntax (sym)
+      if (ch === '(' && charIdx + 2 < line.length && line[charIdx + 2] === ')') {
+        const sym = line[charIdx + 1];
+        if (valid.has(sym)) {
+          row.push(sym);
+          markIdx = { x: row.length - 1, y: rows.length };
+          charIdx += 3;
+          continue;
+        }
+      }
+
+      // Regular symbol
+      if (valid.has(ch)) {
+        row.push(ch);
+        charIdx++;
+      } else {
+        charIdx++;  // Skip whitespace, commas, digits, etc.
+      }
+    }
+
+    if (row.length > 0) rows.push(row);
+  }
+
   const size = rows.length;
   const g = new Game2(size, false);
   for (let y = 0; y < size; y++)
@@ -874,6 +907,14 @@ function parseBoard(boardStr, toMove = BLACK) {
       if (ch === '●' || ch === 'X') g._place(idx, BLACK);
       else if (ch === '○' || ch === 'O') g._place(idx, WHITE);
     }
+
+  // Convert marked display coordinates to board index
+  if (markIdx !== PASS && typeof markIdx === 'object') {
+    const boardY = size - 1 - markIdx.y;
+    const boardX = markIdx.x;
+    g.lastMove = boardY * size + boardX;
+  }
+
   g.current = toMove;
   return g;
 }
