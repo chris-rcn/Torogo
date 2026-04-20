@@ -6,6 +6,8 @@ const { game3FromGame2 } = require('./game3.js');
 
 console.log('Testing round-trip board representation consistency (9x9)\n');
 
+const rng = Math; // todo: replace with xorshift
+
 let passed = 0;
 let failed = 0;
 
@@ -16,7 +18,7 @@ for (let test = 0; test < 500; test++) {
 
   // Play random moves until game ends
   while (g2_original.consecutivePasses < 1 && !g2_original.gameOver) {
-    const move = g2_original.randomLegalMove();
+    const move = g2_original.randomLegalMove(rng);
     g2_original.play(move);
   }
 
