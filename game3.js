@@ -72,25 +72,6 @@ class Game3 {
     // Operation stack - stores reversible operations
     this._opStack = [];
 
-    // Initialize center stone
-    const center = ((size >> 1) * size) + (size >> 1);
-    const centerGid = this._nextGid++;
-    this._gc[centerGid] = BLACK;
-    this._gid[center] = centerGid;
-    this.cells[center] = BLACK;
-    this._addStone(center, centerGid, BLACK);
-    this.emptyCount--;
-
-    // Add liberties for the center stone (its 4 empty neighbors)
-    const nbr = this._nbr;
-    const base = center * 4;
-    for (let i = 0; i < 4; i++) {
-      const ni = nbr[base + i];
-      if (this.cells[ni] === EMPTY) {
-        this._addLiberty_raw(centerGid, ni);
-      }
-    }
-
     this.current = WHITE;
     this.moveCount = 1;
   }
