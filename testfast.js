@@ -819,7 +819,7 @@ section('getLadderStatus2 – 2-liberty group: attacker fails (ladder has escape
     · · · · ● ○ ●
     · · · · ● ● ●
   `, '●');
-  const whiteStone = 4 * N + 5;   // f5 = (5,4)
+  const whiteStone = 2 * N + 5;   // f5: parseBoard inverts y (input row 4 → board y=2)
   const r = getLadderStatus2(g2, whiteStone);
   assert(r !== null,                'attack fail: non-null result');
   assert(r.libs.length === 2,       'attack fail: group has 2 libs');
@@ -873,7 +873,7 @@ section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
-  const r = getLadderStatus2(g2, 5 * N + 4);  // white stone at (4,5)
+  const r = getLadderStatus2(g2, (N - 1 - 5) * N + 4);  // white stone at row 5 col 4 (parseBoard inverts y)
   assert(r !== null,                            'pos1: non-null result');
   assert(r.moverSucceeds === false,             'pos1: white group is doomed → moverSucceeds false');
   assert(r.urgentLibs.length === 0,             'pos1: no escape → no urgent libs');
@@ -897,7 +897,7 @@ section('getLadderStatus2 – real-game ladder pos3: white 12-stone doomed group
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
-  const r = getLadderStatus2(g2, 5 * N + 3);  // white stone at (3,5)
+  const r = getLadderStatus2(g2, (N - 1 - 5) * N + 3);  // white stone at row 5 col 3 (parseBoard inverts y)
   assert(r !== null,                            'pos3: non-null result');
   assert(r.moverSucceeds === false,             'pos3: white group is doomed → moverSucceeds false');
   assert(r.urgentLibs.length === 0,             'pos3: no escape → no urgent libs');
@@ -921,11 +921,11 @@ section('getLadderStatus2 – real-game ladder pos6: black to move, captures whi
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '●');
-  const r = getLadderStatus2(g2, 4 * N + 2);  // white stone at (2,4)
+  const r = getLadderStatus2(g2, (N - 1 - 4) * N + 2);  // white stone at row 4 col 2 (parseBoard inverts y)
   assert(r !== null,                            'pos6: non-null result');
   assert(r.moverSucceeds === true,              'pos6: black can capture → moverSucceeds true');
   assert(r.urgentLibs.length === 1,             'pos6: one urgent liberty');
-  assert(r.urgentLibs[0] === 3 * N + 2,        'pos6: urgent lib is (2,3)');
+  assert(r.urgentLibs[0] === (N - 1 - 3) * N + 2, 'pos6: urgent lib is (2,3)');
 }
 
 section('getLadderStatus2 – sanity check on 50 random positions');
