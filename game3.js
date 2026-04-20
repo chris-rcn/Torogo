@@ -76,6 +76,24 @@ class Game3 {
 
     // Operation stack - stores reversible operations
     this._opStack = [];
+
+    // Pool of W-word scratch buffers, reused across merge/undo cycles to
+    // avoid per-merge Int32Array(W) allocations in merge-heavy search.
+    this._wordBufferPool = [];
+  }
+
+  // Pop a W-word scratch buffer from the pool, or allocate a fresh one.
+  // Contents are undefined; caller overwrites every word before reading.
+  _acquireWordBuffer() {
+    return this._wordBufferPool.length > 0
+      ? this._wordBufferPool.pop()
+      : new Int32Array(this._W);
+  }
+
+  // Return a buffer to the pool after its op has been fully undone. Caller
+  // must not retain a reference after releasing.
+  _releaseWordBuffer(buf) {
+    this._wordBufferPool.push(buf);
   }
 
   // Clear all state back to a fresh empty board (matches constructor output).
@@ -232,31 +250,29 @@ class Game3 {
   }
 
   _mergeGroups(mainGid, otherId) {
-    // Merge group into main with exact reversal
-    // Records which stones and liberties came from the other group
+    // Merge other group into main, recording just enough to reverse.
+    //
+    // Post-merge invariant used for undo: merge does NOT touch _sw[ob],
+    // _lw[ob], _ss[ob] or _ls[ob], and no later op addresses otherId (it has
+    // no _gid entries pointing at it), so those stay frozen at their
+    // pre-merge values. That means:
+    //   - otherStones = _sw[ob] at undo time (no snapshot needed).
+    //   - otherLibs   = _lw[ob] at undo time (no snapshot needed).
+    //   - otherSize   = _ss[ob] at undo time.
+    //   - mainSize    = _ss[mainGid] - _ss[otherId] at undo time.
+    //   - mainStones  = _sw[gb] ^ _sw[ob] (groups never share stones).
+    // Only mainLibs is genuinely lost, because merge does _lw[gb] |= _lw[ob]
+    // and we cannot recover mainLibsBefore from the OR when the two groups
+    // share liberties. So we snapshot that one bitset — into a pooled
+    // buffer, not a fresh Int32Array.
     const W = this._W;
     const gb = mainGid * W;
     const ob = otherId * W;
 
-    // Snapshot the main group's data before merge (for exact reversal)
-    const mainStones = new Int32Array(W);
-    const mainLibs = new Int32Array(W);
+    const mainLibs = this._acquireWordBuffer();
     for (let wi = 0; wi < W; wi++) {
-      mainStones[wi] = this._sw[gb + wi];
       mainLibs[wi] = this._lw[gb + wi];
     }
-    const mainSize = this._ss[mainGid];
-    const mainLibCount = this._ls[mainGid];
-
-    // Snapshot the other group's data for reversal
-    const otherStones = new Int32Array(W);
-    const otherLibs = new Int32Array(W);
-    for (let wi = 0; wi < W; wi++) {
-      otherStones[wi] = this._sw[ob + wi];
-      otherLibs[wi] = this._lw[ob + wi];
-    }
-    const otherSize = this._ss[otherId];
-    const otherLibCount = this._ls[otherId];
 
     // Merge stones
     for (let wi = 0; wi < W; wi++) {
@@ -276,19 +292,11 @@ class Game3 {
     }
     this._ls[mainGid] = this._pop32Count(mainGid, W);
 
-    // Record merge operation with snapshots for reversal
     this._opStack.push({
       type: OP_MERGE_GROUPS,
       mainGid: mainGid,
       otherId: otherId,
-      mainStones: mainStones,
       mainLibs: mainLibs,
-      mainSize: mainSize,
-      mainLibCount: mainLibCount,
-      otherStones: otherStones,
-      otherLibs: otherLibs,
-      otherSize: otherSize,
-      otherLibCount: otherLibCount,
     });
   }
 
@@ -611,37 +619,29 @@ class Game3 {
       // Undo: add liberty back
       this._addLiberty_raw(op.gid, op.idx);
     } else if (op.type === OP_MERGE_GROUPS) {
-      // Undo: restore both main and other groups to pre-merge state
+      // Undo: rebuild main's state using otherId's preserved snapshot.
+      // See _mergeGroups for the invariant this relies on.
       const gb = op.mainGid * W;
       const ob = op.otherId * W;
 
-      // Restore main group's stones and liberties
       for (let wi = 0; wi < W; wi++) {
-        // Restore main group stones (remove merged-in stones)
-        this._sw[gb + wi] = op.mainStones[wi];
-        // Restore main group liberties
-        this._lw[gb + wi] = op.mainLibs[wi];
-      }
-
-      // Restore stones from other group
-      for (let wi = 0; wi < W; wi++) {
-        let w = op.otherStones[wi];
+        // Move otherId's stones' _gid entries back.
+        let w = this._sw[ob + wi];
         while (w) {
           const bit = 31 - Math.clz32(w & -w);
           this._gid[wi * 32 + bit] = op.otherId;
           w &= w - 1;
         }
-        // Restore other group's stones
-        this._sw[ob + wi] = op.otherStones[wi];
-        // Restore other group's liberties
-        this._lw[ob + wi] = op.otherLibs[wi];
+        // Remove other's stones from main's bitset (groups are disjoint).
+        this._sw[gb + wi] &= ~this._sw[ob + wi];
+        // Restore main's liberty bitset from the snapshot.
+        this._lw[gb + wi] = op.mainLibs[wi];
       }
+      // Restore main's counts; other's counts were never modified.
+      this._ss[op.mainGid] -= this._ss[op.otherId];
+      this._ls[op.mainGid] = this._pop32Count(op.mainGid, W);
 
-      // Restore sizes and liberty counts exactly as they were before merge
-      this._ss[op.mainGid] = op.mainSize;
-      this._ss[op.otherId] = op.otherSize;
-      this._ls[op.mainGid] = op.mainLibCount;
-      this._ls[op.otherId] = op.otherLibCount;
+      this._releaseWordBuffer(op.mainLibs);
     }
   }
 
