@@ -800,9 +800,13 @@ function game3FromGame2(game2) {
       // After placing one stone, we should have exactly 1 more stone
       // If we have fewer, a capture happened
       if (stonesAfter < stonesBefore + 1) {
-        console.log('CAPTURE DETECTED during game3FromGame2!');
-        console.log('Placed stone at', i, 'but captures occurred');
+        console.log('\n=== CAPTURE DETECTED ===');
+        console.log('Placed stone at', i, '(' + (i % 13) + ',' + ((i / 13) | 0) + ')');
         console.log('Stones before:', stonesBefore, 'after:', stonesAfter);
+        console.log('\nGame2 board state:');
+        console.log(game2.toString(PASS));
+        console.log('\nGame3 board state at capture:');
+        console.log(game3.toString(PASS));
         process.exit(1);
       }
     }
