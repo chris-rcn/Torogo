@@ -629,7 +629,11 @@ section('Game2.groupStones: all stones belong to the correct color');
 // ─── getLadderStatus2 ────────────────────────────────────────────────────────
 // stoneIdx = y * N + x.
 
-const { getLadderStatus2, getAllLadderStatuses } = require('./ladder2.js');
+const { getLadderStatus, getAllLadderStatuses: _getAllLadderStatuses } = require('./ladder2.js');
+const { game3FromGame2 } = require('./game3.js');
+// ladder2.js operates on Game3 (play/undo). Fixtures below build Game2 — convert on call.
+const getLadderStatus2     = (g2, idx) => getLadderStatus(game3FromGame2(g2), idx);
+const getAllLadderStatuses = (g2, min) => _getAllLadderStatuses(game3FromGame2(g2), min);
 
 // Helper: build a Game2 from a board string (uses game2.js parseBoard).
 // toPlay is '●' (black) or '○' (white).

@@ -797,61 +797,37 @@ class Game3 {
   }
 }
 
-// Convert a Game2 instance to a Game3 instance
+// Convert a Game2 instance to a Game3 instance by replaying stones in index
+// order. Valid positions satisfy the invariant that every placement is legal
+// and causes no capture, so either failure indicates an invalid Game2 position.
 function game3FromGame2(game2) {
   const N = game2.N;
   const game3 = new Game3(N);
   const cap = N * N;
 
-  // Place stones from Game2 board state using play()
-  // Set current player to the color we want to place before each play()
+  let stonesPlaced = 0;
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY) {
-      game3.current = game2.cells[i];
-      if (!game3.isLegal(i)) {
-        console.log('\n=== ILLEGAL MOVE ===');
-        console.log('Cell', coordStr(i, N), 'is not legal in Game3');
-        console.log('Game2 cell:', game2.cells[i] === BLACK ? 'BLACK' : 'WHITE');
-        console.log('\nGame2 board state:');
-        console.log(game2.toString(PASS));
-        console.log('\nGame3 board state:');
-        console.log(game3.toString(PASS));
-        process.exit(1);
-      }
-
-      // Count stones before placement
-      let stonesBefore = 0;
-      for (let j = 0; j < cap; j++) {
-        if (game3.cells[j] !== EMPTY) stonesBefore++;
-      }
-
-      if (!game3.play(i)) {
-        console.log('illegal move in board position??', i);
-      }
-
-      // Count stones after placement
-      let stonesAfter = 0;
-      for (let j = 0; j < cap; j++) {
-        if (game3.cells[j] !== EMPTY) stonesAfter++;
-      }
-
-      // Check if a capture occurred (more stones removed than the one we placed)
-      // After placing one stone, we should have exactly 1 more stone
-      // If we have fewer, a capture happened
-      if (stonesAfter < stonesBefore + 1) {
-        console.log('\n=== CAPTURE DETECTED ===');
-        console.log('Placed stone at', coordStr(i, N));
-        console.log('Stones before:', stonesBefore, 'after:', stonesAfter);
-        console.log('\nGame2 board state:');
-        console.log(game2.toString(PASS));
-        console.log('\nGame3 board state at capture:');
-        console.log(game3.toString(PASS));
-        process.exit(1);
-      }
+    if (game2.cells[i] === EMPTY) continue;
+    game3.current = game2.cells[i];
+    if (!game3.isLegal(i)) {
+      throw new Error(
+        `game3FromGame2: cell ${coordStr(i, N)} (` +
+        `${game2.cells[i] === BLACK ? 'BLACK' : 'WHITE'}) is not legal in Game3\n` +
+        `Game2 board:\n${game2.toString(PASS)}\n` +
+        `Game3 board:\n${game3.toString(PASS)}`
+      );
+    }
+    game3.play(i);
+    stonesPlaced++;
+    if (game3.emptyCount !== cap - stonesPlaced) {
+      throw new Error(
+        `game3FromGame2: capture detected placing ${coordStr(i, N)}\n` +
+        `Game2 board:\n${game2.toString(PASS)}\n` +
+        `Game3 board:\n${game3.toString(PASS)}`
+      );
     }
   }
 
-  // Copy game state from Game2
   game3.current = game2.current;
   game3.ko = game2.ko;
   game3.consecutivePasses = game2.consecutivePasses;

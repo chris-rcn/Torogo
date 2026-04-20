@@ -174,11 +174,11 @@ function searchChain(game, stoneIdx, nodeLimit = Infinity, depthLimit = 10) {
         let unused;
         [escape, unused] = canReach4Libs(game, stoneIdx, budget, 0, depthLimit);
         credits += unused;
+        game.undo();
       } else {
         escape = false;
         credits += budget;  // return unspent budget to pool
       }
-      game.undo();
     }
     if (escape !== null && defending === escape) {
       moverSucceeds = true;
