@@ -20,6 +20,9 @@
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS = -1;
 
+// Import coordStr from game2 for coordinate display
+const { coordStr } = require('./game2.js');
+
 // Operation types (integers, not strings)
 const OP_ADD_STONE = 0;
 const OP_REMOVE_STONE = 1;
