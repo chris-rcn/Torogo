@@ -812,14 +812,29 @@ function game3FromGame2(game2) {
   for (let i = 0; i < game3._lw.length; i++) game3._lw[i] = 0;
 
   // Place stones from Game2 board state using play()
-  // Set current player to the color we want to place before each play()
+  // Use multiple passes to handle order-dependent legality:
+  // stones may only become legal after their neighbors are placed
+  const toPlace = [];
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] !== EMPTY) {
-      game3.current = game2.cells[i];
-      if (game3.isLegal(i)) {
-        game3.play(i);
+      toPlace.push(i);
+    }
+  }
+
+  let pass = 0;
+  while (toPlace.length > 0 && pass < 100) {
+    let placed = false;
+    for (let i = toPlace.length - 1; i >= 0; i--) {
+      const idx = toPlace[i];
+      game3.current = game2.cells[idx];
+      if (game3.isLegal(idx)) {
+        game3.play(idx);
+        toPlace.splice(i, 1);
+        placed = true;
       }
     }
+    if (!placed) break;  // No progress made; remaining stones may have issues
+    pass++;
   }
 
   // Copy game state from Game2
