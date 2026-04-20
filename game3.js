@@ -35,7 +35,9 @@ const OP_PASS = 6;
 const _topologyCache = new Map();
 
 class Game3 {
-  // Initialize game with center black stone, ready for white's first move
+  // Initialize an empty game. Caller is responsible for any opening move:
+  // Game3 intentionally does NOT auto-place a Torogo-opening stone, so that
+  // game3FromGame2 and other replay entry points start from a clean board.
   constructor(size) {
     this.N = size;
     this.boardSize = size;
@@ -75,8 +77,45 @@ class Game3 {
     // Operation stack - stores reversible operations
     this._opStack = [];
 
+    // Pool of W-word scratch buffers, reused across merge/undo cycles to
+    // avoid per-merge Int32Array(W) allocations in merge-heavy search.
+    this._wordBufferPool = [];
+  }
+
+  // Pop a W-word scratch buffer from the pool, or allocate a fresh one.
+  // Contents are undefined; caller overwrites every word before reading.
+  _acquireWordBuffer() {
+    return this._wordBufferPool.length > 0
+      ? this._wordBufferPool.pop()
+      : new Int32Array(this._W);
+  }
+
+  // Return a buffer to the pool after its op has been fully undone. Caller
+  // must not retain a reference after releasing.
+  _releaseWordBuffer(buf) {
+    this._wordBufferPool.push(buf);
+  }
+
+  // Clear all state back to a fresh empty board (matches constructor output).
+  reset() {
+    const cap = this.N * this.N;
+    this.cells.fill(0);
+    this._gid.fill(-1);
+    const used = this._nextGid * this._W;
+    this._sw.fill(0, 0, used);
+    this._ss.fill(0, 0, this._nextGid);
+    this._lw.fill(0, 0, used);
+    this._ls.fill(0, 0, this._nextGid);
+    this._gc.fill(0, 0, this._nextGid);
+    this._nextGid = 0;
     this.current = BLACK;
+    this.ko = PASS;
+    this.consecutivePasses = 0;
+    this.gameOver = false;
     this.moveCount = 0;
+    this.lastMove = PASS;
+    this.emptyCount = cap;
+    this._opStack.length = 0;
   }
 
   // Get or compute neighbor tables and cell list for board size (with memoization)
@@ -95,6 +134,10 @@ class Game3 {
         nbr[i*4+1] = ((y+1  )%N)*N + x;
         nbr[i*4+2] = y*N + (x-1+N)%N;
         nbr[i*4+3] = y*N + (x+1  )%N;
+        dnbr[i*4+0] = ((y-1+N)%N)*N + (x-1+N)%N;
+        dnbr[i*4+1] = ((y-1+N)%N)*N + (x+1  )%N;
+        dnbr[i*4+2] = ((y+1  )%N)*N + (x-1+N)%N;
+        dnbr[i*4+3] = ((y+1  )%N)*N + (x+1  )%N;
       }
     }
     const allCells = new Int32Array(cap);
@@ -157,7 +200,7 @@ class Game3 {
 
   // Recording versions that also push operations
   // Add stone to group and record operation for undo
-  _addStone(idx, gid, color) {
+  _addStone(idx, gid) {
     this._addStone_raw(idx, gid);
     this._opStack.push({
       type: OP_ADD_STONE,
@@ -211,31 +254,29 @@ class Game3 {
   }
 
   _mergeGroups(mainGid, otherId) {
-    // Merge group into main with exact reversal
-    // Records which stones and liberties came from the other group
+    // Merge other group into main, recording just enough to reverse.
+    //
+    // Post-merge invariant used for undo: merge does NOT touch _sw[ob],
+    // _lw[ob], _ss[ob] or _ls[ob], and no later op addresses otherId (it has
+    // no _gid entries pointing at it), so those stay frozen at their
+    // pre-merge values. That means:
+    //   - otherStones = _sw[ob] at undo time (no snapshot needed).
+    //   - otherLibs   = _lw[ob] at undo time (no snapshot needed).
+    //   - otherSize   = _ss[ob] at undo time.
+    //   - mainSize    = _ss[mainGid] - _ss[otherId] at undo time.
+    //   - mainStones  = _sw[gb] ^ _sw[ob] (groups never share stones).
+    // Only mainLibs is genuinely lost, because merge does _lw[gb] |= _lw[ob]
+    // and we cannot recover mainLibsBefore from the OR when the two groups
+    // share liberties. So we snapshot that one bitset — into a pooled
+    // buffer, not a fresh Int32Array.
     const W = this._W;
     const gb = mainGid * W;
     const ob = otherId * W;
 
-    // Snapshot the main group's data before merge (for exact reversal)
-    const mainStones = new Int32Array(W);
-    const mainLibs = new Int32Array(W);
+    const mainLibs = this._acquireWordBuffer();
     for (let wi = 0; wi < W; wi++) {
-      mainStones[wi] = this._sw[gb + wi];
       mainLibs[wi] = this._lw[gb + wi];
     }
-    const mainSize = this._ss[mainGid];
-    const mainLibCount = this._ls[mainGid];
-
-    // Snapshot the other group's data for reversal
-    const otherStones = new Int32Array(W);
-    const otherLibs = new Int32Array(W);
-    for (let wi = 0; wi < W; wi++) {
-      otherStones[wi] = this._sw[ob + wi];
-      otherLibs[wi] = this._lw[ob + wi];
-    }
-    const otherSize = this._ss[otherId];
-    const otherLibCount = this._ls[otherId];
 
     // Merge stones
     for (let wi = 0; wi < W; wi++) {
@@ -255,19 +296,11 @@ class Game3 {
     }
     this._ls[mainGid] = this._pop32Count(mainGid, W);
 
-    // Record merge operation with snapshots for reversal
     this._opStack.push({
       type: OP_MERGE_GROUPS,
       mainGid: mainGid,
       otherId: otherId,
-      mainStones: mainStones,
       mainLibs: mainLibs,
-      mainSize: mainSize,
-      mainLibCount: mainLibCount,
-      otherStones: otherStones,
-      otherLibs: otherLibs,
-      otherSize: otherSize,
-      otherLibCount: otherLibCount,
     });
   }
 
@@ -381,6 +414,7 @@ class Game3 {
     const previousEmptyCount = this.emptyCount;
     const previousConsecutivePasses = this.consecutivePasses;
     const previousLastMove = this.lastMove;
+    const previousNextGid = this._nextGid;
 
     // Step 1: Mark cell as occupied
     this.cells[move] = color;
@@ -421,7 +455,7 @@ class Game3 {
       mainGid = this._nextGid++;
       this._gc[mainGid] = color;
       this._gid[move] = mainGid;
-      this._addStone(move, mainGid, color);
+      this._addStone(move, mainGid);
     } else {
       // Find largest group to merge into
       mainGid = sameColorGroupIds[0];
@@ -432,7 +466,7 @@ class Game3 {
       }
       // Add stone to main group
       this._gid[move] = mainGid;
-      this._addStone(move, mainGid, color);
+      this._addStone(move, mainGid);
 
       // Merge other groups
       for (const otherId of sameColorGroupIds) {
@@ -502,6 +536,7 @@ class Game3 {
       previousEmptyCount: previousEmptyCount,
       previousConsecutivePasses: previousConsecutivePasses,
       previousLastMove: previousLastMove,
+      previousNextGid: previousNextGid,
       opsStart: opCountBefore,
       captured: captured,
     });
@@ -513,8 +548,9 @@ class Game3 {
   }
 
   // Undo last move by reversing all recorded operations
+  // Returns true if a move was undone, false when the stack was empty.
   undo() {
-    if (this._opStack.length === 0) return;
+    if (this._opStack.length === 0) return false;
 
     // Pop operations in reverse order until we hit a move marker
     while (this._opStack.length > 0) {
@@ -527,7 +563,7 @@ class Game3 {
           this.gameOver = false;
         }
         this.moveCount--;
-        return;
+        return true;
       }
 
       if (op.type === OP_MOVE) {
@@ -540,18 +576,11 @@ class Game3 {
         this.cells[op.move] = EMPTY;
         this._gid[op.move] = -1;
 
-        // Restore captured stones with their group IDs
-        if (op.captured) {
-          for (const stone of op.captured) {
-            const stoneIdx = stone.idx || stone;  // Handle both old and new format
-            const gid = stone.gid;
-            // op.color is always stored as 1 or -1, so negation is safe
-            // (op.color is the color that made the move, so opponent is -op.color)
-            this.cells[stoneIdx] = -op.color; // Opponent color
-            if (gid !== undefined) {
-              this._gid[stoneIdx] = gid;  // Restore group ID
-            }
-          }
+        // Restore captured stones with their group IDs.
+        // op.color is the color that made the move, so captured stones are -op.color.
+        for (const stone of op.captured) {
+          this.cells[stone.idx] = -op.color;
+          this._gid[stone.idx] = stone.gid;
         }
 
         this.current = op.previousCurrent;
@@ -559,13 +588,15 @@ class Game3 {
         this.emptyCount = op.previousEmptyCount;
         this.consecutivePasses = op.previousConsecutivePasses;
         this.lastMove = op.previousLastMove;
+        this._nextGid = op.previousNextGid;
         this.moveCount--;
-        return;
+        return true;
       }
 
       // Undo individual operation
       this._undoOperation(op);
     }
+    return true;
   }
 
   // Reverse a single recorded operation
@@ -585,37 +616,29 @@ class Game3 {
       // Undo: add liberty back
       this._addLiberty_raw(op.gid, op.idx);
     } else if (op.type === OP_MERGE_GROUPS) {
-      // Undo: restore both main and other groups to pre-merge state
+      // Undo: rebuild main's state using otherId's preserved snapshot.
+      // See _mergeGroups for the invariant this relies on.
       const gb = op.mainGid * W;
       const ob = op.otherId * W;
 
-      // Restore main group's stones and liberties
       for (let wi = 0; wi < W; wi++) {
-        // Restore main group stones (remove merged-in stones)
-        this._sw[gb + wi] = op.mainStones[wi];
-        // Restore main group liberties
-        this._lw[gb + wi] = op.mainLibs[wi];
-      }
-
-      // Restore stones from other group
-      for (let wi = 0; wi < W; wi++) {
-        let w = op.otherStones[wi];
+        // Move otherId's stones' _gid entries back.
+        let w = this._sw[ob + wi];
         while (w) {
           const bit = 31 - Math.clz32(w & -w);
           this._gid[wi * 32 + bit] = op.otherId;
           w &= w - 1;
         }
-        // Restore other group's stones
-        this._sw[ob + wi] = op.otherStones[wi];
-        // Restore other group's liberties
-        this._lw[ob + wi] = op.otherLibs[wi];
+        // Remove other's stones from main's bitset (groups are disjoint).
+        this._sw[gb + wi] &= ~this._sw[ob + wi];
+        // Restore main's liberty bitset from the snapshot.
+        this._lw[gb + wi] = op.mainLibs[wi];
       }
+      // Restore main's counts; other's counts were never modified.
+      this._ss[op.mainGid] -= this._ss[op.otherId];
+      this._ls[op.mainGid] = this._pop32Count(op.mainGid, W);
 
-      // Restore sizes and liberty counts exactly as they were before merge
-      this._ss[op.mainGid] = op.mainSize;
-      this._ss[op.otherId] = op.otherSize;
-      this._ls[op.mainGid] = op.mainLibCount;
-      this._ls[op.otherId] = op.otherLibCount;
+      this._releaseWordBuffer(op.mainLibs);
     }
   }
 
@@ -797,61 +820,37 @@ class Game3 {
   }
 }
 
-// Convert a Game2 instance to a Game3 instance
+// Convert a Game2 instance to a Game3 instance by replaying stones in index
+// order. Valid positions satisfy the invariant that every placement is legal
+// and causes no capture, so either failure indicates an invalid Game2 position.
 function game3FromGame2(game2) {
   const N = game2.N;
   const game3 = new Game3(N);
   const cap = N * N;
 
-  // Place stones from Game2 board state using play()
-  // Set current player to the color we want to place before each play()
+  let stonesPlaced = 0;
   for (let i = 0; i < cap; i++) {
-    if (game2.cells[i] !== EMPTY) {
-      game3.current = game2.cells[i];
-      if (!game3.isLegal(i)) {
-        console.log('\n=== ILLEGAL MOVE ===');
-        console.log('Cell', coordStr(i, N), 'is not legal in Game3');
-        console.log('Game2 cell:', game2.cells[i] === BLACK ? 'BLACK' : 'WHITE');
-        console.log('\nGame2 board state:');
-        console.log(game2.toString(PASS));
-        console.log('\nGame3 board state:');
-        console.log(game3.toString(PASS));
-        process.exit(1);
-      }
-
-      // Count stones before placement
-      let stonesBefore = 0;
-      for (let j = 0; j < cap; j++) {
-        if (game3.cells[j] !== EMPTY) stonesBefore++;
-      }
-
-      if (!game3.play(i)) {
-        console.log('illegal move in board position??', i);
-      }
-
-      // Count stones after placement
-      let stonesAfter = 0;
-      for (let j = 0; j < cap; j++) {
-        if (game3.cells[j] !== EMPTY) stonesAfter++;
-      }
-
-      // Check if a capture occurred (more stones removed than the one we placed)
-      // After placing one stone, we should have exactly 1 more stone
-      // If we have fewer, a capture happened
-      if (stonesAfter < stonesBefore + 1) {
-        console.log('\n=== CAPTURE DETECTED ===');
-        console.log('Placed stone at', coordStr(i, N));
-        console.log('Stones before:', stonesBefore, 'after:', stonesAfter);
-        console.log('\nGame2 board state:');
-        console.log(game2.toString(PASS));
-        console.log('\nGame3 board state at capture:');
-        console.log(game3.toString(PASS));
-        process.exit(1);
-      }
+    if (game2.cells[i] === EMPTY) continue;
+    game3.current = game2.cells[i];
+    if (!game3.isLegal(i)) {
+      throw new Error(
+        `game3FromGame2: cell ${coordStr(i, N)} (` +
+        `${game2.cells[i] === BLACK ? 'BLACK' : 'WHITE'}) is not legal in Game3\n` +
+        `Game2 board:\n${game2.toString(PASS)}\n` +
+        `Game3 board:\n${game3.toString(PASS)}`
+      );
+    }
+    game3.play(i);
+    stonesPlaced++;
+    if (game3.emptyCount !== cap - stonesPlaced) {
+      throw new Error(
+        `game3FromGame2: capture detected placing ${coordStr(i, N)}\n` +
+        `Game2 board:\n${game2.toString(PASS)}\n` +
+        `Game3 board:\n${game3.toString(PASS)}`
+      );
     }
   }
 
-  // Copy game state from Game2
   game3.current = game2.current;
   game3.ko = game2.ko;
   game3.consecutivePasses = game2.consecutivePasses;

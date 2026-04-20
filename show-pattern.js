@@ -17,7 +17,10 @@ const fs   = require('fs');
 const path = require('path');
 const { Game2, BLACK, WHITE } = require('./game2.js');
 const { getPatternHashes }    = require('./pattern1.js');
-const { getLadderStatus2 }    = require('./ladder2.js');
+const { getLadderStatus: _getLadderStatus } = require('./ladder2.js');
+const { game3FromGame2 }      = require('./game3.js');
+// ladder2.js operates on Game3; callers here pass Game2 positions — convert on call.
+const getLadderStatus = (g2, idx) => _getLadderStatus(game3FromGame2(g2), idx);
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
@@ -72,7 +75,7 @@ function printAdjacentLadders(game2, idx) {
     if (lc === 0 || lc > 2) continue;
     const color  = game2.cells[nidx] === BLACK ? '●' : '○';
     const size   = game2.groupSize(gid);
-    const status = getLadderStatus2(game2, nidx);
+    const status = getLadderStatus(game2, nidx);
     const urgentCoords = status.urgentLibs.map(i => {
       const ux = i % N, uy = (i / N) | 0;
       return String.fromCharCode(97 + ux) + String.fromCharCode(97 + uy);

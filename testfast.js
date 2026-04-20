@@ -629,7 +629,11 @@ section('Game2.groupStones: all stones belong to the correct color');
 // ─── getLadderStatus2 ────────────────────────────────────────────────────────
 // stoneIdx = y * N + x.
 
-const { getLadderStatus2, getAllLadderStatuses } = require('./ladder2.js');
+const { getLadderStatus, getAllLadderStatuses: _getAllLadderStatuses } = require('./ladder2.js');
+const { game3FromGame2 } = require('./game3.js');
+// ladder2.js operates on Game3 (play/undo). Fixtures below build Game2 — convert on call.
+const getLadderStatus2     = (g2, idx) => getLadderStatus(game3FromGame2(g2), idx);
+const getAllLadderStatuses = (g2, min) => _getAllLadderStatuses(game3FromGame2(g2), min);
 
 // Helper: build a Game2 from a board string (uses game2.js parseBoard).
 // toPlay is '●' (black) or '○' (white).
@@ -815,7 +819,7 @@ section('getLadderStatus2 – 2-liberty group: attacker fails (ladder has escape
     · · · · ● ○ ●
     · · · · ● ● ●
   `, '●');
-  const whiteStone = 4 * N + 5;   // f5 = (5,4)
+  const whiteStone = 2 * N + 5;   // f5: parseBoard inverts y (input row 4 → board y=2)
   const r = getLadderStatus2(g2, whiteStone);
   assert(r !== null,                'attack fail: non-null result');
   assert(r.libs.length === 2,       'attack fail: group has 2 libs');
@@ -869,7 +873,7 @@ section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
-  const r = getLadderStatus2(g2, 5 * N + 4);  // white stone at (4,5)
+  const r = getLadderStatus2(g2, (N - 1 - 5) * N + 4);  // white stone at row 5 col 4 (parseBoard inverts y)
   assert(r !== null,                            'pos1: non-null result');
   assert(r.moverSucceeds === false,             'pos1: white group is doomed → moverSucceeds false');
   assert(r.urgentLibs.length === 0,             'pos1: no escape → no urgent libs');
@@ -893,7 +897,7 @@ section('getLadderStatus2 – real-game ladder pos3: white 12-stone doomed group
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '○');
-  const r = getLadderStatus2(g2, 5 * N + 3);  // white stone at (3,5)
+  const r = getLadderStatus2(g2, (N - 1 - 5) * N + 3);  // white stone at row 5 col 3 (parseBoard inverts y)
   assert(r !== null,                            'pos3: non-null result');
   assert(r.moverSucceeds === false,             'pos3: white group is doomed → moverSucceeds false');
   assert(r.urgentLibs.length === 0,             'pos3: no escape → no urgent libs');
@@ -917,11 +921,11 @@ section('getLadderStatus2 – real-game ladder pos6: black to move, captures whi
     · · ○ · · · ○ · ● ● · ● ·
     ○ ○ · · ○ · ○ · · · ● · ·
   `, '●');
-  const r = getLadderStatus2(g2, 4 * N + 2);  // white stone at (2,4)
+  const r = getLadderStatus2(g2, (N - 1 - 4) * N + 2);  // white stone at row 4 col 2 (parseBoard inverts y)
   assert(r !== null,                            'pos6: non-null result');
   assert(r.moverSucceeds === true,              'pos6: black can capture → moverSucceeds true');
   assert(r.urgentLibs.length === 1,             'pos6: one urgent liberty');
-  assert(r.urgentLibs[0] === 3 * N + 2,        'pos6: urgent lib is (2,3)');
+  assert(r.urgentLibs[0] === (N - 1 - 3) * N + 2, 'pos6: urgent lib is (2,3)');
 }
 
 section('getLadderStatus2 – sanity check on 50 random positions');
@@ -1075,28 +1079,47 @@ section('getAllLadderStatuses – each entry matches getLadderStatus2');
 
 section('getAllLadderStatuses – each gid appears exactly once');
 {
-  // A 2-stone group sharing a gid should appear only once.
+  // A 2-stone group sharing a gid should appear only once. The black c5–d5
+  // group has 2 liberties (c4, d4), so it's included by getAllLadderStatuses
+  // and must not be listed twice despite being reached via both stones.
   const N = 9;
   const g2 = _buildGame2Pos(`
     · · · · · · · · ·
     · · · · · · · · ·
     · · · · · · · · ·
-    · · ○ · · · · · ·
-    · ○ ● ○ · · · · ·
-    · · ○ · · · · · ·
-    · · ● · · · · · ·
-    · · ○ · · · · · ·
+    · · ○ ○ · · · · ·
+    · ○ ● ● ○ · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
+    · · · · · · · · ·
     · · · · · · · · ·
   `, '●');
   const all = getAllLadderStatuses(g2);
   const gids = all.map(e => e.gid);
   const unique = new Set(gids);
   assert(gids.length === unique.size, `each gid appears once (got ${gids})`);
+  assert(gids.length >= 1, `at least one 1–2 lib group included (got ${gids.length})`);
 }
 
 // ─── Game3 ───────────────────────────────────────────────────────────────────
 
 const { Game3, PASS: PASS3, BLACK: BLACK3, WHITE: WHITE3 } = require('./game3.js');
+
+// Helper: build a Game2 snapshot of a Game3's current position by copying
+// observable state (cells + scalars). Group structure is rebuilt by _place.
+function game2FromGame3(g3) {
+  const N = g3.N;
+  const g2 = new Game2(N, false);
+  for (let i = 0; i < N * N; i++) {
+    if (g3.cells[i] !== 0) g2._place(i, g3.cells[i]);
+  }
+  g2.current           = g3.current;
+  g2.ko                = g3.ko;
+  g2.consecutivePasses = g3.consecutivePasses;
+  g2.gameOver          = g3.gameOver;
+  g2.moveCount         = g3.moveCount;
+  return g2;
+}
 
 // Helper: compare all observable state between a Game3 and a Game2 instance.
 function game3MatchesGame2(g3, g2) {
@@ -1118,15 +1141,17 @@ function game3MatchesGame2(g3, g2) {
   return null; // match
 }
 
-section('Game3 construction matches Game2');
+section('Game3 construction matches empty Game2');
 {
+  // Game3 intentionally starts empty (no Torogo opening stone), so compare
+  // with Game2(N, false) which also skips the first move.
   const g3 = new Game3(9);
-  const g2 = new Game2(9);
+  const g2 = new Game2(9, false);
   assert(g3.N === 9,                          'game3 N=9');
-  assert(g3.current === WHITE3,               'game3: white to play after construction');
-  assert(g3.cells[4*9+4] === BLACK3,          'game3: center stone is black');
-  assert(g3._undoStack.length === 0,          'game3: undo stack starts empty');
-  assert(game3MatchesGame2(g3, g2) === null,  'game3 initial state matches game2');
+  assert(g3.current === BLACK3,               'game3: black to play after construction');
+  assert(g3.cells[4*9+4] === 0,               'game3: center cell is empty');
+  assert(g3._opStack.length === 0,            'game3: undo stack starts empty');
+  assert(game3MatchesGame2(g3, g2) === null,  'game3 initial state matches empty game2');
 }
 
 section('Game3 undo of a pass');
@@ -1142,21 +1167,21 @@ section('Game3 undo of a pass');
   assert(g3.ko                === before.ko,      'undo pass: ko restored');
   assert(g3.consecutivePasses === before.cp,      'undo pass: consecutivePasses restored');
   assert(g3.moveCount         === before.mc,      'undo pass: moveCount restored');
-  assert(g3._undoStack.length === 0,              'undo pass: stack empty');
+  assert(g3._opStack.length === 0,              'undo pass: stack empty');
 }
 
 section('Game3 undo of a place: scalars and cells');
 {
   const N = 9;
   const g3 = new Game3(N);
-  const g2ref = new Game2(N);  // reference stays at initial state
+  const g2ref = new Game2(N, false);  // empty reference matches empty Game3
   const idx = 2 * N + 3;
   g3.play(idx);
   assert(g3.cells[idx] !== 0, 'stone placed');
   assert(g3.undo() === true,  'undo returns true');
   const err = game3MatchesGame2(g3, g2ref);
   assert(err === null, `undo place: state matches initial game2 (${err})`);
-  assert(g3._undoStack.length === 0, 'stack empty after undo');
+  assert(g3._opStack.length === 0, 'stack empty after undo');
 }
 
 section('Game3 undo of a place: group structure');
@@ -1175,19 +1200,20 @@ section('Game3 undo of a place: group structure');
 
 section('Game3 undo of a capture: stones restored');
 {
-  // Surround the initial center stone and capture it.
+  // Place a BLACK stone at center, then surround it with WHITE to capture.
   const N = 9;
   const c = N >> 1;  // center = 4
   const g3 = new Game3(N);
-  // constructor placed BLACK at center, current = WHITE.
-  // WHITE fills three neighbours of center.
-  g3.play(c * N + (c - 1));  // (3,4)
+  g3.play(c * N + c);        // BLACK center (first move on an empty Game3)
+  // Now current = WHITE. WHITE fills three neighbours of center, BLACK
+  // answers elsewhere so it stays WHITE's turn for the capturing move.
+  g3.play(c * N + (c - 1));  // WHITE (3,4)
   g3.play(1);                 // BLACK plays elsewhere
-  g3.play(c * N + (c + 1));  // (5,4)
+  g3.play(c * N + (c + 1));  // WHITE (5,4)
   g3.play(2);                 // BLACK plays elsewhere
-  g3.play((c - 1) * N + c);  // (4,3)
+  g3.play((c - 1) * N + c);  // WHITE (4,3)
   g3.play(3);                 // BLACK plays elsewhere
-  // Now WHITE plays the last liberty: (4,5) — captures BLACK center stone.
+  // WHITE plays the last liberty: (4,5) — captures BLACK center stone.
   const capMove = (c + 1) * N + c;
   g3.play(capMove);
   assert(g3.cells[c * N + c] === 0, 'center stone captured');
@@ -1216,11 +1242,11 @@ section('Game3 multiple undo levels');
 {
   const N = 9;
   const g3  = new Game3(N);
-  const g2s = [new Game2(N)];  // snapshots after each move
+  const g2s = [new Game2(N, false)];  // empty reference, matches empty Game3
   const moves = [3*N+3, 5*N+5, 3*N+5, 5*N+3, 4*N+6, 6*N+4];
   for (const m of moves) {
     g3.play(m);
-    const snap = g3.clone();  // Game2 clone of current state
+    const snap = game2FromGame3(g3);  // Game2 clone of current state
     g2s.push(snap);
   }
   // Undo all moves one by one and compare with saved snapshots.
@@ -1251,11 +1277,12 @@ section('Game3 illegal move does not corrupt undo stack');
 {
   const N = 9;
   const g3 = new Game3(N);
-  const occupied = 4 * N + 4;  // center, placed by constructor
-  const before = g3._undoStack.length;
+  const occupied = 4 * N + 4;  // center — occupy it explicitly first
+  g3.play(occupied);
+  const before = g3._opStack.length;
   const result = g3.play(occupied);
   assert(result === false,                          'play on occupied cell returns false');
-  assert(g3._undoStack.length === before,           'stack unchanged after illegal move');
+  assert(g3._opStack.length === before,             'stack unchanged after illegal move');
   assert(g3.cells[occupied] === BLACK3,             'occupied cell unchanged');
 }
 
@@ -1265,11 +1292,11 @@ section('Game3 reset clears undo stack');
   const g3 = new Game3(N);
   g3.play(2 * N + 2);
   g3.play(3 * N + 3);
-  assert(g3._undoStack.length > 0, 'stack non-empty before reset');
+  assert(g3._opStack.length > 0, 'stack non-empty before reset');
   g3.reset();
-  assert(g3._undoStack.length === 0, 'stack empty after reset');
-  const g2 = new Game2(N);
-  assert(game3MatchesGame2(g3, g2) === null, 'state matches fresh game2 after reset');
+  assert(g3._opStack.length === 0, 'stack empty after reset');
+  const g2 = new Game2(N, false);  // reset() leaves an empty board, not the Torogo opening
+  assert(game3MatchesGame2(g3, g2) === null, 'state matches empty game2 after reset');
 }
 
 section('Game3 play/undo/replay gives same state');
@@ -1279,7 +1306,7 @@ section('Game3 play/undo/replay gives same state');
   const g3 = new Game3(N);
   const idx = 3 * N + 5;
   g3.play(idx);
-  const snap = g3.clone();  // Game2 snapshot after first play
+  const snap = game2FromGame3(g3);  // Game2 snapshot after first play
   g3.undo();
   g3.play(idx);
   const err = game3MatchesGame2(g3, snap);
@@ -1295,7 +1322,7 @@ section('Game3 random play/undo stress test');
   let ok = true;
   for (let t = 0; t < TRIALS && ok; t++) {
     const g3 = new Game3(N);
-    const snaps = [g3.clone()];
+    const snaps = [game2FromGame3(g3)];
     let played = 0;
     for (let d = 0; d < DEPTH && !g3.gameOver; d++) {
       // Pick a random legal non-true-eye move or pass.
@@ -1307,7 +1334,7 @@ section('Game3 random play/undo stress test');
         ? cands[Math.floor(Math.random() * cands.length)]
         : PASS3;
       g3.play(idx);
-      snaps.push(g3.clone());
+      snaps.push(game2FromGame3(g3));
       played++;
     }
     for (let d = played - 1; d >= 0; d--) {
@@ -1679,10 +1706,11 @@ section('RAVE vs passer: game ends quickly');
 {
   // Passer always passes; after passer's first pass RAVE sees consecutivePasses=1
   // and the obvious-pass check fires immediately (already winning), so the game
-  // ends in just a few moves.
+  // ends in just a few moves. Uses 9×9 because KOMI(9)=3.5 keeps BLACK ahead
+  // with only the centre stone, while KOMI(7)=48.5 does not.
   const { getMove: raveAgent } = require('./ai/rave.js');
   const { getMove: passerAgent } = require('./ai/passer.js');
-  const N = 7;
+  const N = 9;
   const g = new Game2(N);
   let moves = 0;
   while (!g.gameOver && moves < 4 * N * N) {
@@ -1716,11 +1744,11 @@ section('toString centerAt: mark appears at correct display position');
   // Place a stone and use its index as both lastMove and centerAt.
   const idx = 2*N+2; // centre cell (2,2)
   g.cells[idx] = BLACK;
-  const out = g.toString(idx, { centerAt: idx });
+  const out = g.toString(idx, { centerAt: idx, showAxes: false });
   const rows = out.split('\n');
   // The mark '(' must appear somewhere in the output.
   assert(out.includes('('), 'mark parenthesis present');
-  assert(rows.length === N, `output has ${N} rows`);
+  assert(rows.length === N, `output has ${N} rows (no axes)`);
 }
 
 section('toString centerAt: wraps toroidally — corner cell centered splits board');
