@@ -658,7 +658,7 @@ class Game3 {
       rows.push(header);
     }
 
-    for (let dy = 0; dy < N; dy++) {
+    for (let dy = N - 1; dy >= 0; dy--) {
       const by = (y0 + dy) % N;
       const mx = (dy === dmy) ? dmx : -1;
       let row = '';
