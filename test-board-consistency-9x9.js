@@ -6,7 +6,20 @@ const { game3FromGame2 } = require('./game3.js');
 
 console.log('Testing round-trip board representation consistency (9x9)\n');
 
-const rng = Math; // todo: replace with xorshift
+// Xorshift32 RNG for deterministic reproducible randomness
+class XorShift32 {
+  constructor(seed = 12345) {
+    this.state = seed >>> 0;
+  }
+  random() {
+    this.state ^= this.state << 13;
+    this.state ^= this.state >> 17;
+    this.state ^= this.state << 5;
+    return (this.state >>> 0) / 0x100000000;
+  }
+}
+
+const rng = new XorShift32();
 
 let passed = 0;
 let failed = 0;
