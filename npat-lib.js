@@ -528,6 +528,77 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   if (d3 !== 0) vals[tIds[3]] += d3;
 }
 
+// ── Entropy-bonus step ────────────────────────────────────────────────────────
+//
+// Keep the softmax distribution from collapsing by pushing weights in the
+// direction of higher per-state entropy H = −Σ π_i log π_i.  The gradient
+//   ∂H/∂w = Σ_i π_i · (−log π_i − H) · (feat_i − <feat>)
+// has the same sum-over-moves structure as REINFORCE, so per move i the
+// contribution is c_i · feat_i with
+//   c_i = β · π_i · (−log π_i − H)
+// and a balancing −Σ_i π_i·c_i term that we fold in via the same <feat>
+// baseline trick: writing c_i as is, Σ_i c_i · <feat> = 0 because Σ c_i = 0
+// (by construction of H).  So we can just apply Δw[k] += c_i · feat_i_k for
+// every move i and the baseline cancels itself across moves.
+//
+// state.probs must already be populated (by policyMove / _computeSoftmax).
+
+let _entScratch = new Float64Array(0);
+
+function entropyBonusUpdate(state, weights, beta) {
+  const n = state.count;
+  if (n === 0 || beta === 0) return;
+
+  const patIds  = state.patIds;
+  const probs   = state.probs;
+  const tact    = state.tact;
+  const vals    = weights.vals;
+  const delta   = weights.delta;
+  const tIds    = weights.tactIds;
+  const touched = state.touched;
+  if (_entScratch.length < n) _entScratch = new Float64Array(n);
+  const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
+  let tc = 0;
+
+  // Compute H = −Σ π_i log π_i and cache −log(π_i).
+  let H = 0;
+  for (let i = 0; i < n; i++) {
+    const pi = probs[i];
+    const lp = pi > 0 ? -Math.log(pi) : 0;
+    logs[i] = lp;
+    H += pi * lp;
+  }
+
+  // Accumulate per-move coefficients onto shape pids, and tactical totals.
+  let acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+  for (let i = 0; i < n; i++) {
+    const pi = probs[i];
+    if (pi === 0) continue;
+    const ci = beta * pi * (logs[i] - H);
+    if (ci === 0) continue;
+    const off9 = i * 9;
+    for (let k = 0; k < 9; k++) {
+      const idx = patIds[off9 + k];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
+    const off4 = i * N_TACT;
+    acc0 += ci * tact[off4];
+    acc1 += ci * tact[off4 + 1];
+    acc2 += ci * tact[off4 + 2];
+    acc3 += ci * tact[off4 + 3];
+  }
+  for (let i = 0; i < tc; i++) {
+    const idx = touched[i];
+    const d = delta[idx];
+    if (d !== 0) { vals[idx] += d; delta[idx] = 0; }
+  }
+  if (acc0 !== 0) vals[tIds[0]] += acc0;
+  if (acc1 !== 0) vals[tIds[1]] += acc1;
+  if (acc2 !== 0) vals[tIds[2]] += acc2;
+  if (acc3 !== 0) vals[tIds[3]] += acc3;
+}
+
 // ── Module exports ────────────────────────────────────────────────────────────
 
 const NPatterns = {
@@ -539,6 +610,7 @@ const NPatterns = {
   policyMove,
   greedyMove,
   reinforceUpdate,
+  entropyBonusUpdate,
   annotateLadders,
   canonKey,
   // Constants.

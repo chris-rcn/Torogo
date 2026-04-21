@@ -36,6 +36,7 @@ const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'
 const LR         = parseFloat(opts.lr || '0.05');
 const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
+const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
@@ -142,6 +143,7 @@ function trainGame(N) {
     const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
     const adv = BASELINE > 0 ? (R - ema) : R;
     NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR);
+    if (BETA > 0) NPat.entropyBonusUpdate(s, weights, LR * BETA);
     stepsApplied++;
   }
 
@@ -197,6 +199,7 @@ if (opts.help) {
   --lr F           learning rate (default 0.05)
   --baseline F     EMA decay for reward baseline (default 0.95; 0 disables)
   --epsilon F      uniform-random exploration rate (default 0)
+  --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -218,7 +221,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}`);
+console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
