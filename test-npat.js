@@ -1,7 +1,7 @@
 'use strict';
 
-// Tests for npat-lib.js — the nine-pattern policy features with ladder-aware
-// cell encoding.
+// Tests for npat-lib.js — nine-pattern (3-state shape) policy features plus
+// four orthogonal stacking tactical features.
 
 const NPat = require('./npat-lib.js');
 const { Game2, BLACK, WHITE, PASS, parseBoard } = require('./game2.js');
@@ -13,14 +13,19 @@ function check(label, ok) {
 }
 
 const {
-  CELL_EMPTY, CELL_EMPTY_URGENT,
-  CELL_FRIEND, CELL_FOE,
-  CELL_BASE,   CELLS_BASE,
+  CELL_EMPTY, CELL_FRIEND, CELL_FOE,
+  CELL_BASE,  CELLS_BASE,
+  N_TACT,
+  TACT_URGENT_KILL, TACT_URGENT_SAVE,
+  TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
+  TACT_RAW_BASE,
   canonKey, _D4,
 } = NPat;
 
-check('CELL_BASE is 4', CELL_BASE === 4);
-check('CELLS_BASE is 4^9', CELLS_BASE === 262144);
+check('CELL_BASE is 3', CELL_BASE === 3);
+check('CELLS_BASE is 3^9', CELLS_BASE === 19683);
+check('N_TACT is 4', N_TACT === 4);
+check('TACT_RAW_BASE is 9 * CELLS_BASE', TACT_RAW_BASE === 9 * 19683);
 
 // ── 1. canonKey respects D4 symmetry ────────────────────────────────────────
 //
@@ -35,17 +40,16 @@ function applyD4(relPos, cells, perm) {
 }
 
 const cases = [
-  { relPos: 4, cells: [0,2,0, 0,0,0, 0,3,0] },  // candidate center; friend N, foe S
-  { relPos: 0, cells: [0,2,3, 3,2,0, 2,0,3] },  // candidate top-left, full stones
-  { relPos: 8, cells: [2,0,0, 0,0,0, 0,0,0] },  // candidate bottom-right; friend at top-left
-  { relPos: 2, cells: [0,0,0, 2,3,2, 0,0,3] },  // candidate top-right
-  { relPos: 4, cells: [1,2,3, 3,0,1, 2,1,3] },  // with urgent-liberty markers
-  { relPos: 1, cells: [0,1,0, 3,2,3, 0,2,0] },  // mixed
+  { relPos: 4, cells: [0,1,0, 0,0,0, 0,2,0] },  // candidate center; friend N, foe S
+  { relPos: 0, cells: [0,1,2, 2,1,0, 1,0,2] },  // candidate top-left, full stones
+  { relPos: 8, cells: [1,0,0, 0,0,0, 0,0,0] },  // candidate bottom-right; friend at top-left
+  { relPos: 2, cells: [0,0,0, 1,2,1, 0,0,2] },  // candidate top-right
+  { relPos: 1, cells: [0,0,0, 2,1,2, 0,1,0] },  // mixed
 ];
 
 for (const c of cases) {
   check(`case sanity: candidate cell is empty (relPos=${c.relPos})`,
-    c.cells[c.relPos] === CELL_EMPTY || c.cells[c.relPos] === CELL_EMPTY_URGENT);
+    c.cells[c.relPos] === CELL_EMPTY);
 
   const baseKey = canonKey(c.relPos, c.cells);
   for (let di = 0; di < 8; di++) {
@@ -58,17 +62,16 @@ for (const c of cases) {
 
 // ── 2. Distinct patterns get distinct canonical keys (barring symmetry) ─────
 {
-  // (relPos=4, center friend) vs (relPos=4, center foe) are not D4-equivalent.
   const k1 = canonKey(4, [0,0,0, 0,0,0, 0,0,0]);    // all empty
-  const k2 = canonKey(4, [0,0,0, 0,0,0, 2,0,0]);    // one friend at corner
-  const k3 = canonKey(4, [0,0,0, 0,0,0, 3,0,0]);    // one foe at corner
+  const k2 = canonKey(4, [0,0,0, 0,0,0, 1,0,0]);    // one friend at corner
+  const k3 = canonKey(4, [0,0,0, 0,0,0, 2,0,0]);    // one foe at corner
   check('all-empty pattern differs from single-friend pattern', k1 !== k2);
   check('single-friend pattern differs from single-foe pattern', k2 !== k3);
 
   // Four symmetric corner-friend patterns all collapse to the same key.
-  check('corner NW friend ≡ corner NE friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,2, 0,0,0, 0,0,0]));
-  check('corner NW friend ≡ corner SW friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 2,0,0]));
-  check('corner NW friend ≡ corner SE friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 0,0,2]));
+  check('corner NW friend ≡ corner NE friend', canonKey(4, [1,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,1, 0,0,0, 0,0,0]));
+  check('corner NW friend ≡ corner SW friend', canonKey(4, [1,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 1,0,0]));
+  check('corner NW friend ≡ corner SE friend', canonKey(4, [1,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 0,0,1]));
 }
 
 // ── 3. Empty 5×5 board — per-move feature multiset ──────────────────────────
@@ -92,7 +95,7 @@ for (const c of cases) {
   check('empty board, per-move window multiset [1,4,4]',
     JSON.stringify(vals) === '[1,4,4]');
 
-  // Every move produces the same multiset.
+  // Every move produces the same shape multiset, and zero tactical counts.
   let allSame = true;
   const sm = [...m0].sort().join(',');
   for (let i = 1; i < st.count; i++) {
@@ -100,18 +103,18 @@ for (const c of cases) {
     if (a !== sm) { allSame = false; break; }
   }
   check('empty board, every move has the same pattern multiset', allSame);
+  let anyTact = false;
+  for (let i = 0; i < st.count * N_TACT; i++) if (st.tact[i]) { anyTact = true; break; }
+  check('empty board: all tactical counts are zero', !anyTact);
 }
 
-// ── 4. Ladder annotation: chain in atari is marked urgent ───────────────────
+// ── 4. Ladder annotation: chain in atari sets URGENT_KILL at its liberty ────
 //
 // Set up a black chain in atari with exactly one liberty.  White's move.
-// The liberty is urgent for white (playing there captures).  Per ladder2,
-// urgentLibs is non-empty → stoneUrgent on the chain's stones and libUrgent
-// on the liberty point.
+// The liberty is urgent for white (playing there captures a foe chain).
 {
   const N = 5;
   const g = new Game2(N, false);
-  // White surrounds a black stone at (2,2): white at N,E,S; black has 1 lib (W).
   g._place(2 * N + 2, BLACK); // black at (2,2)
   g._place(1 * N + 2, WHITE); // white at (1,2)
   g._place(3 * N + 2, WHITE); // white at (3,2)
@@ -120,67 +123,62 @@ for (const c of cases) {
   const st = NPat.createState(N);
   NPat.extractFeatures(g, st);
 
-  const libIdx        = 2 * N + 1; // (2,1), the remaining liberty
+  const libIdx = 2 * N + 1; // (2,1), the remaining liberty
 
-  check('ladder annotation: liberty cell marked libUrgent',
-    st.ladder.libUrgent[libIdx] === 1);
+  // tactCount[libIdx * N_TACT + TACT_URGENT_KILL] should be 1; save/wasted 0.
+  const tc = st.ladder.tactCount;
+  check('ladder annotation: liberty cell marked URGENT_KILL',
+    tc[libIdx * N_TACT + TACT_URGENT_KILL] === 1);
+  check('ladder annotation: liberty cell not marked URGENT_SAVE',
+    tc[libIdx * N_TACT + TACT_URGENT_SAVE] === 0);
+  check('ladder annotation: liberty cell not marked WASTED_EXTEND',
+    tc[libIdx * N_TACT + TACT_WASTED_EXTEND] === 0);
+  check('ladder annotation: liberty cell not marked WASTED_ATTACK',
+    tc[libIdx * N_TACT + TACT_WASTED_ATTACK] === 0);
 
-  // The urgent liberty move, when extracted as a candidate, has its candidate
-  // cell encoded as EMPTY_URGENT — even after canonicalisation this must
-  // distinguish it from a plain EMPTY-centered candidate in an otherwise
-  // identical neighbourhood.  Here we just check the pattern features differ
-  // between the urgent-liberty candidate and an unrelated far candidate.
-  let urgIdx = -1, farIdx = -1;
-  for (let i = 0; i < st.count; i++) {
-    if (st.moves[i] === libIdx)       urgIdx = i;
-    if (st.moves[i] === 0 * N + 0)    farIdx = i;
-  }
+  // The per-candidate tact buffer should reflect the same values.
+  let urgIdx = -1;
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { urgIdx = i; break; }
   check('urgent liberty candidate present', urgIdx >= 0);
-  check('far candidate present',            farIdx >= 0);
+  check('candidate tact[URGENT_KILL] is 1',
+    st.tact[urgIdx * N_TACT + TACT_URGENT_KILL] === 1);
 
-  const urg = [...st.patIds.subarray(urgIdx * 9, (urgIdx + 1) * 9)].sort().join(',');
-  const far = [...st.patIds.subarray(farIdx * 9, (farIdx + 1) * 9)].sort().join(',');
-  check('urgent-liberty move has different features from empty-area move',
-    urg !== far);
+  // A far candidate has all-zero tactical counts.
+  let farIdx = -1;
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === 0 * N + 0) { farIdx = i; break; }
+  check('far candidate present', farIdx >= 0);
+  let farZero = true;
+  for (let k = 0; k < N_TACT; k++) if (st.tact[farIdx * N_TACT + k]) { farZero = false; break; }
+  check('far candidate: all tactical counts zero', farZero);
 }
 
-// ── 5. Ladder-off vs ladder-on produce different pattern keys ───────────────
-//
-// Same board, but flip one of the white stones away so the black chain now
-// has 2 liberties (still analyzable by ladder2, but urgentLibs may be empty
-// if neither side can force a result).  Confirm the keys change when the
-// tactical landscape changes.
+// ── 5. Friend-in-atari (from mover perspective) sets URGENT_SAVE ────────────
 {
   const N = 5;
-  const g1 = new Game2(N, false);
-  g1._place(2 * N + 2, BLACK);
-  g1._place(1 * N + 2, WHITE);
-  g1._place(3 * N + 2, WHITE);
-  g1._place(2 * N + 3, WHITE);
-  g1.current = WHITE;
+  const g = new Game2(N, false);
+  g._place(2 * N + 2, BLACK);
+  g._place(1 * N + 2, WHITE);
+  g._place(3 * N + 2, WHITE);
+  g._place(2 * N + 3, WHITE);
+  g.current = BLACK; // now mover is the chain owner
 
-  const g2 = new Game2(N, false);
-  g2._place(2 * N + 2, BLACK);
-  g2._place(1 * N + 2, WHITE);
-  // no south white — chain has 2 liberties (W and S) instead of 1.
-  g2._place(2 * N + 3, WHITE);
-  g2.current = WHITE;
-
-  const st1 = NPat.createState(N);
-  const st2 = NPat.createState(N);
-  NPat.extractFeatures(g1, st1);
-  NPat.extractFeatures(g2, st2);
-
+  const st = NPat.createState(N);
+  NPat.extractFeatures(g, st);
   const libIdx = 2 * N + 1;
-  function idsFor(st, idx) {
-    for (let i = 0; i < st.count; i++) if (st.moves[i] === idx)
-      return [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
-    return null;
-  }
-  const a = idsFor(st1, libIdx);
-  const b = idsFor(st2, libIdx);
-  check('atari position vs 2-lib position produce different pattern keys',
-    a !== null && b !== null && a !== b);
+
+  // moverSucceeds may be false here (1 lib with neighbours hemming it in),
+  // in which case the liberty is marked WASTED_EXTEND instead of URGENT_SAVE.
+  // We just assert: exactly one of {URGENT_SAVE, WASTED_EXTEND} is set, and
+  // the KILL / ATTACK slots are zero.
+  const tc = st.ladder.tactCount;
+  const save   = tc[libIdx * N_TACT + TACT_URGENT_SAVE];
+  const wExt   = tc[libIdx * N_TACT + TACT_WASTED_EXTEND];
+  const kill   = tc[libIdx * N_TACT + TACT_URGENT_KILL];
+  const wAtk   = tc[libIdx * N_TACT + TACT_WASTED_ATTACK];
+  check('friend-in-atari: either URGENT_SAVE or WASTED_EXTEND fires',
+    (save === 1 && wExt === 0) || (save === 0 && wExt === 1));
+  check('friend-in-atari: URGENT_KILL is 0', kill === 0);
+  check('friend-in-atari: WASTED_ATTACK is 0', wAtk === 0);
 }
 
 // ── 6. D4 board symmetry → D4 feature symmetry ──────────────────────────────
@@ -244,22 +242,18 @@ for (const c of cases) {
   }
   check('REINFORCE setup: found a non-symmetric move', chosen >= 0);
 
-  function score(i) {
+  function scoreShape(i) {
     const off = i * 9; let s = 0;
     for (let k = 0; k < 9; k++) s += w.vals[st.patIds[off + k]];
     return s;
   }
-  const before = score(chosen);
+  const before = scoreShape(chosen);
   NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
-  const after = score(chosen);
-  check('REINFORCE(+1): chosen move logit increases', after > before);
+  const after = scoreShape(chosen);
+  check('REINFORCE(+1): chosen move shape logit increases', after > before);
 }
 
-// ── 9. No urgent chains on a quiet board → no urgent cell-encoding bits ────
-//
-// A chain with ≥3 liberties is not tactically urgent.  All nine-pattern keys
-// around the chain should use only CELL_EMPTY / CELL_FRIEND / CELL_FOE — i.e.
-// the annotateLadders flags must be zero.
+// ── 9. No urgent chains on a quiet board → all tactical counts zero ────────
 {
   const N = 7;
   const g = new Game2(N, false);
@@ -267,18 +261,12 @@ for (const c of cases) {
   g.current = WHITE;
 
   const ladder = NPat.annotateLadders(g);
-  let anyUrgent = false;
-  for (let i = 0; i < N * N; i++) {
-    if (ladder.libUrgent[i]) { anyUrgent = true; break; }
-  }
-  check('quiet board (chain with 4 libs): no urgent cells', !anyUrgent);
+  let any = false;
+  for (let i = 0; i < N * N * N_TACT; i++) if (ladder.tactCount[i]) { any = true; break; }
+  check('quiet board (chain with 4 libs): no tactical bits set', !any);
 }
 
-// ── 10. Urgent liberty and its D4-symmetric counterpart get the same key ────
-//
-// On a toroidal 7×7 board, set up TWO identical atari situations at positions
-// related by a D4 rotation.  The urgent liberties of both ataris must produce
-// the same multiset of 9 canonical pattern keys.
+// ── 10. Rotated atari → matching shape multisets AND matching tact counts ──
 {
   const N = 7;
   // Configuration A: black in atari at (2,2), surrounded N, E, S by white.
@@ -289,12 +277,12 @@ for (const c of cases) {
   gA._place(2 * N + 3, WHITE);
   gA.current = WHITE;
 
-  // Configuration B: the 180°-rotation of A.  (2,2) → (4,4).  N→S, E→W, S→N.
+  // Configuration B: the 180°-rotation of A.  (2,2) → (4,4).
   const gB = new Game2(N, false);
   gB._place(4 * N + 4, BLACK);
-  gB._place(5 * N + 4, WHITE);   // rotated N (1,2) → (5,4)
-  gB._place(3 * N + 4, WHITE);   // rotated S (3,2) → (3,4)
-  gB._place(4 * N + 3, WHITE);   // rotated E (2,3) → (4,3)
+  gB._place(5 * N + 4, WHITE);
+  gB._place(3 * N + 4, WHITE);
+  gB._place(4 * N + 3, WHITE);
   gB.current = WHITE;
 
   const stA = NPat.createState(N);
@@ -302,19 +290,142 @@ for (const c of cases) {
   NPat.extractFeatures(gA, stA);
   NPat.extractFeatures(gB, stB);
 
-  const libA = 2 * N + 1;   // remaining liberty of A
-  const libB = 4 * N + 5;   // remaining liberty of B (rotated from (2,1))
+  const libA = 2 * N + 1;
+  const libB = 4 * N + 5;
 
-  function ids(state, idx) {
-    for (let i = 0; i < state.count; i++) if (state.moves[i] === idx)
-      return [...state.patIds.subarray(i * 9, (i + 1) * 9)].sort();
-    return null;
+  function candIdx(state, idx) {
+    for (let i = 0; i < state.count; i++) if (state.moves[i] === idx) return i;
+    return -1;
   }
-  const a = ids(stA, libA);
-  const b = ids(stB, libB);
-  check('rotated atari: both urgent liberties present', a !== null && b !== null);
-  check('rotated atari: pattern multisets match',
+  const iA = candIdx(stA, libA), iB = candIdx(stB, libB);
+  check('rotated atari: both urgent liberties present', iA >= 0 && iB >= 0);
+
+  const a = [...stA.patIds.subarray(iA * 9, (iA + 1) * 9)].sort();
+  const b = [...stB.patIds.subarray(iB * 9, (iB + 1) * 9)].sort();
+  check('rotated atari: shape pattern multisets match',
     JSON.stringify(a) === JSON.stringify(b));
+
+  const tA = [...stA.tact.subarray(iA * N_TACT, (iA + 1) * N_TACT)];
+  const tB = [...stB.tact.subarray(iB * N_TACT, (iB + 1) * N_TACT)];
+  check('rotated atari: tactical counts match',
+    JSON.stringify(tA) === JSON.stringify(tB));
+  check('rotated atari: URGENT_KILL fires exactly once',
+    tA[TACT_URGENT_KILL] === 1 && tB[TACT_URGENT_KILL] === 1);
+}
+
+// ── 11. Stacking: WASTED_ATTACK fires twice at a lib shared by two chains ───
+//
+// Two separate black chains with 2 liberties each, placed with lots of
+// surrounding open space so the mover cannot force a kill (moverSucceeds
+// stays false for both).  They share one liberty — the shared cell's
+// WASTED_ATTACK count must be 2, one per chain.
+{
+  const N = 11;
+  const g = new Game2(N, false);
+  // Chain 1: black at (3,5), walls N & W → libs E and S.
+  g._place(3 * N + 5, BLACK);
+  g._place(2 * N + 5, WHITE);
+  g._place(3 * N + 4, WHITE);
+  // Chain 2: black at (5,5), walls S & W → libs E and N.  Shares lib (4,5).
+  g._place(5 * N + 5, BLACK);
+  g._place(6 * N + 5, WHITE);
+  g._place(5 * N + 4, WHITE);
+  g.current = WHITE;
+
+  const st = NPat.createState(N);
+  NPat.extractFeatures(g, st);
+  const libIdx = 4 * N + 5;
+
+  let cand = -1;
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { cand = i; break; }
+  check('stacking: shared-lib candidate found', cand >= 0);
+  if (cand >= 0) {
+    check('stacking: WASTED_ATTACK count is 2 (one per chain)',
+      st.tact[cand * N_TACT + TACT_WASTED_ATTACK] === 2);
+    check('stacking: URGENT_KILL is 0',
+      st.tact[cand * N_TACT + TACT_URGENT_KILL] === 0);
+  }
+}
+
+// ── 12. Coexistence: one move is URGENT_KILL and URGENT_SAVE simultaneously ─
+//
+// A shared liberty where playing captures a foe chain AND saves a friend
+// chain.  Row 3 with white (mover) in atari at (3,1), black in atari at (3,3),
+// shared liberty at (3,2) — playing there extends white's chain (saving it,
+// if the resulting chain has enough libs) and captures the black chain
+// neighbour.  Exact urgency depends on ladder outcome; we assert at least
+// both URGENT_KILL and URGENT_SAVE fire on that cell.  If ladder2 reports
+// WASTED_EXTEND instead of URGENT_SAVE (rare on 7×7 with this setup), we
+// accept that outcome as well — the coexistence we really test is
+// KILL + (SAVE or WASTED_EXTEND).
+{
+  const N = 7;
+  const g = new Game2(N, false);
+  // White chain in atari at (3,1): surround N, S, W with black.
+  g._place(3 * N + 1, WHITE);
+  g._place(2 * N + 1, BLACK);
+  g._place(4 * N + 1, BLACK);
+  g._place(3 * N + 0, BLACK);
+  // Black chain in atari at (3,3): surround N, S, E with white.
+  g._place(3 * N + 3, BLACK);
+  g._place(2 * N + 3, WHITE);
+  g._place(4 * N + 3, WHITE);
+  g._place(3 * N + 4, WHITE);
+  g.current = WHITE;
+
+  const st = NPat.createState(N);
+  NPat.extractFeatures(g, st);
+  const libIdx = 3 * N + 2;
+
+  let cand = -1;
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { cand = i; break; }
+  check('coexist: candidate found', cand >= 0);
+  if (cand >= 0) {
+    const off = cand * N_TACT;
+    const kill = st.tact[off + TACT_URGENT_KILL];
+    const save = st.tact[off + TACT_URGENT_SAVE];
+    const wExt = st.tact[off + TACT_WASTED_EXTEND];
+    check('coexist: URGENT_KILL fires (captures foe chain)', kill >= 1);
+    check('coexist: either URGENT_SAVE or WASTED_EXTEND fires for friend chain',
+      save >= 1 || wExt >= 1);
+  }
+}
+
+// ── 13. REINFORCE updates tactical weights ──────────────────────────────────
+//
+// With a board containing a single urgent-kill candidate and an unrelated far
+// candidate, pushing +1 advantage on the urgent-kill move must raise its
+// URGENT_KILL tactical weight (the only move that has a nonzero count).
+{
+  const N = 7;
+  const g = new Game2(N, false);
+  g._place(3 * N + 3, BLACK);
+  g._place(2 * N + 3, WHITE);
+  g._place(4 * N + 3, WHITE);
+  g._place(3 * N + 4, WHITE);
+  g.current = WHITE;
+
+  const st = NPat.createState(N);
+  const w  = NPat.createWeights();
+
+  NPat.policyMove(g, st, w);
+  const libIdx = 3 * N + 2;
+  let cand = -1;
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { cand = i; break; }
+  check('REINFORCE-tact: urgent-kill candidate found', cand >= 0);
+
+  const killDense = w.tactIds[TACT_URGENT_KILL];
+  const before = w.vals[killDense];
+  NPat.reinforceUpdate(st, cand, +1, w, 0.1);
+  const after = w.vals[killDense];
+  check('REINFORCE(+1) on urgent-kill move raises URGENT_KILL weight',
+    after > before);
+
+  // And after that update, greedyMove must prefer libIdx (it's the only move
+  // with a nonzero tactical count and positive weight).
+  NPat.extractFeatures(g, st, undefined, undefined, w);
+  const best = NPat.greedyMove(g, st, w);
+  check('REINFORCE-tact: greedyMove picks the urgent-kill move', best === libIdx);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
