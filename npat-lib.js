@@ -185,6 +185,7 @@ function canonKey(relPos, cells) {
 
 const _scratchCells = new Int32Array(9);
 const _windowCells  = new Int32Array(9);
+const _patch5       = new Int32Array(25);
 
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
@@ -211,6 +212,7 @@ function extractFeatures(game, state, ladderInfo) {
   const moves  = state.moves;
   const patIds = state.patIds;
   const wc9    = _windowCells;
+  const patch  = _patch5;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -219,6 +221,30 @@ function extractFeatures(game, state, ladderInfo) {
     const r = (idx / N) | 0;
     const c = idx - r * N;
 
+    // Precompute the 5×5 patch of encoded cell values centred on the
+    // candidate.  Patch index (pr+2)*5 + (pc+2) holds the value at
+    // board position (r+pr, c+pc), pr,pc ∈ {-2,-1,0,1,2}.  25 wraps
+    // instead of 9·9 = 81 inside the window loop.
+    for (let pr = -2; pr <= 2; pr++) {
+      const br = _wrap(r + pr, N);
+      const rowBase = br * N;
+      const prBase  = (pr + 2) * 5;
+      for (let pc = -2; pc <= 2; pc++) {
+        const bc = _wrap(c + pc, N);
+        const bi = rowBase + bc;
+        const ci = cells[bi];
+        let v;
+        if (ci === 0) {
+          v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
+        } else if (ci === cur) {
+          v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
+        } else {
+          v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
+        }
+        patch[prBase + (pc + 2)] = v;
+      }
+    }
+
     const off = count * 9;
     for (let wr = -2; wr <= 0; wr++) {
       for (let wc = -2; wc <= 0; wc++) {
@@ -226,24 +252,11 @@ function extractFeatures(game, state, ladderInfo) {
         const relCol = -wc;
         const relPos = relRow * 3 + relCol;
 
-        // Read the 9 cells of the window into wc9.  Candidate cell (at
-        // relPos) is always empty, but it may still be an urgent liberty.
+        // Fill wc9 from the patch — no board indexing at all here.
         for (let i = 0; i < 9; i++) {
           const dr = (i / 3) | 0;
           const dc = i - dr * 3;
-          const br = _wrap(r + wr + dr, N);
-          const bc = _wrap(c + wc + dc, N);
-          const bi = br * N + bc;
-          const ci = cells[bi];
-          let v;
-          if (ci === 0) {
-            v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
-          } else if (ci === cur) {
-            v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
-          } else {
-            v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
-          }
-          wc9[i] = v;
+          wc9[i] = patch[(wr + dr + 2) * 5 + (wc + dc + 2)];
         }
 
         patIds[off + (wr + 2) * 3 + (wc + 2)] = canonKey(relPos, wc9);
