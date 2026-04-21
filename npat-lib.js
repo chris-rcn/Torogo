@@ -1,41 +1,49 @@
 'use strict';
 
-// npat-lib.js — "nine-pattern" policy features.
+// npat-lib.js — "nine-pattern" policy features with ladder-aware cell encoding.
 //
-// For each candidate move, we extract all NINE 3×3 windows that overlap the
+// For each candidate move, we extract the NINE 3×3 windows that overlap the
 // candidate point.  Each window contributes a linear feature indexed by a
-// canonical pattern ID.  The move's logit is the sum of those 9 feature
+// canonical pattern key.  The move's logit is the sum of those 9 feature
 // weights; moves are sampled by softmax over logits.
 //
-// Cell encoding (mover-relative):
-//   0 = EMPTY
-//   1 = FRIEND  (same colour as the player to move)
-//   2 = FOE     (opposite colour)
+// Cell encoding (mover-relative, 6 values):
+//   0 = EMPTY           empty, not an urgent liberty
+//   1 = EMPTY_URGENT    empty; playing here resolves some ladder (saves a
+//                       friend chain or kills a foe chain).  Comes from
+//                       ladder2.getAllLadderStatuses(...).urgentLibs.
+//   2 = FRIEND          own stone, chain is not in a tactical ladder
+//   3 = FRIEND_URGENT   own stone, chain has 1–2 liberties AND the mover has
+//                       a move that saves it (ladder status: urgentLibs ≠ [])
+//   4 = FOE             opponent stone, chain is not in a tactical ladder
+//   5 = FOE_URGENT      opponent stone, chain has 1–2 liberties AND the mover
+//                       has a move that kills it
 //
 // The board is toroidal (game2's neighbour tables wrap), so there is no
 // off-board state to encode.
 //
 // Raw pattern index for a single window:
-//   raw = relPos * 3^9 + Σ_i cells[i] * 3^i                       (i = 0..8)
-// where relPos ∈ 0..8 is the candidate's position within the window
-// (relPos = relRow*3 + relCol, relRow = candidateRow - windowTopRow ∈ 0..2).
-// Range: [0, 9 * 19683) = [0, 177147).
+//   raw = relPos * 6^9 + Σ_i cells[i] * 6^i                        (i = 0..8)
+// where relPos ∈ 0..8 is the candidate's position within the window.
+// Range: [0, 9 * 10_077_696) = [0, 90_699_264).  Fits in 32 bits.
 //
-// D4 canonicalisation: for each of the 8 D4 symmetries σ, transform both the
-// cells (new_cells[σ(i)] = cells[i]) and the candidate's relative position
-// (new_relPos = σ(relPos)), re-encode, and keep the minimum.  Color swap is
-// NOT a symmetry (encoding already absorbs it via FRIEND/FOE).
+// Canonical key: min over 8 D4 symmetries of the transformed raw.  Under σ,
+// new_cells[σ(i)] = cells[i] and new_relPos = σ(relPos).  This is O(8×9) per
+// window and happens at extraction time; no global canonical-ID table is
+// precomputed.  Sparse weights live in Map<rawCanon, weight>.
 //
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
 (function () {
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const { PASS } = _isNode ? require('./game2.js') : window.Game2;
+const { PASS }          = _isNode ? require('./game2.js')  : window.Game2;
+const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
+const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
 // ── D4 position permutations on a 3×3 grid ────────────────────────────────────
 // Positions linearised as i = row*3 + col, row,col ∈ {0,1,2}.
-// Each entry is the permutation σ where new_pos = σ[old_pos].
+// perm[i] is the new position of the value originally at position i.
 
 function _mkPerm(fn) {
   const p = new Int32Array(9);
@@ -48,77 +56,97 @@ function _mkPerm(fn) {
 
 const _D4 = [
   _mkPerm((r, c) => [r, c]),         // 0: Identity
-  _mkPerm((r, c) => [c, 2 - r]),     // 1: Rot90CW       (r,c) → (c, 2−r)
-  _mkPerm((r, c) => [2 - r, 2 - c]), // 2: Rot180        (r,c) → (2−r, 2−c)
-  _mkPerm((r, c) => [2 - c, r]),     // 3: Rot270CW      (r,c) → (2−c, r)
-  _mkPerm((r, c) => [r, 2 - c]),     // 4: FlipH         (r,c) → (r, 2−c)
-  _mkPerm((r, c) => [2 - r, c]),     // 5: FlipV         (r,c) → (2−r, c)
-  _mkPerm((r, c) => [c, r]),         // 6: TransposeMD   (r,c) → (c, r)
-  _mkPerm((r, c) => [2 - c, 2 - r]), // 7: TransposeAD   (r,c) → (2−c, 2−r)
+  _mkPerm((r, c) => [c, 2 - r]),     // 1: Rot90CW
+  _mkPerm((r, c) => [2 - r, 2 - c]), // 2: Rot180
+  _mkPerm((r, c) => [2 - c, r]),     // 3: Rot270CW
+  _mkPerm((r, c) => [r, 2 - c]),     // 4: FlipH
+  _mkPerm((r, c) => [2 - r, c]),     // 5: FlipV
+  _mkPerm((r, c) => [c, r]),         // 6: TransposeMD
+  _mkPerm((r, c) => [2 - c, 2 - r]), // 7: TransposeAD
 ];
 
-// ── Load-time canonicalisation ────────────────────────────────────────────────
+// ── Encoding constants ───────────────────────────────────────────────────────
+
+const CELL_BASE    = 6;
+const CELLS_BASE   = 10077696; // 6^9
+
+// Cell-state labels (exported for readability in other modules / tests).
+const CELL_EMPTY          = 0;
+const CELL_EMPTY_URGENT   = 1;
+const CELL_FRIEND         = 2;
+const CELL_FRIEND_URGENT  = 3;
+const CELL_FOE            = 4;
+const CELL_FOE_URGENT     = 5;
+
+// ── Ladder-status annotation ─────────────────────────────────────────────────
 //
-// Build _CANON_ID: Int32Array[177147] mapping raw → dense canonical ID.
+// Build two per-cell flag arrays for the current game position:
+//   stoneUrgent[idx] = 1 if the stone at idx belongs to a chain whose ladder
+//                      status has non-empty urgentLibs (i.e. mover can resolve
+//                      it with a single move), else 0.
+//   libUrgent[idx]   = 1 if the empty cell at idx appears in some chain's
+//                      urgentLibs, else 0.
+//
+// Both arrays are Uint8Array(N*N), reused across calls when provided.
+//
+// Uses ladder2's Game3-based analysis: convert the Game2 board to Game3, run
+// getAllLadderStatuses, then walk each urgent chain's stones by iterating the
+// chain's group bitset in Game3.
 
-const _CELLS_BASE = 19683; // 3^9
-const _RAW_RANGE  = 9 * _CELLS_BASE;
+function annotateLadders(game, out) {
+  const N   = game.N;
+  const cap = N * N;
 
-const _CANON_ID = new Int32Array(_RAW_RANGE);
+  // Lazy-allocate output buffers.
+  if (!out) out = { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) };
+  out.stoneUrgent.fill(0);
+  out.libUrgent.fill(0);
 
-const NUM_PATTERNS = (function _buildCanonTable() {
-  const cells   = new Int32Array(9);
-  const tCells  = new Int32Array(9);
-  const idMap   = new Map(); // minRaw → canonical ID
-  let nextId = 0;
+  // Empty-board fast path.
+  if (game.emptyCount === cap) return out;
 
-  for (let raw = 0; raw < _RAW_RANGE; raw++) {
-    let relPos   = (raw / _CELLS_BASE) | 0;
-    let packed   = raw - relPos * _CELLS_BASE;
+  // Game3 view for ladder2.  game3FromGame2 preserves `current`.
+  const g3 = game3FromGame2(game);
+  const infos = getAllLadderStatuses(g3);
 
-    // Decode base-3 cells.
-    let p = packed;
-    for (let i = 0; i < 9; i++) { cells[i] = p % 3; p = (p / 3) | 0; }
+  for (const info of infos) {
+    if (!info.status) continue;
+    const { urgentLibs } = info.status;
+    if (urgentLibs.length === 0) continue;
 
-    // Invariant: the candidate cell is always EMPTY.  Skip impossible raws
-    // (they just waste a slot in _CANON_ID, but their canonical mapping is
-    // unused — assign them to an arbitrary id to keep the array dense-ish).
-    if (cells[relPos] !== 0) {
-      _CANON_ID[raw] = -1;
-      continue;
+    // Mark urgent liberty cells (empty points).
+    for (const lib of urgentLibs) out.libUrgent[lib] = 1;
+
+    // Mark every stone of the urgent chain.  Game3 stores group stones in a
+    // bitset at _sw[gid * W + wi]; walk it here.
+    const gid = info.gid;
+    const W   = g3._W;
+    const sw  = g3._sw;
+    const gb  = gid * W;
+    for (let wi = 0; wi < W; wi++) {
+      let w = sw[gb + wi];
+      while (w) {
+        const lsb = w & -w;
+        const si = wi * 32 + (31 - Math.clz32(lsb));
+        if (si < cap) out.stoneUrgent[si] = 1;
+        w ^= lsb;
+      }
     }
-
-    let minRaw = raw;
-    for (let di = 0; di < 8; di++) {
-      const perm = _D4[di];
-      // new_cells[perm[i]] = cells[i]
-      for (let i = 0; i < 9; i++) tCells[perm[i]] = cells[i];
-      const nRelPos = perm[relPos];
-      // Re-encode.
-      let enc = 0;
-      for (let i = 8; i >= 0; i--) enc = enc * 3 + tCells[i];
-      const nRaw = nRelPos * _CELLS_BASE + enc;
-      if (nRaw < minRaw) minRaw = nRaw;
-    }
-
-    if (!idMap.has(minRaw)) idMap.set(minRaw, nextId++);
-    _CANON_ID[raw] = idMap.get(minRaw);
   }
 
-  return nextId;
-}());
+  return out;
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 //
-// For a board of size N:
-//   moves   [count]        flat board index of move i
-//   patIds  [count * 9]    9 canonical pattern IDs per move (row-major: 9 ids)
-//   logits  [count]        scratch buffer for softmax
-//   probs   [count]        scratch buffer for softmax
+// moves   [count]        flat board index of move i
+// patIds  [count * 9]    canonical pattern keys per window (w ∈ 0..8)
+// logits  [count]        scratch buffer for softmax
+// probs   [count]        scratch buffer for softmax
+// ladder  { stoneUrgent, libUrgent }   reusable ladder-annotation buffers
 //
-// The 9 pattern IDs are stored in a fixed window order keyed by (wr, wc),
-// wr,wc ∈ {-2,-1,0} (the offset from the candidate to the window's top-left
-// corner).  Order: wi = (wr+2)*3 + (wc+2) ∈ 0..8.
+// Window order w = (wr+2)*3 + (wc+2) where (wr, wc) ∈ {-2,-1,0}² is the
+// offset from the candidate to the window's top-left corner.
 
 function createState(N) {
   const cap = N * N;
@@ -127,25 +155,47 @@ function createState(N) {
     patIds: new Int32Array(cap * 9),
     logits: new Float64Array(cap),
     probs:  new Float64Array(cap),
+    ladder: { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) },
     count:  0,
   };
 }
 
+// ── Runtime D4 canonicalisation ──────────────────────────────────────────────
+//
+// canonKey(relPos, cells[9]) returns the minimum raw-int over 8 D4 symmetries.
+
+function canonKey(relPos, cells) {
+  // Identity encoding first, then the 7 non-identity D4 perms.
+  let idEnc = 0;
+  for (let i = 8; i >= 0; i--) idEnc = idEnc * CELL_BASE + cells[i];
+  let best = relPos * CELLS_BASE + idEnc;
+
+  const tCells = _scratchCells;
+  for (let di = 1; di < 8; di++) {
+    const perm = _D4[di];
+    for (let i = 0; i < 9; i++) tCells[perm[i]] = cells[i];
+    const nRelPos = perm[relPos];
+    let enc = 0;
+    for (let i = 8; i >= 0; i--) enc = enc * CELL_BASE + tCells[i];
+    const raw = nRelPos * CELLS_BASE + enc;
+    if (raw < best) best = raw;
+  }
+  return best;
+}
+
+const _scratchCells = new Int32Array(9);
+const _windowCells  = new Int32Array(9);
+
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
-// Board coordinate wrap: game2's _nbr / _dnbr are toroidal, but those tables
-// only cover offsets in {-1,0,+1}.  For 3×3 windows anchored at a corner two
-// steps away from the candidate, we need offsets up to ±2, so we compute the
-// wrapped (row,col) ourselves.
+// Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
 
 function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 
-// Extract 9-pattern features for all legal non-true-eye moves from game into
-// state.  After this call:
-//   state.count              = number of candidate moves
-//   state.moves[i]           = flat board index of candidate i  (0 ≤ i < count)
-//   state.patIds[i*9 + w]    = canonical pattern ID for window w (w ∈ 0..8)
-function extractFeatures(game, state) {
+// Fill state with 9 canonical pattern keys for every legal non-true-eye move.
+// Optional ladderInfo skips re-running the ladder analysis (useful if the
+// caller already computed it for this board).
+function extractFeatures(game, state, ladderInfo) {
   const N      = game.N;
   const cap    = N * N;
   const cells  = game.cells;
@@ -153,9 +203,14 @@ function extractFeatures(game, state) {
   const emC    = game._emptyCells;
   const ec     = game.emptyCount;
 
+  const li = ladderInfo || annotateLadders(game, state.ladder);
+  const stoneUrgent = li.stoneUrgent;
+  const libUrgent   = li.libUrgent;
+
   let count = 0;
   const moves  = state.moves;
   const patIds = state.patIds;
+  const wc9    = _windowCells;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -165,38 +220,33 @@ function extractFeatures(game, state) {
     const c = idx - r * N;
 
     const off = count * 9;
-    // Iterate the 9 windows that overlap the candidate.  wr, wc ∈ {-2,-1,0}
-    // are the offsets of the window's top-left corner relative to the
-    // candidate.  relRow = -wr, relCol = -wc are the candidate's
-    // (row, col) within the 3×3 window.
     for (let wr = -2; wr <= 0; wr++) {
       for (let wc = -2; wc <= 0; wc++) {
         const relRow = -wr;
         const relCol = -wc;
         const relPos = relRow * 3 + relCol;
 
-        // Pack the 9 cells of the window in base 3.  Cell order: i = dr*3+dc
-        // with dr,dc ∈ {0,1,2}.  Candidate cell (at relPos) is always EMPTY=0.
-        let packed = 0;
-        // Base-3 accumulation from high index to low (i = 8..0).
-        for (let i = 8; i >= 0; i--) {
+        // Read the 9 cells of the window into wc9.  Candidate cell (at
+        // relPos) is always empty, but it may still be an urgent liberty.
+        for (let i = 0; i < 9; i++) {
           const dr = (i / 3) | 0;
           const dc = i - dr * 3;
+          const br = _wrap(r + wr + dr, N);
+          const bc = _wrap(c + wc + dc, N);
+          const bi = br * N + bc;
+          const ci = cells[bi];
           let v;
-          if (i === relPos) {
-            v = 0;
+          if (ci === 0) {
+            v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
+          } else if (ci === cur) {
+            v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
           } else {
-            const br = _wrap(r + wr + dr, N);
-            const bc = _wrap(c + wc + dc, N);
-            const ci = cells[br * N + bc];
-            v = ci === 0 ? 0 : (ci === cur ? 1 : 2);
+            v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
           }
-          packed = packed * 3 + v;
+          wc9[i] = v;
         }
 
-        const raw = relPos * _CELLS_BASE + packed;
-        const wi  = (wr + 2) * 3 + (wc + 2);
-        patIds[off + wi] = _CANON_ID[raw];
+        patIds[off + (wr + 2) * 3 + (wc + 2)] = canonKey(relPos, wc9);
       }
     }
 
@@ -209,7 +259,6 @@ function extractFeatures(game, state) {
 
 // ── Scoring helpers ───────────────────────────────────────────────────────────
 
-// score(i) = Σ_{w=0..8} w[ patIds[i*9+w] ]
 function _score(patIds, i, weights) {
   const off = i * 9;
   const isMap = weights instanceof Map;
@@ -232,8 +281,6 @@ function evaluate(game, state, weights) {
   return out.sort((a, b) => b.score - a.score);
 }
 
-// Compute softmax probabilities over legal moves and write them into
-// state.logits / state.probs.  Returns state.count.
 function _computeSoftmax(state, weights) {
   const n   = state.count;
   if (n === 0) return 0;
@@ -262,12 +309,7 @@ function _computeSoftmax(state, weights) {
 }
 
 // Extract features, softmax over logits, sample an action.
-// weights: Float32Array/Float64Array indexed by canonical pattern ID, or a Map.
-// rng: object with .random(): [0,1).  Defaults to Math.
-// Returns { move, index, prob }:
-//   move  — flat board index of the chosen move (or PASS if no legal non-eye)
-//   index — i in [0, state.count) (or -1 for PASS)
-//   prob  — π(move | state)       (or 1 for PASS)
+// Returns { move, index, prob }.
 function policyMove(game, state, weights, rng) {
   extractFeatures(game, state);
   const n = state.count;
@@ -285,7 +327,7 @@ function policyMove(game, state, weights, rng) {
   return { move: state.moves[chosen], index: chosen, prob: probs[chosen] };
 }
 
-// Greedy argmax move (no sampling).  Useful for evaluation.
+// Greedy argmax move (no sampling).
 function greedyMove(game, state, weights) {
   extractFeatures(game, state);
   const n = state.count;
@@ -300,24 +342,11 @@ function greedyMove(game, state, weights) {
 
 // ── REINFORCE step ────────────────────────────────────────────────────────────
 //
-// Policy gradient for a single (state, chosen_move, advantage) triple.
+// For each canonical pattern key k, ∂ log π_m / ∂ w[k] = count(k in f_m) −
+// Σ_i π_i · count(k in f_i).  Update: Δw[k] = lr · adv · ∂ log π_m / ∂ w[k].
 //
-// Let f_i ∈ ℕ^9 be the 9 pattern IDs of legal move i.  The logit is
-//   ℓ_i = Σ_k w[ f_i[k] ]
-// and the policy is π_i = softmax(ℓ)_i.
-//
-// For a canonical pattern id `p`, the gradient of log π_m w.r.t. w[p] is
-//   ∂ log π_m / ∂ w[p] = count(p in f_m) − Σ_i π_i · count(p in f_i)
-//
-// REINFORCE with advantage A (e.g. episode return, or return minus baseline):
-//   Δw[p] = lr · A · (count(p in f_m) − Σ_i π_i · count(p in f_i))
-//
-// Because feature ids are unbounded in count (we use a Map to stay sparse),
-// we accumulate updates into the `weights` Map.
-//
-// state must have been populated by extractFeatures AND _computeSoftmax; this
-// function re-uses state.probs so the caller should not mutate it between
-// extractFeatures() and reinforceUpdate().
+// state.probs must be populated (by policyMove / _computeSoftmax) before the
+// call.
 
 function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const n = state.count;
@@ -329,17 +358,8 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const patIds = state.patIds;
   const probs  = state.probs;
   const isMap  = weights instanceof Map;
+  const delta  = new Map();
 
-  // Positive term: +step per occurrence of pid in f_{chosen}.
-  // Negative term: −step · π_i per occurrence of pid in f_i.
-  //
-  // Efficient path: for each pid appearing in any legal move, its net delta
-  // is step · (count_in_chosen − Σ_{i: pid∈f_i} π_i · count(pid, f_i)).
-  //
-  // Use a small scratch Map<pid, delta>.  9*n ops.
-  const delta = new Map();
-
-  // + step per count in chosen.
   {
     const off = chosenIndex * 9;
     for (let k = 0; k < 9; k++) {
@@ -347,8 +367,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       delta.set(pid, (delta.get(pid) ?? 0) + step);
     }
   }
-
-  // − step · π_i per count in each move i.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
@@ -359,7 +377,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       delta.set(pid, (delta.get(pid) ?? 0) - sub);
     }
   }
-
   if (isMap) {
     for (const [pid, d] of delta) {
       if (d === 0) continue;
@@ -379,10 +396,15 @@ const NPatterns = {
   policyMove,
   greedyMove,
   reinforceUpdate,
-  NUM_PATTERNS,
+  annotateLadders,
+  canonKey,
+  // Constants.
+  CELL_BASE,
+  CELLS_BASE,
+  CELL_EMPTY, CELL_EMPTY_URGENT,
+  CELL_FRIEND, CELL_FRIEND_URGENT,
+  CELL_FOE, CELL_FOE_URGENT,
   // Exposed for tests.
-  _CANON_ID,
-  _CELLS_BASE,
   _D4,
 };
 

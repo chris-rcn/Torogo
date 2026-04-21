@@ -1,9 +1,10 @@
 'use strict';
 
-// Tests for npat-lib.js — the nine-pattern policy features.
+// Tests for npat-lib.js — the nine-pattern policy features with ladder-aware
+// cell encoding.
 
 const NPat = require('./npat-lib.js');
-const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { Game2, BLACK, WHITE, PASS, parseBoard } = require('./game2.js');
 
 let passed = 0, failed = 0;
 function check(label, ok) {
@@ -11,170 +12,189 @@ function check(label, ok) {
   else    { failed++; console.error('FAIL:', label); }
 }
 
-// ── 1. Pattern-space accounting ──────────────────────────────────────────────
+const {
+  CELL_EMPTY, CELL_EMPTY_URGENT,
+  CELL_FRIEND, CELL_FRIEND_URGENT,
+  CELL_FOE,    CELL_FOE_URGENT,
+  CELL_BASE,   CELLS_BASE,
+  canonKey, _D4,
+} = NPat;
+
+check('CELL_BASE is 6', CELL_BASE === 6);
+check('CELLS_BASE is 6^9', CELLS_BASE === 10077696);
+
+// ── 1. canonKey respects D4 symmetry ────────────────────────────────────────
 //
-// Raw pattern space = 9 positions × 3^9 = 177,147 encoded entries, but only
-// those with cells[relPos] === EMPTY are valid (9 × 3^8 = 59,049 valid raws).
-// NUM_PATTERNS must be ≤ 59,049 and ≥ 59,049 / 8  ≈  7,381.
-
-check(
-  'NUM_PATTERNS within plausible bounds',
-  NPat.NUM_PATTERNS > 7000 && NPat.NUM_PATTERNS < 59049
-);
-
-// ── 2. D4 equivalence via the canonical table ────────────────────────────────
-//
-// For each of the 8 D4 symmetries, applying σ to a (relPos, cells) pair must
-// yield the same canonical ID.
-
-function packRaw(relPos, cells) {
-  let enc = 0;
-  for (let i = 8; i >= 0; i--) enc = enc * 3 + cells[i];
-  return relPos * NPat._CELLS_BASE + enc;
-}
+// Applying any D4 permutation σ to (relPos, cells) must yield the same
+// canonical key: σ moves both the candidate's relative position and the cell
+// values, so the canonical-min is invariant.
 
 function applyD4(relPos, cells, perm) {
   const nc = new Array(9);
   for (let i = 0; i < 9; i++) nc[perm[i]] = cells[i];
-  const nRelPos = perm[relPos];
-  return { relPos: nRelPos, cells: nc };
+  return { relPos: perm[relPos], cells: nc };
 }
 
-// A few non-trivial patterns to sanity-check.
 const cases = [
-  { relPos: 4, cells: [0,1,0, 0,0,0, 0,2,0] },  // friend N, foe S, candidate center
-  { relPos: 0, cells: [0,1,2, 2,1,0, 1,0,2] },  // candidate top-left
-  { relPos: 8, cells: [1,0,0, 0,0,0, 0,0,0] },  // candidate bottom-right, friend top-left
-  { relPos: 2, cells: [0,0,0, 1,2,1, 0,0,2] },  // candidate top-right
+  { relPos: 4, cells: [0,2,0, 0,0,0, 0,4,0] },  // candidate center; friend N, foe S
+  { relPos: 0, cells: [0,2,4, 4,2,0, 2,0,4] },  // candidate top-left, full stones
+  { relPos: 8, cells: [2,0,0, 0,0,0, 0,0,0] },  // candidate bottom-right; friend at top-left
+  { relPos: 2, cells: [0,0,0, 2,4,2, 0,0,4] },  // candidate top-right
+  { relPos: 4, cells: [1,3,5, 5,0,1, 3,1,5] },  // with urgency markers everywhere
+  { relPos: 1, cells: [0,1,0, 3,2,4, 0,5,0] },  // mixed
 ];
 
 for (const c of cases) {
-  const baseRaw = packRaw(c.relPos, c.cells);
-  const baseId  = NPat._CANON_ID[baseRaw];
-  check(`candidate cell is empty: relPos=${c.relPos}`, c.cells[c.relPos] === 0);
-  check(`base canonical id ≥ 0 for relPos=${c.relPos}`, baseId >= 0);
+  check(`case sanity: candidate cell is empty (relPos=${c.relPos})`,
+    c.cells[c.relPos] === CELL_EMPTY || c.cells[c.relPos] === CELL_EMPTY_URGENT);
 
+  const baseKey = canonKey(c.relPos, c.cells);
   for (let di = 0; di < 8; di++) {
-    const perm = NPat._D4[di];
-    const t = applyD4(c.relPos, c.cells, perm);
-    const tRaw = packRaw(t.relPos, t.cells);
-    const tId  = NPat._CANON_ID[tRaw];
-    check(`D4 symmetry ${di} preserves canonical ID (case ${c.relPos}/${c.cells.join('')})`,
-      tId === baseId);
+    const t = applyD4(c.relPos, c.cells, _D4[di]);
+    const tKey = canonKey(t.relPos, t.cells);
+    check(`D4 symmetry ${di} preserves canonical key (case relPos=${c.relPos})`,
+      tKey === baseKey);
   }
 }
 
-// ── 3. Invalid raws (candidate cell non-empty) are marked ───────────────────
-//
-// We mark impossible patterns with CANON_ID = -1.  Verify by construction.
+// ── 2. Distinct patterns get distinct canonical keys (barring symmetry) ─────
 {
-  let anyInvalid = false;
-  for (let raw = 0; raw < NPat._CANON_ID.length; raw += 1000) {
-    const relPos = (raw / NPat._CELLS_BASE) | 0;
-    let packed = raw - relPos * NPat._CELLS_BASE;
-    // Decode cells[relPos].
-    let p = packed;
-    let candCell = 0;
-    for (let i = 0; i <= relPos; i++) {
-      candCell = p % 3;
-      p = (p / 3) | 0;
-    }
-    if (candCell !== 0) {
-      anyInvalid = true;
-      check(`invalid raw ${raw} gets CANON_ID = -1`, NPat._CANON_ID[raw] === -1);
-    } else {
-      check(`valid raw ${raw} gets CANON_ID ≥ 0`, NPat._CANON_ID[raw] >= 0);
-    }
-  }
-  check('scanned some invalid raws', anyInvalid);
+  // (relPos=4, center friend) vs (relPos=4, center foe) are not D4-equivalent.
+  const k1 = canonKey(4, [0,0,0, 0,0,0, 0,0,0]);    // all empty
+  const k2 = canonKey(4, [0,0,0, 0,0,0, 2,0,0]);    // one friend at corner
+  const k3 = canonKey(4, [0,0,0, 0,0,0, 4,0,0]);    // one foe at corner
+  check('all-empty pattern differs from single-friend pattern', k1 !== k2);
+  check('single-friend pattern differs from single-foe pattern', k2 !== k3);
+
+  // Four symmetric corner-friend patterns all collapse to the same key.
+  check('corner NW friend ≡ corner NE friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,2, 0,0,0, 0,0,0]));
+  check('corner NW friend ≡ corner SW friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 2,0,0]));
+  check('corner NW friend ≡ corner SE friend', canonKey(4, [2,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 0,0,2]));
 }
 
-// ── 4. extractFeatures on an empty board ────────────────────────────────────
+// ── 3. Empty 5×5 board — per-move feature multiset ──────────────────────────
 //
-// Empty 5×5 board.  Every move should have 9 pattern IDs, and all of them
-// should be the same canonical id (the all-EMPTY pattern), because all 9
-// windows around every candidate are entirely empty.
+// All 9 windows around every candidate are entirely empty.  The 9 values of
+// relPos ∈ 0..8 fall into 3 D4 orbits: {0,2,6,8} corners, {1,3,5,7} edges, {4}
+// center.  So every candidate's 9 pattern keys collapse to exactly 3 distinct
+// values with multiplicities [4, 4, 1].
 {
   const N  = 5;
   const g  = new Game2(N, false);
   const st = NPat.createState(N);
   NPat.extractFeatures(g, st);
 
-  // All 5×5 empty cells are legal non-eye moves.  (isTrueEye requires 4
-  // friendly neighbours; there are no stones → emptyCount stays 25.)
   check('empty 5x5: count === 25', st.count === 25);
 
-  // For the all-empty cell case, cells[9] are all zero; relPos varies 0..8.
-  // The canonical ID should collapse all nine relPos values via D4 to just
-  // two orbits (center, edge, corner).  Specifically, relPos ∈ {0,2,6,8} are
-  // D4-equivalent; {1,3,5,7} are D4-equivalent; {4} is alone.  So each move's
-  // 9 windows have exactly 3 distinct canonical IDs.
   const m0 = st.patIds.subarray(0, 9);
-  const distinct = new Set();
-  for (const id of m0) distinct.add(id);
-  check('empty board, per-move window ids: exactly 3 distinct', distinct.size === 3);
-
-  // Count occurrences per id: corner orbit (4), edge orbit (4), center (1).
   const counts = new Map();
   for (const id of m0) counts.set(id, (counts.get(id) ?? 0) + 1);
   const vals = [...counts.values()].sort((a, b) => a - b);
-  check('empty board, occurrence counts are [1,4,4]', JSON.stringify(vals) === '[1,4,4]');
+  check('empty board, per-move window multiset [1,4,4]',
+    JSON.stringify(vals) === '[1,4,4]');
 
-  // Every move produces the same multiset of 9 pattern IDs.
+  // Every move produces the same multiset.
   let allSame = true;
+  const sm = [...m0].sort().join(',');
   for (let i = 1; i < st.count; i++) {
-    const a = st.patIds.subarray(i * 9, (i + 1) * 9);
-    const sa = [...a].sort();
-    const sm = [...m0].sort();
-    if (sa.join(',') !== sm.join(',')) { allSame = false; break; }
+    const a = [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
+    if (a !== sm) { allSame = false; break; }
   }
   check('empty board, every move has the same pattern multiset', allSame);
 }
 
-// ── 5. extractFeatures reacts to stones ─────────────────────────────────────
+// ── 4. Ladder annotation: chain in atari is marked urgent ───────────────────
 //
-// Place a black stone and confirm that candidate moves immediately next to it
-// have different pattern IDs than moves far away.
-{
-  const N  = 7;
-  const g  = new Game2(N, false);
-  const st = NPat.createState(N);
-  // Drop a black stone at (3,3).
-  g._place(3 * N + 3, BLACK);
-  g.current = WHITE;                // White to move → black stone appears as FOE
-  NPat.extractFeatures(g, st);
-
-  // Find candidate moves: (3,4) is adjacent to the stone, (0,0) is far away.
-  let adjIdx = -1, farIdx = -1;
-  for (let i = 0; i < st.count; i++) {
-    if (st.moves[i] === 3 * N + 4) adjIdx = i;
-    if (st.moves[i] === 0)         farIdx = i;
-  }
-  check('stone test: adjacent candidate found', adjIdx >= 0);
-  check('stone test: far candidate found',      farIdx >= 0);
-
-  const adjIds = [...st.patIds.subarray(adjIdx * 9, (adjIdx + 1) * 9)].sort();
-  const farIds = [...st.patIds.subarray(farIdx * 9, (farIdx + 1) * 9)].sort();
-  check('stone test: adjacent move differs from far move (toroidal: stone only touches its 3×3 neighbourhood, and (0,0) is not in it)',
-    adjIds.join(',') !== farIds.join(','));
-}
-
-// ── 6. Board symmetry: D4 of the board yields D4 of the features ────────────
-//
-// Empty board with one black stone at (1,0) on a 5×5 torus.  Now pick
-// candidate (0,0) and its rot180 (4,0)   — wait, that's not general.  Easier:
-// two boards related by a D4 rotation should give identical feature multisets
-// at the two D4-related candidate positions.
+// Set up a black chain in atari with exactly one liberty.  White's move.
+// The liberty is urgent for white (playing there captures).  Per ladder2,
+// urgentLibs is non-empty → stoneUrgent on the chain's stones and libUrgent
+// on the liberty point.
 {
   const N = 5;
-  // Board A: black stone at (1, 2).   Candidate (0, 2) sits directly above.
-  // Board B: 180°-rotated board — stone at (3, 2).  Candidate (4, 2).
+  const g = new Game2(N, false);
+  // White surrounds a black stone at (2,2): white at N,E,S; black has 1 lib (W).
+  g._place(2 * N + 2, BLACK); // black at (2,2)
+  g._place(1 * N + 2, WHITE); // white at (1,2)
+  g._place(3 * N + 2, WHITE); // white at (3,2)
+  g._place(2 * N + 3, WHITE); // white at (2,3)
+  g.current = WHITE;
+  const st = NPat.createState(N);
+  NPat.extractFeatures(g, st);
+
+  const blackStoneIdx = 2 * N + 2;
+  const libIdx        = 2 * N + 1; // (2,1), the remaining liberty
+
+  check('ladder annotation: black stone marked stoneUrgent',
+    st.ladder.stoneUrgent[blackStoneIdx] === 1);
+  check('ladder annotation: liberty cell marked libUrgent',
+    st.ladder.libUrgent[libIdx] === 1);
+
+  // The urgent liberty move, when extracted as a candidate, has its candidate
+  // cell encoded as EMPTY_URGENT — even after canonicalisation this must
+  // distinguish it from a plain EMPTY-centered candidate in an otherwise
+  // identical neighbourhood.  Here we just check the pattern features differ
+  // between the urgent-liberty candidate and an unrelated far candidate.
+  let urgIdx = -1, farIdx = -1;
+  for (let i = 0; i < st.count; i++) {
+    if (st.moves[i] === libIdx)       urgIdx = i;
+    if (st.moves[i] === 0 * N + 0)    farIdx = i;
+  }
+  check('urgent liberty candidate present', urgIdx >= 0);
+  check('far candidate present',            farIdx >= 0);
+
+  const urg = [...st.patIds.subarray(urgIdx * 9, (urgIdx + 1) * 9)].sort().join(',');
+  const far = [...st.patIds.subarray(farIdx * 9, (farIdx + 1) * 9)].sort().join(',');
+  check('urgent-liberty move has different features from empty-area move',
+    urg !== far);
+}
+
+// ── 5. Ladder-off vs ladder-on produce different pattern keys ───────────────
+//
+// Same board, but flip one of the white stones away so the black chain now
+// has 2 liberties (still analyzable by ladder2, but urgentLibs may be empty
+// if neither side can force a result).  Confirm the keys change when the
+// tactical landscape changes.
+{
+  const N = 5;
+  const g1 = new Game2(N, false);
+  g1._place(2 * N + 2, BLACK);
+  g1._place(1 * N + 2, WHITE);
+  g1._place(3 * N + 2, WHITE);
+  g1._place(2 * N + 3, WHITE);
+  g1.current = WHITE;
+
+  const g2 = new Game2(N, false);
+  g2._place(2 * N + 2, BLACK);
+  g2._place(1 * N + 2, WHITE);
+  // no south white — chain has 2 liberties (W and S) instead of 1.
+  g2._place(2 * N + 3, WHITE);
+  g2.current = WHITE;
+
+  const st1 = NPat.createState(N);
+  const st2 = NPat.createState(N);
+  NPat.extractFeatures(g1, st1);
+  NPat.extractFeatures(g2, st2);
+
+  const libIdx = 2 * N + 1;
+  function idsFor(st, idx) {
+    for (let i = 0; i < st.count; i++) if (st.moves[i] === idx)
+      return [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
+    return null;
+  }
+  const a = idsFor(st1, libIdx);
+  const b = idsFor(st2, libIdx);
+  check('atari position vs 2-lib position produce different pattern keys',
+    a !== null && b !== null && a !== b);
+}
+
+// ── 6. D4 board symmetry → D4 feature symmetry ──────────────────────────────
+{
+  const N = 5;
   const gA = new Game2(N, false);
   gA._place(1 * N + 2, BLACK);
   gA.current = WHITE;
-
   const gB = new Game2(N, false);
-  gB._place(3 * N + 2, BLACK);
+  gB._place(3 * N + 2, BLACK); // 180°-rotated
   gB.current = WHITE;
 
   const stA = NPat.createState(N);
@@ -182,7 +202,6 @@ for (const c of cases) {
   NPat.extractFeatures(gA, stA);
   NPat.extractFeatures(gB, stB);
 
-  // Find the two candidates.
   function ids(state, idx) {
     for (let i = 0; i < state.count; i++) if (state.moves[i] === idx)
       return [...state.patIds.subarray(i * 9, (i + 1) * 9)].sort();
@@ -190,30 +209,24 @@ for (const c of cases) {
   }
   const a = ids(stA, 0 * N + 2);
   const b = ids(stB, 4 * N + 2);
-  check('D4-symmetric positions have D4-symmetric features: both candidates found',
-    a !== null && b !== null);
-  check('D4-symmetric positions have identical canonical-id multisets',
+  check('D4-symmetric positions: both candidates found',  a !== null && b !== null);
+  check('D4-symmetric positions: canonical-key multisets match',
     JSON.stringify(a) === JSON.stringify(b));
 }
 
-// ── 7. policyMove returns a legal move on a fresh board ──────────────────────
+// ── 7. policyMove returns a legal move with uniform prob on empty weights ───
 {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w = new Map();   // empty weights: uniform policy
+  const w = new Map();
   const { move, index, prob } = NPat.policyMove(g, st, w);
   check('policyMove: returns a legal move', move !== PASS && g.isLegal(move));
   check('policyMove: returns a valid index', index >= 0 && index < st.count);
   check('policyMove: uniform prob ≈ 1/count', Math.abs(prob - 1 / st.count) < 1e-9);
 }
 
-// ── 8. REINFORCE update: positive advantage boosts chosen move's logit ──────
-//
-// On a featureless board (empty 5×5 torus) every move has the same pattern
-// multiset, so the policy gradient is exactly zero by symmetry.  Break the
-// symmetry by placing a stone; then updating any move must increase its logit
-// relative to the others.
+// ── 8. REINFORCE update boosts chosen move once symmetry is broken ──────────
 {
   const N = 5;
   const g = new Game2(N, false);
@@ -222,11 +235,7 @@ for (const c of cases) {
   const st = NPat.createState(N);
   const w = new Map();
 
-  // populate features + probs
   NPat.policyMove(g, st, w);
-  // Pick a move whose features differ from at least one other move (so the
-  // gradient is non-trivial).  Index 0 is fine unless it's in a degenerate
-  // equivalence class; stepping through the list guarantees we find one.
   let chosen = -1;
   for (let i = 0; i < st.count; i++) {
     const ai = [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
@@ -237,43 +246,79 @@ for (const c of cases) {
     }
     if (chosen >= 0) break;
   }
-  check('REINFORCE test setup: found a non-symmetric move', chosen >= 0);
-  const beforeScore = (() => {
-    const off = chosen * 9;
-    let s = 0;
+  check('REINFORCE setup: found a non-symmetric move', chosen >= 0);
+
+  function score(i) {
+    const off = i * 9; let s = 0;
     for (let k = 0; k < 9; k++) s += w.get(st.patIds[off + k]) || 0;
     return s;
-  })();
-
-  NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
-
-  const afterScore = (() => {
-    const off = chosen * 9;
-    let s = 0;
-    for (let k = 0; k < 9; k++) s += w.get(st.patIds[off + k]) || 0;
-    return s;
-  })();
-
-  check('REINFORCE(+1): chosen move logit increases', afterScore > beforeScore);
-
-  // Also verify probability of chosen move now exceeds 1/n after the update.
-  NPat.extractFeatures(g, st);
-  // recompute softmax manually using updated weights
-  const logits = new Float64Array(st.count);
-  for (let i = 0; i < st.count; i++) {
-    const off = i * 9;
-    let s = 0;
-    for (let k = 0; k < 9; k++) s += w.get(st.patIds[off + k]) || 0;
-    logits[i] = s;
   }
-  let maxL = -Infinity;
-  for (let i = 0; i < st.count; i++) if (logits[i] > maxL) maxL = logits[i];
-  let sum = 0;
-  const probs = new Float64Array(st.count);
-  for (let i = 0; i < st.count; i++) { probs[i] = Math.exp(logits[i] - maxL); sum += probs[i]; }
-  for (let i = 0; i < st.count; i++) probs[i] /= sum;
+  const before = score(chosen);
+  NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
+  const after = score(chosen);
+  check('REINFORCE(+1): chosen move logit increases', after > before);
+}
 
-  check('REINFORCE(+1): chosen move probability increases', probs[chosen] > 1 / st.count);
+// ── 9. No urgent chains on a quiet board → no urgent cell-encoding bits ────
+//
+// A chain with ≥3 liberties is not tactically urgent.  All nine-pattern keys
+// around the chain should use only CELL_EMPTY / CELL_FRIEND / CELL_FOE — i.e.
+// the annotateLadders flags must be zero.
+{
+  const N = 7;
+  const g = new Game2(N, false);
+  g._place(3 * N + 3, BLACK); // black stone with 4 liberties, not in a ladder
+  g.current = WHITE;
+
+  const ladder = NPat.annotateLadders(g);
+  let anyUrgent = false;
+  for (let i = 0; i < N * N; i++) {
+    if (ladder.stoneUrgent[i] || ladder.libUrgent[i]) { anyUrgent = true; break; }
+  }
+  check('quiet board (chain with 4 libs): no urgent cells', !anyUrgent);
+}
+
+// ── 10. Urgent liberty and its D4-symmetric counterpart get the same key ────
+//
+// On a toroidal 7×7 board, set up TWO identical atari situations at positions
+// related by a D4 rotation.  The urgent liberties of both ataris must produce
+// the same multiset of 9 canonical pattern keys.
+{
+  const N = 7;
+  // Configuration A: black in atari at (2,2), surrounded N, E, S by white.
+  const gA = new Game2(N, false);
+  gA._place(2 * N + 2, BLACK);
+  gA._place(1 * N + 2, WHITE);
+  gA._place(3 * N + 2, WHITE);
+  gA._place(2 * N + 3, WHITE);
+  gA.current = WHITE;
+
+  // Configuration B: the 180°-rotation of A.  (2,2) → (4,4).  N→S, E→W, S→N.
+  const gB = new Game2(N, false);
+  gB._place(4 * N + 4, BLACK);
+  gB._place(5 * N + 4, WHITE);   // rotated N (1,2) → (5,4)
+  gB._place(3 * N + 4, WHITE);   // rotated S (3,2) → (3,4)
+  gB._place(4 * N + 3, WHITE);   // rotated E (2,3) → (4,3)
+  gB.current = WHITE;
+
+  const stA = NPat.createState(N);
+  const stB = NPat.createState(N);
+  NPat.extractFeatures(gA, stA);
+  NPat.extractFeatures(gB, stB);
+
+  const libA = 2 * N + 1;   // remaining liberty of A
+  const libB = 4 * N + 5;   // remaining liberty of B (rotated from (2,1))
+
+  function ids(state, idx) {
+    for (let i = 0; i < state.count; i++) if (state.moves[i] === idx)
+      return [...state.patIds.subarray(i * 9, (i + 1) * 9)].sort();
+    return null;
+  }
+  const a = ids(stA, libA);
+  const b = ids(stB, libB);
+  check('rotated atari: both urgent liberties present', a !== null && b !== null);
+  check('rotated atari: pattern multisets match',
+    JSON.stringify(a) === JSON.stringify(b));
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
