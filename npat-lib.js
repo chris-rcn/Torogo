@@ -93,7 +93,7 @@ const CELL_FOE_URGENT     = 5;
 // getAllLadderStatuses, then walk each urgent chain's stones by iterating the
 // chain's group bitset in Game3.
 
-function annotateLadders(game, out) {
+function annotateLadders(game, out, game3) {
   const N   = game.N;
   const cap = N * N;
 
@@ -105,8 +105,10 @@ function annotateLadders(game, out) {
   // Empty-board fast path.
   if (game.emptyCount === cap) return out;
 
-  // Game3 view for ladder2.  game3FromGame2 preserves `current`.
-  const g3 = game3FromGame2(game);
+  // Game3 view for ladder2.  Callers that maintain a Game3 in lockstep with
+  // `game` can pass it in to skip the rebuild; otherwise we fall back to
+  // game3FromGame2 (which preserves `current`).
+  const g3 = game3 || game3FromGame2(game);
   const infos = getAllLadderStatuses(g3);
 
   for (const info of infos) {
@@ -234,8 +236,9 @@ function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 
 // Fill state with 9 canonical pattern keys for every legal non-true-eye move.
 // Optional ladderInfo skips re-running the ladder analysis (useful if the
-// caller already computed it for this board).
-function extractFeatures(game, state, ladderInfo) {
+// caller already computed it for this board).  Optional game3 is a Game3
+// kept in lockstep with `game`; passing it avoids a game3FromGame2 rebuild.
+function extractFeatures(game, state, ladderInfo, game3) {
   const N      = game.N;
   const cap    = N * N;
   const cells  = game.cells;
@@ -243,7 +246,7 @@ function extractFeatures(game, state, ladderInfo) {
   const emC    = game._emptyCells;
   const ec     = game.emptyCount;
 
-  const li = ladderInfo || annotateLadders(game, state.ladder);
+  const li = ladderInfo || annotateLadders(game, state.ladder, game3);
   const stoneUrgent = li.stoneUrgent;
   const libUrgent   = li.libUrgent;
 
@@ -353,9 +356,9 @@ function _computeSoftmax(state, weights) {
 }
 
 // Extract features, softmax over logits, sample an action.
-// Returns { move, index, prob }.
-function policyMove(game, state, weights, rng) {
-  extractFeatures(game, state);
+// Returns { move, index, prob }.  Optional game3 kept in lockstep with game.
+function policyMove(game, state, weights, rng, game3) {
+  extractFeatures(game, state, undefined, game3);
   const n = state.count;
   if (n === 0) return { move: PASS, index: -1, prob: 1 };
 
@@ -371,9 +374,9 @@ function policyMove(game, state, weights, rng) {
   return { move: state.moves[chosen], index: chosen, prob: probs[chosen] };
 }
 
-// Greedy argmax move (no sampling).
-function greedyMove(game, state, weights) {
-  extractFeatures(game, state);
+// Greedy argmax move (no sampling).  Optional game3 kept in lockstep.
+function greedyMove(game, state, weights, game3) {
+  extractFeatures(game, state, undefined, game3);
   const n = state.count;
   if (n === 0) return PASS;
   let best = -Infinity, bestI = 0;

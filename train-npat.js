@@ -24,6 +24,7 @@ const path = require('path');
 const fs   = require('fs');
 
 const { Game2, BLACK, PASS } = require('./game2.js');
+const { Game3 } = require('./game3.js');
 const NPat = require('./npat-lib.js');
 const Util = require('./util.js');
 
@@ -74,6 +75,7 @@ function loadWeights(filePath) {
 // Returns game-level stats for logging.
 function trainGame(N) {
   const game  = new Game2(N, false);
+  const game3 = new Game3(N);  // kept in lockstep for ladder analysis
   const maxMoves = N * N * 4;
   const tStart   = Date.now();
 
@@ -91,14 +93,14 @@ function trainGame(N) {
     if (EPSILON > 0 && Math.random() < EPSILON) {
       // Uniform exploration over legal non-eye moves.  Still need features
       // (and π) for the gradient, so run the same extraction path.
-      const mv = NPat.policyMove(game, state, weights);  // populates state
+      const mv = NPat.policyMove(game, state, weights, Math, game3);
       if (state.count === 0) { choice = { move: PASS, index: -1, prob: 1 }; }
       else {
         const i = Math.floor(Math.random() * state.count);
         choice = { move: state.moves[i], index: i, prob: state.probs[i] };
       }
     } else {
-      choice = NPat.policyMove(game, state, weights);
+      choice = NPat.policyMove(game, state, weights, Math, game3);
     }
 
     if (choice.index >= 0) {
@@ -112,6 +114,7 @@ function trainGame(N) {
     }
 
     game.play(choice.move);
+    game3.play(choice.move);
     moves++;
   }
 
@@ -187,18 +190,20 @@ function evalVsReference(N, refGetMove, nGames) {
   const results = [];
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game = new Game2(N, false);
+    const game  = new Game2(N, false);
+    const game3 = new Game3(N);  // lockstep copy for ladder analysis
     const maxMoves = N * N * 4;
     let m = 0;
     while (!game.gameOver && m++ < maxMoves) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
-        idx = NPat.greedyMove(game, state, weights);
+        idx = NPat.greedyMove(game, state, weights, game3);
       } else {
         const mv = refGetMove(game);
         idx = mv && mv.move !== undefined ? mv.move : PASS;
       }
       game.play(idx);
+      game3.play(idx);
     }
     const winner = game.calcWinner();
     results.push((winner === BLACK) === policyIsBlack ? 1 : 0);
