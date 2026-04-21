@@ -270,15 +270,20 @@ while (true) {
     intervalGames   = 0;
     intervalMoves   = 0;
 
-    let wAbsSum = 0, wAbsMax = 0;
+    // Count only interned pids that have received a non-zero gradient: pids
+    // are interned on first sight in extractFeatures, so weights.size counts
+    // every pattern ever seen — the "learned" count is the non-zero subset.
+    let wAbsSum = 0, wAbsMax = 0, wNonZero = 0;
     const vals = weights.vals;
     const wN   = weights.size;
     for (let i = 0; i < wN; i++) {
       const a = Math.abs(vals[i]);
+      if (a === 0) continue;
+      wNonZero++;
       wAbsSum += a;
       if (a > wAbsMax) wAbsMax = a;
     }
-    const wAvg = wN > 0 ? wAbsSum / wN : 0;
+    const wAvg = wNonZero > 0 ? wAbsSum / wNonZero : 0;
 
     const tTestMs   = Date.now() - tTestStart;
     const elapsedS  = ((Date.now() - t0) / 1000).toFixed(0);
@@ -290,7 +295,7 @@ while (true) {
       String(g)                                  .padStart(7),
       elapsedS                                   .padStart(8),
       tGameMs                                    .padStart(7),
-      String(weights.size)                       .padStart(8),
+      String(wNonZero)                           .padStart(8),
       ((100 * latestWR).toFixed(1) + '%')        .padStart(6) + '(' + String(batch.length).padStart(3) + ')',
       ((100 * avgWR).toFixed(1) + '%')           .padStart(7),
       avgLen                                     .padStart(6),
