@@ -14,14 +14,13 @@ function check(label, ok) {
 
 const {
   CELL_EMPTY, CELL_EMPTY_URGENT,
-  CELL_FRIEND, CELL_FRIEND_URGENT,
-  CELL_FOE,    CELL_FOE_URGENT,
+  CELL_FRIEND, CELL_FOE,
   CELL_BASE,   CELLS_BASE,
   canonKey, _D4,
 } = NPat;
 
-check('CELL_BASE is 6', CELL_BASE === 6);
-check('CELLS_BASE is 6^9', CELLS_BASE === 10077696);
+check('CELL_BASE is 4', CELL_BASE === 4);
+check('CELLS_BASE is 4^9', CELLS_BASE === 262144);
 
 // ── 1. canonKey respects D4 symmetry ────────────────────────────────────────
 //
@@ -36,12 +35,12 @@ function applyD4(relPos, cells, perm) {
 }
 
 const cases = [
-  { relPos: 4, cells: [0,2,0, 0,0,0, 0,4,0] },  // candidate center; friend N, foe S
-  { relPos: 0, cells: [0,2,4, 4,2,0, 2,0,4] },  // candidate top-left, full stones
+  { relPos: 4, cells: [0,2,0, 0,0,0, 0,3,0] },  // candidate center; friend N, foe S
+  { relPos: 0, cells: [0,2,3, 3,2,0, 2,0,3] },  // candidate top-left, full stones
   { relPos: 8, cells: [2,0,0, 0,0,0, 0,0,0] },  // candidate bottom-right; friend at top-left
-  { relPos: 2, cells: [0,0,0, 2,4,2, 0,0,4] },  // candidate top-right
-  { relPos: 4, cells: [1,3,5, 5,0,1, 3,1,5] },  // with urgency markers everywhere
-  { relPos: 1, cells: [0,1,0, 3,2,4, 0,5,0] },  // mixed
+  { relPos: 2, cells: [0,0,0, 2,3,2, 0,0,3] },  // candidate top-right
+  { relPos: 4, cells: [1,2,3, 3,0,1, 2,1,3] },  // with urgent-liberty markers
+  { relPos: 1, cells: [0,1,0, 3,2,3, 0,2,0] },  // mixed
 ];
 
 for (const c of cases) {
@@ -62,7 +61,7 @@ for (const c of cases) {
   // (relPos=4, center friend) vs (relPos=4, center foe) are not D4-equivalent.
   const k1 = canonKey(4, [0,0,0, 0,0,0, 0,0,0]);    // all empty
   const k2 = canonKey(4, [0,0,0, 0,0,0, 2,0,0]);    // one friend at corner
-  const k3 = canonKey(4, [0,0,0, 0,0,0, 4,0,0]);    // one foe at corner
+  const k3 = canonKey(4, [0,0,0, 0,0,0, 3,0,0]);    // one foe at corner
   check('all-empty pattern differs from single-friend pattern', k1 !== k2);
   check('single-friend pattern differs from single-foe pattern', k2 !== k3);
 
@@ -121,11 +120,8 @@ for (const c of cases) {
   const st = NPat.createState(N);
   NPat.extractFeatures(g, st);
 
-  const blackStoneIdx = 2 * N + 2;
   const libIdx        = 2 * N + 1; // (2,1), the remaining liberty
 
-  check('ladder annotation: black stone marked stoneUrgent',
-    st.ladder.stoneUrgent[blackStoneIdx] === 1);
   check('ladder annotation: liberty cell marked libUrgent',
     st.ladder.libUrgent[libIdx] === 1);
 
@@ -273,7 +269,7 @@ for (const c of cases) {
   const ladder = NPat.annotateLadders(g);
   let anyUrgent = false;
   for (let i = 0; i < N * N; i++) {
-    if (ladder.stoneUrgent[i] || ladder.libUrgent[i]) { anyUrgent = true; break; }
+    if (ladder.libUrgent[i]) { anyUrgent = true; break; }
   }
   check('quiet board (chain with 4 libs): no urgent cells', !anyUrgent);
 }

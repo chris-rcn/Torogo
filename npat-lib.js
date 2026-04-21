@@ -7,25 +7,21 @@
 // canonical pattern key.  The move's logit is the sum of those 9 feature
 // weights; moves are sampled by softmax over logits.
 //
-// Cell encoding (mover-relative, 6 values):
+// Cell encoding (mover-relative, 4 values):
 //   0 = EMPTY           empty, not an urgent liberty
 //   1 = EMPTY_URGENT    empty; playing here resolves some ladder (saves a
 //                       friend chain or kills a foe chain).  Comes from
 //                       ladder2.getAllLadderStatuses(...).urgentLibs.
-//   2 = FRIEND          own stone, chain is not in a tactical ladder
-//   3 = FRIEND_URGENT   own stone, chain has 1–2 liberties AND the mover has
-//                       a move that saves it (ladder status: urgentLibs ≠ [])
-//   4 = FOE             opponent stone, chain is not in a tactical ladder
-//   5 = FOE_URGENT      opponent stone, chain has 1–2 liberties AND the mover
-//                       has a move that kills it
+//   2 = FRIEND          own stone
+//   3 = FOE             opponent stone
 //
 // The board is toroidal (game2's neighbour tables wrap), so there is no
 // off-board state to encode.
 //
 // Raw pattern index for a single window:
-//   raw = relPos * 6^9 + Σ_i cells[i] * 6^i                        (i = 0..8)
+//   raw = relPos * 4^9 + Σ_i cells[i] * 4^i                        (i = 0..8)
 // where relPos ∈ 0..8 is the candidate's position within the window.
-// Range: [0, 9 * 10_077_696) = [0, 90_699_264).  Fits in 32 bits.
+// Range: [0, 9 * 262_144) = [0, 2_359_296).  Fits in 32 bits.
 //
 // Canonical key: min over 8 D4 symmetries of the transformed raw.  Under σ,
 // new_cells[σ(i)] = cells[i] and new_relPos = σ(relPos).  This is O(8×9) per
@@ -67,47 +63,35 @@ const _D4 = [
 
 // ── Encoding constants ───────────────────────────────────────────────────────
 
-const CELL_BASE    = 6;
-const CELLS_BASE   = 10077696; // 6^9
+const CELL_BASE    = 4;
+const CELLS_BASE   = 262144; // 4^9
 
 // Cell-state labels (exported for readability in other modules / tests).
 const CELL_EMPTY          = 0;
 const CELL_EMPTY_URGENT   = 1;
 const CELL_FRIEND         = 2;
-const CELL_FRIEND_URGENT  = 3;
-const CELL_FOE            = 4;
-const CELL_FOE_URGENT     = 5;
+const CELL_FOE            = 3;
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
-// Build two per-cell flag arrays for the current game position:
-//   stoneUrgent[idx] = 1 if the stone at idx belongs to a chain whose ladder
-//                      status has non-empty urgentLibs (i.e. mover can resolve
-//                      it with a single move), else 0.
-//   libUrgent[idx]   = 1 if the empty cell at idx appears in some chain's
-//                      urgentLibs, else 0.
+// Build a per-cell flag array for the current game position:
+//   libUrgent[idx] = 1 if the empty cell at idx appears in some chain's
+//                    urgentLibs (i.e. playing there resolves a ladder), else 0.
 //
-// Both arrays are Uint8Array(N*N), reused across calls when provided.
+// libUrgent is a Uint8Array(N*N), reused across calls when provided.
 //
 // Uses ladder2's Game3-based analysis: convert the Game2 board to Game3, run
-// getAllLadderStatuses, then walk each urgent chain's stones by iterating the
-// chain's group bitset in Game3.
+// getAllLadderStatuses, and collect each urgent chain's liberty cells.
 
 function annotateLadders(game, out, game3) {
   const N   = game.N;
   const cap = N * N;
 
-  // Lazy-allocate output buffers.
-  if (!out) out = { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) };
-  out.stoneUrgent.fill(0);
+  if (!out) out = { libUrgent: new Uint8Array(cap) };
   out.libUrgent.fill(0);
 
-  // Empty-board fast path.
   if (game.emptyCount === cap) return out;
 
-  // Game3 view for ladder2.  Callers that maintain a Game3 in lockstep with
-  // `game` can pass it in to skip the rebuild; otherwise we fall back to
-  // game3FromGame2 (which preserves `current`).
   const g3 = game3 || game3FromGame2(game);
   const infos = getAllLadderStatuses(g3);
 
@@ -115,25 +99,7 @@ function annotateLadders(game, out, game3) {
     if (!info.status) continue;
     const { urgentLibs } = info.status;
     if (urgentLibs.length === 0) continue;
-
-    // Mark urgent liberty cells (empty points).
     for (const lib of urgentLibs) out.libUrgent[lib] = 1;
-
-    // Mark every stone of the urgent chain.  Game3 stores group stones in a
-    // bitset at _sw[gid * W + wi]; walk it here.
-    const gid = info.gid;
-    const W   = g3._W;
-    const sw  = g3._sw;
-    const gb  = gid * W;
-    for (let wi = 0; wi < W; wi++) {
-      let w = sw[gb + wi];
-      while (w) {
-        const lsb = w & -w;
-        const si = wi * 32 + (31 - Math.clz32(lsb));
-        if (si < cap) out.stoneUrgent[si] = 1;
-        w ^= lsb;
-      }
-    }
   }
 
   return out;
@@ -176,7 +142,7 @@ function createState(N) {
     patIds:   new Int32Array(cap * 9),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
-    ladder:   { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) },
+    ladder:   { libUrgent: new Uint8Array(cap) },
     patchNbr,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
     // 9 * (n + 1) dense idxs (chosen move + all n moves), n ≤ cap.
@@ -289,8 +255,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const ec     = game.emptyCount;
 
   const li = ladderInfo || annotateLadders(game, state.ladder, game3);
-  const stoneUrgent = li.stoneUrgent;
-  const libUrgent   = li.libUrgent;
+  const libUrgent = li.libUrgent;
 
   let count = 0;
   const moves    = state.moves;
@@ -315,9 +280,9 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       if (ci === 0) {
         v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
       } else if (ci === cur) {
-        v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
+        v = CELL_FRIEND;
       } else {
-        v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
+        v = CELL_FOE;
       }
       patch[p] = v;
     }
@@ -500,8 +465,7 @@ const NPatterns = {
   CELL_BASE,
   CELLS_BASE,
   CELL_EMPTY, CELL_EMPTY_URGENT,
-  CELL_FRIEND, CELL_FRIEND_URGENT,
-  CELL_FOE, CELL_FOE_URGENT,
+  CELL_FRIEND, CELL_FOE,
   // Exposed for tests.
   _D4,
 };
