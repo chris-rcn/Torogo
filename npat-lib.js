@@ -163,27 +163,46 @@ function createState(N) {
 // ── Runtime D4 canonicalisation ──────────────────────────────────────────────
 //
 // canonKey(relPos, cells[9]) returns the minimum raw-int over 8 D4 symmetries.
+//
+// For each D4 permutation σ we have tCells[σ(i)] = cells[i], so
+//   enc_σ = Σ_j tCells[j] · 6^j = Σ_i cells[i] · 6^{σ(i)}
+// and the full raw is σ(relPos) · CELLS_BASE + enc_σ.  Precompute:
+//   _D4cw[σ*9 + i]      = 6^{σ(i)}               (cell weight)
+//   _D4rp[σ*9 + relPos] = σ(relPos) · CELLS_BASE (relPos offset)
+// so each permutation becomes a flat 9-term dot product plus one add.
+
+const _D4cw = new Int32Array(72);
+const _D4rp = new Int32Array(72);
+(function () {
+  const pow6 = new Int32Array(10);
+  pow6[0] = 1;
+  for (let k = 1; k < 10; k++) pow6[k] = pow6[k - 1] * CELL_BASE;
+  for (let di = 0; di < 8; di++) {
+    const perm = _D4[di];
+    for (let i = 0; i < 9; i++) {
+      _D4cw[di * 9 + i] = pow6[perm[i]];
+      _D4rp[di * 9 + i] = perm[i] * CELLS_BASE;
+    }
+  }
+})();
 
 function canonKey(relPos, cells) {
-  // Identity encoding first, then the 7 non-identity D4 perms.
-  let idEnc = 0;
-  for (let i = 8; i >= 0; i--) idEnc = idEnc * CELL_BASE + cells[i];
-  let best = relPos * CELLS_BASE + idEnc;
-
-  const tCells = _scratchCells;
-  for (let di = 1; di < 8; di++) {
-    const perm = _D4[di];
-    for (let i = 0; i < 9; i++) tCells[perm[i]] = cells[i];
-    const nRelPos = perm[relPos];
-    let enc = 0;
-    for (let i = 8; i >= 0; i--) enc = enc * CELL_BASE + tCells[i];
-    const raw = nRelPos * CELLS_BASE + enc;
+  const c0 = cells[0], c1 = cells[1], c2 = cells[2];
+  const c3 = cells[3], c4 = cells[4], c5 = cells[5];
+  const c6 = cells[6], c7 = cells[7], c8 = cells[8];
+  const cw = _D4cw, rp = _D4rp;
+  let best = 0x7fffffff;
+  for (let di = 0; di < 8; di++) {
+    const o = di * 9;
+    const raw = rp[o + relPos]
+      + c0 * cw[o]     + c1 * cw[o + 1] + c2 * cw[o + 2]
+      + c3 * cw[o + 3] + c4 * cw[o + 4] + c5 * cw[o + 5]
+      + c6 * cw[o + 6] + c7 * cw[o + 7] + c8 * cw[o + 8];
     if (raw < best) best = raw;
   }
   return best;
 }
 
-const _scratchCells = new Int32Array(9);
 const _windowCells  = new Int32Array(9);
 const _patch5       = new Int32Array(25);
 
