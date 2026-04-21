@@ -150,13 +150,33 @@ function annotateLadders(game, out) {
 
 function createState(N) {
   const cap = N * N;
+  // Precomputed toroidal 5×5 neighbour table.  For each board index idx and
+  // each offset (pr, pc) ∈ [-2, 2]², patchNbr[idx*25 + (pr+2)*5 + (pc+2)]
+  // gives the flat board index of (r+pr mod N, c+pc mod N).  This replaces
+  // 25 `_wrap` calls per candidate in extractFeatures with one indexed load.
+  const patchNbr = new Int32Array(cap * 25);
+  for (let idx = 0; idx < cap; idx++) {
+    const r = (idx / N) | 0;
+    const c = idx - r * N;
+    const base = idx * 25;
+    for (let pr = -2; pr <= 2; pr++) {
+      const br = _wrap(r + pr, N);
+      const rowBase = br * N;
+      const prBase  = (pr + 2) * 5;
+      for (let pc = -2; pc <= 2; pc++) {
+        patchNbr[base + prBase + (pc + 2)] = rowBase + _wrap(c + pc, N);
+      }
+    }
+  }
   return {
-    moves:  new Int32Array(cap),
-    patIds: new Int32Array(cap * 9),
-    logits: new Float64Array(cap),
-    probs:  new Float64Array(cap),
-    ladder: { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) },
-    count:  0,
+    N,
+    moves:    new Int32Array(cap),
+    patIds:   new Int32Array(cap * 9),
+    logits:   new Float64Array(cap),
+    probs:    new Float64Array(cap),
+    ladder:   { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) },
+    patchNbr,
+    count:    0,
   };
 }
 
@@ -228,40 +248,32 @@ function extractFeatures(game, state, ladderInfo) {
   const libUrgent   = li.libUrgent;
 
   let count = 0;
-  const moves  = state.moves;
-  const patIds = state.patIds;
-  const wc9    = _windowCells;
-  const patch  = _patch5;
+  const moves    = state.moves;
+  const patIds   = state.patIds;
+  const patchNbr = state.patchNbr;
+  const wc9      = _windowCells;
+  const patch    = _patch5;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
 
-    const r = (idx / N) | 0;
-    const c = idx - r * N;
-
-    // Precompute the 5×5 patch of encoded cell values centred on the
-    // candidate.  Patch index (pr+2)*5 + (pc+2) holds the value at
-    // board position (r+pr, c+pc), pr,pc ∈ {-2,-1,0,1,2}.  25 wraps
-    // instead of 9·9 = 81 inside the window loop.
-    for (let pr = -2; pr <= 2; pr++) {
-      const br = _wrap(r + pr, N);
-      const rowBase = br * N;
-      const prBase  = (pr + 2) * 5;
-      for (let pc = -2; pc <= 2; pc++) {
-        const bc = _wrap(c + pc, N);
-        const bi = rowBase + bc;
-        const ci = cells[bi];
-        let v;
-        if (ci === 0) {
-          v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
-        } else if (ci === cur) {
-          v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
-        } else {
-          v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
-        }
-        patch[prBase + (pc + 2)] = v;
+    // Build the 5×5 patch of encoded cell values centred on the candidate.
+    // patchNbr pre-stores the 25 toroidal flat indices for each idx; 25
+    // indexed loads replace 25 _wrap calls.
+    const nbrBase = idx * 25;
+    for (let p = 0; p < 25; p++) {
+      const bi = patchNbr[nbrBase + p];
+      const ci = cells[bi];
+      let v;
+      if (ci === 0) {
+        v = libUrgent[bi] ? CELL_EMPTY_URGENT : CELL_EMPTY;
+      } else if (ci === cur) {
+        v = stoneUrgent[bi] ? CELL_FRIEND_URGENT : CELL_FRIEND;
+      } else {
+        v = stoneUrgent[bi] ? CELL_FOE_URGENT : CELL_FOE;
       }
+      patch[p] = v;
     }
 
     const off = count * 9;
