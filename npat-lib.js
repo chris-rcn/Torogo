@@ -178,8 +178,47 @@ function createState(N) {
     probs:    new Float64Array(cap),
     ladder:   { stoneUrgent: new Uint8Array(cap), libUrgent: new Uint8Array(cap) },
     patchNbr,
+    // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
+    // 9 * (n + 1) dense idxs (chosen move + all n moves), n ≤ cap.
+    touched:  new Int32Array(9 * (cap + 1)),
     count:    0,
   };
+}
+
+// ── Weights store ─────────────────────────────────────────────────────────────
+//
+// Canonical pattern keys (the raw ints from canonKey) can range up to ~90M,
+// so we can't index a flat array by them directly.  Instead we intern each
+// raw key to a dense 0-based index the first time it is seen.  Weights and
+// the reusable reinforce-delta buffer are plain Float64Arrays indexed by the
+// dense index; the raw → dense map is a Map<number, number>.
+//
+// `extractFeatures` performs the intern during extraction, so `state.patIds`
+// then holds dense indices, and scoring / softmax / REINFORCE update paths
+// are all pure typed-array access.  No Map operations in the inner loops.
+
+function createWeights(initialCapacity = 1024) {
+  return {
+    map:   new Map(),                              // raw canonKey → dense idx
+    vals:  new Float64Array(initialCapacity),      // weights[dense idx]
+    delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
+    size:  0,                                      // next dense idx to assign
+  };
+}
+
+function _internWeight(w, rawPid) {
+  const map = w.map;
+  const existing = map.get(rawPid);
+  if (existing !== undefined) return existing;
+  const idx = w.size;
+  if (idx >= w.vals.length) {
+    const cap = w.vals.length * 2;
+    const nv = new Float64Array(cap); nv.set(w.vals); w.vals = nv;
+    const nd = new Float64Array(cap); nd.set(w.delta); w.delta = nd;
+  }
+  map.set(rawPid, idx);
+  w.size = idx + 1;
+  return idx;
 }
 
 // ── Runtime D4 canonicalisation ──────────────────────────────────────────────
@@ -238,7 +277,10 @@ function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 // Optional ladderInfo skips re-running the ladder analysis (useful if the
 // caller already computed it for this board).  Optional game3 is a Game3
 // kept in lockstep with `game`; passing it avoids a game3FromGame2 rebuild.
-function extractFeatures(game, state, ladderInfo, game3) {
+// Optional weights is a WeightsStore; when supplied, each canonical key is
+// interned and patIds[] holds dense indices (used by the scoring/softmax/
+// REINFORCE hot paths).  When omitted, patIds[] holds raw canonKey ints.
+function extractFeatures(game, state, ladderInfo, game3, weights) {
   const N      = game.N;
   const cap    = N * N;
   const cells  = game.cells;
@@ -256,6 +298,7 @@ function extractFeatures(game, state, ladderInfo, game3) {
   const patchNbr = state.patchNbr;
   const wc9      = _windowCells;
   const patch    = _patch5;
+  const wMap     = weights ? weights.map : null;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -293,7 +336,8 @@ function extractFeatures(game, state, ladderInfo, game3) {
           wc9[i] = patch[(wr + dr + 2) * 5 + (wc + dc + 2)];
         }
 
-        patIds[off + (wr + 2) * 3 + (wc + 2)] = canonKey(relPos, wc9);
+        const raw = canonKey(relPos, wc9);
+        patIds[off + (wr + 2) * 3 + (wc + 2)] = wMap ? _internWeight(weights, raw) : raw;
       }
     }
 
@@ -306,24 +350,23 @@ function extractFeatures(game, state, ladderInfo, game3) {
 
 // ── Scoring helpers ───────────────────────────────────────────────────────────
 
-function _score(patIds, i, weights) {
+// After extractFeatures(game, state, _, _, weights), patIds holds dense indices
+// into weights.vals (the raw canonKey has been interned).  Scoring is then a
+// pure typed-array sum.
+function _score(patIds, i, vals) {
   const off = i * 9;
-  const isMap = weights instanceof Map;
-  let s = 0;
-  if (isMap) {
-    for (let w = 0; w < 9; w++) s += weights.get(patIds[off + w]) || 0;
-  } else {
-    for (let w = 0; w < 9; w++) s += weights[patIds[off + w]] || 0;
-  }
-  return s;
+  return vals[patIds[off]]     + vals[patIds[off + 1]] + vals[patIds[off + 2]]
+       + vals[patIds[off + 3]] + vals[patIds[off + 4]] + vals[patIds[off + 5]]
+       + vals[patIds[off + 6]] + vals[patIds[off + 7]] + vals[patIds[off + 8]];
 }
 
 // Evaluate all moves and return them sorted by score descending.
 function evaluate(game, state, weights) {
-  extractFeatures(game, state);
+  extractFeatures(game, state, undefined, undefined, weights);
+  const vals = weights.vals;
   const out = [];
   for (let i = 0; i < state.count; i++) {
-    out.push({ move: state.moves[i], score: _score(state.patIds, i, weights) });
+    out.push({ move: state.moves[i], score: _score(state.patIds, i, vals) });
   }
   return out.sort((a, b) => b.score - a.score);
 }
@@ -331,20 +374,17 @@ function evaluate(game, state, weights) {
 function _computeSoftmax(state, weights) {
   const n   = state.count;
   if (n === 0) return 0;
-  const pid = state.patIds;
-  const lg  = state.logits;
-  const pr  = state.probs;
-  const isMap = weights instanceof Map;
+  const pid  = state.patIds;
+  const lg   = state.logits;
+  const pr   = state.probs;
+  const vals = weights.vals;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
     const off = i * 9;
-    let s = 0;
-    if (isMap) {
-      for (let w = 0; w < 9; w++) s += weights.get(pid[off + w]) || 0;
-    } else {
-      for (let w = 0; w < 9; w++) s += weights[pid[off + w]] || 0;
-    }
+    const s = vals[pid[off]]     + vals[pid[off + 1]] + vals[pid[off + 2]]
+            + vals[pid[off + 3]] + vals[pid[off + 4]] + vals[pid[off + 5]]
+            + vals[pid[off + 6]] + vals[pid[off + 7]] + vals[pid[off + 8]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -358,7 +398,7 @@ function _computeSoftmax(state, weights) {
 // Extract features, softmax over logits, sample an action.
 // Returns { move, index, prob }.  Optional game3 kept in lockstep with game.
 function policyMove(game, state, weights, rng, game3) {
-  extractFeatures(game, state, undefined, game3);
+  extractFeatures(game, state, undefined, game3, weights);
   const n = state.count;
   if (n === 0) return { move: PASS, index: -1, prob: 1 };
 
@@ -376,12 +416,13 @@ function policyMove(game, state, weights, rng, game3) {
 
 // Greedy argmax move (no sampling).  Optional game3 kept in lockstep.
 function greedyMove(game, state, weights, game3) {
-  extractFeatures(game, state, undefined, game3);
+  extractFeatures(game, state, undefined, game3, weights);
   const n = state.count;
   if (n === 0) return PASS;
+  const vals = weights.vals;
   let best = -Infinity, bestI = 0;
   for (let i = 0; i < n; i++) {
-    const s = _score(state.patIds, i, weights);
+    const s = _score(state.patIds, i, vals);
     if (s > best) { best = s; bestI = i; }
   }
   return state.moves[bestI];
@@ -399,38 +440,46 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const n = state.count;
   if (n === 0 || chosenIndex < 0) return;
 
-  const step  = lr * advantage;
+  const step = lr * advantage;
   if (step === 0) return;
 
-  const patIds = state.patIds;
-  const probs  = state.probs;
-  const isMap  = weights instanceof Map;
-  const delta  = new Map();
+  const patIds  = state.patIds;
+  const probs   = state.probs;
+  const vals    = weights.vals;
+  const delta   = weights.delta;
+  const touched = state.touched;
+  let tc = 0;
 
+  // Chosen move contributes +step to each of its 9 dense pids.
   {
     const off = chosenIndex * 9;
     for (let k = 0; k < 9; k++) {
-      const pid = patIds[off + k];
-      delta.set(pid, (delta.get(pid) ?? 0) + step);
+      const idx = patIds[off + k];
+      touched[tc++] = idx;
+      delta[idx] += step;
     }
   }
+  // Every legal move i contributes -step * π_i to each of its 9 dense pids.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
     const sub = step * pi;
     const off = i * 9;
     for (let k = 0; k < 9; k++) {
-      const pid = patIds[off + k];
-      delta.set(pid, (delta.get(pid) ?? 0) - sub);
+      const idx = patIds[off + k];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
     }
   }
-  if (isMap) {
-    for (const [pid, d] of delta) {
-      if (d === 0) continue;
-      weights.set(pid, (weights.get(pid) ?? 0) + d);
+  // Apply accumulated deltas and clear them.  Duplicates are tolerated by the
+  // zero-check: the first visit applies the net delta; later visits see 0.
+  for (let i = 0; i < tc; i++) {
+    const idx = touched[i];
+    const d = delta[idx];
+    if (d !== 0) {
+      vals[idx] += d;
+      delta[idx] = 0;
     }
-  } else {
-    for (const [pid, d] of delta) weights[pid] += d;
   }
 }
 
@@ -438,6 +487,8 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
 
 const NPatterns = {
   createState,
+  createWeights,
+  internWeight: _internWeight,
   extractFeatures,
   evaluate,
   policyMove,

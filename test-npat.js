@@ -219,7 +219,7 @@ for (const c of cases) {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w = new Map();
+  const w = NPat.createWeights();
   const { move, index, prob } = NPat.policyMove(g, st, w);
   check('policyMove: returns a legal move', move !== PASS && g.isLegal(move));
   check('policyMove: returns a valid index', index >= 0 && index < st.count);
@@ -233,7 +233,7 @@ for (const c of cases) {
   g._place(1 * N + 2, BLACK);
   g.current = WHITE;
   const st = NPat.createState(N);
-  const w = new Map();
+  const w = NPat.createWeights();
 
   NPat.policyMove(g, st, w);
   let chosen = -1;
@@ -250,7 +250,7 @@ for (const c of cases) {
 
   function score(i) {
     const off = i * 9; let s = 0;
-    for (let k = 0; k < 9; k++) s += w.get(st.patIds[off + k]) || 0;
+    for (let k = 0; k < 9; k++) s += w.vals[st.patIds[off + k]];
     return s;
   }
   const before = score(chosen);
