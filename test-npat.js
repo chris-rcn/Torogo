@@ -20,7 +20,8 @@ const {
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
   WINDOWS_34, CELLS12_BASE, SHAPE34_RAW_BASE,
-  canonKey, canonKey34, _D4, _D4rect,
+  SHAPE_L_CELLS, SHAPE_L_BASE, SHAPE_L_RAW_BASE,
+  canonKey, canonKey34, canonKeyL, _D4, _D4rect, _LShape,
 } = NPat;
 
 check('CELL_BASE is 3', CELL_BASE === 3);
@@ -31,6 +32,13 @@ check('WINDOWS_34 is 1', WINDOWS_34 === 1);
 check('CELLS12_BASE is 3^12', CELLS12_BASE === 531441);
 check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT',
   SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT);
+check('SHAPE_L_CELLS is 13', SHAPE_L_CELLS === 13);
+check('SHAPE_L_BASE is 3^13', SHAPE_L_BASE === 1594323);
+check('SHAPE_L_RAW_BASE above 3×4 range',
+  SHAPE_L_RAW_BASE === SHAPE34_RAW_BASE + 12 * CELLS12_BASE);
+check('_LShape has 13 offsets', _LShape.length === 13);
+check('_LShape index 4 is the candidate at (0, 0)',
+  _LShape[4][0] === 0 && _LShape[4][1] === 0);
 
 // ── 1. canonKey respects D4 symmetry ────────────────────────────────────────
 //
@@ -540,6 +548,114 @@ function applyD4rect(relPos, cells, perm) {
   }
   check('REINFORCE modifies at least one 3×4 weight for the chosen move',
     anyNonzero);
+}
+
+// ── 20. canonKeyL(empty patch) is 0 ─────────────────────────────────────────
+//
+// An all-empty 5×7 patch has every cell = CELL_EMPTY = 0, so every raw int
+// computed by canonKeyL is 0.  The canonical key is 0.
+
+{
+  const patch = new Int32Array(35);
+  check('canonKeyL on empty patch is 0', canonKeyL(patch) === 0);
+}
+
+// ── 21. canonKeyL is invariant under D4 rotation of the underlying board ────
+//
+// Place an asymmetric pattern of stones on a small board.  Compute canonKeyL
+// at a candidate on the base board, then repeat on each of the 8 D4 rotations
+// of the board.  The canonical keys must all match (the board-rotation takes
+// the candidate's patch to a D4-transformed version of itself, and canonKeyL
+// takes the minimum over all 8 D4 orientations).
+
+{
+  const N = 9;
+
+  function rotate(g, transform) {
+    const out = new Game2(N, false);
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const v = g.cells[r * N + c];
+      if (v === 0) continue;
+      const [nr, nc] = transform(r, c);
+      out._place(nr * N + nc, v);
+    }
+    out.current = g.current;
+    return out;
+  }
+
+  const transforms = [
+    (r, c) => [r, c],
+    (r, c) => [c, N - 1 - r],
+    (r, c) => [N - 1 - r, N - 1 - c],
+    (r, c) => [N - 1 - c, r],
+    (r, c) => [r, N - 1 - c],
+    (r, c) => [N - 1 - r, c],
+    (r, c) => [c, r],
+    (r, c) => [N - 1 - c, N - 1 - r],
+  ];
+
+  // Set up an asymmetric pattern centred around (4, 4): the candidate at (4, 4),
+  // several friends and foes scattered around.  Mover = WHITE so FRIEND=WHITE.
+  const gBase = new Game2(N, false);
+  gBase._place(3 * N + 3, WHITE);   // (-1,-1) friend
+  gBase._place(3 * N + 5, BLACK);   // (-1,+1) foe
+  gBase._place(4 * N + 2, WHITE);   // (0,-2)  — inside the 5×5 but outside the SE L shape
+  gBase._place(4 * N + 6, BLACK);   // (0,+2) foe
+  gBase._place(5 * N + 5, WHITE);   // (+1,+1) friend
+  gBase._place(6 * N + 4, BLACK);   // (+2, 0) foe
+  gBase.current = WHITE;
+
+  const st0 = NPat.createState(N);
+  NPat.extractFeatures(gBase, st0);
+  let cand0 = -1;
+  for (let i = 0; i < st0.count; i++) if (st0.moves[i] === 4 * N + 4) { cand0 = i; break; }
+  check('L-rotation: candidate (4,4) found on base board', cand0 >= 0);
+  const baseKey = st0.patIdsL[cand0];
+
+  for (let s = 1; s < 8; s++) {
+    const g = rotate(gBase, transforms[s]);
+    const [nr, nc] = transforms[s](4, 4);
+    const st = NPat.createState(N);
+    NPat.extractFeatures(g, st);
+    let ci = -1;
+    for (let i = 0; i < st.count; i++) if (st.moves[i] === nr * N + nc) { ci = i; break; }
+    check(`L-rotation: candidate found under D4 transform ${s}`, ci >= 0);
+    check(`L-rotation: canonKeyL invariant under D4 transform ${s}`,
+      st.patIdsL[ci] === baseKey);
+  }
+}
+
+// ── 22. canonKeyL distinguishes non-equivalent patterns ─────────────────────
+//
+// Two patterns that are NOT D4-equivalent should produce different canonical
+// keys.  Use patches with a single friend at different asymmetric positions.
+
+{
+  const pA = new Int32Array(35); // single friend at patch[(0+2)*7 + (+2+3)] = 19 → shape idx 6 (= (0, +2))
+  pA[(0 + 2) * 7 + (2 + 3)] = CELL_FRIEND;
+  const pB = new Int32Array(35); // single friend at patch[(+1+2)*7 + (+1+3)] = 25 → shape idx 9 (= (+1, +1))
+  pB[(1 + 2) * 7 + (1 + 3)] = CELL_FRIEND;
+  // Shape index 6 is on the "handle" extension (only appears in 2 of 8 σ
+  // orbits); shape index 9 is in the 3×3 centre (appears in all 8 σ orbits).
+  // These patterns are not D4-equivalent — one has the friend on the handle,
+  // the other in the centre 3×3.
+  check('canonKeyL distinguishes non-equivalent single-friend positions',
+    canonKeyL(pA) !== canonKeyL(pB));
+}
+
+// ── 23. REINFORCE updates the L weight for the chosen move ──────────────────
+
+{
+  const N = 5;
+  const g = new Game2(N, false);
+  const st = NPat.createState(N);
+  const w  = NPat.createWeights();
+
+  NPat.policyMove(g, st, w);
+  const chosen = 0;
+  const lId = st.patIdsL[chosen];
+  NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
+  check('REINFORCE updates the L weight for the chosen move', w.vals[lId] !== 0);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────

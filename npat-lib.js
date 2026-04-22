@@ -103,6 +103,18 @@ const WINDOWS_34         = 1;
 const CELLS12_BASE       = 531441; // 3^12
 const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT; // 177151; above tactical ids
 
+// "Almost-L" shape window (13 cells — the 3×3 centered on the candidate
+// plus 4 extras extending into the SE corner: 2 cells East at row offsets
+// {0, +1} col offset +2, and 2 cells South at row offset +2 col offsets
+// {0, +1}).  Single window per candidate, handle always SE; D4
+// canonicalisation merges the 8 rotated / reflected versions of the pattern.
+// The shape is asymmetric so σ(S) ≠ S in general — canonicalisation reads
+// cells at 8 different 13-cell footprints, all fitting in the 5×5 sub-patch
+// centred on the candidate.  Theoretical canonical-key count ≈ 3^12 / 8 ≈ 66k.
+const SHAPE_L_CELLS      = 13;
+const SHAPE_L_BASE       = 1594323; // 3^13
+const SHAPE_L_RAW_BASE   = SHAPE34_RAW_BASE + 12 * CELLS12_BASE; // 6554443
+
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
 // Build a per-cell tactical-feature count array for the current game position.
@@ -180,14 +192,15 @@ function createState(N) {
     moves:    new Int32Array(cap),
     patIds:   new Int32Array(cap * 9),
     patIds34: new Int32Array(cap * WINDOWS_34),
+    patIdsL:  new Int32Array(cap),
     tact:     new Uint8Array(cap * N_TACT),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
     ladder:   { tactCount: new Uint8Array(cap * N_TACT) },
     patchNbr,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // (9 + 12) * (n + 1) dense idxs (chosen move + all n moves), n ≤ cap.
-    touched:  new Int32Array((9 + WINDOWS_34) * (cap + 1)),
+    // (9 + WINDOWS_34 + 1) * (n + 1) dense idxs, n ≤ cap.
+    touched:  new Int32Array((9 + WINDOWS_34 + 1) * (cap + 1)),
     count:    0,
   };
 }
@@ -343,6 +356,68 @@ function canonKey34(relPos, cells) {
 
 const _windowCells12 = new Int32Array(12);
 
+// ── Runtime D4 canonicalisation for the almost-L 13-cell shape ────────────────
+//
+// Shape offsets (row, col) in the original orientation (handle-SE), row-major:
+//    ( -1,-1) ( -1, 0) ( -1,+1)
+//    (  0,-1) (  0, 0) (  0,+1) (  0,+2)     ← candidate at index 4 = (0, 0)
+//    ( +1,-1) ( +1, 0) ( +1,+1) ( +1,+2)
+//                      ( +2, 0) ( +2,+1)
+// Under each D4 perm σ, the 13 offsets map to 13 new offsets — a DIFFERENT
+// 13-cell footprint on the board (the L-shape is asymmetric, so σ(S) ≠ S in
+// general).  All 8 footprints lie within rows [-2,+2] × cols [-2,+2], so we
+// read them from the existing 5×7 patch via pre-computed patch indices.
+// Canonical raw: min over σ of Σ_{i=0..12} patch[σ(S_i)] · 3^i.
+
+const _LShape = [
+  [-1, -1], [-1,  0], [-1, +1],
+  [ 0, -1], [ 0,  0], [ 0, +1], [ 0, +2],
+  [+1, -1], [+1,  0], [+1, +1], [+1, +2],
+            [+2,  0], [+2, +1],
+];
+
+const _LPatchIdx    = new Int32Array(8 * SHAPE_L_CELLS);
+const _LCellWeights = new Int32Array(SHAPE_L_CELLS);
+(function () {
+  const d4 = [
+    (r, c) => [ r,  c],   // 0: id
+    (r, c) => [ c, -r],   // 1: 90° CW
+    (r, c) => [-r, -c],   // 2: 180°
+    (r, c) => [-c,  r],   // 3: 270° CW
+    (r, c) => [ r, -c],   // 4: hflip
+    (r, c) => [-r,  c],   // 5: vflip
+    (r, c) => [ c,  r],   // 6: diag
+    (r, c) => [-c, -r],   // 7: antidiag
+  ];
+  for (let s = 0; s < 8; s++) {
+    for (let i = 0; i < SHAPE_L_CELLS; i++) {
+      const [r, c] = d4[s](_LShape[i][0], _LShape[i][1]);
+      // patch layout: (pr+2)*7 + (pc+3), rows [-2,+2] × cols [-3,+3].
+      _LPatchIdx[s * SHAPE_L_CELLS + i] = (r + 2) * 7 + (c + 3);
+    }
+  }
+  let w = 1;
+  for (let i = 0; i < SHAPE_L_CELLS; i++) { _LCellWeights[i] = w; w *= CELL_BASE; }
+})();
+
+// canonKeyL(patch) returns the D4-canonical raw int for the almost-L shape
+// around the candidate at patch centre.  The patch is the 5×7 byte array
+// filled by extractFeatures.  Result is WITHOUT the SHAPE_L_RAW_BASE offset.
+function canonKeyL(patch) {
+  const idx = _LPatchIdx;
+  const cw  = _LCellWeights;
+  let best = 0x7fffffff;
+  for (let s = 0; s < 8; s++) {
+    const o = s * SHAPE_L_CELLS;
+    let raw = 0;
+    for (let i = 0; i < SHAPE_L_CELLS; i++) {
+      raw += patch[idx[o + i]] * cw[i];
+    }
+    if (raw < best) best = raw;
+  }
+  return best;
+}
+
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
 // Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
@@ -371,6 +446,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const moves    = state.moves;
   const patIds   = state.patIds;
   const patIds34 = state.patIds34;
+  const patIdsL  = state.patIdsL;
   const tact     = state.tact;
   const patchNbr = state.patchNbr;
   const wc9      = _windowCells;
@@ -432,6 +508,14 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIds34[count] = wMap ? _internWeight(weights, raw34) : raw34;
     }
 
+    // Almost-L 13-cell shape (3×3 + 4 SE extras) — one canonical key per
+    // candidate.  canonKeyL reads cells directly from the 5×7 patch at 8
+    // precomputed D4 orientations and returns the minimum raw int.
+    {
+      const rawL = SHAPE_L_RAW_BASE + canonKeyL(patch);
+      patIdsL[count] = wMap ? _internWeight(weights, rawL) : rawL;
+    }
+
     // Copy tactical counts for this candidate.
     const tSrc = idx * N_TACT;
     const tDst = count * N_TACT;
@@ -456,6 +540,7 @@ function _score(state, i, weights) {
   const vals     = weights.vals;
   const patIds   = state.patIds;
   const patIds34 = state.patIds34;
+  const patIdsL  = state.patIdsL;
   const tact     = state.tact;
   const tIds     = weights.tactIds;
   const off9     = i * 9;
@@ -469,6 +554,7 @@ function _score(state, i, weights) {
         + tact[off4 + 2] * vals[tIds[2]]
         + tact[off4 + 3] * vals[tIds[3]];
   for (let k = 0; k < WINDOWS_34; k++) s += vals[patIds34[off12 + k]];
+  s += vals[patIdsL[i]];
   return s;
 }
 
@@ -487,6 +573,7 @@ function _computeSoftmax(state, weights) {
   if (n === 0) return 0;
   const pid   = state.patIds;
   const pid34 = state.patIds34;
+  const pidL  = state.patIdsL;
   const tact  = state.tact;
   const lg    = state.logits;
   const pr    = state.probs;
@@ -505,6 +592,7 @@ function _computeSoftmax(state, weights) {
           + tact[off4] * w0 + tact[off4 + 1] * w1
           + tact[off4 + 2] * w2 + tact[off4 + 3] * w3;
     for (let k = 0; k < WINDOWS_34; k++) s += vals[pid34[off12 + k]];
+    s += vals[pidL[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -566,6 +654,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
 
   const patIds   = state.patIds;
   const patIds34 = state.patIds34;
+  const patIdsL  = state.patIdsL;
   const probs    = state.probs;
   const tact     = state.tact;
   const vals     = weights.vals;
@@ -575,7 +664,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
-  // Chosen move contributes +step to each of its 9 + 12 dense pids.
+  // Chosen move contributes +step to each of its 9 + WINDOWS_34 + 1 dense pids.
   {
     const off   = chosenIndex * 9;
     const off34 = chosenIndex * WINDOWS_34;
@@ -589,8 +678,13 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       touched[tc++] = idx;
       delta[idx] += step;
     }
+    {
+      const idx = patIdsL[chosenIndex];
+      touched[tc++] = idx;
+      delta[idx] += step;
+    }
   }
-  // Every legal move i contributes -step * π_i to each of its 9 + 12 dense pids.
+  // Every legal move i contributes -step * π_i to each of its shape pids.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
@@ -604,6 +698,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
     for (let k = 0; k < WINDOWS_34; k++) {
       const idx = patIds34[off34 + k];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    {
+      const idx = patIdsL[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -664,6 +763,7 @@ function entropyBonusUpdate(state, weights, beta) {
 
   const patIds   = state.patIds;
   const patIds34 = state.patIds34;
+  const patIdsL  = state.patIdsL;
   const probs    = state.probs;
   const tact     = state.tact;
   const vals     = weights.vals;
@@ -702,6 +802,11 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
+    {
+      const idx = patIdsL[i];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
     const off4 = i * N_TACT;
     acc0 += ci * tact[off4];
     acc1 += ci * tact[off4 + 1];
@@ -734,6 +839,7 @@ const NPatterns = {
   annotateLadders,
   canonKey,
   canonKey34,
+  canonKeyL,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -743,9 +849,11 @@ const NPatterns = {
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
   WINDOWS_34, CELLS12_BASE, SHAPE34_RAW_BASE,
+  SHAPE_L_CELLS, SHAPE_L_BASE, SHAPE_L_RAW_BASE,
   // Exposed for tests.
   _D4,
   _D4rect,
+  _LShape,
 };
 
 if (typeof module !== 'undefined') module.exports = NPatterns;
