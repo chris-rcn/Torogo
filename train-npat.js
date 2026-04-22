@@ -37,13 +37,16 @@ const LR         = parseFloat(opts.lr || '0.05');
 const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
 const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
+const USE_33     = !!opts['use-3x3'];                         // enable 9 3×3 windows
+const USE_34     = !!opts['use-3x4'];                         // enable single 3×4 window
+const USE_L      = !!opts['use-L'];                           // enable L-shape window
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights();  // raw canonKey → dense idx; vals/delta by idx
+let weights = NPat.createWeights({ use33: USE_33, use34: USE_34, useL: USE_L });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -71,7 +74,10 @@ function saveWeights(filePath, w, meta) {
 function loadWeights(filePath) {
   delete require.cache[require.resolve(path.resolve(filePath))];
   const raw = require(path.resolve(filePath));
-  const w = NPat.createWeights(Math.max(1024, raw.weights.size | 0));
+  const w = NPat.createWeights({
+    initialCapacity: Math.max(1024, raw.weights.size | 0),
+    use33: USE_33, use34: USE_34, useL: USE_L,
+  });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
     w.vals[idx] = val;
@@ -143,10 +149,11 @@ function trainGame(N) {
   // REINFORCE: apply Δw per step with advantage = R − baseline, where R is from
   // the MOVER'S perspective.
   let stepsApplied = 0;
+  let weightUpdates = 0;
   for (const s of steps) {
     const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
     const adv = BASELINE > 0 ? (R - ema) : R;
-    NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR);
+    weightUpdates += NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR) || 0;
     if (BETA > 0) NPat.entropyBonusUpdate(s, weights, LR * BETA);
     stepsApplied++;
   }
@@ -163,6 +170,7 @@ function trainGame(N) {
     elapsedMs: Date.now() - tStart,
     moves,
     stepsApplied,
+    weightUpdates,
     outcomeBlack,
   };
 }
@@ -204,6 +212,9 @@ if (opts.help) {
   --baseline F     EMA decay for reward baseline (default 0.95; 0 disables)
   --epsilon F      uniform-random exploration rate (default 0)
   --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
+  --use-3x3        enable the 9 3×3 shape windows (default off)
+  --use-3x4        enable the single 3×4 shape window   (default off)
+  --use-L          enable the L-shape shape window      (default off)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -226,23 +237,16 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
+console.log(`features: tactical=ALWAYS  3x3=${USE_33 ? 'ON' : 'off'}  3x4=${USE_34 ? 'ON' : 'off'}  L=${USE_L ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 
 console.log([
-  'game'   .padStart(7),
-  'elapsed'.padStart(8),
-  'tGameMs'.padStart(7),
-  'weights'.padStart(8),
-  'win%'   .padStart(6) + '(' + 'n'.padStart(3) + ')',
-  'winAvg%'.padStart(7),
-  'avglen' .padStart(6),
-  'ema'    .padStart(6),
+  'games'  .padStart(7),
+  'weights'.padStart(9),
   'avg|w|' .padStart(7),
-  'max|w|' .padStart(7),
-  'tTrain' .padStart(7),
-  'tTest'  .padStart(6),
+  'upd/pat'.padStart(7),
 ].join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -250,39 +254,18 @@ console.log([
 const t0 = Date.now();
 let nextPrintAt = t0 + 1000;
 let g = 0;
-let intervalGames = 0, intervalMoves = 0, intervalTrainMs = 0;
-const evalHistory = [];
+let totalUpdates = 0;
 
 while (true) {
   g++;
-  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
-  intervalGames++;
-  intervalMoves   += moves;
-  intervalTrainMs += elapsedMs;
+  const { weightUpdates } = trainGame(TRAIN_SIZE);
+  totalUpdates += weightUpdates;
 
   if (Date.now() >= nextPrintAt) {
-    const tTestStart = Date.now();
-    const batch = [];
-    while (true) {
-      for (const r of evalVsReference(EVAL_SIZE, evalGetMove, 2)) batch.push(r);
-      const tMs = Date.now() - tTestStart;
-      if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
-    }
-    for (const r of batch) evalHistory.push(r);
-
-    const latestWR = batch.length ? batch.reduce((s, r) => s + r, 0) / batch.length : 0;
-    const half     = Math.max(1, Math.floor(evalHistory.length / 2));
-    const avgWR    = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
-    const avgLen   = (intervalMoves / Math.max(1, intervalGames)).toFixed(1);
-    const tGameMs  = (intervalTrainMs / Math.max(1, intervalGames)).toFixed(1);
-
-    intervalGames   = 0;
-    intervalMoves   = 0;
-
     // Count only interned pids that have received a non-zero gradient: pids
     // are interned on first sight in extractFeatures, so weights.size counts
     // every pattern ever seen — the "learned" count is the non-zero subset.
-    let wAbsSum = 0, wAbsMax = 0, wNonZero = 0;
+    let wAbsSum = 0, wNonZero = 0;
     const vals = weights.vals;
     const wN   = weights.size;
     for (let i = 0; i < wN; i++) {
@@ -290,29 +273,17 @@ while (true) {
       if (a === 0) continue;
       wNonZero++;
       wAbsSum += a;
-      if (a > wAbsMax) wAbsMax = a;
     }
-    const wAvg = wNonZero > 0 ? wAbsSum / wNonZero : 0;
+    const wAvg    = wNonZero > 0 ? wAbsSum / wNonZero : 0;
+    const updPerPat = wNonZero > 0 ? totalUpdates / wNonZero : 0;
 
-    const tTestMs   = Date.now() - tTestStart;
-    const elapsedS  = ((Date.now() - t0) / 1000).toFixed(0);
-    const nextMs    = Date.now() - t0;
-    const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
-    intervalTrainMs = 0;
+    const nextMs = Date.now() - t0;
 
     console.log([
-      String(g)                                  .padStart(7),
-      elapsedS                                   .padStart(8),
-      tGameMs                                    .padStart(7),
-      String(wNonZero)                           .padStart(8),
-      ((100 * latestWR).toFixed(1) + '%')        .padStart(6) + '(' + String(batch.length).padStart(3) + ')',
-      ((100 * avgWR).toFixed(1) + '%')           .padStart(7),
-      avgLen                                     .padStart(6),
-      ema.toFixed(3)                             .padStart(6),
-      wAvg.toFixed(3)                            .padStart(7),
-      wAbsMax.toFixed(3)                         .padStart(7),
-      tTrainStr                                  .padStart(7),
-      ((tTestMs / 1000).toFixed(1) + 's')        .padStart(6),
+      String(g)                .padStart(7),
+      String(wNonZero)         .padStart(9),
+      wAvg.toFixed(3)          .padStart(7),
+      updPerPat.toFixed(1)     .padStart(7),
     ].join('  '));
 
     saveWeights(SAVE_PATH, weights, { ema });

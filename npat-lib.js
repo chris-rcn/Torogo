@@ -222,13 +222,27 @@ function createState(N) {
 // The 4 tactical features are interned up front (dense ids 0..3) at
 // createWeights time, so weights.tactIds is available before any extraction.
 
-function createWeights(initialCapacity = 1024) {
+function createWeights(opts) {
+  // opts may be a number (initialCapacity, legacy) or an options object
+  //   { initialCapacity, use33, use34, useL }.
+  // Feature-gating flags default to false — tactical features are always on.
+  let initialCapacity = 1024;
+  let use33 = false, use34 = false, useL = false;
+  if (typeof opts === 'number') {
+    initialCapacity = opts;
+  } else if (opts && typeof opts === 'object') {
+    if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
+    if (opts.use33) use33 = true;
+    if (opts.use34) use34 = true;
+    if (opts.useL)  useL  = true;
+  }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
     vals:  new Float64Array(initialCapacity),      // weights[dense idx]
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT),
+    cfg:   { use33, use34, useL },                 // feature gating
   };
   for (let k = 0; k < N_TACT; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
@@ -456,6 +470,13 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const wc12     = _windowCells12;
   const patch    = _patch5;
   const wMap     = weights ? weights.map : null;
+  // Feature-extraction gates: when a weights store with cfg is supplied, skip
+  // shape types that are disabled.  Without weights (tests extracting raw keys
+  // only), extract everything for backward compatibility.
+  const cfg      = weights ? weights.cfg : null;
+  const doUse33  = !cfg || cfg.use33;
+  const doUse34  = !cfg || cfg.use34;
+  const doUseL   = !cfg || cfg.useL;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -476,22 +497,24 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
     }
 
     // 3×3 shape windows (9 per candidate).
-    const off = count * 9;
-    for (let wr = -2; wr <= 0; wr++) {
-      for (let wc = -2; wc <= 0; wc++) {
-        const relRow = -wr;
-        const relCol = -wc;
-        const relPos = relRow * 3 + relCol;
+    if (doUse33) {
+      const off = count * 9;
+      for (let wr = -2; wr <= 0; wr++) {
+        for (let wc = -2; wc <= 0; wc++) {
+          const relRow = -wr;
+          const relCol = -wc;
+          const relPos = relRow * 3 + relCol;
 
-        // Fill wc9 from the patch — no board indexing at all here.
-        for (let i = 0; i < 9; i++) {
-          const dr = (i / 3) | 0;
-          const dc = i - dr * 3;
-          wc9[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
+          // Fill wc9 from the patch — no board indexing at all here.
+          for (let i = 0; i < 9; i++) {
+            const dr = (i / 3) | 0;
+            const dc = i - dr * 3;
+            wc9[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
+          }
+
+          const raw = canonKey(relPos, wc9);
+          patIds[off + (wr + 2) * 3 + (wc + 2)] = wMap ? _internWeight(weights, raw) : raw;
         }
-
-        const raw = canonKey(relPos, wc9);
-        patIds[off + (wr + 2) * 3 + (wc + 2)] = wMap ? _internWeight(weights, raw) : raw;
       }
     }
 
@@ -499,7 +522,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
     // relPos=5 (middle row, col index 1 in the 3×4 layout).  Window spans 1
     // row above/below and 1 col left / 2 cols right of the candidate.  D4
     // canonicalisation absorbs the left-right asymmetry (hflip swaps 5↔6).
-    {
+    if (doUse34) {
       const wr = -1, wc = -1;
       const relPos = 5;
       for (let i = 0; i < 12; i++) {
@@ -511,10 +534,10 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIds34[count] = wMap ? _internWeight(weights, raw34) : raw34;
     }
 
-    // Almost-L 13-cell shape (3×3 + 4 SE extras) — one canonical key per
-    // candidate.  canonKeyL reads cells directly from the 5×7 patch at 8
-    // precomputed D4 orientations and returns the minimum raw int.
-    {
+    // Full-L 14-cell shape (3×3 + 5 SE extras including the corner) — one
+    // canonical key per candidate.  canonKeyL reads cells directly from the
+    // 5×7 patch at 8 precomputed D4 orientations and returns the minimum raw.
+    if (doUseL) {
       const rawL = SHAPE_L_RAW_BASE + canonKeyL(patch);
       patIdsL[count] = wMap ? _internWeight(weights, rawL) : rawL;
     }
@@ -541,23 +564,29 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
 // move tactical counts.  Scoring is a pure typed-array sum.
 function _score(state, i, weights) {
   const vals     = weights.vals;
-  const patIds   = state.patIds;
-  const patIds34 = state.patIds34;
-  const patIdsL  = state.patIdsL;
   const tact     = state.tact;
   const tIds     = weights.tactIds;
-  const off9     = i * 9;
-  const off12    = i * WINDOWS_34;
+  const cfg      = weights.cfg;
   const off4     = i * N_TACT;
-  let s = vals[patIds[off9]]     + vals[patIds[off9 + 1]] + vals[patIds[off9 + 2]]
-        + vals[patIds[off9 + 3]] + vals[patIds[off9 + 4]] + vals[patIds[off9 + 5]]
-        + vals[patIds[off9 + 6]] + vals[patIds[off9 + 7]] + vals[patIds[off9 + 8]]
-        + tact[off4]     * vals[tIds[0]]
+  let s = tact[off4]     * vals[tIds[0]]
         + tact[off4 + 1] * vals[tIds[1]]
         + tact[off4 + 2] * vals[tIds[2]]
         + tact[off4 + 3] * vals[tIds[3]];
-  for (let k = 0; k < WINDOWS_34; k++) s += vals[patIds34[off12 + k]];
-  s += vals[patIdsL[i]];
+  if (cfg.use33) {
+    const patIds = state.patIds;
+    const off9   = i * 9;
+    s += vals[patIds[off9]]     + vals[patIds[off9 + 1]] + vals[patIds[off9 + 2]]
+       + vals[patIds[off9 + 3]] + vals[patIds[off9 + 4]] + vals[patIds[off9 + 5]]
+       + vals[patIds[off9 + 6]] + vals[patIds[off9 + 7]] + vals[patIds[off9 + 8]];
+  }
+  if (cfg.use34) {
+    const patIds34 = state.patIds34;
+    const off12    = i * WINDOWS_34;
+    for (let k = 0; k < WINDOWS_34; k++) s += vals[patIds34[off12 + k]];
+  }
+  if (cfg.useL) {
+    s += vals[state.patIdsL[i]];
+  }
   return s;
 }
 
@@ -574,28 +603,33 @@ function evaluate(game, state, weights) {
 function _computeSoftmax(state, weights) {
   const n   = state.count;
   if (n === 0) return 0;
-  const pid   = state.patIds;
-  const pid34 = state.patIds34;
-  const pidL  = state.patIdsL;
   const tact  = state.tact;
   const lg    = state.logits;
   const pr    = state.probs;
   const vals  = weights.vals;
   const tIds  = weights.tactIds;
+  const cfg   = weights.cfg;
   const w0 = vals[tIds[0]], w1 = vals[tIds[1]], w2 = vals[tIds[2]], w3 = vals[tIds[3]];
+  const pid   = cfg.use33 ? state.patIds   : null;
+  const pid34 = cfg.use34 ? state.patIds34 : null;
+  const pidL  = cfg.useL  ? state.patIdsL  : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
-    const off9  = i * 9;
-    const off12 = i * WINDOWS_34;
-    const off4  = i * N_TACT;
-    let s = vals[pid[off9]]     + vals[pid[off9 + 1]] + vals[pid[off9 + 2]]
-          + vals[pid[off9 + 3]] + vals[pid[off9 + 4]] + vals[pid[off9 + 5]]
-          + vals[pid[off9 + 6]] + vals[pid[off9 + 7]] + vals[pid[off9 + 8]]
-          + tact[off4] * w0 + tact[off4 + 1] * w1
+    const off4 = i * N_TACT;
+    let s = tact[off4] * w0 + tact[off4 + 1] * w1
           + tact[off4 + 2] * w2 + tact[off4 + 3] * w3;
-    for (let k = 0; k < WINDOWS_34; k++) s += vals[pid34[off12 + k]];
-    s += vals[pidL[i]];
+    if (pid) {
+      const off9 = i * 9;
+      s += vals[pid[off9]]     + vals[pid[off9 + 1]] + vals[pid[off9 + 2]]
+         + vals[pid[off9 + 3]] + vals[pid[off9 + 4]] + vals[pid[off9 + 5]]
+         + vals[pid[off9 + 6]] + vals[pid[off9 + 7]] + vals[pid[off9 + 8]];
+    }
+    if (pid34) {
+      const off12 = i * WINDOWS_34;
+      for (let k = 0; k < WINDOWS_34; k++) s += vals[pid34[off12 + k]];
+    }
+    if (pidL) s += vals[pidL[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -655,56 +689,63 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const step = lr * advantage;
   if (step === 0) return;
 
-  const patIds   = state.patIds;
-  const patIds34 = state.patIds34;
-  const patIdsL  = state.patIdsL;
   const probs    = state.probs;
   const tact     = state.tact;
   const vals     = weights.vals;
   const delta    = weights.delta;
   const tIds     = weights.tactIds;
   const touched  = state.touched;
+  const cfg      = weights.cfg;
+  const patIds   = cfg.use33 ? state.patIds   : null;
+  const patIds34 = cfg.use34 ? state.patIds34 : null;
+  const patIdsL  = cfg.useL  ? state.patIdsL  : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
-  // Chosen move contributes +step to each of its 9 + WINDOWS_34 + 1 dense pids.
-  {
-    const off   = chosenIndex * 9;
-    const off34 = chosenIndex * WINDOWS_34;
+  // Chosen move contributes +step to each of its active shape pids.
+  if (patIds) {
+    const off = chosenIndex * 9;
     for (let k = 0; k < 9; k++) {
       const idx = patIds[off + k];
-      touched[tc++] = idx;
-      delta[idx] += step;
-    }
-    for (let k = 0; k < WINDOWS_34; k++) {
-      const idx = patIds34[off34 + k];
-      touched[tc++] = idx;
-      delta[idx] += step;
-    }
-    {
-      const idx = patIdsL[chosenIndex];
       touched[tc++] = idx;
       delta[idx] += step;
     }
   }
-  // Every legal move i contributes -step * π_i to each of its shape pids.
+  if (patIds34) {
+    const off34 = chosenIndex * WINDOWS_34;
+    for (let k = 0; k < WINDOWS_34; k++) {
+      const idx = patIds34[off34 + k];
+      touched[tc++] = idx;
+      delta[idx] += step;
+    }
+  }
+  if (patIdsL) {
+    const idx = patIdsL[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  // Every legal move i contributes -step * π_i to each of its active shape pids.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
     const sub = step * pi;
-    const off   = i * 9;
-    const off34 = i * WINDOWS_34;
-    for (let k = 0; k < 9; k++) {
-      const idx = patIds[off + k];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
+    if (patIds) {
+      const off = i * 9;
+      for (let k = 0; k < 9; k++) {
+        const idx = patIds[off + k];
+        touched[tc++] = idx;
+        delta[idx] -= sub;
+      }
     }
-    for (let k = 0; k < WINDOWS_34; k++) {
-      const idx = patIds34[off34 + k];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
+    if (patIds34) {
+      const off34 = i * WINDOWS_34;
+      for (let k = 0; k < WINDOWS_34; k++) {
+        const idx = patIds34[off34 + k];
+        touched[tc++] = idx;
+        delta[idx] -= sub;
+      }
     }
-    {
+    if (patIdsL) {
       const idx = patIdsL[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
@@ -741,6 +782,9 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   if (d1 !== 0) vals[tIds[1]] += d1;
   if (d2 !== 0) vals[tIds[2]] += d2;
   if (d3 !== 0) vals[tIds[3]] += d3;
+  // Return total shape-feature touches (including duplicates across moves) —
+  // train-npat.js accumulates these to report mean updates-per-pattern.
+  return tc + 4;
 }
 
 // ── Entropy-bonus step ────────────────────────────────────────────────────────
@@ -764,15 +808,16 @@ function entropyBonusUpdate(state, weights, beta) {
   const n = state.count;
   if (n === 0 || beta === 0) return;
 
-  const patIds   = state.patIds;
-  const patIds34 = state.patIds34;
-  const patIdsL  = state.patIdsL;
   const probs    = state.probs;
   const tact     = state.tact;
   const vals     = weights.vals;
   const delta    = weights.delta;
   const tIds     = weights.tactIds;
   const touched  = state.touched;
+  const cfg      = weights.cfg;
+  const patIds   = cfg.use33 ? state.patIds   : null;
+  const patIds34 = cfg.use34 ? state.patIds34 : null;
+  const patIdsL  = cfg.useL  ? state.patIdsL  : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -793,19 +838,23 @@ function entropyBonusUpdate(state, weights, beta) {
     if (pi === 0) continue;
     const ci = beta * pi * (logs[i] - H);
     if (ci === 0) continue;
-    const off9  = i * 9;
-    const off12 = i * WINDOWS_34;
-    for (let k = 0; k < 9; k++) {
-      const idx = patIds[off9 + k];
-      touched[tc++] = idx;
-      delta[idx] += ci;
+    if (patIds) {
+      const off9 = i * 9;
+      for (let k = 0; k < 9; k++) {
+        const idx = patIds[off9 + k];
+        touched[tc++] = idx;
+        delta[idx] += ci;
+      }
     }
-    for (let k = 0; k < WINDOWS_34; k++) {
-      const idx = patIds34[off12 + k];
-      touched[tc++] = idx;
-      delta[idx] += ci;
+    if (patIds34) {
+      const off12 = i * WINDOWS_34;
+      for (let k = 0; k < WINDOWS_34; k++) {
+        const idx = patIds34[off12 + k];
+        touched[tc++] = idx;
+        delta[idx] += ci;
+      }
     }
-    {
+    if (patIdsL) {
       const idx = patIdsL[i];
       touched[tc++] = idx;
       delta[idx] += ci;

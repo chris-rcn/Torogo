@@ -226,7 +226,7 @@ for (const c of cases) {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w = NPat.createWeights();
+  const w = NPat.createWeights({ use33: true, use34: true, useL: true });
   const { move, index, prob } = NPat.policyMove(g, st, w);
   check('policyMove: returns a legal move', move !== PASS && g.isLegal(move));
   check('policyMove: returns a valid index', index >= 0 && index < st.count);
@@ -240,7 +240,7 @@ for (const c of cases) {
   g._place(1 * N + 2, BLACK);
   g.current = WHITE;
   const st = NPat.createState(N);
-  const w = NPat.createWeights();
+  const w = NPat.createWeights({ use33: true, use34: true, useL: true });
 
   NPat.policyMove(g, st, w);
   let chosen = -1;
@@ -419,7 +419,7 @@ for (const c of cases) {
   g.current = WHITE;
 
   const st = NPat.createState(N);
-  const w  = NPat.createWeights();
+  const w  = NPat.createWeights({ use33: true, use34: true, useL: true });
 
   NPat.policyMove(g, st, w);
   const libIdx = 3 * N + 2;
@@ -534,7 +534,7 @@ function applyD4rect(relPos, cells, perm) {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w  = NPat.createWeights();
+  const w  = NPat.createWeights({ use33: true, use34: true, useL: true });
 
   NPat.policyMove(g, st, w);
   const chosen = 0;
@@ -649,7 +649,7 @@ function applyD4rect(relPos, cells, perm) {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w  = NPat.createWeights();
+  const w  = NPat.createWeights({ use33: true, use34: true, useL: true });
 
   NPat.policyMove(g, st, w);
   const chosen = 0;
