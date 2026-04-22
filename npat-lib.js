@@ -117,6 +117,12 @@ const SHAPE_L_CELLS      = 14;
 const SHAPE_L_BASE       = 4782969; // 3^14
 const SHAPE_L_RAW_BASE   = SHAPE34_RAW_BASE + 12 * CELLS12_BASE; // 6554443
 
+// Centered 3×3 shape window (9 cells, candidate always at relPos=4).  Uses
+// the existing canonKey(4, cells) for canonicalisation — the resulting raw
+// lives in a disjoint range above the L-shape block so it can be toggled on
+// independently of the 9-window 3×3 family without colliding keys.
+const SHAPE33C_RAW_BASE  = SHAPE_L_RAW_BASE + SHAPE_L_BASE; // 11337412
+
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
 // Build a per-cell tactical-feature count array for the current game position.
@@ -192,17 +198,18 @@ function createState(N) {
   return {
     N,
     moves:    new Int32Array(cap),
-    patIds:   new Int32Array(cap * 9),
-    patIds34: new Int32Array(cap * WINDOWS_34),
-    patIdsL:  new Int32Array(cap),
+    patIds:    new Int32Array(cap * 9),
+    patIds34:  new Int32Array(cap * WINDOWS_34),
+    patIdsL:   new Int32Array(cap),
+    patIds33c: new Int32Array(cap),
     tact:     new Uint8Array(cap * N_TACT),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
     ladder:   { tactCount: new Uint8Array(cap * N_TACT) },
     patchNbr,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // (9 + WINDOWS_34 + 1) * (n + 1) dense idxs, n ≤ cap.
-    touched:  new Int32Array((9 + WINDOWS_34 + 1) * (cap + 1)),
+    // (9 + WINDOWS_34 + 1 + 1) * (n + 1) dense idxs, n ≤ cap.
+    touched:  new Int32Array((9 + WINDOWS_34 + 1 + 1) * (cap + 1)),
     count:    0,
   };
 }
@@ -227,14 +234,15 @@ function createWeights(opts) {
   //   { initialCapacity, use33, use34, useL }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
-  let use33 = false, use34 = false, useL = false;
+  let use33 = false, use34 = false, useL = false, use33c = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
     if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
-    if (opts.use33) use33 = true;
-    if (opts.use34) use34 = true;
-    if (opts.useL)  useL  = true;
+    if (opts.use33)  use33  = true;
+    if (opts.use34)  use34  = true;
+    if (opts.useL)   useL   = true;
+    if (opts.use33c) use33c = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -242,7 +250,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT),
-    cfg:   { use33, use34, useL },                 // feature gating
+    cfg:   { use33, use34, useL, use33c },         // feature gating
   };
   for (let k = 0; k < N_TACT; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
@@ -477,6 +485,8 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUse33  = !cfg || cfg.use33;
   const doUse34  = !cfg || cfg.use34;
   const doUseL   = !cfg || cfg.useL;
+  const doUse33c = !cfg || cfg.use33c;
+  const patIds33c = state.patIds33c;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -542,6 +552,19 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIdsL[count] = wMap ? _internWeight(weights, rawL) : rawL;
     }
 
+    // Centered 3×3 window — candidate at relPos 4, reads the central 3×3 of
+    // the patch.  Canonicalised via the existing canonKey with its SHAPE33C
+    // raw-base offset so it sits in a disjoint key range.
+    if (doUse33c) {
+      for (let i = 0; i < 9; i++) {
+        const dr = (i / 3) | 0;
+        const dc = i - dr * 3;
+        wc9[i] = patch[(dr - 1 + 2) * 7 + (dc - 1 + 3)];
+      }
+      const raw33c = SHAPE33C_RAW_BASE + canonKey(4, wc9);
+      patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
+    }
+
     // Copy tactical counts for this candidate.
     const tSrc = idx * N_TACT;
     const tDst = count * N_TACT;
@@ -587,6 +610,9 @@ function _score(state, i, weights) {
   if (cfg.useL) {
     s += vals[state.patIdsL[i]];
   }
+  if (cfg.use33c) {
+    s += vals[state.patIds33c[i]];
+  }
   return s;
 }
 
@@ -610,9 +636,10 @@ function _computeSoftmax(state, weights) {
   const tIds  = weights.tactIds;
   const cfg   = weights.cfg;
   const w0 = vals[tIds[0]], w1 = vals[tIds[1]], w2 = vals[tIds[2]], w3 = vals[tIds[3]];
-  const pid   = cfg.use33 ? state.patIds   : null;
-  const pid34 = cfg.use34 ? state.patIds34 : null;
-  const pidL  = cfg.useL  ? state.patIdsL  : null;
+  const pid   = cfg.use33  ? state.patIds    : null;
+  const pid34 = cfg.use34  ? state.patIds34  : null;
+  const pidL  = cfg.useL   ? state.patIdsL   : null;
+  const pid33c = cfg.use33c ? state.patIds33c : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -629,7 +656,8 @@ function _computeSoftmax(state, weights) {
       const off12 = i * WINDOWS_34;
       for (let k = 0; k < WINDOWS_34; k++) s += vals[pid34[off12 + k]];
     }
-    if (pidL) s += vals[pidL[i]];
+    if (pidL)   s += vals[pidL[i]];
+    if (pid33c) s += vals[pid33c[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -696,9 +724,10 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const tIds     = weights.tactIds;
   const touched  = state.touched;
   const cfg      = weights.cfg;
-  const patIds   = cfg.use33 ? state.patIds   : null;
-  const patIds34 = cfg.use34 ? state.patIds34 : null;
-  const patIdsL  = cfg.useL  ? state.patIdsL  : null;
+  const patIds    = cfg.use33  ? state.patIds    : null;
+  const patIds34  = cfg.use34  ? state.patIds34  : null;
+  const patIdsL   = cfg.useL   ? state.patIdsL   : null;
+  const patIds33c = cfg.use33c ? state.patIds33c : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -721,6 +750,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
   if (patIdsL) {
     const idx = patIdsL[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIds33c) {
+    const idx = patIds33c[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -747,6 +781,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
     if (patIdsL) {
       const idx = patIdsL[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIds33c) {
+      const idx = patIds33c[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -815,9 +854,10 @@ function entropyBonusUpdate(state, weights, beta) {
   const tIds     = weights.tactIds;
   const touched  = state.touched;
   const cfg      = weights.cfg;
-  const patIds   = cfg.use33 ? state.patIds   : null;
-  const patIds34 = cfg.use34 ? state.patIds34 : null;
-  const patIdsL  = cfg.useL  ? state.patIdsL  : null;
+  const patIds    = cfg.use33  ? state.patIds    : null;
+  const patIds34  = cfg.use34  ? state.patIds34  : null;
+  const patIdsL   = cfg.useL   ? state.patIdsL   : null;
+  const patIds33c = cfg.use33c ? state.patIds33c : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -856,6 +896,11 @@ function entropyBonusUpdate(state, weights, beta) {
     }
     if (patIdsL) {
       const idx = patIdsL[i];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
+    if (patIds33c) {
+      const idx = patIds33c[i];
       touched[tc++] = idx;
       delta[idx] += ci;
     }
@@ -902,6 +947,7 @@ const NPatterns = {
   TACT_RAW_BASE,
   WINDOWS_34, CELLS12_BASE, SHAPE34_RAW_BASE,
   SHAPE_L_CELLS, SHAPE_L_BASE, SHAPE_L_RAW_BASE,
+  SHAPE33C_RAW_BASE,
   // Exposed for tests.
   _D4,
   _D4rect,
