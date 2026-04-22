@@ -32,11 +32,11 @@ check('WINDOWS_34 is 1', WINDOWS_34 === 1);
 check('CELLS12_BASE is 3^12', CELLS12_BASE === 531441);
 check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT',
   SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT);
-check('SHAPE_L_CELLS is 13', SHAPE_L_CELLS === 13);
-check('SHAPE_L_BASE is 3^13', SHAPE_L_BASE === 1594323);
+check('SHAPE_L_CELLS is 14', SHAPE_L_CELLS === 14);
+check('SHAPE_L_BASE is 3^14', SHAPE_L_BASE === 4782969);
 check('SHAPE_L_RAW_BASE above 3×4 range',
   SHAPE_L_RAW_BASE === SHAPE34_RAW_BASE + 12 * CELLS12_BASE);
-check('_LShape has 13 offsets', _LShape.length === 13);
+check('_LShape has 14 offsets', _LShape.length === 14);
 check('_LShape index 4 is the candidate at (0, 0)',
   _LShape[4][0] === 0 && _LShape[4][1] === 0);
 

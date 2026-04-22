@@ -103,16 +103,18 @@ const WINDOWS_34         = 1;
 const CELLS12_BASE       = 531441; // 3^12
 const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT; // 177151; above tactical ids
 
-// "Almost-L" shape window (13 cells — the 3×3 centered on the candidate
-// plus 4 extras extending into the SE corner: 2 cells East at row offsets
-// {0, +1} col offset +2, and 2 cells South at row offset +2 col offsets
-// {0, +1}).  Single window per candidate, handle always SE; D4
-// canonicalisation merges the 8 rotated / reflected versions of the pattern.
-// The shape is asymmetric so σ(S) ≠ S in general — canonicalisation reads
-// cells at 8 different 13-cell footprints, all fitting in the 5×5 sub-patch
-// centred on the candidate.  Theoretical canonical-key count ≈ 3^12 / 8 ≈ 66k.
-const SHAPE_L_CELLS      = 13;
-const SHAPE_L_BASE       = 1594323; // 3^13
+// Full-L shape window (14 cells — the 3×3 centered on the candidate plus 5
+// extras extending into the SE corner: 2 cells East at row offsets {0, +1}
+// col offset +2, 2 cells South at row offset +2 col offsets {0, +1}, AND the
+// (+2, +2) corner completing the L).  Single window per candidate, handle
+// always SE; D4 canonicalisation merges the 8 rotated / reflected versions of
+// the pattern.  The shape is 180°- and diagonal-symmetric so only 2 of the
+// 8 D4 orbits land on distinct footprints, but we still canonicalise over all
+// 8 to get the orbit-minimum integer.  All 8 footprints lie within rows
+// [-2,+2] × cols [-2,+2], so we read them from the existing 5×7 patch via
+// pre-computed patch indices.  Canonical-key count ≈ 3^13 / 4 ≈ 400k.
+const SHAPE_L_CELLS      = 14;
+const SHAPE_L_BASE       = 4782969; // 3^14
 const SHAPE_L_RAW_BASE   = SHAPE34_RAW_BASE + 12 * CELLS12_BASE; // 6554443
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
@@ -362,18 +364,19 @@ const _windowCells12 = new Int32Array(12);
 //    ( -1,-1) ( -1, 0) ( -1,+1)
 //    (  0,-1) (  0, 0) (  0,+1) (  0,+2)     ← candidate at index 4 = (0, 0)
 //    ( +1,-1) ( +1, 0) ( +1,+1) ( +1,+2)
-//                      ( +2, 0) ( +2,+1)
-// Under each D4 perm σ, the 13 offsets map to 13 new offsets — a DIFFERENT
-// 13-cell footprint on the board (the L-shape is asymmetric, so σ(S) ≠ S in
-// general).  All 8 footprints lie within rows [-2,+2] × cols [-2,+2], so we
-// read them from the existing 5×7 patch via pre-computed patch indices.
-// Canonical raw: min over σ of Σ_{i=0..12} patch[σ(S_i)] · 3^i.
+//                      ( +2, 0) ( +2,+1) ( +2,+2)
+// 14 cells total (4×4 NW sub-block with the NE and SW corners removed).
+// Under each D4 perm σ, the 14 offsets map to a D4-transformed footprint;
+// the shape has 4-fold internal symmetry (id, 180°, diag, antidiag) so only
+// 2 of the 8 orbits land on distinct footprints.  Canonicalisation reads all
+// 8 variants and takes the min integer.  All footprints lie within rows
+// [-2,+2] × cols [-2,+2], reusable from the 5×7 patch.
 
 const _LShape = [
   [-1, -1], [-1,  0], [-1, +1],
   [ 0, -1], [ 0,  0], [ 0, +1], [ 0, +2],
   [+1, -1], [+1,  0], [+1, +1], [+1, +2],
-            [+2,  0], [+2, +1],
+            [+2,  0], [+2, +1], [+2, +2],
 ];
 
 const _LPatchIdx    = new Int32Array(8 * SHAPE_L_CELLS);
