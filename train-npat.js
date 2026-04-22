@@ -30,7 +30,8 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts       = Util.parseArgs(process.argv.slice(2),
+  ['help', 'use-3x3', 'use-3x3c', 'use-3x4', 'use-L']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
