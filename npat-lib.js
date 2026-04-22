@@ -93,6 +93,15 @@ const TACT_WASTED_EXTEND = 2;
 const TACT_WASTED_ATTACK = 3;
 const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 
+// 3×4 shape windows (12 cells each, 12 placements of the candidate per window).
+// Enumerated only in the 3×4 orientation; canonicalisation over full D4
+// absorbs the 4×3 transpose.  The 12 windows covering a candidate at the
+// patch centre span rows [-2,+2] and cols [-3,+3] around the candidate —
+// hence the 5×7 patch layout below.
+const WINDOWS_34         = 12;
+const CELLS12_BASE       = 531441; // 3^12
+const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT; // 177151; above tactical ids
+
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
 // Build a per-cell tactical-feature count array for the current game position.
@@ -145,21 +154,23 @@ function annotateLadders(game, out, game3) {
 
 function createState(N) {
   const cap = N * N;
-  // Precomputed toroidal 5×5 neighbour table.  For each board index idx and
-  // each offset (pr, pc) ∈ [-2, 2]², patchNbr[idx*25 + (pr+2)*5 + (pc+2)]
-  // gives the flat board index of (r+pr mod N, c+pc mod N).  This replaces
-  // 25 `_wrap` calls per candidate in extractFeatures with one indexed load.
-  const patchNbr = new Int32Array(cap * 25);
+  // Precomputed toroidal 5×7 neighbour table (rows pr ∈ [-2, 2], cols
+  // pc ∈ [-3, 3]).  For each board index idx and each offset, patchNbr[idx*35
+  // + (pr+2)*7 + (pc+3)] gives the flat board index of (r+pr mod N, c+pc mod N).
+  // This replaces 35 `_wrap` calls per candidate in extractFeatures with one
+  // indexed load.  5 rows suffice for both 3×3 (rows [-2,0]) and 3×4 (rows
+  // [-2,0]) windows; 7 cols accommodate 3×4 windows with wc ∈ [-3, 0].
+  const patchNbr = new Int32Array(cap * 35);
   for (let idx = 0; idx < cap; idx++) {
     const r = (idx / N) | 0;
     const c = idx - r * N;
-    const base = idx * 25;
+    const base = idx * 35;
     for (let pr = -2; pr <= 2; pr++) {
       const br = _wrap(r + pr, N);
       const rowBase = br * N;
-      const prBase  = (pr + 2) * 5;
-      for (let pc = -2; pc <= 2; pc++) {
-        patchNbr[base + prBase + (pc + 2)] = rowBase + _wrap(c + pc, N);
+      const prBase  = (pr + 2) * 7;
+      for (let pc = -3; pc <= 3; pc++) {
+        patchNbr[base + prBase + (pc + 3)] = rowBase + _wrap(c + pc, N);
       }
     }
   }
@@ -167,14 +178,15 @@ function createState(N) {
     N,
     moves:    new Int32Array(cap),
     patIds:   new Int32Array(cap * 9),
+    patIds34: new Int32Array(cap * WINDOWS_34),
     tact:     new Uint8Array(cap * N_TACT),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
     ladder:   { tactCount: new Uint8Array(cap * N_TACT) },
     patchNbr,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // 9 * (n + 1) dense idxs (chosen move + all n moves), n ≤ cap.
-    touched:  new Int32Array(9 * (cap + 1)),
+    // (9 + 12) * (n + 1) dense idxs (chosen move + all n moves), n ≤ cap.
+    touched:  new Int32Array((9 + WINDOWS_34) * (cap + 1)),
     count:    0,
   };
 }
@@ -267,7 +279,68 @@ function canonKey(relPos, cells) {
 }
 
 const _windowCells  = new Int32Array(9);
-const _patch5       = new Int32Array(25);
+const _patch5       = new Int32Array(35); // 5×7 (rows [-2,+2] × cols [-3,+3])
+
+// ── Runtime D4 canonicalisation for 3×4 windows ──────────────────────────────
+//
+// A 3×4 rectangle is NOT closed under D4 — 90°/270°/diagonal flips take it to
+// a 4×3.  We still canonicalise over all 8 symmetries so a 3×4 window and the
+// 4×3 window obtained by rotating the board share a canonical key.  For each
+// σ we precompute P_σ : {0..11} → {0..11}, the permutation of row-major cell
+// indices (and of relPos) when cells are re-indexed row-major in the
+// post-σ bounding box (which is 3×4 for σ ∈ {id,hflip,vflip,180°} and 4×3 for
+// σ ∈ {90°,270°,diag,antidiag}).  Canonical raw for a 3×4 window:
+//   raw = P_σ(relPos) · 3^12 + Σ_i cells[i] · 3^{P_σ(i)}
+// minimised over σ.  Precompute cell weights and relPos offsets analogous to
+// the 3×3 tables above.
+
+const _D4rect = [
+  [0, 1, 2, 3,  4, 5, 6, 7,   8, 9,10,11], // id           (r,c) -> (r,c),         3×4
+  [3, 2, 1, 0,  7, 6, 5, 4,  11,10, 9, 8], // hflip        (r,c) -> (r, 3-c),      3×4
+  [8, 9,10,11,  4, 5, 6, 7,   0, 1, 2, 3], // vflip        (r,c) -> (2-r, c),      3×4
+  [11,10, 9, 8, 7, 6, 5, 4,   3, 2, 1, 0], // 180°         (r,c) -> (2-r, 3-c),    3×4
+  [2, 5, 8,11,  1, 4, 7,10,   0, 3, 6, 9], // 90° CW       (r,c) -> (c, 2-r),      4×3
+  [9, 6, 3, 0, 10, 7, 4, 1,  11, 8, 5, 2], // 270° CW      (r,c) -> (3-c, r),      4×3
+  [0, 3, 6, 9,  1, 4, 7,10,   2, 5, 8,11], // diag         (r,c) -> (c, r),        4×3
+  [11, 8, 5, 2,10, 7, 4, 1,   9, 6, 3, 0], // antidiag     (r,c) -> (3-c, 2-r),    4×3
+];
+
+const _D4rectCw = new Int32Array(8 * 12);
+const _D4rectRp = new Int32Array(8 * 12);
+(function () {
+  const pow = new Int32Array(13);
+  pow[0] = 1;
+  for (let k = 1; k < 13; k++) pow[k] = pow[k - 1] * CELL_BASE;
+  for (let di = 0; di < 8; di++) {
+    const perm = _D4rect[di];
+    for (let i = 0; i < 12; i++) {
+      _D4rectCw[di * 12 + i] = pow[perm[i]];
+      _D4rectRp[di * 12 + i] = perm[i] * CELLS12_BASE;
+    }
+  }
+})();
+
+// canonKey34(relPos, cells12) returns the D4-canonical raw int for a 3×4
+// window, WITHOUT the SHAPE34_RAW_BASE offset (the caller adds it at intern
+// time so raw ids don't collide with 3×3 keys or tactical ids).
+function canonKey34(relPos, cells) {
+  const c0 = cells[0],  c1 = cells[1],  c2 = cells[2],  c3 = cells[3];
+  const c4 = cells[4],  c5 = cells[5],  c6 = cells[6],  c7 = cells[7];
+  const c8 = cells[8],  c9 = cells[9],  c10 = cells[10], c11 = cells[11];
+  const cw = _D4rectCw, rp = _D4rectRp;
+  let best = 0x7fffffff;
+  for (let di = 0; di < 8; di++) {
+    const o = di * 12;
+    const raw = rp[o + relPos]
+      + c0  * cw[o]      + c1  * cw[o + 1]  + c2  * cw[o + 2]  + c3  * cw[o + 3]
+      + c4  * cw[o + 4]  + c5  * cw[o + 5]  + c6  * cw[o + 6]  + c7  * cw[o + 7]
+      + c8  * cw[o + 8]  + c9  * cw[o + 9]  + c10 * cw[o + 10] + c11 * cw[o + 11];
+    if (raw < best) best = raw;
+  }
+  return best;
+}
+
+const _windowCells12 = new Int32Array(12);
 
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
@@ -296,9 +369,11 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   let count = 0;
   const moves    = state.moves;
   const patIds   = state.patIds;
+  const patIds34 = state.patIds34;
   const tact     = state.tact;
   const patchNbr = state.patchNbr;
   const wc9      = _windowCells;
+  const wc12     = _windowCells12;
   const patch    = _patch5;
   const wMap     = weights ? weights.map : null;
 
@@ -306,11 +381,11 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
     const idx = emC[ei];
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
 
-    // Build the 5×5 patch of encoded cell values centred on the candidate.
-    // patchNbr pre-stores the 25 toroidal flat indices for each idx; 25
-    // indexed loads replace 25 _wrap calls.
-    const nbrBase = idx * 25;
-    for (let p = 0; p < 25; p++) {
+    // Build the 5×7 patch of encoded cell values centred on the candidate.
+    // patchNbr pre-stores the 35 toroidal flat indices for each idx; 35
+    // indexed loads replace 35 _wrap calls.  Layout: patch[(pr+2)*7 + (pc+3)].
+    const nbrBase = idx * 35;
+    for (let p = 0; p < 35; p++) {
       const bi = patchNbr[nbrBase + p];
       const ci = cells[bi];
       let v;
@@ -320,6 +395,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patch[p] = v;
     }
 
+    // 3×3 shape windows (9 per candidate).
     const off = count * 9;
     for (let wr = -2; wr <= 0; wr++) {
       for (let wc = -2; wc <= 0; wc++) {
@@ -331,11 +407,32 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
         for (let i = 0; i < 9; i++) {
           const dr = (i / 3) | 0;
           const dc = i - dr * 3;
-          wc9[i] = patch[(wr + dr + 2) * 5 + (wc + dc + 2)];
+          wc9[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
         }
 
         const raw = canonKey(relPos, wc9);
         patIds[off + (wr + 2) * 3 + (wc + 2)] = wMap ? _internWeight(weights, raw) : raw;
+      }
+    }
+
+    // 3×4 shape windows (12 per candidate) — wr ∈ [-2,0], wc ∈ [-3,0].
+    const off34 = count * WINDOWS_34;
+    for (let wr = -2; wr <= 0; wr++) {
+      for (let wc = -3; wc <= 0; wc++) {
+        const relRow = -wr;
+        const relCol = -wc;
+        const relPos = relRow * 4 + relCol;
+
+        // Fill wc12 row-major from the patch.
+        for (let i = 0; i < 12; i++) {
+          const dr = (i / 4) | 0;
+          const dc = i - dr * 4;
+          wc12[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
+        }
+
+        const raw34 = SHAPE34_RAW_BASE + canonKey34(relPos, wc12);
+        patIds34[off34 + (wr + 2) * 4 + (wc + 3)] =
+          wMap ? _internWeight(weights, raw34) : raw34;
       }
     }
 
@@ -360,19 +457,23 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
 // into weights.vals (the raw canonKey has been interned) and tact holds per-
 // move tactical counts.  Scoring is a pure typed-array sum.
 function _score(state, i, weights) {
-  const vals    = weights.vals;
-  const patIds  = state.patIds;
-  const tact    = state.tact;
-  const tIds    = weights.tactIds;
-  const off9    = i * 9;
-  const off4    = i * N_TACT;
-  return vals[patIds[off9]]     + vals[patIds[off9 + 1]] + vals[patIds[off9 + 2]]
-       + vals[patIds[off9 + 3]] + vals[patIds[off9 + 4]] + vals[patIds[off9 + 5]]
-       + vals[patIds[off9 + 6]] + vals[patIds[off9 + 7]] + vals[patIds[off9 + 8]]
-       + tact[off4]     * vals[tIds[0]]
-       + tact[off4 + 1] * vals[tIds[1]]
-       + tact[off4 + 2] * vals[tIds[2]]
-       + tact[off4 + 3] * vals[tIds[3]];
+  const vals     = weights.vals;
+  const patIds   = state.patIds;
+  const patIds34 = state.patIds34;
+  const tact     = state.tact;
+  const tIds     = weights.tactIds;
+  const off9     = i * 9;
+  const off12    = i * WINDOWS_34;
+  const off4     = i * N_TACT;
+  let s = vals[patIds[off9]]     + vals[patIds[off9 + 1]] + vals[patIds[off9 + 2]]
+        + vals[patIds[off9 + 3]] + vals[patIds[off9 + 4]] + vals[patIds[off9 + 5]]
+        + vals[patIds[off9 + 6]] + vals[patIds[off9 + 7]] + vals[patIds[off9 + 8]]
+        + tact[off4]     * vals[tIds[0]]
+        + tact[off4 + 1] * vals[tIds[1]]
+        + tact[off4 + 2] * vals[tIds[2]]
+        + tact[off4 + 3] * vals[tIds[3]];
+  for (let k = 0; k < WINDOWS_34; k++) s += vals[patIds34[off12 + k]];
+  return s;
 }
 
 // Evaluate all moves and return them sorted by score descending.
@@ -388,23 +489,26 @@ function evaluate(game, state, weights) {
 function _computeSoftmax(state, weights) {
   const n   = state.count;
   if (n === 0) return 0;
-  const pid  = state.patIds;
-  const tact = state.tact;
-  const lg   = state.logits;
-  const pr   = state.probs;
-  const vals = weights.vals;
-  const tIds = weights.tactIds;
+  const pid   = state.patIds;
+  const pid34 = state.patIds34;
+  const tact  = state.tact;
+  const lg    = state.logits;
+  const pr    = state.probs;
+  const vals  = weights.vals;
+  const tIds  = weights.tactIds;
   const w0 = vals[tIds[0]], w1 = vals[tIds[1]], w2 = vals[tIds[2]], w3 = vals[tIds[3]];
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
-    const off9 = i * 9;
-    const off4 = i * N_TACT;
-    const s = vals[pid[off9]]     + vals[pid[off9 + 1]] + vals[pid[off9 + 2]]
-            + vals[pid[off9 + 3]] + vals[pid[off9 + 4]] + vals[pid[off9 + 5]]
-            + vals[pid[off9 + 6]] + vals[pid[off9 + 7]] + vals[pid[off9 + 8]]
-            + tact[off4] * w0 + tact[off4 + 1] * w1
-            + tact[off4 + 2] * w2 + tact[off4 + 3] * w3;
+    const off9  = i * 9;
+    const off12 = i * WINDOWS_34;
+    const off4  = i * N_TACT;
+    let s = vals[pid[off9]]     + vals[pid[off9 + 1]] + vals[pid[off9 + 2]]
+          + vals[pid[off9 + 3]] + vals[pid[off9 + 4]] + vals[pid[off9 + 5]]
+          + vals[pid[off9 + 6]] + vals[pid[off9 + 7]] + vals[pid[off9 + 8]]
+          + tact[off4] * w0 + tact[off4 + 1] * w1
+          + tact[off4 + 2] * w2 + tact[off4 + 3] * w3;
+    for (let k = 0; k < WINDOWS_34; k++) s += vals[pid34[off12 + k]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -464,33 +568,46 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const step = lr * advantage;
   if (step === 0) return;
 
-  const patIds  = state.patIds;
-  const probs   = state.probs;
-  const tact    = state.tact;
-  const vals    = weights.vals;
-  const delta   = weights.delta;
-  const tIds    = weights.tactIds;
-  const touched = state.touched;
+  const patIds   = state.patIds;
+  const patIds34 = state.patIds34;
+  const probs    = state.probs;
+  const tact     = state.tact;
+  const vals     = weights.vals;
+  const delta    = weights.delta;
+  const tIds     = weights.tactIds;
+  const touched  = state.touched;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
-  // Chosen move contributes +step to each of its 9 dense pids.
+  // Chosen move contributes +step to each of its 9 + 12 dense pids.
   {
-    const off = chosenIndex * 9;
+    const off   = chosenIndex * 9;
+    const off34 = chosenIndex * WINDOWS_34;
     for (let k = 0; k < 9; k++) {
       const idx = patIds[off + k];
       touched[tc++] = idx;
       delta[idx] += step;
     }
+    for (let k = 0; k < WINDOWS_34; k++) {
+      const idx = patIds34[off34 + k];
+      touched[tc++] = idx;
+      delta[idx] += step;
+    }
   }
-  // Every legal move i contributes -step * π_i to each of its 9 dense pids.
+  // Every legal move i contributes -step * π_i to each of its 9 + 12 dense pids.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
     const sub = step * pi;
-    const off = i * 9;
+    const off   = i * 9;
+    const off34 = i * WINDOWS_34;
     for (let k = 0; k < 9; k++) {
       const idx = patIds[off + k];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    for (let k = 0; k < WINDOWS_34; k++) {
+      const idx = patIds34[off34 + k];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -549,13 +666,14 @@ function entropyBonusUpdate(state, weights, beta) {
   const n = state.count;
   if (n === 0 || beta === 0) return;
 
-  const patIds  = state.patIds;
-  const probs   = state.probs;
-  const tact    = state.tact;
-  const vals    = weights.vals;
-  const delta   = weights.delta;
-  const tIds    = weights.tactIds;
-  const touched = state.touched;
+  const patIds   = state.patIds;
+  const patIds34 = state.patIds34;
+  const probs    = state.probs;
+  const tact     = state.tact;
+  const vals     = weights.vals;
+  const delta    = weights.delta;
+  const tIds     = weights.tactIds;
+  const touched  = state.touched;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -576,9 +694,15 @@ function entropyBonusUpdate(state, weights, beta) {
     if (pi === 0) continue;
     const ci = beta * pi * (logs[i] - H);
     if (ci === 0) continue;
-    const off9 = i * 9;
+    const off9  = i * 9;
+    const off12 = i * WINDOWS_34;
     for (let k = 0; k < 9; k++) {
       const idx = patIds[off9 + k];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
+    for (let k = 0; k < WINDOWS_34; k++) {
+      const idx = patIds34[off12 + k];
       touched[tc++] = idx;
       delta[idx] += ci;
     }
@@ -613,6 +737,7 @@ const NPatterns = {
   entropyBonusUpdate,
   annotateLadders,
   canonKey,
+  canonKey34,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -621,8 +746,10 @@ const NPatterns = {
   TACT_URGENT_KILL, TACT_URGENT_SAVE,
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
+  WINDOWS_34, CELLS12_BASE, SHAPE34_RAW_BASE,
   // Exposed for tests.
   _D4,
+  _D4rect,
 };
 
 if (typeof module !== 'undefined') module.exports = NPatterns;
