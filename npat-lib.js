@@ -93,12 +93,13 @@ const TACT_WASTED_EXTEND = 2;
 const TACT_WASTED_ATTACK = 3;
 const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 
-// 3×4 shape windows (12 cells each, 12 placements of the candidate per window).
-// Enumerated only in the 3×4 orientation; canonicalisation over full D4
-// absorbs the 4×3 transpose.  The 12 windows covering a candidate at the
-// patch centre span rows [-2,+2] and cols [-3,+3] around the candidate —
-// hence the 5×7 patch layout below.
-const WINDOWS_34         = 12;
+// 3×4 shape window (12 cells, single window per candidate with the candidate
+// CENTERED at relPos=5 — middle row, col index 1 in the 3×4 layout).  Under
+// D4 canonicalisation this collapses with its hflip (candidate at relPos=6),
+// its 4×3 transpose, and other symmetries.  Theoretical canonical-key count
+// ≈ 3^11 / avg-orbit = 22k–100k.  The window spans rows [-1,+1] and cols
+// [-1,+2] around the candidate.
+const WINDOWS_34         = 1;
 const CELLS12_BASE       = 531441; // 3^12
 const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT; // 177151; above tactical ids
 
@@ -415,25 +416,20 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       }
     }
 
-    // 3×4 shape windows (12 per candidate) — wr ∈ [-2,0], wc ∈ [-3,0].
-    const off34 = count * WINDOWS_34;
-    for (let wr = -2; wr <= 0; wr++) {
-      for (let wc = -3; wc <= 0; wc++) {
-        const relRow = -wr;
-        const relCol = -wc;
-        const relPos = relRow * 4 + relCol;
-
-        // Fill wc12 row-major from the patch.
-        for (let i = 0; i < 12; i++) {
-          const dr = (i / 4) | 0;
-          const dc = i - dr * 4;
-          wc12[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
-        }
-
-        const raw34 = SHAPE34_RAW_BASE + canonKey34(relPos, wc12);
-        patIds34[off34 + (wr + 2) * 4 + (wc + 3)] =
-          wMap ? _internWeight(weights, raw34) : raw34;
+    // 3×4 shape window — single window with the candidate centered at
+    // relPos=5 (middle row, col index 1 in the 3×4 layout).  Window spans 1
+    // row above/below and 1 col left / 2 cols right of the candidate.  D4
+    // canonicalisation absorbs the left-right asymmetry (hflip swaps 5↔6).
+    {
+      const wr = -1, wc = -1;
+      const relPos = 5;
+      for (let i = 0; i < 12; i++) {
+        const dr = (i / 4) | 0;
+        const dc = i - dr * 4;
+        wc12[i] = patch[(wr + dr + 2) * 7 + (wc + dc + 3)];
       }
+      const raw34 = SHAPE34_RAW_BASE + canonKey34(relPos, wc12);
+      patIds34[count] = wMap ? _internWeight(weights, raw34) : raw34;
     }
 
     // Copy tactical counts for this candidate.

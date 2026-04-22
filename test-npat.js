@@ -27,7 +27,7 @@ check('CELL_BASE is 3', CELL_BASE === 3);
 check('CELLS_BASE is 3^9', CELLS_BASE === 19683);
 check('N_TACT is 4', N_TACT === 4);
 check('TACT_RAW_BASE is 9 * CELLS_BASE', TACT_RAW_BASE === 9 * 19683);
-check('WINDOWS_34 is 12', WINDOWS_34 === 12);
+check('WINDOWS_34 is 1', WINDOWS_34 === 1);
 check('CELLS12_BASE is 3^12', CELLS12_BASE === 531441);
 check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT',
   SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT);
@@ -485,11 +485,11 @@ function applyD4rect(relPos, cells, perm) {
   check('canonKey34: one-friend vs one-foe keys differ', k2 !== k3);
 }
 
-// ── 17. Empty board: every candidate has 12 3×4 keys with multiset [2,4,6] ──
+// ── 17. Empty board: every candidate has 1 3×4 key, all identical ──────────
 //
-// Canonical relPos values (min over D4 orbit) for j=0..11 are
-// [0,1,1,0, 1,4,4,1, 0,1,1,0], giving counts {0:4, 1:6, 4:2}.  Since cells
-// are all empty, the canonical raw is SHAPE34_RAW_BASE + canon_relPos * 3^12.
+// With WINDOWS_34=1 and the candidate centered at relPos=5, every candidate
+// on an empty board sees the same 12-empty-cells configuration, so all
+// per-move canonical keys are identical.
 
 {
   const N = 5;
@@ -497,64 +497,23 @@ function applyD4rect(relPos, cells, perm) {
   const st = NPat.createState(N);
   NPat.extractFeatures(g, st);
 
-  check('patIds34 buffer length matches count*12',
+  check('patIds34 buffer has count entries (1 per move)',
     st.patIds34.length >= st.count * WINDOWS_34);
 
-  const m0 = st.patIds34.subarray(0, WINDOWS_34);
-  const counts = new Map();
-  for (const id of m0) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const vals = [...counts.values()].sort((a, b) => a - b);
-  check('empty board: per-move 3×4 window multiset [2,4,6]',
-    JSON.stringify(vals) === '[2,4,6]');
-
+  const k0 = st.patIds34[0];
   let allSame = true;
-  const sm = [...m0].sort().join(',');
   for (let i = 1; i < st.count; i++) {
-    const a = [...st.patIds34.subarray(i * WINDOWS_34, (i + 1) * WINDOWS_34)]
-      .sort().join(',');
-    if (a !== sm) { allSame = false; break; }
+    if (st.patIds34[i * WINDOWS_34] !== k0) { allSame = false; break; }
   }
-  check('empty board: every move has the same 3×4 multiset', allSame);
+  check('empty board: every move has the same 3×4 canonical key', allSame);
 }
 
-// ── 18. D4 board symmetry: 3×4 multisets match across rotated atari ─────────
-//
-// Same setup as test 10 (180° board rotation).  The patIds34 multiset at the
-// urgent liberty must match between configs A and B.
-
-{
-  const N = 7;
-  const gA = new Game2(N, false);
-  gA._place(2 * N + 2, BLACK);
-  gA._place(1 * N + 2, WHITE);
-  gA._place(3 * N + 2, WHITE);
-  gA._place(2 * N + 3, WHITE);
-  gA.current = WHITE;
-
-  const gB = new Game2(N, false);
-  gB._place(4 * N + 4, BLACK);
-  gB._place(5 * N + 4, WHITE);
-  gB._place(3 * N + 4, WHITE);
-  gB._place(4 * N + 3, WHITE);
-  gB.current = WHITE;
-
-  const stA = NPat.createState(N);
-  const stB = NPat.createState(N);
-  NPat.extractFeatures(gA, stA);
-  NPat.extractFeatures(gB, stB);
-
-  const libA = 2 * N + 1;
-  const libB = 4 * N + 5;
-  function candIdx(state, idx) {
-    for (let i = 0; i < state.count; i++) if (state.moves[i] === idx) return i;
-    return -1;
-  }
-  const iA = candIdx(stA, libA), iB = candIdx(stB, libB);
-  const a = [...stA.patIds34.subarray(iA * WINDOWS_34, (iA + 1) * WINDOWS_34)].sort();
-  const b = [...stB.patIds34.subarray(iB * WINDOWS_34, (iB + 1) * WINDOWS_34)].sort();
-  check('rotated atari: 3×4 pattern multisets match',
-    JSON.stringify(a) === JSON.stringify(b));
-}
+// (No 180°-rotation test for 3×4: with the candidate at relPos=5 the window
+// extends asymmetrically around the candidate — 1 col left, 2 cols right —
+// so rotating the board 180° does not map the feature's footprint onto
+// itself.  The D4 canonicalisation inside canonKey34 still merges a pattern
+// with its left-right mirror for the same candidate, which is exercised by
+// the Klein-4 invariance test above.)
 
 // ── 19. REINFORCE now updates 3×4 weights too ───────────────────────────────
 //
