@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-3x3', 'use-3x3c', 'use-3x4', 'use-L', 'use-A']);
+  ['help', 'use-3x3', 'use-3x3c', 'use-3x4', 'use-L', 'use-A', 'use-B']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
@@ -43,13 +43,14 @@ const USE_33C    = !!opts['use-3x3c'];                        // enable single c
 const USE_34     = !!opts['use-3x4'];                         // enable single 3×4 window
 const USE_L      = !!opts['use-L'];                           // enable L-shape window
 const USE_A      = !!opts['use-A'];                           // enable Type A window
+const USE_B      = !!opts['use-B'];                           // enable Type B window
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A });
+let weights = NPat.createWeights({ use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A, useB: USE_B });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ function loadWeights(filePath) {
   const raw = require(path.resolve(filePath));
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A,
+    use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A, useB: USE_B,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
@@ -137,11 +138,13 @@ function trainGame(N) {
       patIds33c.set(state.patIds33c.subarray(0, n));
       const patIdsA = new Int32Array(n);
       patIdsA.set(state.patIdsA.subarray(0, n));
+      const patIdsB = new Int32Array(n);
+      patIdsB.set(state.patIdsB.subarray(0, n));
       const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds, patIds34, patIdsL, patIds33c, patIdsA, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds, patIds34, patIdsL, patIds33c, patIdsA, patIdsB, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -224,6 +227,7 @@ if (opts.help) {
   --use-3x4        enable the single 3×4 shape window   (default off)
   --use-L          enable the L-shape shape window      (default off)
   --use-A          enable the Type A shape window       (default off)
+  --use-B          enable the Type B shape window       (default off)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -246,7 +250,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=ALWAYS  3x3=${USE_33 ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  3x4=${USE_34 ? 'ON' : 'off'}  L=${USE_L ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}`);
+console.log(`features: tactical=ALWAYS  3x3=${USE_33 ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  3x4=${USE_34 ? 'ON' : 'off'}  L=${USE_L ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
