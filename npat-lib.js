@@ -143,6 +143,20 @@ const TYPE_B_CELLS       = 11;
 const TYPE_B_BASE        = 177147; // 3^11
 const TYPE_B_RAW_BASE    = TYPE_A_RAW_BASE + TYPE_A_BASE; // above A range
 
+// Grown shape window — one pattern per candidate whose cell set is chosen
+// dynamically.  The 9 cells of the 3×3 core are always included; we then add
+// the next-closest board cell (by game2's blended-distance function) one at a
+// time until the pattern contains at least PAT_STONES stones or reaches
+// MAX_PAT_SIZE cells.  The raw key is the byte sequence of cell values in
+// grow order, prefixed by the size, canonicalised over D4 by taking the
+// lex-min string across 8 σ-grows (each σ sees a rotated virtual-coord
+// tiebreaker, so rotated boards produce the same canonical key).  Raw keys
+// are STRINGS (not integers) so intern uses a Map<string, denseIdx>; they
+// live outside any flat base-offset.
+const MAX_PAT_SIZE       = 40;
+const PAT_STONES         = (typeof process !== 'undefined' && process.env && process.env.NPAT_PAT_STONES)
+  ? parseInt(process.env.NPAT_PAT_STONES, 10) : 1;
+
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
 // Build a per-cell tactical-feature count array for the current game position.
@@ -224,20 +238,81 @@ function createState(N) {
       }
     }
   }
+
+  // Precomputed distance-sorted growth order per (candidate, σ).  For each
+  // candidate c and each D4 perm σ (indexed 0..7), growOrder[c * 8 *
+  // MAX_PAT_SIZE + σ * MAX_PAT_SIZE + k] = the k-th board cell to add under
+  // σ-growth.  Sort key is (distance(c, j), σ(j − c) lex) so distance drives
+  // the growth and the virtual σ-coord breaks ties.  Rotating the board by σ'
+  // swaps which σ produces which grown pattern, so canonicalising by lex-min
+  // over the 8 resulting encodings yields a D4-invariant key.
+  const growOrder = new Int32Array(cap * 8 * MAX_PAT_SIZE);
+  const d4fns = [
+    (dr, dc) => [ dr,  dc],
+    (dr, dc) => [ dc, -dr],
+    (dr, dc) => [-dr, -dc],
+    (dr, dc) => [-dc,  dr],
+    (dr, dc) => [ dr, -dc],
+    (dr, dc) => [-dr,  dc],
+    (dr, dc) => [ dc,  dr],
+    (dr, dc) => [-dc, -dr],
+  ];
+  const halfN = N / 2;
+  function _torDiff(a, b) {
+    let d = a - b;
+    if (d >  halfN) d -= N;
+    if (d < -halfN) d += N;
+    return d;
+  }
+  function _blendedDist(dr, dc) {
+    const adr = Math.abs(dr), adc = Math.abs(dc);
+    return 0.4 * (adr + adc) + 0.6 * Math.sqrt(adr * adr + adc * adc);
+  }
+  const entries = new Array(cap - 1);
+  for (let c = 0; c < cap; c++) {
+    const cr = (c / N) | 0, cc = c - cr * N;
+    let ei = 0;
+    for (let j = 0; j < cap; j++) {
+      if (j === c) continue;
+      const jr = (j / N) | 0, jc = j - jr * N;
+      const dr = _torDiff(jr, cr);
+      const dc = _torDiff(jc, cc);
+      entries[ei++] = { j, dr, dc, dist: _blendedDist(dr, dc) };
+    }
+    for (let s = 0; s < 8; s++) {
+      const perm = d4fns[s];
+      for (let k = 0; k < entries.length; k++) {
+        const [vr, vc] = perm(entries[k].dr, entries[k].dc);
+        entries[k].vr = vr;
+        entries[k].vc = vc;
+      }
+      entries.sort((a, b) => {
+        if (a.dist !== b.dist) return a.dist - b.dist;
+        if (a.vr   !== b.vr)   return a.vr   - b.vr;
+        return a.vc - b.vc;
+      });
+      const baseK = c * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
+      const limit = Math.min(MAX_PAT_SIZE, entries.length);
+      for (let k = 0; k < limit; k++) growOrder[baseK + k] = entries[k].j;
+    }
+  }
+
   return {
     N,
     moves:     new Int32Array(cap),
     patIds33c: new Int32Array(cap),
     patIdsA:   new Int32Array(cap),
     patIdsB:   new Int32Array(cap),
+    patIdsG:   new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
     ladder:    { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
+    growOrder,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // 3 * (n + 1) dense idxs (one per shape type, chosen + all moves).
-    touched:   new Int32Array(3 * (cap + 1)),
+    // 4 * (n + 1) dense idxs (one per shape type, chosen + all moves).
+    touched:   new Int32Array(4 * (cap + 1)),
     count:     0,
   };
 }
@@ -262,7 +337,7 @@ function createWeights(opts) {
   //   { initialCapacity, use33, use34, useL }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
-  let use33c = false, useA = false, useB = false;
+  let use33c = false, useA = false, useB = false, useG = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
@@ -270,6 +345,7 @@ function createWeights(opts) {
     if (opts.use33c) use33c = true;
     if (opts.useA)   useA   = true;
     if (opts.useB)   useB   = true;
+    if (opts.useG)   useG   = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -277,7 +353,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { use33c, useA, useB },                 // feature gating
+    cfg:   { use33c, useA, useB, useG },           // feature gating
   };
   for (let k = 0; k < N_TACT_SLOTS; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
@@ -474,6 +550,46 @@ function canonKeyB(patch) {
   return best;
 }
 
+// Scratch byte buffer for grown-pattern serialization (size prefix + up to
+// MAX_PAT_SIZE cells).
+const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
+
+// canonKeyG(game, candIdx, state, cur) — grow the pattern 8 times (one per
+// D4 σ) and return the lex-min string encoding.  The first 9 grow-slots are
+// the 3×3 core in σ-specific row-major order; subsequent slots are the next-
+// closest board cells by blended distance from the candidate (tiebreak by
+// σ-virtual (vr, vc)).  Growth stops when stone count reaches PAT_STONES or
+// size reaches MAX_PAT_SIZE.
+function canonKeyG(game, candIdx, state, cur) {
+  const cells    = game.cells;
+  const growOrd  = state.growOrder;
+  const bytes    = _growBytes;
+  let bestStr = null;
+  for (let s = 0; s < 8; s++) {
+    const baseK = candIdx * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
+    let size = 0, stones = 0;
+    while (size < MAX_PAT_SIZE) {
+      if (stones >= PAT_STONES) break;
+      const bi = growOrd[baseK + size];
+      const ci = cells[bi];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[size + 1] = v;
+      if (v !== 0) stones++;
+      size++;
+    }
+    bytes[0] = size;
+    // Build the encoding string up to length size+1.  String concat in a tight
+    // loop beats .apply for small arrays.
+    let str = '';
+    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
+    if (bestStr === null || str < bestStr) bestStr = str;
+  }
+  return bestStr;
+}
+
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
 // Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
@@ -512,9 +628,11 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUse33c = !cfg || cfg.use33c;
   const doUseA   = !cfg || cfg.useA;
   const doUseB   = !cfg || cfg.useB;
+  const doUseG   = !cfg || cfg.useG;
   const patIds33c = state.patIds33c;
   const patIdsA   = state.patIdsA;
   const patIdsB   = state.patIdsB;
+  const patIdsG   = state.patIdsG;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -560,6 +678,14 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIdsB[count] = wMap ? _internWeight(weights, rawB) : rawB;
     }
 
+    // Grown shape — single canonical string key per candidate.  Raw key is
+    // a string so it bypasses the integer raw-id ranges used by the other
+    // shapes; interning still goes through the same weights.map.
+    if (doUseG) {
+      const rawG = canonKeyG(game, idx, state, cur);
+      patIdsG[count] = wMap ? _internWeight(weights, rawG) : -1;
+    }
+
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
     // × TACT_STONE_LIMIT stone-indices).
     const tSrc = idx * N_TACT_SLOTS;
@@ -589,6 +715,7 @@ function _score(state, i, weights) {
   if (cfg.use33c) s += vals[state.patIds33c[i]];
   if (cfg.useA)   s += vals[state.patIdsA[i]];
   if (cfg.useB)   s += vals[state.patIdsB[i]];
+  if (cfg.useG)   s += vals[state.patIdsG[i]];
   return s;
 }
 
@@ -616,6 +743,7 @@ function _computeSoftmax(state, weights) {
   const pid33c = cfg.use33c ? state.patIds33c : null;
   const pidA   = cfg.useA   ? state.patIdsA   : null;
   const pidB   = cfg.useB   ? state.patIdsB   : null;
+  const pidG   = cfg.useG   ? state.patIdsG   : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -625,6 +753,7 @@ function _computeSoftmax(state, weights) {
     if (pid33c) s += vals[pid33c[i]];
     if (pidA)   s += vals[pidA[i]];
     if (pidB)   s += vals[pidB[i]];
+    if (pidG)   s += vals[pidG[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -696,6 +825,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const patIds33c = cfg.use33c ? state.patIds33c : null;
   const patIdsA   = cfg.useA   ? state.patIdsA   : null;
   const patIdsB   = cfg.useB   ? state.patIdsB   : null;
+  const patIdsG   = cfg.useG   ? state.patIdsG   : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -712,6 +842,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
   if (patIdsB) {
     const idx = patIdsB[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIdsG) {
+    const idx = patIdsG[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -732,6 +867,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
     if (patIdsB) {
       const idx = patIdsB[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsG) {
+      const idx = patIdsG[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -797,6 +937,7 @@ function entropyBonusUpdate(state, weights, beta) {
   const patIds33c = cfg.use33c ? state.patIds33c : null;
   const patIdsA   = cfg.useA   ? state.patIdsA   : null;
   const patIdsB   = cfg.useB   ? state.patIdsB   : null;
+  const patIdsG   = cfg.useG   ? state.patIdsG   : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -833,6 +974,11 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
+    if (patIdsG) {
+      const idx = patIdsG[i];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
     const tOff = i * N_TACT_SLOTS;
     for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
   }
@@ -862,6 +1008,7 @@ const NPatterns = {
   canonKey,
   canonKeyA,
   canonKeyB,
+  canonKeyG,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -873,6 +1020,7 @@ const NPatterns = {
   SHAPE33C_RAW_BASE,
   TYPE_A_CELLS, TYPE_A_BASE, TYPE_A_RAW_BASE,
   TYPE_B_CELLS, TYPE_B_BASE, TYPE_B_RAW_BASE,
+  MAX_PAT_SIZE, PAT_STONES,
   // Exposed for tests.
   _D4,
   _AShape,
