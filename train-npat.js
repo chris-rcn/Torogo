@@ -31,17 +31,14 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-3x3', 'use-3x3c', 'use-3x4', 'use-L', 'use-A', 'use-B']);
+  ['help', 'use-3x3c', 'use-A', 'use-B']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
 const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
 const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
-const USE_33     = !!opts['use-3x3'];                         // enable 9 3×3 windows
-const USE_33C    = !!opts['use-3x3c'];                        // enable single centered 3×3 window
-const USE_34     = !!opts['use-3x4'];                         // enable single 3×4 window
-const USE_L      = !!opts['use-L'];                           // enable L-shape window
+const USE_33C    = !!opts['use-3x3c'];                        // enable centered 3×3 window
 const USE_A      = !!opts['use-A'];                           // enable Type A window
 const USE_B      = !!opts['use-B'];                           // enable Type B window
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
@@ -50,7 +47,7 @@ const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A, useB: USE_B });
+let weights = NPat.createWeights({ use33c: USE_33C, useA: USE_A, useB: USE_B });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -80,7 +77,7 @@ function loadWeights(filePath) {
   const raw = require(path.resolve(filePath));
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33: USE_33, use34: USE_34, useL: USE_L, use33c: USE_33C, useA: USE_A, useB: USE_B,
+    use33c: USE_33C, useA: USE_A, useB: USE_B,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
@@ -100,7 +97,7 @@ function trainGame(N) {
   const tStart   = Date.now();
 
   // Per-step record: enough to replay the gradient with the known outcome.
-  // We store (player, chosenIndex, patIds (9*count), probs (count), moves (count), count).
+  // We store (player, chosenIndex, per-shape patIds, tact, probs, count).
   // To minimise allocations we use per-step state snapshots.
   const steps = [];
   const state = NPat.createState(N);
@@ -128,12 +125,6 @@ function trainGame(N) {
       // We reuse state.touched across snapshots as the REINFORCE scratch
       // buffer — reinforceUpdate zeros each touched slot after applying.
       const n = state.count;
-      const patIds = new Int32Array(n * 9);
-      patIds.set(state.patIds.subarray(0, n * 9));
-      const patIds34 = new Int32Array(n * NPat.WINDOWS_34);
-      patIds34.set(state.patIds34.subarray(0, n * NPat.WINDOWS_34));
-      const patIdsL = new Int32Array(n);
-      patIdsL.set(state.patIdsL.subarray(0, n));
       const patIds33c = new Int32Array(n);
       patIds33c.set(state.patIds33c.subarray(0, n));
       const patIdsA = new Int32Array(n);
@@ -144,7 +135,7 @@ function trainGame(N) {
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds, patIds34, patIdsL, patIds33c, patIdsA, patIdsB, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsA, patIdsB, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -222,10 +213,7 @@ if (opts.help) {
   --baseline F     EMA decay for reward baseline (default 0.95; 0 disables)
   --epsilon F      uniform-random exploration rate (default 0)
   --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
-  --use-3x3        enable the 9 3×3 shape windows      (default off)
-  --use-3x3c       enable the single centered 3×3 window (default off)
-  --use-3x4        enable the single 3×4 shape window   (default off)
-  --use-L          enable the L-shape shape window      (default off)
+  --use-3x3c       enable the centered 3×3 shape window (default off)
   --use-A          enable the Type A shape window       (default off)
   --use-B          enable the Type B shape window       (default off)
   --eval-agent S   reference agent in ai/ (default random)
@@ -250,7 +238,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=ALWAYS  3x3=${USE_33 ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  3x4=${USE_34 ? 'ON' : 'off'}  L=${USE_L ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}`);
+console.log(`features: tactical=ALWAYS  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();

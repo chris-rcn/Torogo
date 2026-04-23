@@ -19,22 +19,25 @@ const {
   TACT_URGENT_KILL, TACT_URGENT_SAVE,
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
-  WINDOWS_34, CELLS12_BASE, SHAPE34_RAW_BASE,
-  SHAPE_L_CELLS, SHAPE_L_BASE, SHAPE_L_RAW_BASE,
-  canonKey, canonKey34, canonKeyL, _D4, _D4rect, _LShape,
+  SHAPE33C_RAW_BASE,
+  TYPE_A_CELLS, TYPE_A_BASE, TYPE_A_RAW_BASE,
+  TYPE_B_CELLS, TYPE_B_BASE, TYPE_B_RAW_BASE,
+  canonKey, canonKeyA, canonKeyB, _D4,
 } = NPat;
 
 check('CELL_BASE is 3', CELL_BASE === 3);
 check('CELLS_BASE is 3^9', CELLS_BASE === 19683);
 check('N_TACT is 4', N_TACT === 4);
 check('TACT_RAW_BASE is 9 * CELLS_BASE', TACT_RAW_BASE === 9 * 19683);
-check('WINDOWS_34 is 1', WINDOWS_34 === 1);
-check('CELLS12_BASE is 3^12', CELLS12_BASE === 531441);
-check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT_SLOTS',
-  SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT_SLOTS);
 check('TACT_STONE_LIMIT is 8', TACT_STONE_LIMIT === 8);
 check('N_TACT_SLOTS is N_TACT * TACT_STONE_LIMIT',
   N_TACT_SLOTS === N_TACT * TACT_STONE_LIMIT);
+check('SHAPE33C_RAW_BASE above tactical block',
+  SHAPE33C_RAW_BASE === TACT_RAW_BASE + N_TACT_SLOTS);
+check('TYPE_A_CELLS is 10', TYPE_A_CELLS === 10);
+check('TYPE_A_BASE is 3^10', TYPE_A_BASE === 59049);
+check('TYPE_B_CELLS is 11', TYPE_B_CELLS === 11);
+check('TYPE_B_BASE is 3^11', TYPE_B_BASE === 177147);
 
 // Helper: sum the stone-index sub-counts for a (cell, feature-type) pair.
 // Equal to min(chain_size, LIMIT) per qualifying chain, so it matches the
@@ -45,13 +48,6 @@ function tactSum(buf, idx, k) {
   for (let j = 0; j < TACT_STONE_LIMIT; j++) s += buf[off + j];
   return s;
 }
-check('SHAPE_L_CELLS is 14', SHAPE_L_CELLS === 14);
-check('SHAPE_L_BASE is 3^14', SHAPE_L_BASE === 4782969);
-check('SHAPE_L_RAW_BASE above 3×4 range',
-  SHAPE_L_RAW_BASE === SHAPE34_RAW_BASE + 12 * CELLS12_BASE);
-check('_LShape has 14 offsets', _LShape.length === 14);
-check('_LShape index 4 is the candidate at (0, 0)',
-  _LShape[4][0] === 0 && _LShape[4][1] === 0);
 
 // ── 1. canonKey respects D4 symmetry ────────────────────────────────────────
 //
@@ -100,12 +96,7 @@ for (const c of cases) {
   check('corner NW friend ≡ corner SE friend', canonKey(4, [1,0,0, 0,0,0, 0,0,0]) === canonKey(4, [0,0,0, 0,0,0, 0,0,1]));
 }
 
-// ── 3. Empty 5×5 board — per-move feature multiset ──────────────────────────
-//
-// All 9 windows around every candidate are entirely empty.  The 9 values of
-// relPos ∈ 0..8 fall into 3 D4 orbits: {0,2,6,8} corners, {1,3,5,7} edges, {4}
-// center.  So every candidate's 9 pattern keys collapse to exactly 3 distinct
-// values with multiplicities [4, 4, 1].
+// ── 3. Empty 5×5 board — extractFeatures count and zero tactical ───────────
 {
   const N  = 5;
   const g  = new Game2(N, false);
@@ -113,22 +104,6 @@ for (const c of cases) {
   NPat.extractFeatures(g, st);
 
   check('empty 5x5: count === 25', st.count === 25);
-
-  const m0 = st.patIds.subarray(0, 9);
-  const counts = new Map();
-  for (const id of m0) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const vals = [...counts.values()].sort((a, b) => a - b);
-  check('empty board, per-move window multiset [1,4,4]',
-    JSON.stringify(vals) === '[1,4,4]');
-
-  // Every move produces the same shape multiset, and zero tactical counts.
-  let allSame = true;
-  const sm = [...m0].sort().join(',');
-  for (let i = 1; i < st.count; i++) {
-    const a = [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
-    if (a !== sm) { allSame = false; break; }
-  }
-  check('empty board, every move has the same pattern multiset', allSame);
   let anyTact = false;
   for (let i = 0; i < st.count * N_TACT_SLOTS; i++) if (st.tact[i]) { anyTact = true; break; }
   check('empty board: all tactical counts are zero', !anyTact);
@@ -209,7 +184,7 @@ for (const c of cases) {
   check('friend-in-atari: WASTED_ATTACK is 0', wAtk === 0);
 }
 
-// ── 6. D4 board symmetry → D4 feature symmetry ──────────────────────────────
+// ── 6. D4 board symmetry → 3×3c feature symmetry ────────────────────────────
 {
   const N = 5;
   const gA = new Game2(N, false);
@@ -224,16 +199,15 @@ for (const c of cases) {
   NPat.extractFeatures(gA, stA);
   NPat.extractFeatures(gB, stB);
 
-  function ids(state, idx) {
+  function pid(state, idx) {
     for (let i = 0; i < state.count; i++) if (state.moves[i] === idx)
-      return [...state.patIds.subarray(i * 9, (i + 1) * 9)].sort();
-    return null;
+      return state.patIds33c[i];
+    return -1;
   }
-  const a = ids(stA, 0 * N + 2);
-  const b = ids(stB, 4 * N + 2);
-  check('D4-symmetric positions: both candidates found',  a !== null && b !== null);
-  check('D4-symmetric positions: canonical-key multisets match',
-    JSON.stringify(a) === JSON.stringify(b));
+  const a = pid(stA, 0 * N + 2);
+  const b = pid(stB, 4 * N + 2);
+  check('D4-symmetric positions: both candidates found', a !== -1 && b !== -1);
+  check('D4-symmetric positions: 3×3c canonical key matches', a === b);
 }
 
 // ── 7. policyMove returns a legal move with uniform prob on empty weights ───
@@ -241,7 +215,7 @@ for (const c of cases) {
   const N = 5;
   const g = new Game2(N, false);
   const st = NPat.createState(N);
-  const w = NPat.createWeights({ use33: true, use34: true, useL: true });
+  const w = NPat.createWeights({ use33c: true, useA: true, useB: true });
   const { move, index, prob } = NPat.policyMove(g, st, w);
   check('policyMove: returns a legal move', move !== PASS && g.isLegal(move));
   check('policyMove: returns a valid index', index >= 0 && index < st.count);
@@ -255,25 +229,19 @@ for (const c of cases) {
   g._place(1 * N + 2, BLACK);
   g.current = WHITE;
   const st = NPat.createState(N);
-  const w = NPat.createWeights({ use33: true, use34: true, useL: true });
+  const w = NPat.createWeights({ use33c: true, useA: true, useB: true });
 
   NPat.policyMove(g, st, w);
+  // Pick any move whose 3×3c canonical key differs from move 0's (they will,
+  // because the board is broken-symmetric).
   let chosen = -1;
-  for (let i = 0; i < st.count; i++) {
-    const ai = [...st.patIds.subarray(i * 9, (i + 1) * 9)].sort().join(',');
-    for (let j = 0; j < st.count; j++) {
-      if (j === i) continue;
-      const aj = [...st.patIds.subarray(j * 9, (j + 1) * 9)].sort().join(',');
-      if (ai !== aj) { chosen = i; break; }
-    }
-    if (chosen >= 0) break;
+  for (let i = 1; i < st.count; i++) {
+    if (st.patIds33c[i] !== st.patIds33c[0]) { chosen = i; break; }
   }
   check('REINFORCE setup: found a non-symmetric move', chosen >= 0);
 
   function scoreShape(i) {
-    const off = i * 9; let s = 0;
-    for (let k = 0; k < 9; k++) s += w.vals[st.patIds[off + k]];
-    return s;
+    return w.vals[st.patIds33c[i]] + w.vals[st.patIdsA[i]] + w.vals[st.patIdsB[i]];
   }
   const before = scoreShape(chosen);
   NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
@@ -328,10 +296,14 @@ for (const c of cases) {
   const iA = candIdx(stA, libA), iB = candIdx(stB, libB);
   check('rotated atari: both urgent liberties present', iA >= 0 && iB >= 0);
 
-  const a = [...stA.patIds.subarray(iA * 9, (iA + 1) * 9)].sort();
-  const b = [...stB.patIds.subarray(iB * 9, (iB + 1) * 9)].sort();
-  check('rotated atari: shape pattern multisets match',
-    JSON.stringify(a) === JSON.stringify(b));
+  // Under a D4 rotation, the canonical keys for 3×3c, A, and B at the
+  // rotated candidate must match.
+  check('rotated atari: 3×3c canonical keys match',
+    stA.patIds33c[iA] === stB.patIds33c[iB]);
+  check('rotated atari: Type A canonical keys match',
+    stA.patIdsA[iA] === stB.patIdsA[iB]);
+  check('rotated atari: Type B canonical keys match',
+    stA.patIdsB[iA] === stB.patIdsB[iB]);
 
   const tA = [...stA.tact.subarray(iA * N_TACT_SLOTS, (iA + 1) * N_TACT_SLOTS)];
   const tB = [...stB.tact.subarray(iB * N_TACT_SLOTS, (iB + 1) * N_TACT_SLOTS)];
@@ -454,223 +426,6 @@ for (const c of cases) {
   NPat.extractFeatures(g, st, undefined, undefined, w);
   const best = NPat.greedyMove(g, st, w);
   check('REINFORCE-tact: greedyMove picks the urgent-kill move', best === libIdx);
-}
-
-// ── 15. canonKey34 is invariant under the Klein-4 subgroup of D4 ────────────
-//
-// The 8 D4 perms _D4rect indices 0..3 (id, hflip, vflip, 180°) are the ones
-// that keep a 3×4 window as a 3×4 window.  They form a closed subgroup under
-// composition, so applying any of them to a (relPos, cells) input yields a
-// new 3×4 input with the same canonical key.  The other 4 perms (indices
-// 4..7) take 3×4 → 4×3 (different row-major layout), so they do not form a
-// closed action on our 3×4-input space and are exercised instead by the
-// end-to-end board-rotation test below.
-
-function applyD4rect(relPos, cells, perm) {
-  const nc = new Array(12);
-  for (let i = 0; i < 12; i++) nc[perm[i]] = cells[i];
-  return { relPos: perm[relPos], cells: nc };
-}
-
-{
-  const cases = [
-    { relPos: 0,  cells: [0,0,0,0, 0,0,0,0, 0,0,0,0] }, // all empty, corner
-    { relPos: 5,  cells: [0,0,0,0, 0,0,1,0, 0,0,0,0] }, // one friend adj candidate
-    { relPos: 5,  cells: [0,1,2,0, 1,0,2,0, 0,1,2,0] }, // mixed
-    { relPos: 11, cells: [1,0,0,0, 0,2,0,0, 0,0,1,0] }, // candidate bottom-right-ish
-    { relPos: 4,  cells: [2,2,2,2, 0,1,1,1, 0,0,0,0] }, // asymmetric
-  ];
-
-  for (const c of cases) {
-    check(`canonKey34 case sanity: candidate cell empty (relPos=${c.relPos})`,
-      c.cells[c.relPos] === CELL_EMPTY);
-    const baseKey = canonKey34(c.relPos, c.cells);
-    for (let di = 0; di < 4; di++) {  // Klein-4 subgroup only
-      const t = applyD4rect(c.relPos, c.cells, _D4rect[di]);
-      const tKey = canonKey34(t.relPos, t.cells);
-      check(`canonKey34: Klein-4 sym ${di} preserves canonical key (relPos=${c.relPos})`,
-        tKey === baseKey);
-    }
-  }
-}
-
-// ── 16. Distinct 3×4 patterns get distinct canonical keys (barring symmetry) ─
-//
-// A single friend at the window's top-left (relPos at center) vs a single foe
-// at the same spot vs all empty must yield three different canonical keys.
-
-{
-  const k1 = canonKey34(5, [0,0,0,0, 0,0,0,0, 0,0,0,0]); // all empty
-  const k2 = canonKey34(5, [1,0,0,0, 0,0,0,0, 0,0,0,0]); // one friend at corner
-  const k3 = canonKey34(5, [2,0,0,0, 0,0,0,0, 0,0,0,0]); // one foe at corner
-  check('canonKey34: empty vs one-friend keys differ', k1 !== k2);
-  check('canonKey34: empty vs one-foe keys differ',    k1 !== k3);
-  check('canonKey34: one-friend vs one-foe keys differ', k2 !== k3);
-}
-
-// ── 17. Empty board: every candidate has 1 3×4 key, all identical ──────────
-//
-// With WINDOWS_34=1 and the candidate centered at relPos=5, every candidate
-// on an empty board sees the same 12-empty-cells configuration, so all
-// per-move canonical keys are identical.
-
-{
-  const N = 5;
-  const g = new Game2(N, false);
-  const st = NPat.createState(N);
-  NPat.extractFeatures(g, st);
-
-  check('patIds34 buffer has count entries (1 per move)',
-    st.patIds34.length >= st.count * WINDOWS_34);
-
-  const k0 = st.patIds34[0];
-  let allSame = true;
-  for (let i = 1; i < st.count; i++) {
-    if (st.patIds34[i * WINDOWS_34] !== k0) { allSame = false; break; }
-  }
-  check('empty board: every move has the same 3×4 canonical key', allSame);
-}
-
-// (No 180°-rotation test for 3×4: with the candidate at relPos=5 the window
-// extends asymmetrically around the candidate — 1 col left, 2 cols right —
-// so rotating the board 180° does not map the feature's footprint onto
-// itself.  The D4 canonicalisation inside canonKey34 still merges a pattern
-// with its left-right mirror for the same candidate, which is exercised by
-// the Klein-4 invariance test above.)
-
-// ── 19. REINFORCE now updates 3×4 weights too ───────────────────────────────
-//
-// After a REINFORCE step on a chosen move, every one of its 12 3×4 dense pids
-// must have a nonzero weight (at least some of them will, barring cancellations
-// from the distribution-average term — unlikely on a mostly-empty board with
-// uniform initialisation).
-
-{
-  const N = 5;
-  const g = new Game2(N, false);
-  const st = NPat.createState(N);
-  const w  = NPat.createWeights({ use33: true, use34: true, useL: true });
-
-  NPat.policyMove(g, st, w);
-  const chosen = 0;
-  const off34 = chosen * WINDOWS_34;
-  const pidsBefore = [...st.patIds34.subarray(off34, off34 + WINDOWS_34)];
-  NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
-
-  let anyNonzero = false;
-  for (const p of pidsBefore) {
-    if (w.vals[p] !== 0) { anyNonzero = true; break; }
-  }
-  check('REINFORCE modifies at least one 3×4 weight for the chosen move',
-    anyNonzero);
-}
-
-// ── 20. canonKeyL(empty patch) is 0 ─────────────────────────────────────────
-//
-// An all-empty 5×7 patch has every cell = CELL_EMPTY = 0, so every raw int
-// computed by canonKeyL is 0.  The canonical key is 0.
-
-{
-  const patch = new Int32Array(35);
-  check('canonKeyL on empty patch is 0', canonKeyL(patch) === 0);
-}
-
-// ── 21. canonKeyL is invariant under D4 rotation of the underlying board ────
-//
-// Place an asymmetric pattern of stones on a small board.  Compute canonKeyL
-// at a candidate on the base board, then repeat on each of the 8 D4 rotations
-// of the board.  The canonical keys must all match (the board-rotation takes
-// the candidate's patch to a D4-transformed version of itself, and canonKeyL
-// takes the minimum over all 8 D4 orientations).
-
-{
-  const N = 9;
-
-  function rotate(g, transform) {
-    const out = new Game2(N, false);
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
-      const v = g.cells[r * N + c];
-      if (v === 0) continue;
-      const [nr, nc] = transform(r, c);
-      out._place(nr * N + nc, v);
-    }
-    out.current = g.current;
-    return out;
-  }
-
-  const transforms = [
-    (r, c) => [r, c],
-    (r, c) => [c, N - 1 - r],
-    (r, c) => [N - 1 - r, N - 1 - c],
-    (r, c) => [N - 1 - c, r],
-    (r, c) => [r, N - 1 - c],
-    (r, c) => [N - 1 - r, c],
-    (r, c) => [c, r],
-    (r, c) => [N - 1 - c, N - 1 - r],
-  ];
-
-  // Set up an asymmetric pattern centred around (4, 4): the candidate at (4, 4),
-  // several friends and foes scattered around.  Mover = WHITE so FRIEND=WHITE.
-  const gBase = new Game2(N, false);
-  gBase._place(3 * N + 3, WHITE);   // (-1,-1) friend
-  gBase._place(3 * N + 5, BLACK);   // (-1,+1) foe
-  gBase._place(4 * N + 2, WHITE);   // (0,-2)  — inside the 5×5 but outside the SE L shape
-  gBase._place(4 * N + 6, BLACK);   // (0,+2) foe
-  gBase._place(5 * N + 5, WHITE);   // (+1,+1) friend
-  gBase._place(6 * N + 4, BLACK);   // (+2, 0) foe
-  gBase.current = WHITE;
-
-  const st0 = NPat.createState(N);
-  NPat.extractFeatures(gBase, st0);
-  let cand0 = -1;
-  for (let i = 0; i < st0.count; i++) if (st0.moves[i] === 4 * N + 4) { cand0 = i; break; }
-  check('L-rotation: candidate (4,4) found on base board', cand0 >= 0);
-  const baseKey = st0.patIdsL[cand0];
-
-  for (let s = 1; s < 8; s++) {
-    const g = rotate(gBase, transforms[s]);
-    const [nr, nc] = transforms[s](4, 4);
-    const st = NPat.createState(N);
-    NPat.extractFeatures(g, st);
-    let ci = -1;
-    for (let i = 0; i < st.count; i++) if (st.moves[i] === nr * N + nc) { ci = i; break; }
-    check(`L-rotation: candidate found under D4 transform ${s}`, ci >= 0);
-    check(`L-rotation: canonKeyL invariant under D4 transform ${s}`,
-      st.patIdsL[ci] === baseKey);
-  }
-}
-
-// ── 22. canonKeyL distinguishes non-equivalent patterns ─────────────────────
-//
-// Two patterns that are NOT D4-equivalent should produce different canonical
-// keys.  Use patches with a single friend at different asymmetric positions.
-
-{
-  const pA = new Int32Array(35); // single friend at patch[(0+2)*7 + (+2+3)] = 19 → shape idx 6 (= (0, +2))
-  pA[(0 + 2) * 7 + (2 + 3)] = CELL_FRIEND;
-  const pB = new Int32Array(35); // single friend at patch[(+1+2)*7 + (+1+3)] = 25 → shape idx 9 (= (+1, +1))
-  pB[(1 + 2) * 7 + (1 + 3)] = CELL_FRIEND;
-  // Shape index 6 is on the "handle" extension (only appears in 2 of 8 σ
-  // orbits); shape index 9 is in the 3×3 centre (appears in all 8 σ orbits).
-  // These patterns are not D4-equivalent — one has the friend on the handle,
-  // the other in the centre 3×3.
-  check('canonKeyL distinguishes non-equivalent single-friend positions',
-    canonKeyL(pA) !== canonKeyL(pB));
-}
-
-// ── 23. REINFORCE updates the L weight for the chosen move ──────────────────
-
-{
-  const N = 5;
-  const g = new Game2(N, false);
-  const st = NPat.createState(N);
-  const w  = NPat.createWeights({ use33: true, use34: true, useL: true });
-
-  NPat.policyMove(g, st, w);
-  const chosen = 0;
-  const lId = st.patIdsL[chosen];
-  NPat.reinforceUpdate(st, chosen, +1, w, 0.1);
-  check('REINFORCE updates the L weight for the chosen move', w.vals[lId] !== 0);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
