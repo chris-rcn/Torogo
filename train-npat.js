@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-3x3c', 'use-A', 'use-B', 'use-G']);
+  ['help', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
@@ -42,13 +42,14 @@ const USE_33C    = !!opts['use-3x3c'];                        // enable centered
 const USE_A      = !!opts['use-A'];                           // enable Type A window
 const USE_B      = !!opts['use-B'];                           // enable Type B window
 const USE_G      = !!opts['use-G'];                           // enable grown-pattern window
+const USE_O      = !!opts['use-O'];                           // enable octant-grown pattern
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G });
+let weights = NPat.createWeights({ use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ function loadWeights(filePath) {
   const raw = require(path.resolve(filePath));
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G,
+    use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
@@ -136,11 +137,13 @@ function trainGame(N) {
       patIdsB.set(state.patIdsB.subarray(0, n));
       const patIdsG = new Int32Array(n);
       patIdsG.set(state.patIdsG.subarray(0, n));
+      const patIdsO = new Int32Array(n);
+      patIdsO.set(state.patIdsO.subarray(0, n));
       const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsA, patIdsB, patIdsG, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsA, patIdsB, patIdsG, patIdsO, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -222,6 +225,7 @@ if (opts.help) {
   --use-A          enable the Type A shape window       (default off)
   --use-B          enable the Type B shape window       (default off)
   --use-G          enable the grown-pattern shape window (default off)
+  --use-O          enable the octant-grown shape window  (default off)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -244,7 +248,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=ALWAYS  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}`);
+console.log(`features: tactical=ALWAYS  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
