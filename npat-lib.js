@@ -555,11 +555,12 @@ function canonKeyB(patch) {
 const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
 
 // canonKeyG(game, candIdx, state, cur) — grow the pattern 8 times (one per
-// D4 σ) and return the lex-min string encoding.  The first 9 grow-slots are
-// the 3×3 core in σ-specific row-major order; subsequent slots are the next-
-// closest board cells by blended distance from the candidate (tiebreak by
-// σ-virtual (vr, vc)).  Growth stops when stone count reaches PAT_STONES or
-// size reaches MAX_PAT_SIZE.
+// D4 σ) and return the lex-min string encoding.  The 8 cells of the 3×3
+// core (the candidate's neighbours; the candidate itself is always empty
+// and carries no info) are ALWAYS included unconditionally.  Beyond the
+// core, we add the next-closest board cell by blended distance (with
+// σ-virtual (vr, vc) tiebreak) one at a time as long as the stone count is
+// strictly less than PAT_STONES, up to MAX_PAT_SIZE total cells.
 function canonKeyG(game, candIdx, state, cur) {
   const cells    = game.cells;
   const growOrd  = state.growOrder;
@@ -568,8 +569,21 @@ function canonKeyG(game, candIdx, state, cur) {
   for (let s = 0; s < 8; s++) {
     const baseK = candIdx * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
     let size = 0, stones = 0;
-    while (size < MAX_PAT_SIZE) {
-      if (stones >= PAT_STONES) break;
+    // Step 1: unconditionally include the 8 core cells (3×3 around the
+    // candidate, candidate itself excluded).
+    for (let k = 0; k < 8 && k < MAX_PAT_SIZE; k++) {
+      const bi = growOrd[baseK + k];
+      const ci = cells[bi];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[size + 1] = v;
+      if (v !== 0) stones++;
+      size++;
+    }
+    // Step 2: grow until stones reach PAT_STONES or we hit MAX_PAT_SIZE.
+    while (size < MAX_PAT_SIZE && stones < PAT_STONES) {
       const bi = growOrd[baseK + size];
       const ci = cells[bi];
       let v;
