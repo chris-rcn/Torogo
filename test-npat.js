@@ -15,7 +15,7 @@ function check(label, ok) {
 const {
   CELL_EMPTY, CELL_FRIEND, CELL_FOE,
   CELL_BASE,  CELLS_BASE,
-  N_TACT,
+  N_TACT, TACT_STONE_LIMIT, N_TACT_SLOTS,
   TACT_URGENT_KILL, TACT_URGENT_SAVE,
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
@@ -30,8 +30,21 @@ check('N_TACT is 4', N_TACT === 4);
 check('TACT_RAW_BASE is 9 * CELLS_BASE', TACT_RAW_BASE === 9 * 19683);
 check('WINDOWS_34 is 1', WINDOWS_34 === 1);
 check('CELLS12_BASE is 3^12', CELLS12_BASE === 531441);
-check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT',
-  SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT);
+check('SHAPE34_RAW_BASE is TACT_RAW_BASE + N_TACT_SLOTS',
+  SHAPE34_RAW_BASE === TACT_RAW_BASE + N_TACT_SLOTS);
+check('TACT_STONE_LIMIT is 8', TACT_STONE_LIMIT === 8);
+check('N_TACT_SLOTS is N_TACT * TACT_STONE_LIMIT',
+  N_TACT_SLOTS === N_TACT * TACT_STONE_LIMIT);
+
+// Helper: sum the stone-index sub-counts for a (cell, feature-type) pair.
+// Equal to min(chain_size, LIMIT) per qualifying chain, so it matches the
+// old "count of qualifying chains" semantics when every chain is size 1.
+function tactSum(buf, idx, k) {
+  const off = idx * N_TACT_SLOTS + k * TACT_STONE_LIMIT;
+  let s = 0;
+  for (let j = 0; j < TACT_STONE_LIMIT; j++) s += buf[off + j];
+  return s;
+}
 check('SHAPE_L_CELLS is 14', SHAPE_L_CELLS === 14);
 check('SHAPE_L_BASE is 3^14', SHAPE_L_BASE === 4782969);
 check('SHAPE_L_RAW_BASE above 3×4 range',
@@ -117,7 +130,7 @@ for (const c of cases) {
   }
   check('empty board, every move has the same pattern multiset', allSame);
   let anyTact = false;
-  for (let i = 0; i < st.count * N_TACT; i++) if (st.tact[i]) { anyTact = true; break; }
+  for (let i = 0; i < st.count * N_TACT_SLOTS; i++) if (st.tact[i]) { anyTact = true; break; }
   check('empty board: all tactical counts are zero', !anyTact);
 }
 
@@ -138,30 +151,32 @@ for (const c of cases) {
 
   const libIdx = 2 * N + 1; // (2,1), the remaining liberty
 
-  // tactCount[libIdx * N_TACT + TACT_URGENT_KILL] should be 1; save/wasted 0.
+  // For a size-1 chain, URGENT_KILL fires STONE_0 once at the liberty.
+  // tactSum returns min(chain_size, LIMIT) per qualifying chain so it matches
+  // the old "count of qualifying chains" semantics for size-1 chains.
   const tc = st.ladder.tactCount;
   check('ladder annotation: liberty cell marked URGENT_KILL',
-    tc[libIdx * N_TACT + TACT_URGENT_KILL] === 1);
+    tactSum(tc, libIdx, TACT_URGENT_KILL) === 1);
   check('ladder annotation: liberty cell not marked URGENT_SAVE',
-    tc[libIdx * N_TACT + TACT_URGENT_SAVE] === 0);
+    tactSum(tc, libIdx, TACT_URGENT_SAVE) === 0);
   check('ladder annotation: liberty cell not marked WASTED_EXTEND',
-    tc[libIdx * N_TACT + TACT_WASTED_EXTEND] === 0);
+    tactSum(tc, libIdx, TACT_WASTED_EXTEND) === 0);
   check('ladder annotation: liberty cell not marked WASTED_ATTACK',
-    tc[libIdx * N_TACT + TACT_WASTED_ATTACK] === 0);
+    tactSum(tc, libIdx, TACT_WASTED_ATTACK) === 0);
 
   // The per-candidate tact buffer should reflect the same values.
   let urgIdx = -1;
   for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { urgIdx = i; break; }
   check('urgent liberty candidate present', urgIdx >= 0);
   check('candidate tact[URGENT_KILL] is 1',
-    st.tact[urgIdx * N_TACT + TACT_URGENT_KILL] === 1);
+    tactSum(st.tact, urgIdx, TACT_URGENT_KILL) === 1);
 
   // A far candidate has all-zero tactical counts.
   let farIdx = -1;
   for (let i = 0; i < st.count; i++) if (st.moves[i] === 0 * N + 0) { farIdx = i; break; }
   check('far candidate present', farIdx >= 0);
   let farZero = true;
-  for (let k = 0; k < N_TACT; k++) if (st.tact[farIdx * N_TACT + k]) { farZero = false; break; }
+  for (let k = 0; k < N_TACT_SLOTS; k++) if (st.tact[farIdx * N_TACT_SLOTS + k]) { farZero = false; break; }
   check('far candidate: all tactical counts zero', farZero);
 }
 
@@ -184,10 +199,10 @@ for (const c of cases) {
   // We just assert: exactly one of {URGENT_SAVE, WASTED_EXTEND} is set, and
   // the KILL / ATTACK slots are zero.
   const tc = st.ladder.tactCount;
-  const save   = tc[libIdx * N_TACT + TACT_URGENT_SAVE];
-  const wExt   = tc[libIdx * N_TACT + TACT_WASTED_EXTEND];
-  const kill   = tc[libIdx * N_TACT + TACT_URGENT_KILL];
-  const wAtk   = tc[libIdx * N_TACT + TACT_WASTED_ATTACK];
+  const save   = tactSum(tc, libIdx, TACT_URGENT_SAVE);
+  const wExt   = tactSum(tc, libIdx, TACT_WASTED_EXTEND);
+  const kill   = tactSum(tc, libIdx, TACT_URGENT_KILL);
+  const wAtk   = tactSum(tc, libIdx, TACT_WASTED_ATTACK);
   check('friend-in-atari: either URGENT_SAVE or WASTED_EXTEND fires',
     (save === 1 && wExt === 0) || (save === 0 && wExt === 1));
   check('friend-in-atari: URGENT_KILL is 0', kill === 0);
@@ -275,7 +290,7 @@ for (const c of cases) {
 
   const ladder = NPat.annotateLadders(g);
   let any = false;
-  for (let i = 0; i < N * N * N_TACT; i++) if (ladder.tactCount[i]) { any = true; break; }
+  for (let i = 0; i < N * N * N_TACT_SLOTS; i++) if (ladder.tactCount[i]) { any = true; break; }
   check('quiet board (chain with 4 libs): no tactical bits set', !any);
 }
 
@@ -318,12 +333,13 @@ for (const c of cases) {
   check('rotated atari: shape pattern multisets match',
     JSON.stringify(a) === JSON.stringify(b));
 
-  const tA = [...stA.tact.subarray(iA * N_TACT, (iA + 1) * N_TACT)];
-  const tB = [...stB.tact.subarray(iB * N_TACT, (iB + 1) * N_TACT)];
+  const tA = [...stA.tact.subarray(iA * N_TACT_SLOTS, (iA + 1) * N_TACT_SLOTS)];
+  const tB = [...stB.tact.subarray(iB * N_TACT_SLOTS, (iB + 1) * N_TACT_SLOTS)];
   check('rotated atari: tactical counts match',
     JSON.stringify(tA) === JSON.stringify(tB));
-  check('rotated atari: URGENT_KILL fires exactly once',
-    tA[TACT_URGENT_KILL] === 1 && tB[TACT_URGENT_KILL] === 1);
+  check('rotated atari: URGENT_KILL STONE_0 fires exactly once',
+    tactSum(stA.tact, iA, TACT_URGENT_KILL) === 1 &&
+    tactSum(stB.tact, iB, TACT_URGENT_KILL) === 1);
 }
 
 // ── 11. Stacking: WASTED_ATTACK fires twice at a lib shared by two chains ───
@@ -354,9 +370,9 @@ for (const c of cases) {
   check('stacking: shared-lib candidate found', cand >= 0);
   if (cand >= 0) {
     check('stacking: WASTED_ATTACK count is 2 (one per chain)',
-      st.tact[cand * N_TACT + TACT_WASTED_ATTACK] === 2);
+      tactSum(st.tact, cand, TACT_WASTED_ATTACK) === 2);
     check('stacking: URGENT_KILL is 0',
-      st.tact[cand * N_TACT + TACT_URGENT_KILL] === 0);
+      tactSum(st.tact, cand, TACT_URGENT_KILL) === 0);
   }
 }
 
@@ -394,10 +410,9 @@ for (const c of cases) {
   for (let i = 0; i < st.count; i++) if (st.moves[i] === libIdx) { cand = i; break; }
   check('coexist: candidate found', cand >= 0);
   if (cand >= 0) {
-    const off = cand * N_TACT;
-    const kill = st.tact[off + TACT_URGENT_KILL];
-    const save = st.tact[off + TACT_URGENT_SAVE];
-    const wExt = st.tact[off + TACT_WASTED_EXTEND];
+    const kill = tactSum(st.tact, cand, TACT_URGENT_KILL);
+    const save = tactSum(st.tact, cand, TACT_URGENT_SAVE);
+    const wExt = tactSum(st.tact, cand, TACT_WASTED_EXTEND);
     check('coexist: URGENT_KILL fires (captures foe chain)', kill >= 1);
     check('coexist: either URGENT_SAVE or WASTED_EXTEND fires for friend chain',
       save >= 1 || wExt >= 1);

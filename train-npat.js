@@ -134,8 +134,8 @@ function trainGame(N) {
       patIdsL.set(state.patIdsL.subarray(0, n));
       const patIds33c = new Int32Array(n);
       patIds33c.set(state.patIds33c.subarray(0, n));
-      const tact = new Uint8Array(n * NPat.N_TACT);
-      tact.set(state.tact.subarray(0, n * NPat.N_TACT));
+      const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
+      tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
       steps.push({ player, chosenIndex: choice.index, count: n, patIds, patIds34, patIdsL, patIds33c, tact, probs, touched: state.touched });

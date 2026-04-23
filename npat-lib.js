@@ -86,7 +86,15 @@ const CELL_FRIEND  = 1;
 const CELL_FOE     = 2;
 
 // Tactical feature indices (also their offset above TACT_RAW_BASE).
+// Each type is expanded into TACT_STONE_LIMIT numbered sub-features indexed
+// by stone-index within the chain: a qualifying chain of size s emits the
+// sub-features 0..min(s, LIMIT)-1 at every relevant cell.  In a linear
+// softmax policy this lets the model learn a size-dependent preference
+// (longer chains activate more weights, so the logit scales with chain size
+// in a per-type weighted fashion).
 const N_TACT             = 4;
+const TACT_STONE_LIMIT   = 8;
+const N_TACT_SLOTS       = N_TACT * TACT_STONE_LIMIT;  // 32
 const TACT_URGENT_KILL   = 0;
 const TACT_URGENT_SAVE   = 1;
 const TACT_WASTED_EXTEND = 2;
@@ -101,7 +109,7 @@ const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 // [-1,+2] around the candidate.
 const WINDOWS_34         = 1;
 const CELLS12_BASE       = 531441; // 3^12
-const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT; // 177151; above tactical ids
+const SHAPE34_RAW_BASE   = TACT_RAW_BASE + N_TACT_SLOTS; // above tactical ids
 
 // Full-L shape window (14 cells — the 3×3 centered on the candidate plus 5
 // extras extending into the SE corner: 2 cells East at row offsets {0, +1}
@@ -135,7 +143,7 @@ function annotateLadders(game, out, game3) {
   const N   = game.N;
   const cap = N * N;
 
-  if (!out) out = { tactCount: new Uint8Array(cap * N_TACT) };
+  if (!out) out = { tactCount: new Uint8Array(cap * N_TACT_SLOTS) };
   out.tactCount.fill(0);
 
   if (game.emptyCount === cap) return out;
@@ -149,12 +157,22 @@ function annotateLadders(game, out, game3) {
     if (!info.status) continue;
     const { libs, moverSucceeds, urgentLibs } = info.status;
     const defending = (info.color === cur);
+    const size = g3.groupSize(info.gid);
+    const emit = size < TACT_STONE_LIMIT ? size : TACT_STONE_LIMIT;
+    let fi, targets;
     if (urgentLibs.length > 0) {
-      const fi = defending ? TACT_URGENT_SAVE : TACT_URGENT_KILL;
-      for (const lib of urgentLibs) tc[lib * N_TACT + fi]++;
+      fi = defending ? TACT_URGENT_SAVE : TACT_URGENT_KILL;
+      targets = urgentLibs;
     } else if (!moverSucceeds) {
-      const fi = defending ? TACT_WASTED_EXTEND : TACT_WASTED_ATTACK;
-      for (const lib of libs) tc[lib * N_TACT + fi]++;
+      fi = defending ? TACT_WASTED_EXTEND : TACT_WASTED_ATTACK;
+      targets = libs;
+    } else {
+      continue;
+    }
+    const base = fi * TACT_STONE_LIMIT;
+    for (const lib of targets) {
+      const off = lib * N_TACT_SLOTS + base;
+      for (let j = 0; j < emit; j++) tc[off + j]++;
     }
   }
 
@@ -202,10 +220,10 @@ function createState(N) {
     patIds34:  new Int32Array(cap * WINDOWS_34),
     patIdsL:   new Int32Array(cap),
     patIds33c: new Int32Array(cap),
-    tact:     new Uint8Array(cap * N_TACT),
+    tact:     new Uint8Array(cap * N_TACT_SLOTS),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
-    ladder:   { tactCount: new Uint8Array(cap * N_TACT) },
+    ladder:   { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
     // (9 + WINDOWS_34 + 1 + 1) * (n + 1) dense idxs, n ≤ cap.
@@ -249,10 +267,10 @@ function createWeights(opts) {
     vals:  new Float64Array(initialCapacity),      // weights[dense idx]
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
-    tactIds: new Int32Array(N_TACT),
+    tactIds: new Int32Array(N_TACT_SLOTS),
     cfg:   { use33, use34, useL, use33c },         // feature gating
   };
-  for (let k = 0; k < N_TACT; k++) {
+  for (let k = 0; k < N_TACT_SLOTS; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
   }
   return w;
@@ -565,13 +583,11 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
     }
 
-    // Copy tactical counts for this candidate.
-    const tSrc = idx * N_TACT;
-    const tDst = count * N_TACT;
-    tact[tDst]     = tactCount[tSrc];
-    tact[tDst + 1] = tactCount[tSrc + 1];
-    tact[tDst + 2] = tactCount[tSrc + 2];
-    tact[tDst + 3] = tactCount[tSrc + 3];
+    // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
+    // × TACT_STONE_LIMIT stone-indices).
+    const tSrc = idx * N_TACT_SLOTS;
+    const tDst = count * N_TACT_SLOTS;
+    for (let k = 0; k < N_TACT_SLOTS; k++) tact[tDst + k] = tactCount[tSrc + k];
 
     moves[count] = idx;
     count++;
@@ -590,11 +606,9 @@ function _score(state, i, weights) {
   const tact     = state.tact;
   const tIds     = weights.tactIds;
   const cfg      = weights.cfg;
-  const off4     = i * N_TACT;
-  let s = tact[off4]     * vals[tIds[0]]
-        + tact[off4 + 1] * vals[tIds[1]]
-        + tact[off4 + 2] * vals[tIds[2]]
-        + tact[off4 + 3] * vals[tIds[3]];
+  const tOff     = i * N_TACT_SLOTS;
+  let s = 0;
+  for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
   if (cfg.use33) {
     const patIds = state.patIds;
     const off9   = i * 9;
@@ -635,7 +649,8 @@ function _computeSoftmax(state, weights) {
   const vals  = weights.vals;
   const tIds  = weights.tactIds;
   const cfg   = weights.cfg;
-  const w0 = vals[tIds[0]], w1 = vals[tIds[1]], w2 = vals[tIds[2]], w3 = vals[tIds[3]];
+  const tW    = new Float64Array(N_TACT_SLOTS);
+  for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
   const pid   = cfg.use33  ? state.patIds    : null;
   const pid34 = cfg.use34  ? state.patIds34  : null;
   const pidL  = cfg.useL   ? state.patIdsL   : null;
@@ -643,9 +658,9 @@ function _computeSoftmax(state, weights) {
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
-    const off4 = i * N_TACT;
-    let s = tact[off4] * w0 + tact[off4 + 1] * w1
-          + tact[off4 + 2] * w2 + tact[off4 + 3] * w3;
+    const tOff = i * N_TACT_SLOTS;
+    let s = 0;
+    for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
     if (pid) {
       const off9 = i * 9;
       s += vals[pid[off9]]     + vals[pid[off9 + 1]] + vals[pid[off9 + 2]]
@@ -709,6 +724,8 @@ function greedyMove(game, state, weights, game3) {
 //
 // state.probs must be populated (by policyMove / _computeSoftmax) before the
 // call.
+
+const _tactScratch = new Float64Array(N_TACT_SLOTS);
 
 function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const n = state.count;
@@ -801,29 +818,23 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
   }
 
-  // ── Tactical features (just 4, always touched; no delta buffer needed) ──
-  const cOff = chosenIndex * N_TACT;
-  let neg0 = 0, neg1 = 0, neg2 = 0, neg3 = 0;
+  // ── Tactical features (N_TACT_SLOTS, always touched; no delta buffer) ──
+  const cOff = chosenIndex * N_TACT_SLOTS;
+  const neg  = _tactScratch;  // Float64 scratch buffer sized N_TACT_SLOTS
+  for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] = 0;
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
-    const off = i * N_TACT;
-    neg0 += pi * tact[off];
-    neg1 += pi * tact[off + 1];
-    neg2 += pi * tact[off + 2];
-    neg3 += pi * tact[off + 3];
+    const off = i * N_TACT_SLOTS;
+    for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] += pi * tact[off + k];
   }
-  const d0 = step * (tact[cOff]     - neg0);
-  const d1 = step * (tact[cOff + 1] - neg1);
-  const d2 = step * (tact[cOff + 2] - neg2);
-  const d3 = step * (tact[cOff + 3] - neg3);
-  if (d0 !== 0) vals[tIds[0]] += d0;
-  if (d1 !== 0) vals[tIds[1]] += d1;
-  if (d2 !== 0) vals[tIds[2]] += d2;
-  if (d3 !== 0) vals[tIds[3]] += d3;
+  for (let k = 0; k < N_TACT_SLOTS; k++) {
+    const d = step * (tact[cOff + k] - neg[k]);
+    if (d !== 0) vals[tIds[k]] += d;
+  }
   // Return total shape-feature touches (including duplicates across moves) —
   // train-npat.js accumulates these to report mean updates-per-pattern.
-  return tc + 4;
+  return tc + N_TACT_SLOTS;
 }
 
 // ── Entropy-bonus step ────────────────────────────────────────────────────────
@@ -872,7 +883,8 @@ function entropyBonusUpdate(state, weights, beta) {
   }
 
   // Accumulate per-move coefficients onto shape pids, and tactical totals.
-  let acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+  const acc = _tactScratch;
+  for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] = 0;
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
@@ -904,21 +916,17 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
-    const off4 = i * N_TACT;
-    acc0 += ci * tact[off4];
-    acc1 += ci * tact[off4 + 1];
-    acc2 += ci * tact[off4 + 2];
-    acc3 += ci * tact[off4 + 3];
+    const tOff = i * N_TACT_SLOTS;
+    for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
   }
   for (let i = 0; i < tc; i++) {
     const idx = touched[i];
     const d = delta[idx];
     if (d !== 0) { vals[idx] += d; delta[idx] = 0; }
   }
-  if (acc0 !== 0) vals[tIds[0]] += acc0;
-  if (acc1 !== 0) vals[tIds[1]] += acc1;
-  if (acc2 !== 0) vals[tIds[2]] += acc2;
-  if (acc3 !== 0) vals[tIds[3]] += acc3;
+  for (let k = 0; k < N_TACT_SLOTS; k++) {
+    if (acc[k] !== 0) vals[tIds[k]] += acc[k];
+  }
 }
 
 // ── Module exports ────────────────────────────────────────────────────────────
@@ -941,7 +949,7 @@ const NPatterns = {
   CELL_BASE,
   CELLS_BASE,
   CELL_EMPTY, CELL_FRIEND, CELL_FOE,
-  N_TACT,
+  N_TACT, TACT_STONE_LIMIT, N_TACT_SLOTS,
   TACT_URGENT_KILL, TACT_URGENT_SAVE,
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
