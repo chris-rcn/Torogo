@@ -357,10 +357,27 @@ const _D4rp = new Int32Array(72);
   }
 })();
 
+// Lazy flat caches for canonKey* functions — filled on first lookup.  Each
+// is an Int32Array sized to the shape's raw-input space with -1 as the
+// "not yet computed" sentinel.  Cache keys are always the s=0 (identity)
+// raw encoding, so a single lookup replaces the 8-way D4 minimum loop.
+//
+// Shared cache for canonKey (covers both the 9-window 3×3 family and the
+// centered 3×3c, which both call into canonKey(relPos, cells[9])).
+
+const _canonKeyCache = new Int32Array(9 * CELLS_BASE).fill(-1); // 708KB
+
 function canonKey(relPos, cells) {
   const c0 = cells[0], c1 = cells[1], c2 = cells[2];
   const c3 = cells[3], c4 = cells[4], c5 = cells[5];
   const c6 = cells[6], c7 = cells[7], c8 = cells[8];
+  // Lazy flat cache: key = s=0 raw = relPos·3^9 + Σ cells[i]·3^i,
+  // range [0, 9·19683) = [0, 177147).  The cache is shared across the
+  // 9-window 3×3 extraction and the centered-3×3c extraction.
+  const cacheKey = relPos * CELLS_BASE
+    + c0 + c1*3 + c2*9 + c3*27 + c4*81 + c5*243 + c6*729 + c7*2187 + c8*6561;
+  const cached = _canonKeyCache[cacheKey];
+  if (cached !== -1) return cached;
   const cw = _D4cw, rp = _D4rp;
   let best = 0x7fffffff;
   for (let di = 0; di < 8; di++) {
@@ -371,6 +388,7 @@ function canonKey(relPos, cells) {
       + c6 * cw[o + 6] + c7 * cw[o + 7] + c8 * cw[o + 8];
     if (raw < best) best = raw;
   }
+  _canonKeyCache[cacheKey] = best;
   return best;
 }
 
@@ -419,10 +437,23 @@ const _D4rectRp = new Int32Array(8 * 12);
 // canonKey34(relPos, cells12) returns the D4-canonical raw int for a 3×4
 // window, WITHOUT the SHAPE34_RAW_BASE offset (the caller adds it at intern
 // time so raw ids don't collide with 3×3 keys or tactical ids).
+//
+// Cache is only populated for relPos=5 (the single value used by the hot
+// path); other relPos values still compute fresh via the full D4 loop.
+const _canonKey34Cache = new Int32Array(CELLS12_BASE).fill(-1); // 2.1MB
+
 function canonKey34(relPos, cells) {
   const c0 = cells[0],  c1 = cells[1],  c2 = cells[2],  c3 = cells[3];
   const c4 = cells[4],  c5 = cells[5],  c6 = cells[6],  c7 = cells[7];
   const c8 = cells[8],  c9 = cells[9],  c10 = cells[10], c11 = cells[11];
+  let cacheKey = -1;
+  if (relPos === 5) {
+    cacheKey = c0 + c1*3 + c2*9 + c3*27 + c4*81 + c5*243
+             + c6*729 + c7*2187 + c8*6561 + c9*19683
+             + c10*59049 + c11*177147;
+    const cached = _canonKey34Cache[cacheKey];
+    if (cached !== -1) return cached;
+  }
   const cw = _D4rectCw, rp = _D4rectRp;
   let best = 0x7fffffff;
   for (let di = 0; di < 8; di++) {
@@ -433,6 +464,7 @@ function canonKey34(relPos, cells) {
       + c8  * cw[o + 8]  + c9  * cw[o + 9]  + c10 * cw[o + 10] + c11 * cw[o + 11];
     if (raw < best) best = raw;
   }
+  if (cacheKey !== -1) _canonKey34Cache[cacheKey] = best;
   return best;
 }
 
@@ -536,18 +568,24 @@ const _ACellWeights = new Int32Array(TYPE_A_CELLS);
   for (let i = 0; i < TYPE_A_CELLS; i++) { _ACellWeights[i] = w; w *= CELL_BASE; }
 })();
 
+const _canonKeyACache = new Int32Array(TYPE_A_BASE).fill(-1); // 236KB
+
 function canonKeyA(patch) {
   const idx = _APatchIdx;
   const cw  = _ACellWeights;
-  let best = 0x7fffffff;
-  for (let s = 0; s < 8; s++) {
+  // s=0 identity raw = cache key.
+  let cacheKey = 0;
+  for (let i = 0; i < TYPE_A_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
+  const cached = _canonKeyACache[cacheKey];
+  if (cached !== -1) return cached;
+  let best = cacheKey;
+  for (let s = 1; s < 8; s++) {
     const o = s * TYPE_A_CELLS;
     let raw = 0;
-    for (let i = 0; i < TYPE_A_CELLS; i++) {
-      raw += patch[idx[o + i]] * cw[i];
-    }
+    for (let i = 0; i < TYPE_A_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
     if (raw < best) best = raw;
   }
+  _canonKeyACache[cacheKey] = best;
   return best;
 }
 
@@ -585,18 +623,23 @@ const _BCellWeights = new Int32Array(TYPE_B_CELLS);
   for (let i = 0; i < TYPE_B_CELLS; i++) { _BCellWeights[i] = w; w *= CELL_BASE; }
 })();
 
+const _canonKeyBCache = new Int32Array(TYPE_B_BASE).fill(-1); // 708KB
+
 function canonKeyB(patch) {
   const idx = _BPatchIdx;
   const cw  = _BCellWeights;
-  let best = 0x7fffffff;
-  for (let s = 0; s < 8; s++) {
+  let cacheKey = 0;
+  for (let i = 0; i < TYPE_B_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
+  const cached = _canonKeyBCache[cacheKey];
+  if (cached !== -1) return cached;
+  let best = cacheKey;
+  for (let s = 1; s < 8; s++) {
     const o = s * TYPE_B_CELLS;
     let raw = 0;
-    for (let i = 0; i < TYPE_B_CELLS; i++) {
-      raw += patch[idx[o + i]] * cw[i];
-    }
+    for (let i = 0; i < TYPE_B_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
     if (raw < best) best = raw;
   }
+  _canonKeyBCache[cacheKey] = best;
   return best;
 }
 
