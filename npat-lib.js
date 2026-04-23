@@ -93,8 +93,11 @@ const CELL_FOE     = 2;
 // (longer chains activate more weights, so the logit scales with chain size
 // in a per-type weighted fashion).
 const N_TACT             = 4;
-const TACT_STONE_LIMIT   = 8;
-const N_TACT_SLOTS       = N_TACT * TACT_STONE_LIMIT;  // 32
+// TACT_STONE_LIMIT controls per-stone-index expansion; env-configurable so
+// A/B tests can sweep without recompiling (default 8).
+const TACT_STONE_LIMIT   = (typeof process !== 'undefined' && process.env && process.env.NPAT_STONE_LIMIT)
+  ? parseInt(process.env.NPAT_STONE_LIMIT, 10) : 8;
+const N_TACT_SLOTS       = N_TACT * TACT_STONE_LIMIT;  // 32 at default
 const TACT_URGENT_KILL   = 0;
 const TACT_URGENT_SAVE   = 1;
 const TACT_WASTED_EXTEND = 2;
