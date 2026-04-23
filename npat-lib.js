@@ -612,6 +612,52 @@ function canonKeyB(patch) {
 // MAX_PAT_SIZE cells).
 const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
 
+// Ordinary-hashing caches for canonKeyG and canonKeyO.  Keyed on the σ=0
+// (identity) encoding string, which uniquely determines the local cell
+// configuration and therefore the canonical form; on a hit we skip the 7
+// other σ grows.  The cache grows unboundedly across training; sizes in
+// practice are bounded by ~8 × (number of distinct canonical patterns) —
+// the 8 comes from different σ=0 encodings mapping to the same canonical.
+const _canonKeyGCache = new Map();
+const _canonKeyOCache = new Map();
+
+// Helper: grow the pattern under σ starting from a given precomputed order
+// array, writing the bytes into out[1..size], with out[0] = size.  Returns
+// the built string encoding.
+function _growAndEncode(order, baseK, cells, cur, out) {
+  let size = 0, stones = 0;
+  // Core (8 cells).
+  for (let k = 0; k < 8 && k < MAX_PAT_SIZE; k++) {
+    const bi = order[baseK + k];
+    if (bi < 0) break;
+    const ci = cells[bi];
+    let v;
+    if (ci === 0)        v = CELL_EMPTY;
+    else if (ci === cur) v = CELL_FRIEND;
+    else                 v = CELL_FOE;
+    out[size + 1] = v;
+    if (v !== 0) stones++;
+    size++;
+  }
+  // Grow.
+  while (size < MAX_PAT_SIZE && stones < PAT_STONES) {
+    const bi = order[baseK + size];
+    if (bi < 0) break;
+    const ci = cells[bi];
+    let v;
+    if (ci === 0)        v = CELL_EMPTY;
+    else if (ci === cur) v = CELL_FRIEND;
+    else                 v = CELL_FOE;
+    out[size + 1] = v;
+    if (v !== 0) stones++;
+    size++;
+  }
+  out[0] = size;
+  let str = '';
+  for (let k = 0; k <= size; k++) str += String.fromCharCode(out[k]);
+  return str;
+}
+
 // canonKeyG(game, candIdx, state, cur) — grow the pattern 8 times (one per
 // D4 σ) and return the lex-min string encoding.  The 8 cells of the 3×3
 // core (the candidate's neighbours; the candidate itself is always empty
@@ -620,46 +666,23 @@ const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
 // σ-virtual (vr, vc) tiebreak) one at a time as long as the stone count is
 // strictly less than PAT_STONES, up to MAX_PAT_SIZE total cells.
 function canonKeyG(game, candIdx, state, cur) {
-  const cells    = game.cells;
-  const growOrd  = state.growOrder;
-  const bytes    = _growBytes;
-  let bestStr = null;
-  for (let s = 0; s < 8; s++) {
-    const baseK = candIdx * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
-    let size = 0, stones = 0;
-    // Step 1: unconditionally include the 8 core cells (3×3 around the
-    // candidate, candidate itself excluded).
-    for (let k = 0; k < 8 && k < MAX_PAT_SIZE; k++) {
-      const bi = growOrd[baseK + k];
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      if (v !== 0) stones++;
-      size++;
-    }
-    // Step 2: grow until stones reach PAT_STONES or we hit MAX_PAT_SIZE.
-    while (size < MAX_PAT_SIZE && stones < PAT_STONES) {
-      const bi = growOrd[baseK + size];
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      if (v !== 0) stones++;
-      size++;
-    }
-    bytes[0] = size;
-    // Build the encoding string up to length size+1.  String concat in a tight
-    // loop beats .apply for small arrays.
-    let str = '';
-    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
-    if (bestStr === null || str < bestStr) bestStr = str;
+  const cells   = game.cells;
+  const growOrd = state.growOrder;
+  const bytes   = _growBytes;
+  const strideC = 8 * MAX_PAT_SIZE;
+  // Compute σ=0 encoding first and use it as cache key.
+  const key0 = _growAndEncode(growOrd, candIdx * strideC, cells, cur, bytes);
+  const cached = _canonKeyGCache.get(key0);
+  if (cached !== undefined) return cached;
+  // Cache miss: compute σ=1..7 and take lex-min.
+  let best = key0;
+  for (let s = 1; s < 8; s++) {
+    const str = _growAndEncode(growOrd, candIdx * strideC + s * MAX_PAT_SIZE,
+      cells, cur, bytes);
+    if (str < best) best = str;
   }
-  return bestStr;
+  _canonKeyGCache.set(key0, best);
+  return best;
 }
 
 // canonKeyO(game, candIdx, state, cur) — 3×3 core + one auto-expanding octant.
@@ -671,41 +694,18 @@ function canonKeyO(game, candIdx, state, cur) {
   const cells   = game.cells;
   const octOrd  = state.octantOrder;
   const bytes   = _growBytes;
-  let bestStr = null;
-  for (let s = 0; s < 8; s++) {
-    const baseK = candIdx * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
-    let size = 0, stones = 0;
-    // Core (slots 0..7).
-    for (let k = 0; k < 8 && k < MAX_PAT_SIZE; k++) {
-      const bi = octOrd[baseK + k];
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      if (v !== 0) stones++;
-      size++;
-    }
-    // Octant cells until patStones or MAX_PAT_SIZE.
-    while (size < MAX_PAT_SIZE && stones < PAT_STONES) {
-      const bi = octOrd[baseK + size];
-      if (bi < 0) break;  // -1 sentinel = octant exhausted
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      if (v !== 0) stones++;
-      size++;
-    }
-    bytes[0] = size;
-    let str = '';
-    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
-    if (bestStr === null || str < bestStr) bestStr = str;
+  const strideC = 8 * MAX_PAT_SIZE;
+  const key0 = _growAndEncode(octOrd, candIdx * strideC, cells, cur, bytes);
+  const cached = _canonKeyOCache.get(key0);
+  if (cached !== undefined) return cached;
+  let best = key0;
+  for (let s = 1; s < 8; s++) {
+    const str = _growAndEncode(octOrd, candIdx * strideC + s * MAX_PAT_SIZE,
+      cells, cur, bytes);
+    if (str < best) best = str;
   }
-  return bestStr;
+  _canonKeyOCache.set(key0, best);
+  return best;
 }
 
 // ── Core feature extraction ───────────────────────────────────────────────────
