@@ -612,15 +612,6 @@ function canonKeyB(patch) {
 // MAX_PAT_SIZE cells).
 const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
 
-// Ordinary-hashing caches for canonKeyG and canonKeyO.  Keyed on the σ=0
-// (identity) encoding string, which uniquely determines the local cell
-// configuration and therefore the canonical form; on a hit we skip the 7
-// other σ grows.  The cache grows unboundedly across training; sizes in
-// practice are bounded by ~8 × (number of distinct canonical patterns) —
-// the 8 comes from different σ=0 encodings mapping to the same canonical.
-const _canonKeyGCache = new Map();
-const _canonKeyOCache = new Map();
-
 // Helper: grow the pattern under σ starting from a given precomputed order
 // array, writing the bytes into out[1..size], with out[0] = size.  Returns
 // the built string encoding.
@@ -670,18 +661,12 @@ function canonKeyG(game, candIdx, state, cur) {
   const growOrd = state.growOrder;
   const bytes   = _growBytes;
   const strideC = 8 * MAX_PAT_SIZE;
-  // Compute σ=0 encoding first and use it as cache key.
-  const key0 = _growAndEncode(growOrd, candIdx * strideC, cells, cur, bytes);
-  const cached = _canonKeyGCache.get(key0);
-  if (cached !== undefined) return cached;
-  // Cache miss: compute σ=1..7 and take lex-min.
-  let best = key0;
-  for (let s = 1; s < 8; s++) {
+  let best = null;
+  for (let s = 0; s < 8; s++) {
     const str = _growAndEncode(growOrd, candIdx * strideC + s * MAX_PAT_SIZE,
       cells, cur, bytes);
-    if (str < best) best = str;
+    if (best === null || str < best) best = str;
   }
-  _canonKeyGCache.set(key0, best);
   return best;
 }
 
@@ -695,16 +680,12 @@ function canonKeyO(game, candIdx, state, cur) {
   const octOrd  = state.octantOrder;
   const bytes   = _growBytes;
   const strideC = 8 * MAX_PAT_SIZE;
-  const key0 = _growAndEncode(octOrd, candIdx * strideC, cells, cur, bytes);
-  const cached = _canonKeyOCache.get(key0);
-  if (cached !== undefined) return cached;
-  let best = key0;
-  for (let s = 1; s < 8; s++) {
+  let best = null;
+  for (let s = 0; s < 8; s++) {
     const str = _growAndEncode(octOrd, candIdx * strideC + s * MAX_PAT_SIZE,
       cells, cur, bytes);
-    if (str < best) best = str;
+    if (best === null || str < best) best = str;
   }
-  _canonKeyOCache.set(key0, best);
   return best;
 }
 
