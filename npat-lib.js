@@ -352,15 +352,11 @@ function createState(N) {
     }
   }
 
-  // Precomputed per-candidate read sets: the union of all cells touched by
-  // ANY σ-grow at MAX_PAT_SIZE, sorted by (distance, Δr, Δc) so cells at the
-  // same blended distance form contiguous "shells".  Returned as
-  //   { cells: Int32Array, shellStart: Int32Array }
-  // where shellStart[i]..shellStart[i+1] is the i-th shell's cell range
-  // (shellStart[numShells] = cells.length).  The hash uses this shell
-  // structure to include only complete shells whose cumulative stone count
-  // stays ≤ PAT_STONES — keeping the cache key scoped to cells that
-  // σ-grows actually read in practice.
+  // Precomputed per-candidate read sets: cells any σ-grow could touch at
+  // MAX_PAT_SIZE, sorted by (distance, Δr, Δc) and grouped into shells.
+  // Returns { cells, shellStart, cellToShell } per candidate — canonKeyG/O
+  // use these to ensure the hash and canonical are computed over the same
+  // set of cells (shells 0..maxShell from _shellWalk).
   function _buildReadSet(orderArr) {
     const out = new Array(cap);
     const seen = new Uint8Array(cap);
@@ -389,21 +385,20 @@ function createState(N) {
       });
       const cellsArr = new Int32Array(list.length);
       for (let i = 0; i < list.length; i++) cellsArr[i] = list[i].bi;
-      // Collect shell start indices (one per distinct distance value).
+      // Shell boundaries: cells at distinct blended distances form shells.
       const shellStart = [0];
       for (let i = 1; i < list.length; i++) {
         if (list[i].dist !== list[i - 1].dist) shellStart.push(i);
       }
       shellStart.push(list.length);
-      // Precompute cellToShell: for each of the cap cells, the shell index in
-      // this candidate's readSet.  -1 for cells not in the readSet (e.g., the
-      // candidate itself).  Lets per-σ grows quickly test whether a cell is
-      // in an included shell.
+      // cellToShell: for each board index in this candidate's readSet, the
+      // shell it belongs to.  -1 for cells not in the readSet.  Used by
+      // canonKeyG/O to gate per-σ grows at the same maxShell the hash did.
       const cellToShell = new Int8Array(cap).fill(-1);
-      for (let i = 0; i < list.length; i++) {
-        let s = 0;
-        while (shellStart[s + 1] <= i) s++;
-        cellToShell[list[i].bi] = s;
+      for (let s = 0; s < shellStart.length - 1; s++) {
+        for (let i = shellStart[s]; i < shellStart[s + 1]; i++) {
+          cellToShell[list[i].bi] = s;
+        }
       }
       out[c] = {
         cells: cellsArr,
@@ -704,10 +699,11 @@ for (let i = 0; i < CACHE_SHARD_COUNT; i++) {
 //   hash       — FNV-1a over cell values in included shells
 //   maxShell   — the highest shell index included (shells 0..maxShell are
 //                in; shells past maxShell are "invisible")
-// A shell is included iff its inclusion keeps the cumulative stone count
-// ≤ PAT_STONES.  The canonKeyG/O functions read the same maxShell so that
-// hash and canonical are computed over the SAME set of cells — two boards
-// with the same hash produce the same canonical by construction.
+// A shell is always INCLUDED first; we then check whether the cumulative
+// stone count has reached PAT_STONES and exit if so — the last shell is
+// the one that brought us to/over the limit.  The canonKeyG/O functions
+// read the same maxShell so that hash and canonical are computed over the
+// SAME set of cells.
 function _shellWalk(readSet, cells, cur, out) {
   const cellArr    = readSet.cells;
   const shellStart = readSet.shellStart;
@@ -718,11 +714,6 @@ function _shellWalk(readSet, cells, cur, out) {
   for (let s = 0; s < numShells; s++) {
     const start = shellStart[s];
     const end   = shellStart[s + 1];
-    let shellStones = 0;
-    for (let i = start; i < end; i++) {
-      if (cells[cellArr[i]] !== 0) shellStones++;
-    }
-    if (stones + shellStones > PAT_STONES) break;
     for (let i = start; i < end; i++) {
       const ci = cells[cellArr[i]];
       let v;
@@ -730,9 +721,10 @@ function _shellWalk(readSet, cells, cur, out) {
       else if (ci === cur) v = CELL_FRIEND;
       else                 v = CELL_FOE;
       h = Math.imul(h ^ v, 16777619);
+      if (v !== 0) stones++;
     }
-    stones += shellStones;
     maxShell = s;
+    if (stones >= PAT_STONES) break;
   }
   out.hash = h | 0;
   out.maxShell = maxShell;
