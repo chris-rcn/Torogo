@@ -353,9 +353,14 @@ function createState(N) {
   }
 
   // Precomputed per-candidate read sets: the union of all cells touched by
-  // ANY σ-grow at MAX_PAT_SIZE, sorted by RELATIVE OFFSET (Δr, Δc) so the
-  // hash of the mover-relative values is position-invariant (same local
-  // pattern anywhere on the board → same hash → same cache entry).
+  // ANY σ-grow at MAX_PAT_SIZE, sorted by (distance, Δr, Δc) so cells at the
+  // same blended distance form contiguous "shells".  Returned as
+  //   { cells: Int32Array, shellStart: Int32Array }
+  // where shellStart[i]..shellStart[i+1] is the i-th shell's cell range
+  // (shellStart[numShells] = cells.length).  The hash uses this shell
+  // structure to include only complete shells whose cumulative stone count
+  // stays ≤ PAT_STONES — keeping the cache key scoped to cells that
+  // σ-grows actually read in practice.
   function _buildReadSet(orderArr) {
     const out = new Array(cap);
     const seen = new Uint8Array(cap);
@@ -373,14 +378,24 @@ function createState(N) {
             const br = (bi / N) | 0, bc = bi - br * N;
             const dr = _torDiff(br, cr);
             const dc = _torDiff(bc, cc);
-            list.push({ bi, dr, dc });
+            list.push({ bi, dr, dc, dist: _blendedDist(dr, dc) });
           }
         }
       }
-      list.sort((a, b) => a.dr !== b.dr ? a.dr - b.dr : a.dc - b.dc);
-      const arr = new Int32Array(list.length);
-      for (let i = 0; i < list.length; i++) arr[i] = list[i].bi;
-      out[c] = arr;
+      list.sort((a, b) => {
+        if (a.dist !== b.dist) return a.dist - b.dist;
+        if (a.dr   !== b.dr)   return a.dr   - b.dr;
+        return a.dc - b.dc;
+      });
+      const cellsArr = new Int32Array(list.length);
+      for (let i = 0; i < list.length; i++) cellsArr[i] = list[i].bi;
+      // Collect shell start indices (one per distinct distance value).
+      const shellStart = [0];
+      for (let i = 1; i < list.length; i++) {
+        if (list[i].dist !== list[i - 1].dist) shellStart.push(i);
+      }
+      shellStart.push(list.length);
+      out[c] = { cells: cellsArr, shellStart: new Int32Array(shellStart) };
     }
     return out;
   }
@@ -672,15 +687,36 @@ for (let i = 0; i < CACHE_SHARD_COUNT; i++) {
 }
 
 function _hashReadSet(readSet, cells, cur) {
-  let h = 2166136261;  // FNV-1a offset basis
-  const n = readSet.length;
-  for (let i = 0; i < n; i++) {
-    const ci = cells[readSet[i]];
-    let v;
-    if (ci === 0)        v = CELL_EMPTY;
-    else if (ci === cur) v = CELL_FRIEND;
-    else                 v = CELL_FOE;
-    h = Math.imul(h ^ v, 16777619);  // FNV-1a prime; Math.imul keeps int32
+  // Walk the readSet shell by shell (cells at the same blended distance),
+  // including a shell only if doing so keeps the cumulative stone count
+  // ≤ PAT_STONES.  The first shell that would push the total over the limit
+  // (and all further-out shells) are DROPPED from the hash — σ-grows
+  // generally terminate within the shells we include, so those dropped
+  // cells are "don't-care" and shouldn't contribute to the cache key.
+  const cellArr    = readSet.cells;
+  const shellStart = readSet.shellStart;
+  const numShells  = shellStart.length - 1;
+  let h = 2166136261;
+  let stones = 0;
+  for (let s = 0; s < numShells; s++) {
+    const start = shellStart[s];
+    const end   = shellStart[s + 1];
+    // Tentatively count stones in this shell.
+    let shellStones = 0;
+    for (let i = start; i < end; i++) {
+      if (cells[cellArr[i]] !== 0) shellStones++;
+    }
+    if (stones + shellStones > PAT_STONES) break;
+    // Include the shell in the hash.
+    for (let i = start; i < end; i++) {
+      const ci = cells[cellArr[i]];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      h = Math.imul(h ^ v, 16777619);
+    }
+    stones += shellStones;
   }
   return h | 0;
 }
