@@ -352,6 +352,46 @@ function createState(N) {
     }
   }
 
+  // Precompute per-candidate read sets: the union of all cells that ANY of
+  // the 8 σ grows could touch at MAX_PAT_SIZE cells.  Used as the cache key
+  // basis for canonKeyG / canonKeyO so that two boards with identical
+  // cell values across the read set are guaranteed to share a canonical
+  // (regardless of patStones / early termination during the actual grow).
+  function _buildReadSet(orderArr) {
+    // For each candidate, build the list of cells touched by ANY σ-grow.
+    // Sort by RELATIVE OFFSET (Δr, Δc) lex so the cache key encoding is
+    // position-invariant: two candidates with identical local cell patterns
+    // (just at different board positions) produce identical cache keys.
+    const out = new Array(cap);
+    const seen = new Uint8Array(cap);
+    for (let c = 0; c < cap; c++) {
+      seen.fill(0);
+      const cr = (c / N) | 0, cc = c - cr * N;
+      const list = [];
+      for (let s = 0; s < 8; s++) {
+        const baseK = c * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
+        for (let k = 0; k < MAX_PAT_SIZE; k++) {
+          const bi = orderArr[baseK + k];
+          if (bi < 0) break;
+          if (!seen[bi]) {
+            seen[bi] = 1;
+            const br = (bi / N) | 0, bc = bi - br * N;
+            const dr = _torDiff(br, cr);
+            const dc = _torDiff(bc, cc);
+            list.push({ bi, dr, dc });
+          }
+        }
+      }
+      list.sort((a, b) => a.dr !== b.dr ? a.dr - b.dr : a.dc - b.dc);
+      const arr = new Int32Array(list.length);
+      for (let i = 0; i < list.length; i++) arr[i] = list[i].bi;
+      out[c] = arr;
+    }
+    return out;
+  }
+  const readSetG = _buildReadSet(growOrder);
+  const readSetO = _buildReadSet(octantOrder);
+
   return {
     N,
     moves:     new Int32Array(cap),
@@ -367,6 +407,8 @@ function createState(N) {
     patchNbr,
     growOrder,
     octantOrder,
+    readSetG,
+    readSetO,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
     // 5 * (n + 1) dense idxs (one per shape type, chosen + all moves).
     touched:   new Int32Array(5 * (cap + 1)),
@@ -612,6 +654,38 @@ function canonKeyB(patch) {
 // MAX_PAT_SIZE cells).
 const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
 
+// Caches for canonKeyG / canonKeyO.  Cache key is the mover-relative cell
+// values at the candidate's read set (the union of all cells any of the 8
+// σ-grows could touch at MAX_PAT_SIZE), in relative-offset sort order.
+// Same read-set values → identical canonicals by construction.  Cache is
+// bounded: when it exceeds CACHE_MAX_ENTRIES, we clear it.  In practice
+// the working-set size is bounded by the number of unique local patterns
+// the policy explores; 200k entries × ~80-char keys + ~30-char values
+// + Map overhead ≈ ~50 MB.
+const CACHE_MAX_ENTRIES = 200000;
+const _canonKeyGCache = new Map();
+const _canonKeyOCache = new Map();
+function _setCanonCached(cache, key, value) {
+  if (cache.size >= CACHE_MAX_ENTRIES) cache.clear();
+  cache.set(key, value);
+}
+
+// Build the read-set cache key for one candidate.  Reads |readSet| cells
+// and produces a string of the same length, each char in {0, 1, 2}.
+function _readSetKey(readSet, cells, cur) {
+  const n = readSet.length;
+  let key = '';
+  for (let i = 0; i < n; i++) {
+    const ci = cells[readSet[i]];
+    let v;
+    if (ci === 0)        v = CELL_EMPTY;
+    else if (ci === cur) v = CELL_FRIEND;
+    else                 v = CELL_FOE;
+    key += String.fromCharCode(v);
+  }
+  return key;
+}
+
 // Helper: grow the pattern under σ starting from a given precomputed order
 // array, writing the bytes into out[1..size], with out[0] = size.  Returns
 // the built string encoding.
@@ -658,6 +732,9 @@ function _growAndEncode(order, baseK, cells, cur, out) {
 // strictly less than PAT_STONES, up to MAX_PAT_SIZE total cells.
 function canonKeyG(game, candIdx, state, cur) {
   const cells   = game.cells;
+  const cacheKey = _readSetKey(state.readSetG[candIdx], cells, cur);
+  const cached = _canonKeyGCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const growOrd = state.growOrder;
   const bytes   = _growBytes;
   const strideC = 8 * MAX_PAT_SIZE;
@@ -667,6 +744,7 @@ function canonKeyG(game, candIdx, state, cur) {
       cells, cur, bytes);
     if (best === null || str < best) best = str;
   }
+  _setCanonCached(_canonKeyGCache, cacheKey, best);
   return best;
 }
 
@@ -677,6 +755,9 @@ function canonKeyG(game, candIdx, state, cur) {
 // gives a D4-invariant canonical key.
 function canonKeyO(game, candIdx, state, cur) {
   const cells   = game.cells;
+  const cacheKey = _readSetKey(state.readSetO[candIdx], cells, cur);
+  const cached = _canonKeyOCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const octOrd  = state.octantOrder;
   const bytes   = _growBytes;
   const strideC = 8 * MAX_PAT_SIZE;
@@ -686,6 +767,7 @@ function canonKeyO(game, candIdx, state, cur) {
       cells, cur, bytes);
     if (best === null || str < best) best = str;
   }
+  _setCanonCached(_canonKeyOCache, cacheKey, best);
   return best;
 }
 
