@@ -395,7 +395,21 @@ function createState(N) {
         if (list[i].dist !== list[i - 1].dist) shellStart.push(i);
       }
       shellStart.push(list.length);
-      out[c] = { cells: cellsArr, shellStart: new Int32Array(shellStart) };
+      // Precompute cellToShell: for each of the cap cells, the shell index in
+      // this candidate's readSet.  -1 for cells not in the readSet (e.g., the
+      // candidate itself).  Lets per-σ grows quickly test whether a cell is
+      // in an included shell.
+      const cellToShell = new Int8Array(cap).fill(-1);
+      for (let i = 0; i < list.length; i++) {
+        let s = 0;
+        while (shellStart[s + 1] <= i) s++;
+        cellToShell[list[i].bi] = s;
+      }
+      out[c] = {
+        cells: cellsArr,
+        shellStart: new Int32Array(shellStart),
+        cellToShell,
+      };
     }
     return out;
   }
@@ -686,28 +700,29 @@ for (let i = 0; i < CACHE_SHARD_COUNT; i++) {
   _canonKeyOCaches[i] = new Map();
 }
 
-function _hashReadSet(readSet, cells, cur) {
-  // Walk the readSet shell by shell (cells at the same blended distance),
-  // including a shell only if doing so keeps the cumulative stone count
-  // ≤ PAT_STONES.  The first shell that would push the total over the limit
-  // (and all further-out shells) are DROPPED from the hash — σ-grows
-  // generally terminate within the shells we include, so those dropped
-  // cells are "don't-care" and shouldn't contribute to the cache key.
+// Walk the readSet shell by shell, returning { hash, maxShell }:
+//   hash       — FNV-1a over cell values in included shells
+//   maxShell   — the highest shell index included (shells 0..maxShell are
+//                in; shells past maxShell are "invisible")
+// A shell is included iff its inclusion keeps the cumulative stone count
+// ≤ PAT_STONES.  The canonKeyG/O functions read the same maxShell so that
+// hash and canonical are computed over the SAME set of cells — two boards
+// with the same hash produce the same canonical by construction.
+function _shellWalk(readSet, cells, cur, out) {
   const cellArr    = readSet.cells;
   const shellStart = readSet.shellStart;
   const numShells  = shellStart.length - 1;
   let h = 2166136261;
   let stones = 0;
+  let maxShell = -1;
   for (let s = 0; s < numShells; s++) {
     const start = shellStart[s];
     const end   = shellStart[s + 1];
-    // Tentatively count stones in this shell.
     let shellStones = 0;
     for (let i = start; i < end; i++) {
       if (cells[cellArr[i]] !== 0) shellStones++;
     }
     if (stones + shellStones > PAT_STONES) break;
-    // Include the shell in the hash.
     for (let i = start; i < end; i++) {
       const ci = cells[cellArr[i]];
       let v;
@@ -717,45 +732,13 @@ function _hashReadSet(readSet, cells, cur) {
       h = Math.imul(h ^ v, 16777619);
     }
     stones += shellStones;
+    maxShell = s;
   }
-  return h | 0;
+  out.hash = h | 0;
+  out.maxShell = maxShell;
 }
-// Helper: grow the pattern under σ starting from a given precomputed order
-// array, writing the bytes into out[1..size], with out[0] = size.  Returns
-// the built string encoding.
-function _growAndEncode(order, baseK, cells, cur, out) {
-  let size = 0, stones = 0;
-  // Core (8 cells).
-  for (let k = 0; k < 8 && k < MAX_PAT_SIZE; k++) {
-    const bi = order[baseK + k];
-    if (bi < 0) break;
-    const ci = cells[bi];
-    let v;
-    if (ci === 0)        v = CELL_EMPTY;
-    else if (ci === cur) v = CELL_FRIEND;
-    else                 v = CELL_FOE;
-    out[size + 1] = v;
-    if (v !== 0) stones++;
-    size++;
-  }
-  // Grow.
-  while (size < MAX_PAT_SIZE && stones < PAT_STONES) {
-    const bi = order[baseK + size];
-    if (bi < 0) break;
-    const ci = cells[bi];
-    let v;
-    if (ci === 0)        v = CELL_EMPTY;
-    else if (ci === cur) v = CELL_FRIEND;
-    else                 v = CELL_FOE;
-    out[size + 1] = v;
-    if (v !== 0) stones++;
-    size++;
-  }
-  out[0] = size;
-  let str = '';
-  for (let k = 0; k <= size; k++) str += String.fromCharCode(out[k]);
-  return str;
-}
+
+const _shellWalkOut = { hash: 0, maxShell: -1 };
 
 // canonKeyG(game, candIdx, state, cur) — grow the pattern 8 times (one per
 // D4 σ) and return the lex-min string encoding.  The 8 cells of the 3×3
@@ -766,17 +749,36 @@ function _growAndEncode(order, baseK, cells, cur, out) {
 // strictly less than PAT_STONES, up to MAX_PAT_SIZE total cells.
 function canonKeyG(game, candIdx, state, cur) {
   const cells = game.cells;
-  const h = _hashReadSet(state.readSetG[candIdx], cells, cur);
+  const rs = state.readSetG[candIdx];
+  _shellWalk(rs, cells, cur, _shellWalkOut);
+  const h = _shellWalkOut.hash;
+  const maxShell = _shellWalkOut.maxShell;
   const shard = _canonKeyGCaches[h & CACHE_SHARD_MASK];
   const cached = shard.get(h);
   if (cached !== undefined) return cached;
   const growOrd = state.growOrder;
   const bytes   = _growBytes;
+  const cellToShell = rs.cellToShell;
   const strideC = 8 * MAX_PAT_SIZE;
   let best = null;
-  for (let s = 0; s < 8; s++) {
-    const str = _growAndEncode(growOrd, candIdx * strideC + s * MAX_PAT_SIZE,
-      cells, cur, bytes);
+  for (let sigma = 0; sigma < 8; sigma++) {
+    const baseK = candIdx * strideC + sigma * MAX_PAT_SIZE;
+    let size = 0;
+    for (let k = 0; k < MAX_PAT_SIZE; k++) {
+      const bi = growOrd[baseK + k];
+      if (bi < 0) break;
+      if (cellToShell[bi] > maxShell) break;
+      const ci = cells[bi];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[size + 1] = v;
+      size++;
+    }
+    bytes[0] = size;
+    let str = '';
+    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
     if (best === null || str < best) best = str;
   }
   shard.set(h, best);
@@ -790,17 +792,36 @@ function canonKeyG(game, candIdx, state, cur) {
 // gives a D4-invariant canonical key.
 function canonKeyO(game, candIdx, state, cur) {
   const cells = game.cells;
-  const h = _hashReadSet(state.readSetO[candIdx], cells, cur);
+  const rs = state.readSetO[candIdx];
+  _shellWalk(rs, cells, cur, _shellWalkOut);
+  const h = _shellWalkOut.hash;
+  const maxShell = _shellWalkOut.maxShell;
   const shard = _canonKeyOCaches[h & CACHE_SHARD_MASK];
   const cached = shard.get(h);
   if (cached !== undefined) return cached;
-  const octOrd  = state.octantOrder;
-  const bytes   = _growBytes;
+  const octOrd = state.octantOrder;
+  const bytes  = _growBytes;
+  const cellToShell = rs.cellToShell;
   const strideC = 8 * MAX_PAT_SIZE;
   let best = null;
-  for (let s = 0; s < 8; s++) {
-    const str = _growAndEncode(octOrd, candIdx * strideC + s * MAX_PAT_SIZE,
-      cells, cur, bytes);
+  for (let sigma = 0; sigma < 8; sigma++) {
+    const baseK = candIdx * strideC + sigma * MAX_PAT_SIZE;
+    let size = 0;
+    for (let k = 0; k < MAX_PAT_SIZE; k++) {
+      const bi = octOrd[baseK + k];
+      if (bi < 0) break;
+      if (cellToShell[bi] > maxShell) break;
+      const ci = cells[bi];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[size + 1] = v;
+      size++;
+    }
+    bytes[0] = size;
+    let str = '';
+    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
     if (best === null || str < best) best = str;
   }
   shard.set(h, best);
