@@ -352,6 +352,64 @@ function createState(N) {
     }
   }
 
+  // Precomputed quadrant-growth order per (candidate, σ_q ∈ 0..7).  Same
+  // shape as octantOrder but each "wedge" is a 90° quadrant (twice as wide
+  // as an octant).  Eight wedges total: four CARDINAL-centred quadrants and
+  // four DIAGONAL-centred quadrants, half-overlapping each other so every
+  // off-axis cell belongs to exactly two wedges (one cardinal + one
+  // diagonal).  Wedge definitions (slot = σ_q):
+  //   0  S  cardinal: dr > 0 AND |dc| ≤ dr
+  //   1  SE diagonal: dr > 0 AND dc > 0
+  //   2  E  cardinal: dc > 0 AND |dr| ≤ dc
+  //   3  NE diagonal: dr < 0 AND dc > 0
+  //   4  N  cardinal: dr < 0 AND |dc| ≤ -dr
+  //   5  NW diagonal: dr < 0 AND dc < 0
+  //   6  W  cardinal: dc < 0 AND |dr| ≤ -dc
+  //   7  SW diagonal: dr > 0 AND dc < 0
+  // Slots 0..7 of each wedge are the 8 core cells (shared via growOrder),
+  // slots 8.. are the wedge cells outside the core in distance order with a
+  // (Δr, Δc) lex tiebreak.
+  const quadrantOrder = new Int32Array(cap * 8 * MAX_PAT_SIZE).fill(-1);
+  function _wedgeMember(qi, dr, dc) {
+    switch (qi) {
+      case 0: return dr > 0 && Math.abs(dc) <= dr;          // S
+      case 1: return dr > 0 && dc > 0;                       // SE
+      case 2: return dc > 0 && Math.abs(dr) <= dc;          // E
+      case 3: return dr < 0 && dc > 0;                       // NE
+      case 4: return dr < 0 && Math.abs(dc) <= -dr;         // N
+      case 5: return dr < 0 && dc < 0;                       // NW
+      case 6: return dc < 0 && Math.abs(dr) <= -dc;         // W
+      case 7: return dr > 0 && dc < 0;                       // SW
+    }
+    return false;
+  }
+  for (let c = 0; c < cap; c++) {
+    for (let q = 0; q < 8; q++) {
+      const baseK = c * 8 * MAX_PAT_SIZE + q * MAX_PAT_SIZE;
+      // Slots 0..7: copy core from growOrder σ=0 (deterministic order;
+      // canonicalisation across the 8 wedges takes the lex-min anyway).
+      for (let k = 0; k < 8; k++) quadrantOrder[baseK + k] = growOrder[c * 8 * MAX_PAT_SIZE + k];
+      const cr = (c / N) | 0, cc = c - cr * N;
+      const out = [];
+      for (let j = 0; j < cap; j++) {
+        if (j === c) continue;
+        const jr = (j / N) | 0, jc = j - jr * N;
+        const dr = _torDiff(jr, cr);
+        const dc = _torDiff(jc, cc);
+        if (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) continue;
+        if (!_wedgeMember(q, dr, dc)) continue;
+        out.push({ j, dist: _blendedDist(dr, dc), dr, dc });
+      }
+      out.sort((a, b) => {
+        if (a.dist !== b.dist) return a.dist - b.dist;
+        if (a.dr   !== b.dr)   return a.dr   - b.dr;
+        return a.dc - b.dc;
+      });
+      const lim = Math.min(out.length, MAX_PAT_SIZE - 8);
+      for (let k = 0; k < lim; k++) quadrantOrder[baseK + 8 + k] = out[k].j;
+    }
+  }
+
   // Precomputed per-candidate read sets: cells any σ-grow could touch at
   // MAX_PAT_SIZE, sorted by (distance, Δr, Δc) and grouped into shells.
   // Returns { cells, shellStart, cellToShell } per candidate — canonKeyG/O
@@ -419,6 +477,7 @@ function createState(N) {
     patIdsB:   new Int32Array(cap),
     patIdsG:   new Int32Array(cap),
     patIdsO:   new Int32Array(cap),
+    patIdsQ:   new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
@@ -426,11 +485,12 @@ function createState(N) {
     patchNbr,
     growOrder,
     octantOrder,
+    quadrantOrder,
     readSetG,
     readSetO,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // 5 * (n + 1) dense idxs (one per shape type, chosen + all moves).
-    touched:   new Int32Array(5 * (cap + 1)),
+    // 6 * (n + 1) dense idxs (one per shape type, chosen + all moves).
+    touched:   new Int32Array(6 * (cap + 1)),
     count:     0,
   };
 }
@@ -455,7 +515,7 @@ function createWeights(opts) {
   //   { initialCapacity, use33, use34, useL }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
-  let use33c = false, useA = false, useB = false, useG = false, useO = false;
+  let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
@@ -465,6 +525,7 @@ function createWeights(opts) {
     if (opts.useB)   useB   = true;
     if (opts.useG)   useG   = true;
     if (opts.useO)   useO   = true;
+    if (opts.useQ)   useQ   = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -472,7 +533,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { use33c, useA, useB, useG, useO },     // feature gating
+    cfg:   { use33c, useA, useB, useG, useO, useQ },
   };
   for (let k = 0; k < N_TACT_SLOTS; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
@@ -690,9 +751,11 @@ const CACHE_SHARD_COUNT = 1 << CACHE_SHARD_BITS;
 const CACHE_SHARD_MASK  = CACHE_SHARD_COUNT - 1;
 const _canonKeyGCaches = new Array(CACHE_SHARD_COUNT);
 const _canonKeyOCaches = new Array(CACHE_SHARD_COUNT);
+const _canonKeyQCaches = new Array(CACHE_SHARD_COUNT);
 for (let i = 0; i < CACHE_SHARD_COUNT; i++) {
   _canonKeyGCaches[i] = new Map();
   _canonKeyOCaches[i] = new Map();
+  _canonKeyQCaches[i] = new Map();
 }
 
 // Walk the readSet shell by shell, returning { hash, maxShell }:
@@ -820,6 +883,50 @@ function canonKeyO(game, candIdx, state, cur) {
   return best;
 }
 
+// canonKeyQ — quadrant-grown pattern (8 wedges, each 90° wide; cardinal and
+// diagonal quadrants alternating with 50% pairwise overlap).  Reuses the
+// all-direction readSet (readSetG) for the cache key since quadrants
+// collectively cover all directions; each σ_q's grow uses the precomputed
+// quadrantOrder.  Same shell-cutoff invariant as canonKeyG/O — both hash
+// and canonical respect cellToShell ≤ maxShell.
+function canonKeyQ(game, candIdx, state, cur) {
+  const cells = game.cells;
+  const rs = state.readSetG[candIdx];
+  _shellWalk(rs, cells, cur, _shellWalkOut);
+  const h = _shellWalkOut.hash;
+  const maxShell = _shellWalkOut.maxShell;
+  const shard = _canonKeyQCaches[h & CACHE_SHARD_MASK];
+  const cached = shard.get(h);
+  if (cached !== undefined) return cached;
+  const quadOrd = state.quadrantOrder;
+  const bytes   = _growBytes;
+  const cellToShell = rs.cellToShell;
+  const strideC = 8 * MAX_PAT_SIZE;
+  let best = null;
+  for (let q = 0; q < 8; q++) {
+    const baseK = candIdx * strideC + q * MAX_PAT_SIZE;
+    let size = 0;
+    for (let k = 0; k < MAX_PAT_SIZE; k++) {
+      const bi = quadOrd[baseK + k];
+      if (bi < 0) break;
+      if (cellToShell[bi] > maxShell) break;
+      const ci = cells[bi];
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[size + 1] = v;
+      size++;
+    }
+    bytes[0] = size;
+    let str = '';
+    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
+    if (best === null || str < best) best = str;
+  }
+  shard.set(h, best);
+  return best;
+}
+
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
 // Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
@@ -860,11 +967,13 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUseB   = !cfg || cfg.useB;
   const doUseG   = !cfg || cfg.useG;
   const doUseO   = !cfg || cfg.useO;
+  const doUseQ   = !cfg || cfg.useQ;
   const patIds33c = state.patIds33c;
   const patIdsA   = state.patIdsA;
   const patIdsB   = state.patIdsB;
   const patIdsG   = state.patIdsG;
   const patIdsO   = state.patIdsO;
+  const patIdsQ   = state.patIdsQ;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -926,6 +1035,13 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIdsO[count] = wMap ? _internWeight(weights, rawO) : -1;
     }
 
+    // Quadrant-grown shape — same shell-cutoff hash as G/O, but each σ_q
+    // grows in one of 8 90° wedges (4 cardinal + 4 diagonal, half-overlap).
+    if (doUseQ) {
+      const rawQ = canonKeyQ(game, idx, state, cur);
+      patIdsQ[count] = wMap ? _internWeight(weights, rawQ) : -1;
+    }
+
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
     // × TACT_STONE_LIMIT stone-indices).
     const tSrc = idx * N_TACT_SLOTS;
@@ -957,6 +1073,7 @@ function _score(state, i, weights) {
   if (cfg.useB)   s += vals[state.patIdsB[i]];
   if (cfg.useG)   s += vals[state.patIdsG[i]];
   if (cfg.useO)   s += vals[state.patIdsO[i]];
+  if (cfg.useQ)   s += vals[state.patIdsQ[i]];
   return s;
 }
 
@@ -986,6 +1103,7 @@ function _computeSoftmax(state, weights) {
   const pidB   = cfg.useB   ? state.patIdsB   : null;
   const pidG   = cfg.useG   ? state.patIdsG   : null;
   const pidO   = cfg.useO   ? state.patIdsO   : null;
+  const pidQ   = cfg.useQ   ? state.patIdsQ   : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -997,6 +1115,7 @@ function _computeSoftmax(state, weights) {
     if (pidB)   s += vals[pidB[i]];
     if (pidG)   s += vals[pidG[i]];
     if (pidO)   s += vals[pidO[i]];
+    if (pidQ)   s += vals[pidQ[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -1070,6 +1189,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const patIdsB   = cfg.useB   ? state.patIdsB   : null;
   const patIdsG   = cfg.useG   ? state.patIdsG   : null;
   const patIdsO   = cfg.useO   ? state.patIdsO   : null;
+  const patIdsQ   = cfg.useQ   ? state.patIdsQ   : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -1096,6 +1216,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
   if (patIdsO) {
     const idx = patIdsO[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIdsQ) {
+    const idx = patIdsQ[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -1126,6 +1251,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
     if (patIdsO) {
       const idx = patIdsO[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsQ) {
+      const idx = patIdsQ[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -1193,6 +1323,7 @@ function entropyBonusUpdate(state, weights, beta) {
   const patIdsB   = cfg.useB   ? state.patIdsB   : null;
   const patIdsG   = cfg.useG   ? state.patIdsG   : null;
   const patIdsO   = cfg.useO   ? state.patIdsO   : null;
+  const patIdsQ   = cfg.useQ   ? state.patIdsQ   : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -1239,6 +1370,11 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
+    if (patIdsQ) {
+      const idx = patIdsQ[i];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
     const tOff = i * N_TACT_SLOTS;
     for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
   }
@@ -1270,6 +1406,7 @@ const NPatterns = {
   canonKeyB,
   canonKeyG,
   canonKeyO,
+  canonKeyQ,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
