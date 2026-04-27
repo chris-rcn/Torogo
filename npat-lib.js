@@ -373,13 +373,13 @@ function createState(N) {
   function _wedgeMember(qi, dr, dc) {
     switch (qi) {
       case 0: return dr > 0 && Math.abs(dc) <= dr;          // S
-      case 1: return dr > 0 && dc > 0;                       // SE
+      case 1: return dr >= 0 && dc >= 0;                    // SE (incl. row & col)
       case 2: return dc > 0 && Math.abs(dr) <= dc;          // E
-      case 3: return dr < 0 && dc > 0;                       // NE
+      case 3: return dr <= 0 && dc >= 0;                    // NE (incl. row & col)
       case 4: return dr < 0 && Math.abs(dc) <= -dr;         // N
-      case 5: return dr < 0 && dc < 0;                       // NW
+      case 5: return dr <= 0 && dc <= 0;                    // NW (incl. row & col)
       case 6: return dc < 0 && Math.abs(dr) <= -dc;         // W
-      case 7: return dr > 0 && dc < 0;                       // SW
+      case 7: return dr >= 0 && dc <= 0;                    // SW (incl. row & col)
     }
     return false;
   }
