@@ -888,12 +888,10 @@ function canonKeyO(game, candIdx, state, cur) {
 // all-direction readSet (readSetG) for the cache key since quadrants
 // collectively cover all directions; each σ_q's grow uses the precomputed
 // quadrantOrder.  Same shell-cutoff invariant as canonKeyG/O — both hash
-// and canonical respect cellToShell ≤ maxShell.
-//
-// Within each shell the cell values are sorted before being appended to the
-// encoding, so two boards with the same multiset of {empty, friend, foe}
-// counts in a shell collapse to the same canonical (position-agnostic
-// within equidistant cells).
+// and canonical respect cellToShell ≤ maxShell, and growth always includes
+// whole shells (never stops mid-shell).  Within a shell, cells are emitted
+// in their precomputed (Δr, Δc) lex order so position information is
+// preserved.
 function canonKeyQ(game, candIdx, state, cur) {
   const cells = game.cells;
   const rs = state.readSetG[candIdx];
@@ -907,32 +905,21 @@ function canonKeyQ(game, candIdx, state, cur) {
   const bytes   = _growBytes;
   const cellToShell = rs.cellToShell;
   const strideC = 8 * MAX_PAT_SIZE;
-  const shellBuf = []; // accumulates cell values within a shell before sort
   let best = null;
   for (let q = 0; q < 8; q++) {
     const baseK = candIdx * strideC + q * MAX_PAT_SIZE;
     let size = 0;
-    let curShell = -1;
-    shellBuf.length = 0;
-    function flushShell() {
-      if (shellBuf.length === 0) return;
-      shellBuf.sort();
-      for (const v of shellBuf) bytes[++size] = v;
-      shellBuf.length = 0;
-    }
     for (let k = 0; k < MAX_PAT_SIZE; k++) {
       const bi = quadOrd[baseK + k];
       if (bi < 0) break;
-      const sh = cellToShell[bi];
-      if (sh > maxShell) break;
-      if (sh !== curShell) {
-        flushShell();
-        curShell = sh;
-      }
+      if (cellToShell[bi] > maxShell) break;
       const ci = cells[bi];
-      shellBuf.push(ci === 0 ? CELL_EMPTY : ci === cur ? CELL_FRIEND : CELL_FOE);
+      let v;
+      if (ci === 0)        v = CELL_EMPTY;
+      else if (ci === cur) v = CELL_FRIEND;
+      else                 v = CELL_FOE;
+      bytes[++size] = v;
     }
-    flushShell();
     bytes[0] = size;
     let str = '';
     for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
