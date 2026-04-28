@@ -184,12 +184,25 @@ function trainGame(N) {
     ema = BASELINE * ema + (1 - BASELINE) * outcomeBlack;
   }
 
+  // Sum of max(softmax) across the snapshotted steps (top-1 confidence).
+  let maxProbSum = 0, maxProbN = 0;
+  for (const s of steps) {
+    let mx = 0;
+    const p = s.probs;
+    const n = s.count;
+    for (let i = 0; i < n; i++) if (p[i] > mx) mx = p[i];
+    maxProbSum += mx;
+    maxProbN++;
+  }
+
   return {
     elapsedMs: Date.now() - tStart,
     moves,
     stepsApplied,
     weightUpdates,
     outcomeBlack,
+    maxProbSum,
+    maxProbN,
   };
 }
 
@@ -270,6 +283,7 @@ console.log([
   'weights'.padStart(9),
   'avg|w|' .padStart(7),
   'upd/pat'.padStart(7),
+  'maxP'   .padStart(6),
 ].join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -278,11 +292,14 @@ const t0 = Date.now();
 let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalUpdates = 0;
+let maxProbSumWindow = 0, maxProbNWindow = 0;
 
 while (true) {
   g++;
-  const { weightUpdates } = trainGame(TRAIN_SIZE);
-  totalUpdates += weightUpdates;
+  const r = trainGame(TRAIN_SIZE);
+  totalUpdates += r.weightUpdates;
+  maxProbSumWindow += r.maxProbSum;
+  maxProbNWindow   += r.maxProbN;
 
   if (Date.now() >= nextPrintAt) {
     // Count only interned pids that have received a non-zero gradient: pids
@@ -302,12 +319,15 @@ while (true) {
 
     const nextMs = Date.now() - t0;
 
+    const maxPAvg = maxProbNWindow > 0 ? maxProbSumWindow / maxProbNWindow : 0;
     console.log([
       String(g)                .padStart(7),
       String(wNonZero)         .padStart(9),
       wAvg.toFixed(3)          .padStart(7),
       updPerPat.toFixed(1)     .padStart(7),
+      maxPAvg.toFixed(3)       .padStart(6),
     ].join('  '));
+    maxProbSumWindow = 0; maxProbNWindow = 0;
 
     saveWeights(SAVE_PATH, weights, { ema });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
