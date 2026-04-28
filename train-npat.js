@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T']);
+  ['help', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
@@ -46,13 +46,14 @@ const USE_O      = !!opts['use-O'];                           // enable octant-g
 const USE_Q      = !!opts['use-Q'];                           // enable quadrant-grown pattern
 const USE_D      = !!opts['use-D'];                           // enable 12-cell diamond pattern
 const USE_T      = !!opts['use-T'];                           // enable 4-cardinal-neighbours pattern
+const USE_E      = !!opts['use-E'];                           // enable 12-cell 3×4 block pattern
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T });
+let weights = NPat.createWeights({ use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T, useE: USE_E });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 let totalUpdates = 0;                // cumulative weight-update count across resumed runs
 
@@ -86,7 +87,7 @@ function loadWeights(filePath) {
   const raw = require(path.resolve(filePath));
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T,
+    use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T, useE: USE_E,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
@@ -150,11 +151,13 @@ function trainGame(N) {
       patIdsD.set(state.patIdsD.subarray(0, n));
       const patIdsT = new Int32Array(n);
       patIdsT.set(state.patIdsT.subarray(0, n));
+      const patIdsE = new Int32Array(n);
+      patIdsE.set(state.patIdsE.subarray(0, n));
       const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsA, patIdsB, patIdsG, patIdsO, patIdsQ, patIdsD, patIdsT, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsA, patIdsB, patIdsG, patIdsO, patIdsQ, patIdsD, patIdsT, patIdsE, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -253,6 +256,7 @@ if (opts.help) {
   --use-Q          enable the quadrant-grown shape window (default off)
   --use-D          enable the 12-cell diamond shape window (default off)
   --use-T          enable the 4-cardinal-neighbours window (default off)
+  --use-E          enable the 12-cell 3×4 block shape window (default off)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -276,7 +280,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=ALWAYS  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  Q=${USE_Q ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  D=${USE_D ? 'ON' : 'off'}  T=${USE_T ? 'ON' : 'off'}`);
+console.log(`features: tactical=ALWAYS  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  Q=${USE_Q ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  D=${USE_D ? 'ON' : 'off'}  T=${USE_T ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
