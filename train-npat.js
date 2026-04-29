@@ -31,14 +31,16 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'no-tactical', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E', 'use-F']);
+  ['help', 'no-tactical', 'use-3x3c', 'use-T8', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E', 'use-F']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
 const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
 const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
-const USE_33C    = !!opts['use-3x3c'];                        // enable centered 3×3 window
+// T8 bundles tactical + 3×3c (a single shorthand for the always-on baseline).
+const USE_T8     = !!opts['use-T8'];                          // tactical + 3×3c bundle
+const USE_33C    = !!opts['use-3x3c'] || USE_T8;              // enable centered 3×3 window
 const USE_A      = !!opts['use-A'];                           // enable Type A window
 const USE_B      = !!opts['use-B'];                           // enable Type B window
 const USE_G      = !!opts['use-G'];                           // enable grown-pattern window
@@ -48,7 +50,7 @@ const USE_D      = !!opts['use-D'];                           // enable 12-cell 
 const USE_T      = !!opts['use-T'];                           // enable 4-cardinal-neighbours pattern
 const USE_E      = !!opts['use-E'];                           // enable 12-cell 3×4 block pattern
 const USE_F      = !!opts['use-F'];                           // enable 13-cell diag-symmetric pattern
-const USE_TACT   = !opts['no-tactical'];                       // tactical features (default ON)
+const USE_TACT   = !opts['no-tactical'] || USE_T8;              // tactical features (default ON; T8 forces ON)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
@@ -252,6 +254,7 @@ if (opts.help) {
   --baseline F     EMA decay for reward baseline (default 0.95; 0 disables)
   --epsilon F      uniform-random exploration rate (default 0)
   --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
+  --use-T8         enable T8 = tactical + 3×3c bundle (default off; sets both)
   --use-3x3c       enable the centered 3×3 shape window (default off)
   --use-A          enable the Type A shape window       (default off)
   --use-B          enable the Type B shape window       (default off)
@@ -286,7 +289,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  Q=${USE_Q ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  D=${USE_D ? 'ON' : 'off'}  T=${USE_T ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}  F=${USE_F ? 'ON' : 'off'}`);
+console.log(`features: T8=${USE_TACT && USE_33C ? 'ON' : 'split'}  tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  A=${USE_A ? 'ON' : 'off'}  B=${USE_B ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  Q=${USE_Q ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  D=${USE_D ? 'ON' : 'off'}  T=${USE_T ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}  F=${USE_F ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
