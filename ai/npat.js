@@ -19,7 +19,7 @@ const weightsPath = process.env.NPAT_WEIGHTS
 const raw = require(path.resolve(weightsPath));
 
 // Infer feature flags from the raw key types/ranges in the file.
-let has33c = false, hasA = false, hasB = false, hasD = false, hasT = false, hasE = false, hasF = false, hasStr = false;
+let has33c = false, hasA = false, hasB = false, hasD = false, hasT = false, hasE = false, hasF = false, hasT8c = false, hasStr = false;
 for (const [k] of raw.weights) {
   if (typeof k === 'string') { hasStr = true; continue; }
   if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.TYPE_A_RAW_BASE) has33c = true;
@@ -28,7 +28,8 @@ for (const [k] of raw.weights) {
   else if (k >= NPat.TYPE_D_RAW_BASE   && k < NPat.TYPE_T_RAW_BASE) hasD   = true;
   else if (k >= NPat.TYPE_T_RAW_BASE   && k < NPat.TYPE_E_RAW_BASE) hasT   = true;
   else if (k >= NPat.TYPE_E_RAW_BASE   && k < NPat.TYPE_F_RAW_BASE) hasE   = true;
-  else if (k >= NPat.TYPE_F_RAW_BASE)                                hasF   = true;
+  else if (k >= NPat.TYPE_F_RAW_BASE   && k < NPat.TYPE_T8C_RAW_BASE) hasF = true;
+  else if (k >= NPat.TYPE_T8C_RAW_BASE)                              hasT8c = true;
 }
 // String raw keys are produced by canonKeyG / canonKeyO / canonKeyQ.  We
 // can't tell them apart from the file alone, so default to the most recent
@@ -40,7 +41,7 @@ const useQ = hasStr && stringFlags.includes('Q');
 
 const weights = NPat.createWeights({
   initialCapacity: Math.max(1024, raw.weights.size | 0),
-  use33c: has33c, useA: hasA, useB: hasB, useD: hasD, useT: hasT, useE: hasE, useF: hasF,
+  use33c: has33c, useA: hasA, useB: hasB, useD: hasD, useT: hasT, useE: hasE, useF: hasF, useT8c: hasT8c,
   useG, useO, useQ,
 });
 for (const [k, v] of raw.weights) {
@@ -63,7 +64,7 @@ function getMove(game) {
 }
 
 console.error(`npat: loaded ${weights.size} weights from ${path.basename(weightsPath)} ` +
-  `(3x3c=${has33c} A=${hasA} B=${hasB} D=${hasD} T=${hasT} E=${hasE} F=${hasF} ` +
+  `(3x3c=${has33c} A=${hasA} B=${hasB} D=${hasD} T=${hasT} E=${hasE} F=${hasF} T8c=${hasT8c} ` +
   `${hasStr ? `[string-keyed: G=${useG} O=${useO} Q=${useQ}]` : ''})`);
 
 module.exports = { getMove };
