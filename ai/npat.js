@@ -17,6 +17,13 @@ const { Game3, game3FromGame2 } = require('../game3.js');
 const weightsPath = process.env.NPAT_WEIGHTS
   || path.join(__dirname, '..', 'out', 'npat-9-QD-pat4-6.js');
 const raw = require(path.resolve(weightsPath));
+if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
+  throw new Error(
+    `npat: TACT_STONE_LIMIT mismatch — file ${path.basename(weightsPath)} ` +
+    `was trained at ${raw.tactStoneLimit}, runtime is ${NPat.TACT_STONE_LIMIT}. ` +
+    `Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
+  );
+}
 
 // Infer feature flags from the raw key types/ranges in the file.
 let has33c = false, hasA = false, hasB = false, hasD = false, hasT = false, hasE = false, hasF = false, hasT8c = false, hasStr = false;

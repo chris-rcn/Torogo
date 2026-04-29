@@ -78,6 +78,7 @@ function saveWeights(filePath, w, meta) {
     `const npatModel = {`,
     `  ema: ${+meta.ema.toFixed(6)},`,
     `  totalUpdates: ${meta.totalUpdates | 0},`,
+    `  tactStoneLimit: ${NPat.TACT_STONE_LIMIT},`,
     `  weights: new Map(${list}),`,
     `};`,
     "if (typeof module !== 'undefined') module.exports = npatModel;",
@@ -90,6 +91,13 @@ function saveWeights(filePath, w, meta) {
 function loadWeights(filePath) {
   delete require.cache[require.resolve(path.resolve(filePath))];
   const raw = require(path.resolve(filePath));
+  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
+    throw new Error(
+      `TACT_STONE_LIMIT mismatch: file was trained with ${raw.tactStoneLimit}, ` +
+      `current is ${NPat.TACT_STONE_LIMIT}. ` +
+      `Re-run with NPAT_STONE_LIMIT=${raw.tactStoneLimit}.`
+    );
+  }
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
     useTactical: USE_TACT, use33c: USE_33C, useA: USE_A, useB: USE_B, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T, useE: USE_E, useF: USE_F, useT8c: USE_T8C,
@@ -98,7 +106,7 @@ function loadWeights(filePath) {
     const idx = NPat.internWeight(w, rawId);
     w.vals[idx] = val;
   }
-  return { weights: w, ema: raw.ema ?? 0, totalUpdates: raw.totalUpdates ?? 0 };
+  return { weights: w, ema: raw.ema ?? 0, totalUpdates: raw.totalUpdates ?? 0, tactStoneLimit: raw.tactStoneLimit };
 }
 
 // ── Training ──────────────────────────────────────────────────────────────────
