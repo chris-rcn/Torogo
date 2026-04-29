@@ -184,19 +184,6 @@ const TYPE_F_CELLS       = 13;
 const TYPE_F_BASE        = 1594323; // 3^13
 const TYPE_F_RAW_BASE    = TYPE_E_RAW_BASE + TYPE_E_BASE; // above E range
 
-// T8c feature: multiplicative conjunction of (3×3c canonical key, tactical
-// slot index).  For each candidate and each of N_TACT_SLOTS slots k, the
-// score contribution is tact[k] * w[T8c(canonical, k)].  Raw key layout:
-//   T8c_raw = TYPE_T8C_RAW_BASE + canon * 32 + k
-// where canon is the canonKey output (range [0, 9*CELLS_BASE)).  We use a
-// fixed stride of 32 (max N_TACT_SLOTS at TACT_STONE_LIMIT=8) so raw keys
-// are stable across NPAT_STONE_LIMIT changes.  Max raw range =
-// 9 * 19683 * 32 = 5,668,704; D4 collapses observed canonicals to a much
-// smaller working set (~5–20k seen × 24 active slots ≈ 100–500k actual).
-const TYPE_T8C_STRIDE    = 32; // max N_TACT_SLOTS
-const TYPE_T8C_BASE      = 9 * CELLS_BASE * TYPE_T8C_STRIDE; // 5,668,704
-const TYPE_T8C_RAW_BASE  = TYPE_F_RAW_BASE + TYPE_F_BASE;
-
 // Grown shape window — one pattern per candidate whose cell set is chosen
 // dynamically.  The 9 cells of the 3×3 core are always included; we then add
 // the next-closest board cell (by game2's blended-distance function) one at a
@@ -536,7 +523,6 @@ function createState(N) {
     patIdsT:   new Int32Array(cap),
     patIdsE:   new Int32Array(cap),
     patIdsF:   new Int32Array(cap),
-    patIdsT8c: new Int32Array(cap * N_TACT_SLOTS),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
@@ -548,9 +534,8 @@ function createState(N) {
     readSetG,
     readSetO,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // (10 + N_TACT_SLOTS) * (n + 1) dense idxs — 10 shape types and up to
-    // N_TACT_SLOTS T8c slots per candidate (chosen + all moves).
-    touched:   new Int32Array((10 + N_TACT_SLOTS) * (cap + 1)),
+    // 10 * (n + 1) dense idxs (one per shape type, chosen + all moves).
+    touched:   new Int32Array(10 * (cap + 1)),
     count:     0,
   };
 }
@@ -576,7 +561,7 @@ function createWeights(opts) {
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
   let useTactical = true;
-  let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false, useF = false, useT8c = false;
+  let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false, useF = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
@@ -592,7 +577,6 @@ function createWeights(opts) {
     if (opts.useT)   useT   = true;
     if (opts.useE)   useE   = true;
     if (opts.useF)   useF   = true;
-    if (opts.useT8c) useT8c = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -600,7 +584,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { useTactical, use33c, useA, useB, useG, useO, useQ, useD, useT, useE, useF, useT8c },
+    cfg:   { useTactical, use33c, useA, useB, useG, useO, useQ, useD, useT, useE, useF },
   };
   if (useTactical) {
     for (let k = 0; k < N_TACT_SLOTS; k++) {
@@ -1227,7 +1211,6 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUseT   = !cfg || cfg.useT;
   const doUseE   = !cfg || cfg.useE;
   const doUseF   = !cfg || cfg.useF;
-  const doUseT8c = cfg && cfg.useT8c;
   const patIds33c = state.patIds33c;
   const patIdsA   = state.patIdsA;
   const patIdsB   = state.patIdsB;
@@ -1238,7 +1221,6 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const patIdsT   = state.patIdsT;
   const patIdsE   = state.patIdsE;
   const patIdsF   = state.patIdsF;
-  const patIdsT8c = state.patIdsT8c;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -1260,20 +1242,15 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
 
     // Centered 3×3 window — candidate at relPos 4, reads the central 3×3 of
     // the patch.  Canonicalised via canonKey with its SHAPE33C raw-base
-    // offset so keys sit in a disjoint range.  The 3×3c canonical (without
-    // SHAPE33C_RAW_BASE) is also reused by T8c below.
-    let canon33c = -1;
-    if (doUse33c || doUseT8c) {
+    // offset so keys sit in a disjoint range.
+    if (doUse33c) {
       for (let i = 0; i < 9; i++) {
         const dr = (i / 3) | 0;
         const dc = i - dr * 3;
         wc9[i] = patch[(dr - 1 + 2) * 5 + (dc - 1 + 2)];
       }
-      canon33c = canonKey(4, wc9);
-      if (doUse33c) {
-        const raw33c = SHAPE33C_RAW_BASE + canon33c;
-        patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
-      }
+      const raw33c = SHAPE33C_RAW_BASE + canonKey(4, wc9);
+      patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
     }
 
     // Type A shape (10 cells, hflip-symmetric).  canonKeyA reads cells
@@ -1336,19 +1313,6 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIdsF[count] = wMap ? _internWeight(weights, rawF) : rawF;
     }
 
-    // T8c: multiplicative conjunction of 3×3c canonical with each tactical
-    // slot.  One dense index per (candidate, slot k); score uses these as
-    // count-weighted (tact[k] * w[T8c(canon, k)]).  Stride is fixed at
-    // TYPE_T8C_STRIDE (32) so raw keys are stable across stone-limit values.
-    if (doUseT8c) {
-      const baseRaw = TYPE_T8C_RAW_BASE + canon33c * TYPE_T8C_STRIDE;
-      const off = count * N_TACT_SLOTS;
-      for (let k = 0; k < N_TACT_SLOTS; k++) {
-        const raw = baseRaw + k;
-        patIdsT8c[off + k] = wMap ? _internWeight(weights, raw) : raw;
-      }
-    }
-
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
     // × TACT_STONE_LIMIT stone-indices).  Skipped when useTactical is off.
     if (doUseTact) {
@@ -1389,14 +1353,6 @@ function _score(state, i, weights) {
   if (cfg.useT)   s += vals[state.patIdsT[i]];
   if (cfg.useE)   s += vals[state.patIdsE[i]];
   if (cfg.useF)   s += vals[state.patIdsF[i]];
-  if (cfg.useT8c) {
-    const off = i * N_TACT_SLOTS;
-    const ids = state.patIdsT8c;
-    for (let k = 0; k < N_TACT_SLOTS; k++) {
-      const c = state.tact[off + k];
-      if (c) s += c * vals[ids[off + k]];
-    }
-  }
   return s;
 }
 
@@ -1434,7 +1390,6 @@ function _computeSoftmax(state, weights) {
   const pidT   = cfg.useT   ? state.patIdsT   : null;
   const pidE   = cfg.useE   ? state.patIdsE   : null;
   const pidF   = cfg.useF   ? state.patIdsF   : null;
-  const pidT8c = cfg.useT8c ? state.patIdsT8c : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -1453,13 +1408,6 @@ function _computeSoftmax(state, weights) {
     if (pidT)   s += vals[pidT[i]];
     if (pidE)   s += vals[pidE[i]];
     if (pidF)   s += vals[pidF[i]];
-    if (pidT8c) {
-      const off = i * N_TACT_SLOTS;
-      for (let k = 0; k < N_TACT_SLOTS; k++) {
-        const c = tact[off + k];
-        if (c) s += c * vals[pidT8c[off + k]];
-      }
-    }
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -1538,7 +1486,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
   const patIdsF   = cfg.useF   ? state.patIdsF   : null;
-  const patIdsT8c = cfg.useT8c ? state.patIdsT8c : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -1592,18 +1539,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     const idx = patIdsF[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
-  }
-  // T8c: chosen contributes +step * tact[chosen][k] to each active slot.
-  if (patIdsT8c) {
-    const cOff = chosenIndex * N_TACT_SLOTS;
-    for (let k = 0; k < N_TACT_SLOTS; k++) {
-      const c = tact[cOff + k];
-      if (c) {
-        const idx = patIdsT8c[cOff + k];
-        touched[tc++] = idx;
-        delta[idx] += step * c;
-      }
-    }
   }
   // Every legal move i contributes -step * π_i to each of its active shape pids.
   for (let i = 0; i < n; i++) {
@@ -1659,17 +1594,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       const idx = patIdsF[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
-    }
-    if (patIdsT8c) {
-      const off = i * N_TACT_SLOTS;
-      for (let k = 0; k < N_TACT_SLOTS; k++) {
-        const c = tact[off + k];
-        if (c) {
-          const idx = patIdsT8c[off + k];
-          touched[tc++] = idx;
-          delta[idx] -= sub * c;
-        }
-      }
     }
   }
   // Apply accumulated deltas and clear them.  Duplicates are tolerated by the
@@ -1742,7 +1666,6 @@ function entropyBonusUpdate(state, weights, beta) {
   const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
   const patIdsF   = cfg.useF   ? state.patIdsF   : null;
-  const patIdsT8c = cfg.useT8c ? state.patIdsT8c : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -1814,17 +1737,6 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
-    if (patIdsT8c) {
-      const off = i * N_TACT_SLOTS;
-      for (let k = 0; k < N_TACT_SLOTS; k++) {
-        const c = tact[off + k];
-        if (c) {
-          const idx = patIdsT8c[off + k];
-          touched[tc++] = idx;
-          delta[idx] += ci * c;
-        }
-      }
-    }
     if (cfg.useTactical !== false) {
       const tOff = i * N_TACT_SLOTS;
       for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
@@ -1880,7 +1792,6 @@ const NPatterns = {
   TYPE_T_CELLS, TYPE_T_BASE, TYPE_T_RAW_BASE,
   TYPE_E_CELLS, TYPE_E_BASE, TYPE_E_RAW_BASE,
   TYPE_F_CELLS, TYPE_F_BASE, TYPE_F_RAW_BASE,
-  TYPE_T8C_STRIDE, TYPE_T8C_BASE, TYPE_T8C_RAW_BASE,
   MAX_PAT_SIZE, PAT_STONES,
   // Exposed for tests.
   _D4,
