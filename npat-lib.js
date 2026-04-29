@@ -560,11 +560,13 @@ function createWeights(opts) {
   //   { initialCapacity, use33, use34, useL }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
+  let useTactical = true;
   let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false, useF = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
     if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
+    if (opts.useTactical === false) useTactical = false;
     if (opts.use33c) use33c = true;
     if (opts.useA)   useA   = true;
     if (opts.useB)   useB   = true;
@@ -582,10 +584,12 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { use33c, useA, useB, useG, useO, useQ, useD, useT, useE, useF },
+    cfg:   { useTactical, use33c, useA, useB, useG, useO, useQ, useD, useT, useE, useF },
   };
-  for (let k = 0; k < N_TACT_SLOTS; k++) {
-    w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
+  if (useTactical) {
+    for (let k = 0; k < N_TACT_SLOTS; k++) {
+      w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
+    }
   }
   return w;
 }
@@ -1181,9 +1185,6 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const emC    = game._emptyCells;
   const ec     = game.emptyCount;
 
-  const li = ladderInfo || annotateLadders(game, state.ladder, game3);
-  const tactCount = li.tactCount;
-
   let count = 0;
   const moves    = state.moves;
   const tact     = state.tact;
@@ -1194,7 +1195,12 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   // Feature-extraction gates: when a weights store with cfg is supplied, skip
   // shape types that are disabled.  Without weights (tests extracting raw keys
   // only), extract everything for backward compatibility.
-  const cfg      = weights ? weights.cfg : null;
+  const cfg         = weights ? weights.cfg : null;
+  const doUseTact   = !cfg || cfg.useTactical !== false;
+  // Skip ladder annotation entirely when tactical features are off — that's
+  // the dominant per-position cost when no shape extracts depend on it.
+  const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3)) : null;
+  const tactCount = li ? li.tactCount : null;
   const doUse33c = !cfg || cfg.use33c;
   const doUseA   = !cfg || cfg.useA;
   const doUseB   = !cfg || cfg.useB;
@@ -1308,10 +1314,12 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
     }
 
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
-    // × TACT_STONE_LIMIT stone-indices).
-    const tSrc = idx * N_TACT_SLOTS;
-    const tDst = count * N_TACT_SLOTS;
-    for (let k = 0; k < N_TACT_SLOTS; k++) tact[tDst + k] = tactCount[tSrc + k];
+    // × TACT_STONE_LIMIT stone-indices).  Skipped when useTactical is off.
+    if (doUseTact) {
+      const tSrc = idx * N_TACT_SLOTS;
+      const tDst = count * N_TACT_SLOTS;
+      for (let k = 0; k < N_TACT_SLOTS; k++) tact[tDst + k] = tactCount[tSrc + k];
+    }
 
     moves[count] = idx;
     count++;
@@ -1330,9 +1338,11 @@ function _score(state, i, weights) {
   const tact = state.tact;
   const tIds = weights.tactIds;
   const cfg  = weights.cfg;
-  const tOff = i * N_TACT_SLOTS;
   let s = 0;
-  for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
+  if (cfg.useTactical !== false) {
+    const tOff = i * N_TACT_SLOTS;
+    for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
+  }
   if (cfg.use33c) s += vals[state.patIds33c[i]];
   if (cfg.useA)   s += vals[state.patIdsA[i]];
   if (cfg.useB)   s += vals[state.patIdsB[i]];
@@ -1365,8 +1375,11 @@ function _computeSoftmax(state, weights) {
   const vals  = weights.vals;
   const tIds  = weights.tactIds;
   const cfg   = weights.cfg;
+  const useTact = cfg.useTactical !== false;
   const tW    = new Float64Array(N_TACT_SLOTS);
-  for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
+  if (useTact) {
+    for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
+  }
   const pid33c = cfg.use33c ? state.patIds33c : null;
   const pidA   = cfg.useA   ? state.patIdsA   : null;
   const pidB   = cfg.useB   ? state.patIdsB   : null;
@@ -1380,9 +1393,11 @@ function _computeSoftmax(state, weights) {
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
-    const tOff = i * N_TACT_SLOTS;
     let s = 0;
-    for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
+    if (useTact) {
+      const tOff = i * N_TACT_SLOTS;
+      for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
+    }
     if (pid33c) s += vals[pid33c[i]];
     if (pidA)   s += vals[pidA[i]];
     if (pidB)   s += vals[pidB[i]];
@@ -1593,22 +1608,24 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
 
   // ── Tactical features (N_TACT_SLOTS, always touched; no delta buffer) ──
-  const cOff = chosenIndex * N_TACT_SLOTS;
-  const neg  = _tactScratch;  // Float64 scratch buffer sized N_TACT_SLOTS
-  for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] = 0;
-  for (let i = 0; i < n; i++) {
-    const pi = probs[i];
-    if (pi === 0) continue;
-    const off = i * N_TACT_SLOTS;
-    for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] += pi * tact[off + k];
-  }
-  for (let k = 0; k < N_TACT_SLOTS; k++) {
-    const d = step * (tact[cOff + k] - neg[k]);
-    if (d !== 0) vals[tIds[k]] += d;
+  if (cfg.useTactical !== false) {
+    const cOff = chosenIndex * N_TACT_SLOTS;
+    const neg  = _tactScratch;  // Float64 scratch buffer sized N_TACT_SLOTS
+    for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] = 0;
+    for (let i = 0; i < n; i++) {
+      const pi = probs[i];
+      if (pi === 0) continue;
+      const off = i * N_TACT_SLOTS;
+      for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] += pi * tact[off + k];
+    }
+    for (let k = 0; k < N_TACT_SLOTS; k++) {
+      const d = step * (tact[cOff + k] - neg[k]);
+      if (d !== 0) vals[tIds[k]] += d;
+    }
   }
   // Return total shape-feature touches (including duplicates across moves) —
   // train-npat.js accumulates these to report mean updates-per-pattern.
-  return tc + N_TACT_SLOTS;
+  return tc + (cfg.useTactical !== false ? N_TACT_SLOTS : 0);
 }
 
 // ── Entropy-bonus step ────────────────────────────────────────────────────────
@@ -1720,16 +1737,20 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
-    const tOff = i * N_TACT_SLOTS;
-    for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
+    if (cfg.useTactical !== false) {
+      const tOff = i * N_TACT_SLOTS;
+      for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
+    }
   }
   for (let i = 0; i < tc; i++) {
     const idx = touched[i];
     const d = delta[idx];
     if (d !== 0) { vals[idx] += d; delta[idx] = 0; }
   }
-  for (let k = 0; k < N_TACT_SLOTS; k++) {
-    if (acc[k] !== 0) vals[tIds[k]] += acc[k];
+  if (cfg.useTactical !== false) {
+    for (let k = 0; k < N_TACT_SLOTS; k++) {
+      if (acc[k] !== 0) vals[tIds[k]] += acc[k];
+    }
   }
 }
 
