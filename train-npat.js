@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'no-tactical', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E', 'use-F']);
+  ['help', 'no-tactical', 'force-tactical-limit', 'use-3x3c', 'use-A', 'use-B', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E', 'use-F']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
@@ -89,11 +89,20 @@ function loadWeights(filePath) {
   delete require.cache[require.resolve(path.resolve(filePath))];
   const raw = require(path.resolve(filePath));
   if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
-    throw new Error(
-      `TACT_STONE_LIMIT mismatch: file was trained with ${raw.tactStoneLimit}, ` +
-      `current is ${NPat.TACT_STONE_LIMIT}. ` +
-      `Re-run with NPAT_STONE_LIMIT=${raw.tactStoneLimit}.`
-    );
+    if (opts['force-tactical-limit']) {
+      console.warn(
+        `WARNING: tactStoneLimit mismatch — file ${path.basename(filePath)} ` +
+        `was trained at ${raw.tactStoneLimit}, current is ${NPat.TACT_STONE_LIMIT}. ` +
+        `Continuing anyway (--force-tactical-limit). Existing tactical weights ` +
+        `will have scrambled slot semantics until retrained.`
+      );
+    } else {
+      throw new Error(
+        `TACT_STONE_LIMIT mismatch: file was trained with ${raw.tactStoneLimit}, ` +
+        `current is ${NPat.TACT_STONE_LIMIT}. ` +
+        `Re-run with NPAT_STONE_LIMIT=${raw.tactStoneLimit}, or pass --force-tactical-limit.`
+      );
+    }
   }
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
