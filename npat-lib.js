@@ -170,6 +170,20 @@ const TYPE_E_CELLS       = 12;
 const TYPE_E_BASE        = 531441; // 3^12
 const TYPE_E_RAW_BASE    = TYPE_T_RAW_BASE + TYPE_T_BASE; // above T range
 
+// Type F shape window (13 cells, diag-symmetric about NW-SE axis through the
+// candidate).  Asymmetric 4-wide × 4-tall footprint with two opposite corners
+// dropped:
+//
+//     x    x    x    .      (-1, -1) (-1, 0) (-1, +1)
+//     x    *    x    x      (0, -1)  (0, 0)  (0, +1) (0, +2)
+//     x    x    x    x      (+1, -1) (+1, 0) (+1, +1) (+1, +2)
+//     .    x    x    .      (+2, 0) (+2, +1)
+//
+// 3^13 ≈ 1.59M raw slots; cache is a flat Int32Array (~6.4 MB).
+const TYPE_F_CELLS       = 13;
+const TYPE_F_BASE        = 1594323; // 3^13
+const TYPE_F_RAW_BASE    = TYPE_E_RAW_BASE + TYPE_E_BASE; // above E range
+
 // Grown shape window — one pattern per candidate whose cell set is chosen
 // dynamically.  The 9 cells of the 3×3 core are always included; we then add
 // the next-closest board cell (by game2's blended-distance function) one at a
@@ -508,6 +522,7 @@ function createState(N) {
     patIdsD:   new Int32Array(cap),
     patIdsT:   new Int32Array(cap),
     patIdsE:   new Int32Array(cap),
+    patIdsF:   new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
@@ -519,8 +534,8 @@ function createState(N) {
     readSetG,
     readSetO,
     // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // 9 * (n + 1) dense idxs (one per shape type, chosen + all moves).
-    touched:   new Int32Array(9 * (cap + 1)),
+    // 10 * (n + 1) dense idxs (one per shape type, chosen + all moves).
+    touched:   new Int32Array(10 * (cap + 1)),
     count:     0,
   };
 }
@@ -545,7 +560,7 @@ function createWeights(opts) {
   //   { initialCapacity, use33, use34, useL }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
-  let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false;
+  let use33c = false, useA = false, useB = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false, useF = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
@@ -559,6 +574,7 @@ function createWeights(opts) {
     if (opts.useD)   useD   = true;
     if (opts.useT)   useT   = true;
     if (opts.useE)   useE   = true;
+    if (opts.useF)   useF   = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -566,7 +582,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { use33c, useA, useB, useG, useO, useQ, useD, useT, useE },
+    cfg:   { use33c, useA, useB, useG, useO, useQ, useD, useT, useE, useF },
   };
   for (let k = 0; k < N_TACT_SLOTS; k++) {
     w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
@@ -900,6 +916,51 @@ function canonKeyE(patch) {
   return best;
 }
 
+// Type F shape (13 cells, diag-symmetric about NW-SE axis).  Row-major.
+const _FShape = [
+  [-1, -1], [-1,  0], [-1, +1],
+  [ 0, -1], [ 0,  0], [ 0, +1], [ 0, +2],
+  [+1, -1], [+1,  0], [+1, +1], [+1, +2],
+            [+2,  0], [+2, +1],
+];
+
+const _FPatchIdx    = new Int32Array(8 * TYPE_F_CELLS);
+const _FCellWeights = new Int32Array(TYPE_F_CELLS);
+(function () {
+  const d4 = [
+    (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
+    (r, c) => [ r, -c], (r, c) => [-r,  c], (r, c) => [ c,  r], (r, c) => [-c, -r],
+  ];
+  for (let s = 0; s < 8; s++) {
+    for (let i = 0; i < TYPE_F_CELLS; i++) {
+      const [r, c] = d4[s](_FShape[i][0], _FShape[i][1]);
+      _FPatchIdx[s * TYPE_F_CELLS + i] = (r + 2) * 5 + (c + 2);
+    }
+  }
+  let w = 1;
+  for (let i = 0; i < TYPE_F_CELLS; i++) { _FCellWeights[i] = w; w *= CELL_BASE; }
+})();
+
+const _canonKeyFCache = new Int32Array(TYPE_F_BASE).fill(-1); // 6.4MB
+
+function canonKeyF(patch) {
+  const idx = _FPatchIdx;
+  const cw  = _FCellWeights;
+  let cacheKey = 0;
+  for (let i = 0; i < TYPE_F_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
+  const cached = _canonKeyFCache[cacheKey];
+  if (cached !== -1) return cached;
+  let best = cacheKey;
+  for (let s = 1; s < 8; s++) {
+    const o = s * TYPE_F_CELLS;
+    let raw = 0;
+    for (let i = 0; i < TYPE_F_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
+    if (raw < best) best = raw;
+  }
+  _canonKeyFCache[cacheKey] = best;
+  return best;
+}
+
 // Scratch byte buffer for grown-pattern serialization (size prefix + up to
 // MAX_PAT_SIZE cells).
 const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
@@ -1143,6 +1204,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUseD   = !cfg || cfg.useD;
   const doUseT   = !cfg || cfg.useT;
   const doUseE   = !cfg || cfg.useE;
+  const doUseF   = !cfg || cfg.useF;
   const patIds33c = state.patIds33c;
   const patIdsA   = state.patIdsA;
   const patIdsB   = state.patIdsB;
@@ -1152,6 +1214,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const patIdsD   = state.patIdsD;
   const patIdsT   = state.patIdsT;
   const patIdsE   = state.patIdsE;
+  const patIdsF   = state.patIdsF;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -1238,6 +1301,12 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIdsE[count] = wMap ? _internWeight(weights, rawE) : rawE;
     }
 
+    // Type F shape — 13 cells, diag-symmetric asymmetric block.
+    if (doUseF) {
+      const rawF = TYPE_F_RAW_BASE + canonKeyF(patch);
+      patIdsF[count] = wMap ? _internWeight(weights, rawF) : rawF;
+    }
+
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
     // × TACT_STONE_LIMIT stone-indices).
     const tSrc = idx * N_TACT_SLOTS;
@@ -1273,6 +1342,7 @@ function _score(state, i, weights) {
   if (cfg.useD)   s += vals[state.patIdsD[i]];
   if (cfg.useT)   s += vals[state.patIdsT[i]];
   if (cfg.useE)   s += vals[state.patIdsE[i]];
+  if (cfg.useF)   s += vals[state.patIdsF[i]];
   return s;
 }
 
@@ -1306,6 +1376,7 @@ function _computeSoftmax(state, weights) {
   const pidD   = cfg.useD   ? state.patIdsD   : null;
   const pidT   = cfg.useT   ? state.patIdsT   : null;
   const pidE   = cfg.useE   ? state.patIdsE   : null;
+  const pidF   = cfg.useF   ? state.patIdsF   : null;
 
   let maxL = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -1321,6 +1392,7 @@ function _computeSoftmax(state, weights) {
     if (pidD)   s += vals[pidD[i]];
     if (pidT)   s += vals[pidT[i]];
     if (pidE)   s += vals[pidE[i]];
+    if (pidF)   s += vals[pidF[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
   }
@@ -1398,6 +1470,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const patIdsD   = cfg.useD   ? state.patIdsD   : null;
   const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
+  const patIdsF   = cfg.useF   ? state.patIdsF   : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -1444,6 +1517,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
   if (patIdsE) {
     const idx = patIdsE[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIdsF) {
+    const idx = patIdsF[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -1494,6 +1572,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
     if (patIdsE) {
       const idx = patIdsE[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsF) {
+      const idx = patIdsF[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -1565,6 +1648,7 @@ function entropyBonusUpdate(state, weights, beta) {
   const patIdsD   = cfg.useD   ? state.patIdsD   : null;
   const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
+  const patIdsF   = cfg.useF   ? state.patIdsF   : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
   let tc = 0;
@@ -1631,6 +1715,11 @@ function entropyBonusUpdate(state, weights, beta) {
       touched[tc++] = idx;
       delta[idx] += ci;
     }
+    if (patIdsF) {
+      const idx = patIdsF[i];
+      touched[tc++] = idx;
+      delta[idx] += ci;
+    }
     const tOff = i * N_TACT_SLOTS;
     for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
   }
@@ -1663,6 +1752,7 @@ const NPatterns = {
   canonKeyD,
   canonKeyT,
   canonKeyE,
+  canonKeyF,
   canonKeyG,
   canonKeyO,
   canonKeyQ,
@@ -1680,6 +1770,7 @@ const NPatterns = {
   TYPE_D_CELLS, TYPE_D_BASE, TYPE_D_RAW_BASE,
   TYPE_T_CELLS, TYPE_T_BASE, TYPE_T_RAW_BASE,
   TYPE_E_CELLS, TYPE_E_BASE, TYPE_E_RAW_BASE,
+  TYPE_F_CELLS, TYPE_F_BASE, TYPE_F_RAW_BASE,
   MAX_PAT_SIZE, PAT_STONES,
   // Exposed for tests.
   _D4,
