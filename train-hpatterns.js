@@ -29,7 +29,7 @@ const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '9',  10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
-const EVAL_AGENT = opts.eval  || 'prod';
+const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games
 const EPSILON    = Math.min(parseFloat(opts.epsilon   || '0.1'),  0.9999);
 const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
@@ -237,7 +237,9 @@ function evalVsReference(N, refGetMove, nGames) {
 
 // ── CLI setup ─────────────────────────────────────────────────────────────────
 
-const { getMove: evalGetMove } = require(path.join(__dirname, 'ai', EVAL_AGENT + '.js'));
+const evalGetMove = EVAL_AGENT
+  ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
+  : null;
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
@@ -254,29 +256,34 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
 console.log(`spec=${SPEC_RAW}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 
 const col = n => String(n).padStart;
-console.log([
+const headerCols = [
   'game'   .padStart(7),
   'elapsed'.padStart(8),
   'tGameMs'.padStart(7),
   'weights'.padStart(8),
   'canonKs'.padStart(8),
+];
+if (evalGetMove) headerCols.push(
   'win%'   .padStart(6) + '(' + 'n'.padStart(3) + ')',
   'winAvg%'.padStart(7),
+);
+headerCols.push(
   'avglen' .padStart(6),
   'acc%'   .padStart(5),
   'avg|w|' .padStart(7),
   'rms(w)' .padStart(7),
   'max|w|' .padStart(7),
   'tTrain' .padStart(7),
-  'tTest'  .padStart(6),
-  'turnMs' .padStart(6),
-].join('  '));
+);
+if (evalGetMove) headerCols.push('tTest'.padStart(6));
+headerCols.push('turnMs'.padStart(6));
+console.log(headerCols.join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
@@ -305,17 +312,19 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    const batch = [];
-    while (true) {
-      for (const r of evalVsReference(EVAL_SIZE, evalGetMove, 2)) batch.push(r);
-      const tMs = Date.now() - tTestStart;
-      if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
+    let batch = null, latestWR = 0, avgWR = 0;
+    if (evalGetMove) {
+      batch = [];
+      while (true) {
+        for (const r of evalVsReference(EVAL_SIZE, evalGetMove, 2)) batch.push(r);
+        const tMs = Date.now() - tTestStart;
+        if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
+      }
+      for (const r of batch) evalHistory.push(r);
+      latestWR  = batch.reduce((s, r) => s + r, 0) / batch.length;
+      const half = Math.max(1, Math.floor(evalHistory.length / 2));
+      avgWR     = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
     }
-    for (const r of batch) evalHistory.push(r);
-
-    const latestWR  = batch.reduce((s, r) => s + r, 0) / batch.length;
-    const half      = Math.max(1, Math.floor(evalHistory.length / 2));
-    const avgWR     = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
     const avgLen    = (intervalMoves / intervalGames).toFixed(1);
     const tGameMs   = (intervalTrainMs / intervalGames).toFixed(1);
     const avgAcc    = (100 * totalCorrect / totalNVals).toFixed(1);
@@ -343,23 +352,28 @@ while (true) {
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
     intervalTrainMs = 0;
 
-    console.log([
+    const cols = [
       String(g)                                       .padStart(7),
       elapsedS                                        .padStart(8),
       tGameMs                                         .padStart(7),
       String(ws)                                      .padStart(8),
       String(model.canonMap.size)                     .padStart(8),
+    ];
+    if (evalGetMove) cols.push(
       ((100 * latestWR).toFixed(1) + '%')             .padStart(6) + '(' + String(batch.length).padStart(3) + ')',
       ((100 * avgWR).toFixed(1) + '%')                .padStart(7),
+    );
+    cols.push(
       avgLen                                          .padStart(6),
       (avgAcc + '%')                                  .padStart(5),
       wAvg.toFixed(3)                                 .padStart(7),
       wRms.toFixed(3)                                 .padStart(7),
       wAbsMax.toFixed(3)                              .padStart(7),
       tTrainStr                                       .padStart(7),
-      ((tTestMs / 1000).toFixed(1) + 's')             .padStart(6),
-      tpMove.toFixed(1)                               .padStart(6),
-    ].join('  '));
+    );
+    if (evalGetMove) cols.push(((tTestMs / 1000).toFixed(1) + 's').padStart(6));
+    cols.push(tpMove.toFixed(1).padStart(6));
+    console.log(cols.join('  '));
 
     saveModel(SAVE_PATH, model);
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
