@@ -38,6 +38,7 @@ const LR         = parseFloat(opts.lr || '0.05');
 const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
 const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
+const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.999'); // Polyak EMA decay (per game)
 const USE_33C    = !!opts['use-3x3c'];                        // enable centered 3×3 window
 const USE_E      = !!opts['use-E'];                           // enable 12-cell 3×4 block pattern
 const USE_TACT   = !opts['no-tactical'];                       // tactical features (default ON)
@@ -54,11 +55,13 @@ let totalUpdates = 0;                // cumulative weight-update count across re
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function saveWeights(filePath, w, meta) {
+  // Persist Polyak-averaged weights when available (better for eval, slight
+  // rewind on resume).  Falls back to live weights before the first EMA snap.
+  const useEMA = w.valsEMAInit;
+  const source = useEMA ? w.valsEMA : w.vals;
   const parts = [];
   for (const [rawId, denseIdx] of w.map) {
-    // JSON.stringify handles both number and string raw ids; string ids come
-    // from shape types with hashed canonicalisation (e.g., the grown pattern).
-    parts.push(`[${JSON.stringify(rawId)},${+w.vals[denseIdx].toFixed(6)}]`);
+    parts.push(`[${JSON.stringify(rawId)},${+source[denseIdx].toFixed(6)}]`);
   }
   const list = '[' + parts.join(',') + ']';
   const src = [
@@ -68,6 +71,8 @@ function saveWeights(filePath, w, meta) {
     `  ema: ${+meta.ema.toFixed(6)},`,
     `  totalUpdates: ${meta.totalUpdates | 0},`,
     `  tactStoneLimit: ${NPat.TACT_STONE_LIMIT},`,
+    `  emaAlpha: ${+meta.emaAlpha.toFixed(6)},`,
+    `  weightsAreEMA: ${useEMA},`,
     `  weights: new Map(${list}),`,
     `};`,
     "if (typeof module !== 'undefined') module.exports = npatModel;",
@@ -103,7 +108,13 @@ function loadWeights(filePath) {
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
     w.vals[idx] = val;
+    w.valsEMA[idx] = val;
   }
+  // Files saved after EMA was wired up store the Polyak-averaged values, so
+  // we mark valsEMA as initialised — subsequent applyEMA calls continue
+  // averaging on top.  Older files don't have weightsAreEMA; we still seed
+  // valsEMA = vals for them, which is the same as the first applyEMA would do.
+  w.valsEMAInit = true;
   return { weights: w, ema: raw.ema ?? 0, totalUpdates: raw.totalUpdates ?? 0, tactStoneLimit: raw.tactStoneLimit };
 }
 
@@ -248,6 +259,7 @@ if (opts.help) {
   --use-3x3c       enable the centered 3×3 shape window (default off)
   --use-E          enable the 12-cell 3×4 block shape window (default off)
   --no-tactical    disable the ladder/tactical features (default on)
+  --ema-alpha F    Polyak EMA decay per game; eval reads valsEMA (default 0.999)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -270,7 +282,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
+console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}  ema-alpha=${EMA_ALPHA}`);
 console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
@@ -297,6 +309,8 @@ while (true) {
   totalUpdates += r.weightUpdates;
   maxProbSumWindow += r.maxProbSum;
   maxProbNWindow   += r.maxProbN;
+  // Polyak / SWA: nudge valsEMA toward the post-update vals once per game.
+  NPat.applyEMA(weights, EMA_ALPHA);
 
   if (Date.now() >= nextPrintAt) {
     // Count only interned pids that have received a non-zero gradient: pids
@@ -326,7 +340,7 @@ while (true) {
     ].join('  '));
     maxProbSumWindow = 0; maxProbNWindow = 0;
 
-    saveWeights(SAVE_PATH, weights, { ema, totalUpdates });
+    saveWeights(SAVE_PATH, weights, { ema, totalUpdates, emaAlpha: EMA_ALPHA });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 }

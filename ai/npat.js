@@ -56,7 +56,7 @@ function getMove(game) {
 }
 
 console.error(`npat: loaded ${weights.size} weights from ${path.basename(weightsPath)} ` +
-  `(3x3c=${has33c} E=${hasE})`);
+  `(3x3c=${has33c} E=${hasE} weightsAreEMA=${!!raw.weightsAreEMA})`);
 
 module.exports = { getMove };
 

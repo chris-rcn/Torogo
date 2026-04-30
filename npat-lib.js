@@ -259,8 +259,10 @@ function createWeights(opts) {
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
     vals:  new Float64Array(initialCapacity),      // weights[dense idx]
+    valsEMA: new Float64Array(initialCapacity),    // Polyak-averaged weights for eval
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
+    valsEMAInit: false,                            // first applyEMA seeds valsEMA = vals
     tactIds: new Int32Array(N_TACT_SLOTS),
     cfg:   { useTactical, use33c, useE },
   };
@@ -280,11 +282,33 @@ function _internWeight(w, rawPid) {
   if (idx >= w.vals.length) {
     const cap = w.vals.length * 2;
     const nv = new Float64Array(cap); nv.set(w.vals); w.vals = nv;
+    const ne = new Float64Array(cap); ne.set(w.valsEMA); w.valsEMA = ne;
     const nd = new Float64Array(cap); nd.set(w.delta); w.delta = nd;
   }
   map.set(rawPid, idx);
   w.size = idx + 1;
   return idx;
+}
+
+// Polyak / SWA averaging.  Updates valsEMA in-place to track a smoothed copy
+// of vals.  First call seeds valsEMA = vals (so we don't average against the
+// zero initialisation).  Subsequent calls do
+//   valsEMA[i] = alpha * valsEMA[i] + (1 - alpha) * vals[i]
+// for every interned weight.  Call this periodically (e.g. once per training
+// game).  Caller picks alpha based on the desired effective window — with one
+// snapshot per game, alpha=0.999 averages over ~1000 recent games.
+function applyEMA(w, alpha) {
+  const n = w.size;
+  const v = w.vals, e = w.valsEMA;
+  if (!w.valsEMAInit) {
+    for (let i = 0; i < n; i++) e[i] = v[i];
+    w.valsEMAInit = true;
+    return;
+  }
+  const beta = 1 - alpha;
+  for (let i = 0; i < n; i++) {
+    e[i] = alpha * e[i] + beta * v[i];
+  }
 }
 
 // ── Runtime D4 canonicalisation ──────────────────────────────────────────────
@@ -769,6 +793,7 @@ const NPatterns = {
   greedyMove,
   reinforceUpdate,
   entropyBonusUpdate,
+  applyEMA,
   annotateLadders,
   canonKey,
   canonKeyE,
