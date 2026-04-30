@@ -36,10 +36,17 @@ const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
 // spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not extracted.
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+// Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
+// (loaded values stay fixed; gradient updates skipped).
 const SPEC = {};
+const FROZEN = new Set();
 for (const part of SPEC_RAW.split(',')) {
-  const [k, v] = part.split(':');
-  SPEC[parseInt(k, 10)] = parseInt(v, 10);
+  const [k, vRaw] = part.split(':');
+  const sz = parseInt(k, 10);
+  const frozen = /f$/.test(vRaw);
+  const v = parseInt(frozen ? vRaw.slice(0, -1) : vRaw, 10);
+  SPEC[sz] = v;
+  if (frozen) FROZEN.add(sz);
 }
 let MAX_SIZE   = Math.max(...Object.keys(SPEC).map(Number));
 let MAX_STONES = SPEC;
@@ -92,15 +99,18 @@ function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
   const perFeature = (target - features.val) / n;
-  const { keys, pols } = features;
+  const { keys, pols, sizes } = features;
+  const hasFrozen = FROZEN.size > 0;
   if (MOMENTUM === 0) {
     const step = lr * perFeature;
     for (let i = 0; i < n; i++) {
+      if (hasFrozen && FROZEN.has(sizes[i])) continue;
       const k = keys[i];
       model.weights.set(k, (model.weights.get(k) ?? 0) + pols[i] * step);
     }
   } else {
     for (let i = 0; i < n; i++) {
+      if (hasFrozen && FROZEN.has(sizes[i])) continue;
       const k   = keys[i];
       const g   = pols[i] * perFeature;
       const vel = MOMENTUM * (velocity.get(k) ?? 0) + g;
@@ -187,7 +197,7 @@ function trainGame(N) {
     if (prev2 !== null) tdUpdate(prev2, f.val, LR);
 
     prev2 = prev1;
-    prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), count: f.count, val: f.val };
+    prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), sizes: f.sizes.slice(0, f.count), count: f.count, val: f.val };
 
     const move = Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game, maxSearch);
     const hasCaptures = move !== PASS && game.captureList(move).length > 0;
@@ -257,7 +267,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
-console.log(`spec=${SPEC_RAW}`);
+console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 

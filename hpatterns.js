@@ -226,9 +226,11 @@
     if (!model._outKeys || model._outKeys.length < maxFeatures) {
       model._outKeys = new Int32Array(maxFeatures);
       model._outPols = new Int8Array(maxFeatures);
+      model._outSizes = new Int8Array(maxFeatures);
     }
     const outKeys = model._outKeys;
     const outPols = model._outPols;
+    const outSizes = model._outSizes;
     let count = 0;
 
     // 2D prefix sum of stone presence over the N×N board (non-toroidal part).
@@ -296,7 +298,7 @@
         // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
         let enc = canonMap.get(rawKey);
         if (enc !== undefined) {
-          if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; count++; }
+          if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
           continue;
         }
 
@@ -309,6 +311,7 @@
 
         outKeys[count] = (enc > 0 ? enc : -enc) - 1;
         outPols[count] = enc > 0 ? 1 : -1;
+        outSizes[count] = M;
         count++;
       }
 
@@ -316,7 +319,7 @@
       if (!anyEligible && limit > 0) break;
     }
 
-    return { keys: outKeys, pols: outPols, count, topLevel: topActive, val: 0.5 };
+    return { keys: outKeys, pols: outPols, sizes: outSizes, count, topLevel: topActive, val: 0.5 };
   }
 
   // ── Evaluation ─────────────────────────────────────────────────────────────
