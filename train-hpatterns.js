@@ -322,8 +322,12 @@ while (true) {
   intervalCorrect += correct;  intervalNVals   += nVals;
   totalCorrect    += correct;
   totalNVals      += nVals;
-  moveElapsedMs   += elapsedMs;
-  intervalTrainMs += elapsedMs;
+  moveElapsedMs   += elapsedMs;  intervalTrainMs += elapsedMs;
+
+  // Force the print/save block to fire on the limit-reaching iteration so
+  // the final stats are emitted before we break.
+  const limitReached = LIMIT_GAMES > 0 && g >= LIMIT_GAMES;
+  if (limitReached) nextPrintAt = 0;
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
@@ -392,8 +396,7 @@ while (true) {
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 
-  if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
-    saveModel(SAVE_PATH, model);
+  if (limitReached) {
     console.log();
     console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
     break;
