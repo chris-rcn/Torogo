@@ -26,16 +26,15 @@ if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_L
 }
 
 // Infer feature flags from the raw key types/ranges in the file.
-let has33c = false, hasA = false, hasB = false, hasD = false, hasT = false, hasE = false, hasF = false, hasStr = false;
+let has33c = false, hasD = false, hasT = false, hasE = false, hasStr = false;
 for (const [k] of raw.weights) {
   if (typeof k === 'string') { hasStr = true; continue; }
   if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.TYPE_A_RAW_BASE) has33c = true;
-  else if (k >= NPat.TYPE_A_RAW_BASE   && k < NPat.TYPE_B_RAW_BASE) hasA   = true;
-  else if (k >= NPat.TYPE_B_RAW_BASE   && k < NPat.TYPE_D_RAW_BASE) hasB   = true;
   else if (k >= NPat.TYPE_D_RAW_BASE   && k < NPat.TYPE_T_RAW_BASE) hasD   = true;
   else if (k >= NPat.TYPE_T_RAW_BASE   && k < NPat.TYPE_E_RAW_BASE) hasT   = true;
-  else if (k >= NPat.TYPE_E_RAW_BASE   && k < NPat.TYPE_F_RAW_BASE) hasE   = true;
-  else if (k >= NPat.TYPE_F_RAW_BASE)                                hasF   = true;
+  else if (k >= NPat.TYPE_E_RAW_BASE)                                hasE   = true;
+  // Old A/B-trained checkpoints have keys in [TYPE_A_RAW_BASE, TYPE_D_RAW_BASE)
+  // — silently ignored (no longer scored).
 }
 // String raw keys are produced by canonKeyG / canonKeyO / canonKeyQ.  We
 // can't tell them apart from the file alone, so default to the most recent
@@ -47,7 +46,7 @@ const useQ = hasStr && stringFlags.includes('Q');
 
 const weights = NPat.createWeights({
   initialCapacity: Math.max(1024, raw.weights.size | 0),
-  use33c: has33c, useA: hasA, useB: hasB, useD: hasD, useT: hasT, useE: hasE, useF: hasF,
+  use33c: has33c, useD: hasD, useT: hasT, useE: hasE,
   useG, useO, useQ,
 });
 for (const [k, v] of raw.weights) {
@@ -70,7 +69,7 @@ function getMove(game) {
 }
 
 console.error(`npat: loaded ${weights.size} weights from ${path.basename(weightsPath)} ` +
-  `(3x3c=${has33c} A=${hasA} B=${hasB} D=${hasD} T=${hasT} E=${hasE} F=${hasF} ` +
+  `(3x3c=${has33c} D=${hasD} T=${hasT} E=${hasE} ` +
   `${hasStr ? `[string-keyed: G=${useG} O=${useO} Q=${useQ}]` : ''})`);
 
 module.exports = { getMove };
