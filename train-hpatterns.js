@@ -206,16 +206,14 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), sizes: f.sizes.slice(0, f.count), count: f.count, val: f.val };
 
-    // Move source: when --ext is set, mix 10% random / 5% own-search / 85% ext.
-    // Otherwise: EPSILON random / 1-EPSILON own-search.
+    // Move source: EPSILON random / (1-EPSILON) {ext or own-search}.
     let move;
-    if (extGetMove) {
-      const r = Math.random();
-      if (r < 0.10)      move = game.randomLegalMove();
-      else if (r < 0.15) move = search1ply(game, maxSearch);
-      else               move = extGetMove(game).move;
+    if (Math.random() < EPSILON) {
+      move = game.randomLegalMove();
+    } else if (extGetMove) {
+      move = extGetMove(game).move;
     } else {
-      move = Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game, maxSearch);
+      move = search1ply(game, maxSearch);
     }
     const hasCaptures = move !== PASS && game.captureList(move).length > 0;
     game.play(move);
