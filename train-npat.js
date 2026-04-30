@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'no-tactical', 'force-tactical-limit', 'use-3x3c', 'use-G', 'use-O', 'use-Q', 'use-D', 'use-T', 'use-E']);
+  ['help', 'no-tactical', 'force-tactical-limit', 'use-3x3c', 'use-E']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
 const LR         = parseFloat(opts.lr || '0.05');
@@ -39,11 +39,6 @@ const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for rewar
 const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
 const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
 const USE_33C    = !!opts['use-3x3c'];                        // enable centered 3×3 window
-const USE_G      = !!opts['use-G'];                           // enable grown-pattern window
-const USE_O      = !!opts['use-O'];                           // enable octant-grown pattern
-const USE_Q      = !!opts['use-Q'];                           // enable quadrant-grown pattern
-const USE_D      = !!opts['use-D'];                           // enable 12-cell diamond pattern
-const USE_T      = !!opts['use-T'];                           // enable 4-cardinal-neighbours pattern
 const USE_E      = !!opts['use-E'];                           // enable 12-cell 3×4 block pattern
 const USE_TACT   = !opts['no-tactical'];                       // tactical features (default ON)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
@@ -52,7 +47,7 @@ const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ useTactical: USE_TACT, use33c: USE_33C, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T, useE: USE_E });
+let weights = NPat.createWeights({ useTactical: USE_TACT, use33c: USE_33C, useE: USE_E });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 let totalUpdates = 0;                // cumulative weight-update count across resumed runs
 
@@ -103,7 +98,7 @@ function loadWeights(filePath) {
   }
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    useTactical: USE_TACT, use33c: USE_33C, useG: USE_G, useO: USE_O, useQ: USE_Q, useD: USE_D, useT: USE_T, useE: USE_E,
+    useTactical: USE_TACT, use33c: USE_33C, useE: USE_E,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
@@ -153,23 +148,13 @@ function trainGame(N) {
       const n = state.count;
       const patIds33c = new Int32Array(n);
       patIds33c.set(state.patIds33c.subarray(0, n));
-      const patIdsG = new Int32Array(n);
-      patIdsG.set(state.patIdsG.subarray(0, n));
-      const patIdsO = new Int32Array(n);
-      patIdsO.set(state.patIdsO.subarray(0, n));
-      const patIdsQ = new Int32Array(n);
-      patIdsQ.set(state.patIdsQ.subarray(0, n));
-      const patIdsD = new Int32Array(n);
-      patIdsD.set(state.patIdsD.subarray(0, n));
-      const patIdsT = new Int32Array(n);
-      patIdsT.set(state.patIdsT.subarray(0, n));
       const patIdsE = new Int32Array(n);
       patIdsE.set(state.patIdsE.subarray(0, n));
       const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsG, patIdsO, patIdsQ, patIdsD, patIdsT, patIdsE, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsE, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -261,11 +246,6 @@ if (opts.help) {
   --epsilon F      uniform-random exploration rate (default 0)
   --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
   --use-3x3c       enable the centered 3×3 shape window (default off)
-  --use-G          enable the grown-pattern shape window (default off)
-  --use-O          enable the octant-grown shape window  (default off)
-  --use-Q          enable the quadrant-grown shape window (default off)
-  --use-D          enable the 12-cell diamond shape window (default off)
-  --use-T          enable the 4-cardinal-neighbours window (default off)
   --use-E          enable the 12-cell 3×4 block shape window (default off)
   --no-tactical    disable the ladder/tactical features (default on)
   --eval-agent S   reference agent in ai/ (default random)
@@ -291,7 +271,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}`);
-console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  G=${USE_G ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  O=${USE_O ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  Q=${USE_Q ? `ON(patStones=${NPat.PAT_STONES},max=${NPat.MAX_PAT_SIZE})` : 'off'}  D=${USE_D ? 'ON' : 'off'}  T=${USE_T ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}`);
+console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();

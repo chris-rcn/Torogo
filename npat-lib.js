@@ -110,54 +110,23 @@ const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 // tactical block.
 const SHAPE33C_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
 
-// Type A and Type B shape windows were removed — these constants remain only
-// to keep raw-key offsets for D/T/E stable so older D-trained checkpoints
-// load correctly.  No code creates A or B keys anymore.
-const TYPE_A_BASE        = 59049;  // 3^10  (legacy reservation)
-const TYPE_A_RAW_BASE    = SHAPE33C_RAW_BASE + 9 * CELLS_BASE;
-const TYPE_B_BASE        = 177147; // 3^11  (legacy reservation)
-const TYPE_B_RAW_BASE    = TYPE_A_RAW_BASE + TYPE_A_BASE;
-
-// Type D shape window: the 12 closest cells around the candidate (diamond
-// shape).  4 cardinal neighbours at distance 1, 4 diagonal at √2, 4 outer
-// cardinals at distance 2.  Fixed size, no growth, fully D4-symmetric.  Raw
-// key fits in 3^12 = 531k slots so we use a flat Int32Array cache.
-const TYPE_D_CELLS       = 12;
-const TYPE_D_BASE        = 531441; // 3^12
-const TYPE_D_RAW_BASE    = TYPE_B_RAW_BASE + TYPE_B_BASE; // above B range
-
-// Type T shape window: the 4 cardinal neighbours of the candidate (the cells
-// directly N, W, E, S).  Fixed, fully D4-symmetric.  3^4 = 81 raw slots.
-const TYPE_T_CELLS       = 4;
-const TYPE_T_BASE        = 81; // 3^4
-const TYPE_T_RAW_BASE    = TYPE_D_RAW_BASE + TYPE_D_BASE; // above D range
-
-// Type E shape window (12 cells, 3-wide × 4-tall block, hflip-symmetric).
-// Same offsets as A but with the two top-row corners filled in:
+// Type E shape window (12 cells, 3-wide × 4-tall block, hflip-symmetric):
 //
 //     x    x    x    (-1, -1) (-1, 0) (-1, +1)
 //     x    *    x    (0, -1)  (0, 0)  (0, +1)
 //     x    x    x    (+1, -1) (+1, 0) (+1, +1)
 //     x    x    x    (+2, -1) (+2, 0) (+2, +1)
 //
-// 3^12 = 531k raw slots — same alphabet size as D but a different footprint.
+// 3^12 = 531k raw slots; flat Int32Array cache.
+//
+// TYPE_E_RAW_BASE preserves the offset from when types A, B, D, T existed,
+// so existing E-trained checkpoints continue to load.  The legacy chain was
+//   SHAPE33C + 9*CELLS_BASE (was A) + 59049 (A_BASE) + 177147 (B_BASE)
+//                                   + 531441 (D_BASE) + 81 (T_BASE).
 const TYPE_E_CELLS       = 12;
 const TYPE_E_BASE        = 531441; // 3^12
-const TYPE_E_RAW_BASE    = TYPE_T_RAW_BASE + TYPE_T_BASE; // above T range
-
-// Grown shape window — one pattern per candidate whose cell set is chosen
-// dynamically.  The 9 cells of the 3×3 core are always included; we then add
-// the next-closest board cell (by game2's blended-distance function) one at a
-// time until the pattern contains at least PAT_STONES stones or reaches
-// MAX_PAT_SIZE cells.  The raw key is the byte sequence of cell values in
-// grow order, prefixed by the size, canonicalised over D4 by taking the
-// lex-min string across 8 σ-grows (each σ sees a rotated virtual-coord
-// tiebreaker, so rotated boards produce the same canonical key).  Raw keys
-// are STRINGS (not integers) so intern uses a Map<string, denseIdx>; they
-// live outside any flat base-offset.
-const MAX_PAT_SIZE       = 40;
-const PAT_STONES         = (typeof process !== 'undefined' && process.env && process.env.NPAT_PAT_STONES)
-  ? parseInt(process.env.NPAT_PAT_STONES, 10) : 1;
+const TYPE_E_RAW_BASE    = SHAPE33C_RAW_BASE + 9 * CELLS_BASE
+                         + 59049 + 177147 + 531441 + 81;
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
@@ -239,259 +208,20 @@ function createState(N) {
     }
   }
 
-  // Precomputed distance-sorted growth order per (candidate, σ).  For each
-  // candidate c and each D4 perm σ (indexed 0..7), growOrder[c * 8 *
-  // MAX_PAT_SIZE + σ * MAX_PAT_SIZE + k] = the k-th board cell to add under
-  // σ-growth.  Sort key is (distance(c, j), σ(j − c) lex) so distance drives
-  // the growth and the virtual σ-coord breaks ties.  Rotating the board by σ'
-  // swaps which σ produces which grown pattern, so canonicalising by lex-min
-  // over the 8 resulting encodings yields a D4-invariant key.
-  const growOrder = new Int32Array(cap * 8 * MAX_PAT_SIZE);
-  const d4fns = [
-    (dr, dc) => [ dr,  dc],
-    (dr, dc) => [ dc, -dr],
-    (dr, dc) => [-dr, -dc],
-    (dr, dc) => [-dc,  dr],
-    (dr, dc) => [ dr, -dc],
-    (dr, dc) => [-dr,  dc],
-    (dr, dc) => [ dc,  dr],
-    (dr, dc) => [-dc, -dr],
-  ];
-  const halfN = N / 2;
-  function _torDiff(a, b) {
-    let d = a - b;
-    if (d >  halfN) d -= N;
-    if (d < -halfN) d += N;
-    return d;
-  }
-  function _blendedDist(dr, dc) {
-    const adr = Math.abs(dr), adc = Math.abs(dc);
-    return 0.4 * (adr + adc) + 0.6 * Math.sqrt(adr * adr + adc * adc);
-  }
-  const entries = new Array(cap - 1);
-  for (let c = 0; c < cap; c++) {
-    const cr = (c / N) | 0, cc = c - cr * N;
-    let ei = 0;
-    for (let j = 0; j < cap; j++) {
-      if (j === c) continue;
-      const jr = (j / N) | 0, jc = j - jr * N;
-      const dr = _torDiff(jr, cr);
-      const dc = _torDiff(jc, cc);
-      entries[ei++] = { j, dr, dc, dist: _blendedDist(dr, dc) };
-    }
-    for (let s = 0; s < 8; s++) {
-      const perm = d4fns[s];
-      for (let k = 0; k < entries.length; k++) {
-        const [vr, vc] = perm(entries[k].dr, entries[k].dc);
-        entries[k].vr = vr;
-        entries[k].vc = vc;
-      }
-      entries.sort((a, b) => {
-        if (a.dist !== b.dist) return a.dist - b.dist;
-        if (a.vr   !== b.vr)   return a.vr   - b.vr;
-        return a.vc - b.vc;
-      });
-      const baseK = c * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
-      const limit = Math.min(MAX_PAT_SIZE, entries.length);
-      for (let k = 0; k < limit; k++) growOrder[baseK + k] = entries[k].j;
-    }
-  }
-
-  // Precomputed octant-growth order per (candidate, σ).  Slot k at
-  // octantOrder[c * 8 * MAX_PAT_SIZE + σ * MAX_PAT_SIZE + k] gives the k-th
-  // cell in the σ-octant-grow sequence: slots 0..7 are the 8 core cells (same
-  // as growOrder), slots 8.. are the cells in σ's octant (outside the core)
-  // in distance order with σ-virtual-coord tiebreak.
-  //
-  // The canonical octant (for σ=0) is SSE: cells (dr, dc) with dr > 0 and
-  // 0 ≤ dc ≤ dr — the closed 45° wedge between "directly south" (the dc=0
-  // vertical) and the "SE" diagonal (dc=dr), inclusive of both boundary
-  // rays.  The other 7 σs rotate / reflect this wedge onto the other 7
-  // octants of the plane.
-  const octantOrder = new Int32Array(cap * 8 * MAX_PAT_SIZE).fill(-1);
-  const sigmaInv = [
-    (dr, dc) => [ dr,  dc],
-    (dr, dc) => [-dc,  dr],
-    (dr, dc) => [-dr, -dc],
-    (dr, dc) => [ dc, -dr],
-    (dr, dc) => [ dr, -dc],
-    (dr, dc) => [-dr,  dc],
-    (dr, dc) => [ dc,  dr],
-    (dr, dc) => [-dc, -dr],
-  ];
-  for (let c = 0; c < cap; c++) {
-    for (let s = 0; s < 8; s++) {
-      const baseK = c * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
-      // Slots 0..7: copy core from growOrder.
-      for (let k = 0; k < 8; k++) octantOrder[baseK + k] = growOrder[baseK + k];
-      // Slots 8..: cells in σ-octant outside the core.
-      const cr = (c / N) | 0, cc = c - cr * N;
-      const invPerm = sigmaInv[s];
-      const perm    = d4fns[s];
-      const out = [];
-      for (let j = 0; j < cap; j++) {
-        if (j === c) continue;
-        const jr = (j / N) | 0, jc = j - jr * N;
-        const dr = _torDiff(jr, cr);
-        const dc = _torDiff(jc, cc);
-        // Skip core cells.
-        if (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) continue;
-        // σ-octant membership: apply σ⁻¹ and test canonical-SSE condition.
-        const [pr, pc] = invPerm(dr, dc);
-        if (!(pr > 0 && pc >= 0 && pc <= pr)) continue;
-        const [vr, vc] = perm(dr, dc);
-        out.push({ j, dist: _blendedDist(dr, dc), vr, vc });
-      }
-      out.sort((a, b) => {
-        if (a.dist !== b.dist) return a.dist - b.dist;
-        if (a.vr   !== b.vr)   return a.vr   - b.vr;
-        return a.vc - b.vc;
-      });
-      const lim = Math.min(out.length, MAX_PAT_SIZE - 8);
-      for (let k = 0; k < lim; k++) octantOrder[baseK + 8 + k] = out[k].j;
-    }
-  }
-
-  // Precomputed quadrant-growth order per (candidate, σ_q ∈ 0..7).  Same
-  // shape as octantOrder but each "wedge" is a 90° quadrant (twice as wide
-  // as an octant).  Eight wedges total: four CARDINAL-centred quadrants and
-  // four DIAGONAL-centred quadrants, half-overlapping each other so every
-  // off-axis cell belongs to exactly two wedges (one cardinal + one
-  // diagonal).  Wedge definitions (slot = σ_q):
-  //   0  S  cardinal: dr > 0 AND |dc| ≤ dr
-  //   1  SE diagonal: dr > 0 AND dc > 0
-  //   2  E  cardinal: dc > 0 AND |dr| ≤ dc
-  //   3  NE diagonal: dr < 0 AND dc > 0
-  //   4  N  cardinal: dr < 0 AND |dc| ≤ -dr
-  //   5  NW diagonal: dr < 0 AND dc < 0
-  //   6  W  cardinal: dc < 0 AND |dr| ≤ -dc
-  //   7  SW diagonal: dr > 0 AND dc < 0
-  // Slots 0..7 of each wedge are the 8 core cells (shared via growOrder),
-  // slots 8.. are the wedge cells outside the core in distance order with a
-  // (Δr, Δc) lex tiebreak.
-  const quadrantOrder = new Int32Array(cap * 8 * MAX_PAT_SIZE).fill(-1);
-  function _wedgeMember(qi, dr, dc) {
-    switch (qi) {
-      case 0: return dr > 0 && Math.abs(dc) <= dr;          // S
-      case 1: return dr >= 0 && dc >= 0;                    // SE (incl. row & col)
-      case 2: return dc > 0 && Math.abs(dr) <= dc;          // E
-      case 3: return dr <= 0 && dc >= 0;                    // NE (incl. row & col)
-      case 4: return dr < 0 && Math.abs(dc) <= -dr;         // N
-      case 5: return dr <= 0 && dc <= 0;                    // NW (incl. row & col)
-      case 6: return dc < 0 && Math.abs(dr) <= -dc;         // W
-      case 7: return dr >= 0 && dc <= 0;                    // SW (incl. row & col)
-    }
-    return false;
-  }
-  for (let c = 0; c < cap; c++) {
-    for (let q = 0; q < 8; q++) {
-      const baseK = c * 8 * MAX_PAT_SIZE + q * MAX_PAT_SIZE;
-      // Slots 0..7: copy core from growOrder σ=0 (deterministic order;
-      // canonicalisation across the 8 wedges takes the lex-min anyway).
-      for (let k = 0; k < 8; k++) quadrantOrder[baseK + k] = growOrder[c * 8 * MAX_PAT_SIZE + k];
-      const cr = (c / N) | 0, cc = c - cr * N;
-      const out = [];
-      for (let j = 0; j < cap; j++) {
-        if (j === c) continue;
-        const jr = (j / N) | 0, jc = j - jr * N;
-        const dr = _torDiff(jr, cr);
-        const dc = _torDiff(jc, cc);
-        if (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) continue;
-        if (!_wedgeMember(q, dr, dc)) continue;
-        out.push({ j, dist: _blendedDist(dr, dc), dr, dc });
-      }
-      out.sort((a, b) => {
-        if (a.dist !== b.dist) return a.dist - b.dist;
-        if (a.dr   !== b.dr)   return a.dr   - b.dr;
-        return a.dc - b.dc;
-      });
-      const lim = Math.min(out.length, MAX_PAT_SIZE - 8);
-      for (let k = 0; k < lim; k++) quadrantOrder[baseK + 8 + k] = out[k].j;
-    }
-  }
-
-  // Precomputed per-candidate read sets: cells any σ-grow could touch at
-  // MAX_PAT_SIZE, sorted by (distance, Δr, Δc) and grouped into shells.
-  // Returns { cells, shellStart, cellToShell } per candidate — canonKeyG/O
-  // use these to ensure the hash and canonical are computed over the same
-  // set of cells (shells 0..maxShell from _shellWalk).
-  function _buildReadSet(orderArr) {
-    const out = new Array(cap);
-    const seen = new Uint8Array(cap);
-    for (let c = 0; c < cap; c++) {
-      seen.fill(0);
-      const cr = (c / N) | 0, cc = c - cr * N;
-      const list = [];
-      for (let s = 0; s < 8; s++) {
-        const baseK = c * 8 * MAX_PAT_SIZE + s * MAX_PAT_SIZE;
-        for (let k = 0; k < MAX_PAT_SIZE; k++) {
-          const bi = orderArr[baseK + k];
-          if (bi < 0) break;
-          if (!seen[bi]) {
-            seen[bi] = 1;
-            const br = (bi / N) | 0, bc = bi - br * N;
-            const dr = _torDiff(br, cr);
-            const dc = _torDiff(bc, cc);
-            list.push({ bi, dr, dc, dist: _blendedDist(dr, dc) });
-          }
-        }
-      }
-      list.sort((a, b) => {
-        if (a.dist !== b.dist) return a.dist - b.dist;
-        if (a.dr   !== b.dr)   return a.dr   - b.dr;
-        return a.dc - b.dc;
-      });
-      const cellsArr = new Int32Array(list.length);
-      for (let i = 0; i < list.length; i++) cellsArr[i] = list[i].bi;
-      // Shell boundaries: cells at distinct blended distances form shells.
-      const shellStart = [0];
-      for (let i = 1; i < list.length; i++) {
-        if (list[i].dist !== list[i - 1].dist) shellStart.push(i);
-      }
-      shellStart.push(list.length);
-      // cellToShell: for each board index in this candidate's readSet, the
-      // shell it belongs to.  -1 for cells not in the readSet.  Used by
-      // canonKeyG/O to gate per-σ grows at the same maxShell the hash did.
-      const cellToShell = new Int8Array(cap).fill(-1);
-      for (let s = 0; s < shellStart.length - 1; s++) {
-        for (let i = shellStart[s]; i < shellStart[s + 1]; i++) {
-          cellToShell[list[i].bi] = s;
-        }
-      }
-      out[c] = {
-        cells: cellsArr,
-        shellStart: new Int32Array(shellStart),
-        cellToShell,
-      };
-    }
-    return out;
-  }
-  const readSetG = _buildReadSet(growOrder);
-  const readSetO = _buildReadSet(octantOrder);
 
   return {
     N,
     moves:     new Int32Array(cap),
     patIds33c: new Int32Array(cap),
-    patIdsG:   new Int32Array(cap),
-    patIdsO:   new Int32Array(cap),
-    patIdsQ:   new Int32Array(cap),
-    patIdsD:   new Int32Array(cap),
-    patIdsT:   new Int32Array(cap),
     patIdsE:   new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
     ladder:    { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
-    growOrder,
-    octantOrder,
-    quadrantOrder,
-    readSetG,
-    readSetO,
-    // Reusable touched-index scratch for reinforceUpdate.  Upper bound is
-    // 10 * (n + 1) dense idxs (one per shape type, chosen + all moves).
-    touched:   new Int32Array(10 * (cap + 1)),
+    // Reusable touched-index scratch for reinforceUpdate.  Two shape types
+    // (3×3c + E), one dense idx per (chosen + each move).
+    touched:   new Int32Array(2 * (cap + 1)),
     count:     0,
   };
 }
@@ -517,18 +247,13 @@ function createWeights(opts) {
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
   let useTactical = true;
-  let use33c = false, useG = false, useO = false, useQ = false, useD = false, useT = false, useE = false;
+  let use33c = false, useE = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
     if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
     if (opts.useTactical === false) useTactical = false;
     if (opts.use33c) use33c = true;
-    if (opts.useG)   useG   = true;
-    if (opts.useO)   useO   = true;
-    if (opts.useQ)   useQ   = true;
-    if (opts.useD)   useD   = true;
-    if (opts.useT)   useT   = true;
     if (opts.useE)   useE   = true;
   }
   const w = {
@@ -537,7 +262,7 @@ function createWeights(opts) {
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { useTactical, use33c, useG, useO, useQ, useD, useT, useE },
+    cfg:   { useTactical, use33c, useE },
   };
   if (useTactical) {
     for (let k = 0; k < N_TACT_SLOTS; k++) {
@@ -626,99 +351,8 @@ function canonKey(relPos, cells) {
 const _windowCells  = new Int32Array(9);
 const _patch5       = new Int32Array(25); // 5×5 (rows [-2,+2] × cols [-2,+2])
 
-// Type D shape (12 closest cells, diamond, fully D4-symmetric).  Row-major
-// layout sorted by (Δr, Δc) lex over the offset list above.  Indices:
-//   0  (-2,  0)
-//   1  (-1, -1)   2  (-1,  0)   3  (-1, +1)
-//   4  ( 0, -2)   5  ( 0, -1)   6  ( 0, +1)   7  ( 0, +2)
-//   8  (+1, -1)   9  (+1,  0)  10  (+1, +1)
-//  11  (+2,  0)
-const _DShape = [
-  [-2,  0], [-1, -1], [-1,  0], [-1, +1],
-  [ 0, -2], [ 0, -1], [ 0, +1], [ 0, +2],
-  [+1, -1], [+1,  0], [+1, +1], [+2,  0],
-];
-
-const _DPatchIdx    = new Int32Array(8 * TYPE_D_CELLS);
-const _DCellWeights = new Int32Array(TYPE_D_CELLS);
-(function () {
-  const d4 = [
-    (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
-    (r, c) => [ r, -c], (r, c) => [-r,  c], (r, c) => [ c,  r], (r, c) => [-c, -r],
-  ];
-  for (let s = 0; s < 8; s++) {
-    for (let i = 0; i < TYPE_D_CELLS; i++) {
-      const [r, c] = d4[s](_DShape[i][0], _DShape[i][1]);
-      _DPatchIdx[s * TYPE_D_CELLS + i] = (r + 2) * 5 + (c + 2);
-    }
-  }
-  let w = 1;
-  for (let i = 0; i < TYPE_D_CELLS; i++) { _DCellWeights[i] = w; w *= CELL_BASE; }
-})();
-
-const _canonKeyDCache = new Int32Array(TYPE_D_BASE).fill(-1); // 2.1MB
-
-function canonKeyD(patch) {
-  const idx = _DPatchIdx;
-  const cw  = _DCellWeights;
-  let cacheKey = 0;
-  for (let i = 0; i < TYPE_D_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
-  const cached = _canonKeyDCache[cacheKey];
-  if (cached !== -1) return cached;
-  let best = cacheKey;
-  for (let s = 1; s < 8; s++) {
-    const o = s * TYPE_D_CELLS;
-    let raw = 0;
-    for (let i = 0; i < TYPE_D_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
-    if (raw < best) best = raw;
-  }
-  _canonKeyDCache[cacheKey] = best;
-  return best;
-}
-
-// Type T shape: 4 cardinal neighbours.  Indices 0..3 in row-major order.
-const _TShape = [
-  [-1,  0], [ 0, -1], [ 0, +1], [+1,  0],
-];
-const _TPatchIdx    = new Int32Array(8 * TYPE_T_CELLS);
-const _TCellWeights = new Int32Array(TYPE_T_CELLS);
-(function () {
-  const d4 = [
-    (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
-    (r, c) => [ r, -c], (r, c) => [-r,  c], (r, c) => [ c,  r], (r, c) => [-c, -r],
-  ];
-  for (let s = 0; s < 8; s++) {
-    for (let i = 0; i < TYPE_T_CELLS; i++) {
-      const [r, c] = d4[s](_TShape[i][0], _TShape[i][1]);
-      _TPatchIdx[s * TYPE_T_CELLS + i] = (r + 2) * 5 + (c + 2);
-    }
-  }
-  let w = 1;
-  for (let i = 0; i < TYPE_T_CELLS; i++) { _TCellWeights[i] = w; w *= CELL_BASE; }
-})();
-
-const _canonKeyTCache = new Int32Array(TYPE_T_BASE).fill(-1); // tiny, 81 slots
-
-function canonKeyT(patch) {
-  const idx = _TPatchIdx;
-  const cw  = _TCellWeights;
-  let cacheKey = 0;
-  for (let i = 0; i < TYPE_T_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
-  const cached = _canonKeyTCache[cacheKey];
-  if (cached !== -1) return cached;
-  let best = cacheKey;
-  for (let s = 1; s < 8; s++) {
-    const o = s * TYPE_T_CELLS;
-    let raw = 0;
-    for (let i = 0; i < TYPE_T_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
-    if (raw < best) best = raw;
-  }
-  _canonKeyTCache[cacheKey] = best;
-  return best;
-}
-
-// Type E shape (12 cells, full 3×4 block including the candidate cell, hflip-
-// symmetric).  Row-major layout, candidate at index 4.
+// Type E shape (12 cells, full 3×4 block including the candidate cell,
+// hflip-symmetric).  Row-major layout, candidate at index 4.
 const _EShape = [
   [-1, -1], [-1,  0], [-1, +1],
   [ 0, -1], [ 0,  0], [ 0, +1],
@@ -763,206 +397,6 @@ function canonKeyE(patch) {
   return best;
 }
 
-
-// Scratch byte buffer for grown-pattern serialization (size prefix + up to
-// MAX_PAT_SIZE cells).
-const _growBytes = new Uint8Array(MAX_PAT_SIZE + 1);
-
-// ── Canonical-key caches keyed by 32-bit FNV-1a hash ─────────────────────────
-//
-// Each candidate's readSet (cells any σ-grow might touch, sorted by relative
-// offset) is hashed to a 32-bit int via FNV-1a over mover-relative values.
-// The cache maps that int to the canonical string — the cache NEVER clears,
-// so memory grows with the working set of distinct local patterns.
-// 32-bit hashes mean rare collisions (~1 per 1M entries by birthday); those
-// return a wrong canonical for those few patterns, which we treat as noise
-// in the gradient signal.
-//
-// V8 caps a single Map at ~16.7M entries, so we shard into 16 Maps keyed by
-// the low 4 bits of the hash — total capacity ~268M entries.
-const CACHE_SHARD_BITS = 4;
-const CACHE_SHARD_COUNT = 1 << CACHE_SHARD_BITS;
-const CACHE_SHARD_MASK  = CACHE_SHARD_COUNT - 1;
-const _canonKeyGCaches = new Array(CACHE_SHARD_COUNT);
-const _canonKeyOCaches = new Array(CACHE_SHARD_COUNT);
-const _canonKeyQCaches = new Array(CACHE_SHARD_COUNT);
-for (let i = 0; i < CACHE_SHARD_COUNT; i++) {
-  _canonKeyGCaches[i] = new Map();
-  _canonKeyOCaches[i] = new Map();
-  _canonKeyQCaches[i] = new Map();
-}
-
-// Walk the readSet shell by shell, returning { hash, maxShell }:
-//   hash       — FNV-1a over cell values in included shells
-//   maxShell   — the highest shell index included (shells 0..maxShell are
-//                in; shells past maxShell are "invisible")
-// A shell is always INCLUDED first; we then check whether the cumulative
-// stone count has reached PAT_STONES and exit if so — the last shell is
-// the one that brought us to/over the limit.  The canonKeyG/O functions
-// read the same maxShell so that hash and canonical are computed over the
-// SAME set of cells.
-function _shellWalk(readSet, cells, cur, out) {
-  const cellArr    = readSet.cells;
-  const shellStart = readSet.shellStart;
-  const numShells  = shellStart.length - 1;
-  let h = 2166136261;
-  let stones = 0;
-  let maxShell = -1;
-  for (let s = 0; s < numShells; s++) {
-    const start = shellStart[s];
-    const end   = shellStart[s + 1];
-    for (let i = start; i < end; i++) {
-      const ci = cells[cellArr[i]];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      h = Math.imul(h ^ v, 16777619);
-      if (v !== 0) stones++;
-    }
-    maxShell = s;
-    if (stones >= PAT_STONES) break;
-  }
-  out.hash = h | 0;
-  out.maxShell = maxShell;
-}
-
-const _shellWalkOut = { hash: 0, maxShell: -1 };
-
-// canonKeyG(game, candIdx, state, cur) — grow the pattern 8 times (one per
-// D4 σ) and return the lex-min string encoding.  The 8 cells of the 3×3
-// core (the candidate's neighbours; the candidate itself is always empty
-// and carries no info) are ALWAYS included unconditionally.  Beyond the
-// core, we add the next-closest board cell by blended distance (with
-// σ-virtual (vr, vc) tiebreak) one at a time as long as the stone count is
-// strictly less than PAT_STONES, up to MAX_PAT_SIZE total cells.
-function canonKeyG(game, candIdx, state, cur) {
-  const cells = game.cells;
-  const rs = state.readSetG[candIdx];
-  _shellWalk(rs, cells, cur, _shellWalkOut);
-  const h = _shellWalkOut.hash;
-  const maxShell = _shellWalkOut.maxShell;
-  const shard = _canonKeyGCaches[h & CACHE_SHARD_MASK];
-  const cached = shard.get(h);
-  if (cached !== undefined) return cached;
-  const growOrd = state.growOrder;
-  const bytes   = _growBytes;
-  const cellToShell = rs.cellToShell;
-  const strideC = 8 * MAX_PAT_SIZE;
-  let best = null;
-  for (let sigma = 0; sigma < 8; sigma++) {
-    const baseK = candIdx * strideC + sigma * MAX_PAT_SIZE;
-    let size = 0;
-    for (let k = 0; k < MAX_PAT_SIZE; k++) {
-      const bi = growOrd[baseK + k];
-      if (bi < 0) break;
-      if (cellToShell[bi] > maxShell) break;
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      size++;
-    }
-    bytes[0] = size;
-    let str = '';
-    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
-    if (best === null || str < best) best = str;
-  }
-  shard.set(h, best);
-  return best;
-}
-
-// canonKeyO(game, candIdx, state, cur) — 3×3 core + one auto-expanding octant.
-// Like canonKeyG but growth is restricted to cells in the σ-octant (see
-// createState for the octant definition).  The 8 D4 variants rotate the
-// octant through all 8 directions; taking lex-min across the encodings
-// gives a D4-invariant canonical key.
-function canonKeyO(game, candIdx, state, cur) {
-  const cells = game.cells;
-  const rs = state.readSetO[candIdx];
-  _shellWalk(rs, cells, cur, _shellWalkOut);
-  const h = _shellWalkOut.hash;
-  const maxShell = _shellWalkOut.maxShell;
-  const shard = _canonKeyOCaches[h & CACHE_SHARD_MASK];
-  const cached = shard.get(h);
-  if (cached !== undefined) return cached;
-  const octOrd = state.octantOrder;
-  const bytes  = _growBytes;
-  const cellToShell = rs.cellToShell;
-  const strideC = 8 * MAX_PAT_SIZE;
-  let best = null;
-  for (let sigma = 0; sigma < 8; sigma++) {
-    const baseK = candIdx * strideC + sigma * MAX_PAT_SIZE;
-    let size = 0;
-    for (let k = 0; k < MAX_PAT_SIZE; k++) {
-      const bi = octOrd[baseK + k];
-      if (bi < 0) break;
-      if (cellToShell[bi] > maxShell) break;
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[size + 1] = v;
-      size++;
-    }
-    bytes[0] = size;
-    let str = '';
-    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
-    if (best === null || str < best) best = str;
-  }
-  shard.set(h, best);
-  return best;
-}
-
-// canonKeyQ — quadrant-grown pattern (8 wedges, each 90° wide; cardinal and
-// diagonal quadrants alternating with 50% pairwise overlap).  Reuses the
-// all-direction readSet (readSetG) for the cache key since quadrants
-// collectively cover all directions; each σ_q's grow uses the precomputed
-// quadrantOrder.  Same shell-cutoff invariant as canonKeyG/O — both hash
-// and canonical respect cellToShell ≤ maxShell, and growth always includes
-// whole shells (never stops mid-shell).  Within a shell, cells are emitted
-// in their precomputed (Δr, Δc) lex order so position information is
-// preserved.
-function canonKeyQ(game, candIdx, state, cur) {
-  const cells = game.cells;
-  const rs = state.readSetG[candIdx];
-  _shellWalk(rs, cells, cur, _shellWalkOut);
-  const h = _shellWalkOut.hash;
-  const maxShell = _shellWalkOut.maxShell;
-  const shard = _canonKeyQCaches[h & CACHE_SHARD_MASK];
-  const cached = shard.get(h);
-  if (cached !== undefined) return cached;
-  const quadOrd = state.quadrantOrder;
-  const bytes   = _growBytes;
-  const cellToShell = rs.cellToShell;
-  const strideC = 8 * MAX_PAT_SIZE;
-  let best = null;
-  for (let q = 0; q < 8; q++) {
-    const baseK = candIdx * strideC + q * MAX_PAT_SIZE;
-    let size = 0;
-    for (let k = 0; k < MAX_PAT_SIZE; k++) {
-      const bi = quadOrd[baseK + k];
-      if (bi < 0) break;
-      if (cellToShell[bi] > maxShell) break;
-      const ci = cells[bi];
-      let v;
-      if (ci === 0)        v = CELL_EMPTY;
-      else if (ci === cur) v = CELL_FRIEND;
-      else                 v = CELL_FOE;
-      bytes[++size] = v;
-    }
-    bytes[0] = size;
-    let str = '';
-    for (let k = 0; k <= size; k++) str += String.fromCharCode(bytes[k]);
-    if (best === null || str < best) best = str;
-  }
-  shard.set(h, best);
-  return best;
-}
-
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
 // Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
@@ -1001,18 +435,8 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3)) : null;
   const tactCount = li ? li.tactCount : null;
   const doUse33c = !cfg || cfg.use33c;
-  const doUseG   = !cfg || cfg.useG;
-  const doUseO   = !cfg || cfg.useO;
-  const doUseQ   = !cfg || cfg.useQ;
-  const doUseD   = !cfg || cfg.useD;
-  const doUseT   = !cfg || cfg.useT;
   const doUseE   = !cfg || cfg.useE;
   const patIds33c = state.patIds33c;
-  const patIdsG   = state.patIdsG;
-  const patIdsO   = state.patIdsO;
-  const patIdsQ   = state.patIdsQ;
-  const patIdsD   = state.patIdsD;
-  const patIdsT   = state.patIdsT;
   const patIdsE   = state.patIdsE;
 
   for (let ei = 0; ei < ec; ei++) {
@@ -1044,42 +468,6 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       }
       const raw33c = SHAPE33C_RAW_BASE + canonKey(4, wc9);
       patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
-    }
-
-
-    // Grown shape — single canonical string key per candidate.  Raw key is
-    // a string so it bypasses the integer raw-id ranges used by the other
-    // shapes; interning still goes through the same weights.map.
-    if (doUseG) {
-      const rawG = canonKeyG(game, idx, state, cur);
-      patIdsG[count] = wMap ? _internWeight(weights, rawG) : -1;
-    }
-
-    // Octant-grown shape — 3×3 core + auto-expanding into one of 8 D4-
-    // canonicalised octants until patStones are accumulated (or the octant
-    // cells are exhausted).
-    if (doUseO) {
-      const rawO = canonKeyO(game, idx, state, cur);
-      patIdsO[count] = wMap ? _internWeight(weights, rawO) : -1;
-    }
-
-    // Quadrant-grown shape — same shell-cutoff hash as G/O, but each σ_q
-    // grows in one of 8 90° wedges (4 cardinal + 4 diagonal, half-overlap).
-    if (doUseQ) {
-      const rawQ = canonKeyQ(game, idx, state, cur);
-      patIdsQ[count] = wMap ? _internWeight(weights, rawQ) : -1;
-    }
-
-    // Type D shape — fixed 12 closest cells around the candidate (diamond).
-    if (doUseD) {
-      const rawD = TYPE_D_RAW_BASE + canonKeyD(patch);
-      patIdsD[count] = wMap ? _internWeight(weights, rawD) : rawD;
-    }
-
-    // Type T shape — 4 cardinal neighbours of the candidate.
-    if (doUseT) {
-      const rawT = TYPE_T_RAW_BASE + canonKeyT(patch);
-      patIdsT[count] = wMap ? _internWeight(weights, rawT) : rawT;
     }
 
     // Type E shape — 12-cell 3×4 block including the candidate cell.
@@ -1119,11 +507,6 @@ function _score(state, i, weights) {
     for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
   }
   if (cfg.use33c) s += vals[state.patIds33c[i]];
-  if (cfg.useG)   s += vals[state.patIdsG[i]];
-  if (cfg.useO)   s += vals[state.patIdsO[i]];
-  if (cfg.useQ)   s += vals[state.patIdsQ[i]];
-  if (cfg.useD)   s += vals[state.patIdsD[i]];
-  if (cfg.useT)   s += vals[state.patIdsT[i]];
   if (cfg.useE)   s += vals[state.patIdsE[i]];
   return s;
 }
@@ -1153,11 +536,6 @@ function _computeSoftmax(state, weights) {
     for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
   }
   const pid33c = cfg.use33c ? state.patIds33c : null;
-  const pidG   = cfg.useG   ? state.patIdsG   : null;
-  const pidO   = cfg.useO   ? state.patIdsO   : null;
-  const pidQ   = cfg.useQ   ? state.patIdsQ   : null;
-  const pidD   = cfg.useD   ? state.patIdsD   : null;
-  const pidT   = cfg.useT   ? state.patIdsT   : null;
   const pidE   = cfg.useE   ? state.patIdsE   : null;
 
   let maxL = -Infinity;
@@ -1168,11 +546,6 @@ function _computeSoftmax(state, weights) {
       for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
     }
     if (pid33c) s += vals[pid33c[i]];
-    if (pidG)   s += vals[pidG[i]];
-    if (pidO)   s += vals[pidO[i]];
-    if (pidQ)   s += vals[pidQ[i]];
-    if (pidD)   s += vals[pidD[i]];
-    if (pidT)   s += vals[pidT[i]];
     if (pidE)   s += vals[pidE[i]];
     lg[i] = s;
     if (s > maxL) maxL = s;
@@ -1243,11 +616,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const touched  = state.touched;
   const cfg      = weights.cfg;
   const patIds33c = cfg.use33c ? state.patIds33c : null;
-  const patIdsG   = cfg.useG   ? state.patIdsG   : null;
-  const patIdsO   = cfg.useO   ? state.patIdsO   : null;
-  const patIdsQ   = cfg.useQ   ? state.patIdsQ   : null;
-  const patIdsD   = cfg.useD   ? state.patIdsD   : null;
-  const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
   let tc = 0;
 
@@ -1255,31 +623,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   // Chosen move contributes +step to each of its active shape pids.
   if (patIds33c) {
     const idx = patIds33c[chosenIndex];
-    touched[tc++] = idx;
-    delta[idx] += step;
-  }
-  if (patIdsG) {
-    const idx = patIdsG[chosenIndex];
-    touched[tc++] = idx;
-    delta[idx] += step;
-  }
-  if (patIdsO) {
-    const idx = patIdsO[chosenIndex];
-    touched[tc++] = idx;
-    delta[idx] += step;
-  }
-  if (patIdsQ) {
-    const idx = patIdsQ[chosenIndex];
-    touched[tc++] = idx;
-    delta[idx] += step;
-  }
-  if (patIdsD) {
-    const idx = patIdsD[chosenIndex];
-    touched[tc++] = idx;
-    delta[idx] += step;
-  }
-  if (patIdsT) {
-    const idx = patIdsT[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -1295,31 +638,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     const sub = step * pi;
     if (patIds33c) {
       const idx = patIds33c[i];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
-    }
-    if (patIdsG) {
-      const idx = patIdsG[i];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
-    }
-    if (patIdsO) {
-      const idx = patIdsO[i];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
-    }
-    if (patIdsQ) {
-      const idx = patIdsQ[i];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
-    }
-    if (patIdsD) {
-      const idx = patIdsD[i];
-      touched[tc++] = idx;
-      delta[idx] -= sub;
-    }
-    if (patIdsT) {
-      const idx = patIdsT[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -1390,11 +708,6 @@ function entropyBonusUpdate(state, weights, beta) {
   const touched  = state.touched;
   const cfg      = weights.cfg;
   const patIds33c = cfg.use33c ? state.patIds33c : null;
-  const patIdsG   = cfg.useG   ? state.patIdsG   : null;
-  const patIdsO   = cfg.useO   ? state.patIdsO   : null;
-  const patIdsQ   = cfg.useQ   ? state.patIdsQ   : null;
-  const patIdsD   = cfg.useD   ? state.patIdsD   : null;
-  const patIdsT   = cfg.useT   ? state.patIdsT   : null;
   const patIdsE   = cfg.useE   ? state.patIdsE   : null;
   if (_entScratch.length < n) _entScratch = new Float64Array(n);
   const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
@@ -1419,31 +732,6 @@ function entropyBonusUpdate(state, weights, beta) {
     if (ci === 0) continue;
     if (patIds33c) {
       const idx = patIds33c[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsG) {
-      const idx = patIdsG[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsO) {
-      const idx = patIdsO[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsQ) {
-      const idx = patIdsQ[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsD) {
-      const idx = patIdsD[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsT) {
-      const idx = patIdsT[i];
       touched[tc++] = idx;
       delta[idx] += ci;
     }
@@ -1483,12 +771,7 @@ const NPatterns = {
   entropyBonusUpdate,
   annotateLadders,
   canonKey,
-  canonKeyD,
-  canonKeyT,
   canonKeyE,
-  canonKeyG,
-  canonKeyO,
-  canonKeyQ,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -1498,12 +781,7 @@ const NPatterns = {
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
   SHAPE33C_RAW_BASE,
-  TYPE_A_BASE, TYPE_A_RAW_BASE,
-  TYPE_B_BASE, TYPE_B_RAW_BASE,
-  TYPE_D_CELLS, TYPE_D_BASE, TYPE_D_RAW_BASE,
-  TYPE_T_CELLS, TYPE_T_BASE, TYPE_T_RAW_BASE,
   TYPE_E_CELLS, TYPE_E_BASE, TYPE_E_RAW_BASE,
-  MAX_PAT_SIZE, PAT_STONES,
   // Exposed for tests.
   _D4,
 };
