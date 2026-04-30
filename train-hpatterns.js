@@ -98,9 +98,15 @@ function absoluteOutcome(game) {
 function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
-  const perFeature = (target - features.val) / n;
   const { keys, pols, sizes } = features;
   const hasFrozen = FROZEN.size > 0;
+  let nActive = n;
+  if (hasFrozen) {
+    nActive = 0;
+    for (let i = 0; i < n; i++) if (!FROZEN.has(sizes[i])) nActive++;
+    if (nActive === 0) return;
+  }
+  const perFeature = (target - features.val) / nActive;
   if (MOMENTUM === 0) {
     const step = lr * perFeature;
     for (let i = 0; i < n; i++) {
