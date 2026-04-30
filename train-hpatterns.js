@@ -35,6 +35,7 @@ const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
 // spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not extracted.
 const SPEC_RAW = opts.spec || '2:4';
+const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const SPEC = {};
 for (const part of SPEC_RAW.split(',')) {
   const [k, v] = part.split(':');
@@ -296,8 +297,7 @@ while (true) {
   totalMoves      += moves;
   intervalGames++;
   intervalMoves   += moves;
-  intervalCorrect += correct;
-  intervalNVals   += nVals;
+  intervalCorrect += correct;  intervalNVals   += nVals;
   totalCorrect    += correct;
   totalNVals      += nVals;
   moveElapsedMs   += elapsedMs;
@@ -363,5 +363,12 @@ while (true) {
 
     saveModel(SAVE_PATH, model);
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
+  }
+
+  if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
+    saveModel(SAVE_PATH, model);
+    console.log();
+    console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
+    break;
   }
 }
