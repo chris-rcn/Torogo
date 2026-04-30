@@ -30,6 +30,7 @@ const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games
+const EXT_AGENT  = opts.ext  || '';   // off-policy move source: 80% of moves come from this agent
 const EPSILON    = Math.min(parseFloat(opts.epsilon   || '0.1'),  0.9999);
 const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
@@ -205,7 +206,17 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), sizes: f.sizes.slice(0, f.count), count: f.count, val: f.val };
 
-    const move = Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game, maxSearch);
+    // Move source: when --ext is set, mix 10% random / 10% own-search / 80% ext.
+    // Otherwise: EPSILON random / 1-EPSILON own-search.
+    let move;
+    if (extGetMove) {
+      const r = Math.random();
+      if (r < 0.10)      move = game.randomLegalMove();
+      else if (r < 0.20) move = search1ply(game, maxSearch);
+      else               move = extGetMove(game).move;
+    } else {
+      move = Math.random() < EPSILON ? game.randomLegalMove() : search1ply(game, maxSearch);
+    }
     const hasCaptures = move !== PASS && game.captureList(move).length > 0;
     game.play(move);
 
@@ -256,6 +267,9 @@ function evalVsReference(N, refGetMove, nGames) {
 const evalGetMove = EVAL_AGENT
   ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
   : null;
+const extGetMove = EXT_AGENT
+  ? require(path.join(__dirname, 'ai', EXT_AGENT + '.js')).getMove
+  : null;
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
@@ -272,7 +286,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
