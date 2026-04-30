@@ -264,7 +264,6 @@ console.log();
 const col = n => String(n).padStart;
 const headerCols = [
   'game'   .padStart(7),
-  'elapsed'.padStart(8),
   'tGameMs'.padStart(7),
   'weights'.padStart(8),
   'canonKs'.padStart(8),
@@ -347,14 +346,12 @@ while (true) {
     const wRms = ws > 0 ? Math.sqrt(wSqSum / ws) : 0;
 
     const tTestMs   = Date.now() - tTestStart;
-    const elapsedS  = ((Date.now() - t0) / 1000).toFixed(0);
     const nextMs    = Date.now() - t0;
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
     intervalTrainMs = 0;
 
     const cols = [
       String(g)                                       .padStart(7),
-      elapsedS                                        .padStart(8),
       tGameMs                                         .padStart(7),
       String(ws)                                      .padStart(8),
       String(model.canonMap.size)                     .padStart(8),
