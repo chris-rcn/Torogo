@@ -304,8 +304,6 @@ headerCols.push(
   'avglen' .padStart(6),
   'acc%'   .padStart(5),
   'avg|w|' .padStart(7),
-  'rms(w)' .padStart(7),
-  'max|w|' .padStart(7),
   'tTrain' .padStart(7),
 );
 if (evalGetMove) headerCols.push('tTest'.padStart(6));
@@ -367,15 +365,12 @@ while (true) {
     intervalNVals   = 0;
 
     // Count unique canonKeys referenced in weights.
-    let wAbsSum = 0, wSqSum = 0, wAbsMax = 0;
+    let wAbsSum = 0;
     for (const w of model.weights.values()) {
-      const a = Math.abs(w);
-      wAbsSum += a; wSqSum += w * w;
-      if (a > wAbsMax) wAbsMax = a;
+      wAbsSum += Math.abs(w);
     }
     const ws  = model.weights.size;
     const wAvg = ws > 0 ? wAbsSum / ws : 0;
-    const wRms = ws > 0 ? Math.sqrt(wSqSum / ws) : 0;
 
     const tTestMs   = Date.now() - tTestStart;
     const nextMs    = Date.now() - t0;
@@ -396,8 +391,6 @@ while (true) {
       avgLen                                          .padStart(6),
       (avgAcc + '%')                                  .padStart(5),
       wAvg.toFixed(3)                                 .padStart(7),
-      wRms.toFixed(3)                                 .padStart(7),
-      wAbsMax.toFixed(3)                              .padStart(7),
       tTrainStr                                       .padStart(7),
     );
     if (evalGetMove) cols.push(((tTestMs / 1000).toFixed(1) + 's').padStart(6));
