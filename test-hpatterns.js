@@ -262,17 +262,15 @@ section('evaluate');
   check(f2.val > 0.5, `evaluate with positive weights → >0.5, got ${f2.val}`);
 }
 
-// ── corner zeroing ────────────────────────────────────────────────────────────
+// ── corners count for size ≥ 4 ────────────────────────────────────────────────
 
-section('corner zeroing');
+section('corners count for size ≥ 4');
 {
-  // Two 4×4 windows identical except for one corner cell should share a canonKey.
+  // Two 4×4 windows identical except for one corner cell now have DIFFERENT
+  // canonKeys — corners are part of the pattern.
   const m = createModel({4: 4}, 4);
   const g1 = new Game2(9, false);
   const g2 = new Game2(9, false);
-  // Place B at the center of a 4×4 window (non-corner, non-edge).
-  // idx 20 = row 2, col 2.  A 4×4 window starting at row 1, col 1 (idx 10)
-  // has its center cells at rows 2-3, cols 2-3.
   g1.play(20);   // B at (2,2) — interior of a 4×4 window starting at (1,1)
   g2.play(20);   // same interior stone
   g2.cells[10] = 1;  // also place B at top-left corner of that window (1,1) = idx 10
@@ -281,16 +279,15 @@ section('corner zeroing');
   const f2 = featureArr(extractFeatures(g2, m));
 
   // The window starting at (1,1) in g2 has an extra stone at its corner vs g1.
-  // After corner-zeroing, both should map to the same canonKey for that window.
+  // Corners contribute to the canonical, so g2 picks up canonKeys not in g1.
   const keys1 = new Set(f1.map(x => x.key));
   const keys2 = new Set(f2.map(x => x.key));
-  const shared = [...keys1].filter(k => keys2.has(k));
-  check(shared.length === keys1.size,
-    `all canonKeys in g1 also appear in g2 (corners zeroed): g1=${keys1.size} shared=${shared.length}`);
+  const onlyInG2 = [...keys2].filter(k => !keys1.has(k));
+  check(onlyInG2.length > 0,
+    `g2 has at least one canonKey absent from g1 (corners matter): keys1=${keys1.size} keys2=${keys2.size} onlyInG2=${onlyInG2.length}`);
 }
 {
-  // Corners are NOT zeroed for size < 4: two 2×2 windows differing in a corner
-  // (which is every cell for 2×2) should produce different canonKeys.
+  // Two 2×2 windows differing in any cell produce different canonKeys.
   const m = createModel({2: 2}, 2);
   const g1 = new Game2(9, false);
   const g2 = new Game2(9, false);
@@ -401,30 +398,30 @@ section('canonMap encoding');
 }
 
 // ── canonical count for spec 4:1 ──────────────────────────────────────────────
-// 4×4 with limit=1 fires when exactly one of the 12 active cells (4×4 minus
-// the four outer corners) has a stone.  Under the canonical group D4 × Z2
-// (color-flip), this collapses to two orbits:
-//   inner orbit:  4 cells × 2 colors = 8 configs → 1 canonical
-//   edge  orbit:  8 cells × 2 colors = 16 configs → 1 canonical
-// Total: 2 distinct canonical keys.
+// 4×4 with limit=1 fires when exactly one of the 16 cells has a stone.  Under
+// the canonical group D4 × Z2 (color-flip) the cell positions split into:
+//   corner orbit: 4 cells × 2 colors = 8 configs → 1 canonical
+//   edge   orbit: 8 cells × 2 colors = 16 configs → 1 canonical
+//   inner  orbit: 4 cells × 2 colors = 8 configs → 1 canonical
+// Total: 3 distinct canonical keys.
 
 section('canonical count for spec 4:1 (1-stone 4×4)');
 {
   const m = createModel({4: 1}, 4);
   const N = 9;
   const seen = new Set();
-  // Every single-stone board emits 12 size-4 features (one per patch where
-  // the stone sits at an active position); since the board is toroidal, all
-  // single-stone boards are equivalent up to translation, so we only need
+  // Every single-stone board emits 16 size-4 features (one per patch where
+  // the stone sits anywhere in the 4×4 window); since the board is toroidal,
+  // all single-stone boards are equivalent up to translation, so we only need
   // one stone position per color to enumerate every canonical.
   for (const color of [BLACK, WHITE]) {
     const g = new Game2(N, false);
-    g.cells[40] = color;  // arbitrary inner cell
+    g.cells[40] = color;  // arbitrary cell
     const f = extractFeatures(g, m);
     for (let i = 0; i < f.count; i++) seen.add(f.keys[i]);
   }
-  check(seen.size === 2,
-    `expected 2 canonical 4:1 patterns (inner + edge), got ${seen.size}`);
+  check(seen.size === 3,
+    `expected 3 canonical 4:1 patterns (corner + edge + inner), got ${seen.size}`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

@@ -94,23 +94,6 @@
     return hash4(buf[0], buf[1], buf[2], buf[3]);
   }
 
-  // Cross-shaped hash for M×M windows (M≥4): covers M×M minus the 4 corner cells.
-  // Uses four standard (M-2)×(M-2) sub-window hashes at the cross positions
-  // (0,1), (1,0), (1,2), (2,1) — matching the board-level rawKey formula.
-  // Called only from computeAndStoreCanon (amortised).
-
-  function crossHierHash(winCells, M) {
-    const K = M - 2;
-    function subHash(rOff, cOff) {
-      const sub = new Array(K * K);
-      for (let r = 0; r < K; r++)
-        for (let c = 0; c < K; c++)
-          sub[r * K + c] = winCells[(rOff + r) * M + (cOff + c)];
-      return hierHash(sub, K);
-    }
-    return hash4(subHash(0, 1), subHash(1, 0), subHash(1, 2), subHash(2, 1));
-  }
-
   // ── Canonicalisation ───────────────────────────────────────────────────────
   // Generates 16 variants (8 D4 rotations × 2 color flips), finds the minimum
   // hash as the canonical key, detects color-twin patterns, and stores all 16
@@ -131,7 +114,7 @@
     const rotated   = new Array(n2);
     const vHashes   = new Array(16);
     const vParities = new Array(16);  // +1 = non-inverted, -1 = color-inverted
-    const hashFn    = M >= 4 ? crossHierHash : hierHash;
+    const hashFn    = hierHash;
 
     for (let pi = 0; pi < 8; pi++) {
       const perm = perms[pi];
@@ -254,7 +237,6 @@
     for (let M = 2; M <= searchMaxSize; M++) {
       const hM    = hBufs[M - 2];
       const hPrev = M > 2 ? hBufs[M - 3] : null;
-      const hPrev2 = M > 3 ? hBufs[M - 4] : null;
       const limit = maxStones[M] ?? 0;
       let anyEligible = false;
 
@@ -266,29 +248,20 @@
         hM[idx] = stdKey;
         if (limit === 0) continue;
 
-        // For M≥4 use cross-shaped rawKey (M×M minus corners); else rawKey = stdKey.
-        const rawKey = M < 4 ? stdKey
-          : hash4(hPrev2[(idx + 1) % cap], hPrev2[(idx + N) % cap], hPrev2[(idx + N + 2) % cap], hPrev2[(idx + 2*N + 1) % cap]);
+        const rawKey = stdKey;
 
-        // Stone count over the active cells (M≥4: exclude 4 corners; else all M×M).
-        // O(1) via prefix sum for non-wrapping windows, O(M²) fallback for toroidal wrap.
+        // Stone count over the full M×M window.  O(1) via prefix sum for
+        // non-wrapping windows, O(M²) fallback for toroidal wrap.
         const row = (idx / N) | 0;
         const col = idx % N;
         let stones;
         if (col + M <= N && row + M <= N) {
           stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
                  - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
-          if (M >= 4) {
-            if (cells[ row          * N + col        ] !== 0) stones--;
-            if (cells[ row          * N + col + M - 1] !== 0) stones--;
-            if (cells[(row + M - 1) * N + col        ] !== 0) stones--;
-            if (cells[(row + M - 1) * N + col + M - 1] !== 0) stones--;
-          }
         } else {
           stones = 0;
           for (let dr = 0; dr < M; dr++)
             for (let dc = 0; dc < M; dc++) {
-              if (M >= 4 && (dr === 0 || dr === M - 1) && (dc === 0 || dc === M - 1)) continue;
               if (cells[(idx + dr * N + dc) % cap]) stones++;
             }
         }
