@@ -400,6 +400,33 @@ section('canonMap encoding');
     `encoding round-trip: result=${result.val.toFixed(6)} expected=${expected.toFixed(6)}`);
 }
 
+// ── canonical count for spec 4:1 ──────────────────────────────────────────────
+// 4×4 with limit=1 fires when exactly one of the 12 active cells (4×4 minus
+// the four outer corners) has a stone.  Under the canonical group D4 × Z2
+// (color-flip), this collapses to two orbits:
+//   inner orbit:  4 cells × 2 colors = 8 configs → 1 canonical
+//   edge  orbit:  8 cells × 2 colors = 16 configs → 1 canonical
+// Total: 2 distinct canonical keys.
+
+section('canonical count for spec 4:1 (1-stone 4×4)');
+{
+  const m = createModel({4: 1}, 4);
+  const N = 9;
+  const seen = new Set();
+  // Every single-stone board emits 12 size-4 features (one per patch where
+  // the stone sits at an active position); since the board is toroidal, all
+  // single-stone boards are equivalent up to translation, so we only need
+  // one stone position per color to enumerate every canonical.
+  for (const color of [BLACK, WHITE]) {
+    const g = new Game2(N, false);
+    g.cells[40] = color;  // arbitrary inner cell
+    const f = extractFeatures(g, m);
+    for (let i = 0; i < f.count; i++) seen.add(f.keys[i]);
+  }
+  check(seen.size === 2,
+    `expected 2 canonical 4:1 patterns (inner + edge), got ${seen.size}`);
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass} passed, ${fail} failed`);
