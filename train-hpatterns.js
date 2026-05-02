@@ -32,6 +32,7 @@ const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext  || '';   // off-policy move source: 80% of moves come from this agent
 const EPSILON    = Math.min(parseFloat(opts.epsilon   || '0.1'),  0.9999);
+const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '0'), 0.9999);  // share of moves from own search1ply when --ext is set
 const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
 const EMA_ALPHA  = parseFloat(opts['ema-alpha']     || '0.999');  // Polyak per-game EMA
@@ -216,10 +217,13 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), sizes: f.sizes.slice(0, f.count), count: f.count, val: f.val };
 
-    // Move source: EPSILON random / (1-EPSILON) {ext or own-search}.
+    // Move source: EPSILON random / ON_POLICY own-search / remainder {ext or own-search}.
     let move;
-    if (Math.random() < EPSILON) {
+    const r = Math.random();
+    if (r < EPSILON) {
       move = game.randomLegalMove();
+    } else if (extGetMove && r < EPSILON + ON_POLICY) {
+      move = search1ply(game, maxSearch);
     } else if (extGetMove) {
       move = extGetMove(game).move;
     } else {
@@ -294,7 +298,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
