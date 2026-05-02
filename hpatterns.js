@@ -319,16 +319,40 @@
   // maxSize:   largest window size to extract (defaults to board size).
   function createModel(maxStones, maxSize) {
     return {
-      weights:   new Map(),
-      canonMap:  new Map(),
-      maxStones: maxStones !== undefined ? maxStones : {},
-      maxSize:   maxSize   !== undefined ? maxSize   : Infinity,
+      weights:    new Map(),                  // live TD-updated weights
+      weightsEMA: new Map(),                  // Polyak-averaged shadow (eval-quality)
+      weightsEMAInit: false,                  // first applyEMA seeds EMA = weights
+      canonMap:   new Map(),
+      maxStones:  maxStones !== undefined ? maxStones : {},
+      maxSize:    maxSize   !== undefined ? maxSize   : Infinity,
     };
+  }
+
+  // Polyak / SWA averaging.  Updates m.weightsEMA in-place to track a
+  // smoothed copy of m.weights.  First call seeds EMA = weights so the
+  // average doesn't include the zero initialisation.  Subsequent calls do
+  //   weightsEMA[k] = alpha * weightsEMA[k] + (1 - alpha) * weights[k]
+  // for every interned weight.  Caller picks alpha by desired window — at
+  // one snapshot per game, alpha=0.999 averages over ~1000 recent games.
+  function applyEMA(m, alpha) {
+    const w = m.weights, e = m.weightsEMA;
+    if (!m.weightsEMAInit) {
+      for (const [k, v] of w) e.set(k, v);
+      m.weightsEMAInit = true;
+      return;
+    }
+    const beta = 1 - alpha;
+    // Track keys that exist only in weights but not yet in EMA (newly interned
+    // since the last applyEMA — they get seeded from current weights value).
+    for (const [k, v] of w) {
+      const eOld = e.get(k);
+      e.set(k, eOld === undefined ? v : alpha * eOld + beta * v);
+    }
   }
 
   // ── Exports ────────────────────────────────────────────────────────────────
 
-  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate };
+  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA };
   if (typeof module !== 'undefined') module.exports = HPatterns;
   else window.HPatterns = HPatterns;
 })();
