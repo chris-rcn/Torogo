@@ -3,15 +3,14 @@
 // RAVE with priors seeded from npat softmax probabilities (Node-only).
 //
 // Identical to ai/rave.js except: when RAVE_NPAT_VISITS > 0, every newly
-// created tree node has its raveVisits/raveWins boosted in proportion to
-// npat's softmax over the candidate moves at that position.
+// created tree node has its raveVisits/raveWins boosted using npat's softmax
+// over the candidate moves at that position.
 //
-//   raveVisits[m] += V * p_m
-//   raveWins[m]   += wr * V * p_m
-//
-// where V = RAVE_NPAT_VISITS and wr is set by RAVE_NPAT_MODE:
-//   neutral  (default) — wr = 0.5  (npat used purely as policy attention)
-//   value              — wr = p_m  (npat softmax read as a value estimate too)
+// RAVE_NPAT_MODE selects how the V virtual visits map to wins/visits:
+//   neutral (default) — dv = V*p   dw = 0.5*V*p   (wr=0.5; npat as attention only)
+//   value             — dv = V*p   dw = p*V*p     (wr=p;   npat as value too)
+//   uniform           — dv = V     dw = V*p       (wr=p;   uniform attention,
+//                                                   value claim only)
 
 (function () {
 
@@ -89,15 +88,20 @@ function applyNpatPrior(node, game2) {
   const probs = state.probs;
   const rv = node.raveVisits;
   const rw = node.raveWins;
-  const useValueMode = RAVE_NPAT_MODE === 'value';
+  const V = RAVE_NPAT_VISITS;
 
   for (let i = 0; i < state.count; i++) {
     const m = moves[i];
     const p = probs[i];
-    const dv = RAVE_NPAT_VISITS * p;
-    const wr = useValueMode ? p : 0.5;
+    let dv, dw;
+    switch (RAVE_NPAT_MODE) {
+      case 'value':   dv = V * p; dw = p   * dv; break;
+      case 'uniform': dv = V;     dw = V   * p;  break;
+      case 'neutral':
+      default:        dv = V * p; dw = 0.5 * dv; break;
+    }
     rv[m] += dv;
-    rw[m] += wr * dv;
+    rw[m] += dw;
   }
 }
 
