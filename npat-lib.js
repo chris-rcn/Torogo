@@ -791,6 +791,7 @@ const NPatterns = {
   evaluate,
   policyMove,
   greedyMove,
+  computeSoftmax: _computeSoftmax,
   reinforceUpdate,
   entropyBonusUpdate,
   applyEMA,
