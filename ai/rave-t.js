@@ -1,16 +1,19 @@
 'use strict';
 
-// RAVE with a threshold-gated local-pattern refinement (Node-only).
+// RAVE with parallel pattern-specific stats blended at selection time.
 //
-// Identical to ai/rave.js except: once a move m's raveVisits at a node
-// crosses RAVE_T, subsequent RAVE updates for m skip any rollout in which
-// the local pattern at m (when it was played) differs from the local
-// pattern at m in this node's board state.  No extra memory; no per-pattern
-// bins.  Selection scoring continues to read the single aggregate.
+// Identical to ai/rave.js except: alongside the usual aggregate RAVE
+// counters, each node also maintains pattern-specific counters that are
+// incremented only for rollouts whose local pattern at m (at play time)
+// matched the node's own local pattern at m.  Both are updated on every
+// playout; no signal is discarded.
 //
-// Local pattern: 4 toroidal neighbours of m, each in {empty, black, white},
-// encoded as a base-3 number in [0, 81).  PASS has no neighbourhood and is
-// never gated.
+// Selection blends the two estimates by patternVisits relative to RAVE_T,
+// mirroring the existing real/RAVE blend.  RAVE_T = blend knee:
+//   patWeight = patVisits / (RAVE_T + patVisits)
+//   mixedWR   = (1 - patWeight) * simpleWR + patWeight * patWR
+//
+// RAVE_T = 0 disables the feature (pure baseline RAVE, zero overhead).
 
 (function () {
 
@@ -27,7 +30,7 @@ const RAVE_K        = Util.envFloat('RAVE_K', 800);
 const PLAYOUTS      = Util.envInt('PLAYOUTS', 0);
 const N_EXPAND      = Util.envInt('N_EXPAND', 2);
 const RAVE_INHERIT  = Util.envFloat('RAVE_INHERIT', 0.2);
-const RAVE_T        = Util.envFloat('RAVE_T', 0);  // 0 = disabled (baseline rave)
+const RAVE_T        = Util.envFloat('RAVE_T', 0);
 
 const PRIOR_WINS   = 0.001;
 const PRIOR_VISITS = 2 * PRIOR_WINS;
@@ -138,11 +141,13 @@ function makeNode(move, parent, ci, game2, N) {
     }
   }
 
-  // Precompute the local pattern at every cell on this node's board.
-  // Used only when RAVE_T > 0 to gate post-threshold RAVE updates.
-  let nodePattern = null;
+  // Pattern-specific arrays + per-cell pattern lookup, only when feature is on.
+  // Pattern stats start empty (no inheritance) — they earn their visits.
+  let ravePatWins = null, ravePatVisits = null, nodePattern = null;
   if (RAVE_T > 0) {
-    nodePattern = new Int16Array(area);
+    ravePatWins   = new Float32Array(area);
+    ravePatVisits = new Float32Array(area);
+    nodePattern   = new Int16Array(area);
     const cells = game2.cells;
     for (let m = 0; m < area; m++) nodePattern[m] = patternAt(cells, m, N);
   }
@@ -165,6 +170,8 @@ function makeNode(move, parent, ci, game2, N) {
 
     raveWins,
     raveVisits,
+    ravePatWins,
+    ravePatVisits,
     nodePattern,
   };
 }
@@ -172,7 +179,20 @@ function makeNode(move, parent, ci, game2, N) {
 function ucbScore(moveIdx, node, rng) {
   const move  = node.legalMoves[moveIdx];
 
-  const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
+  let raveWR;
+  if (move === PASS) {
+    raveWR = 0;
+  } else {
+    const simpleWR = node.raveWins[move] / node.raveVisits[move];
+    if (RAVE_T > 0) {
+      const pv = node.ravePatVisits[move];
+      const patWR     = pv > 0 ? node.ravePatWins[move] / pv : simpleWR;
+      const patWeight = pv / (RAVE_T + pv);
+      raveWR = (1 - patWeight) * simpleWR + patWeight * patWR;
+    } else {
+      raveWR = simpleWR;
+    }
+  }
 
   const realW = node.wins[moveIdx];
   const realV = node.visits[moveIdx];
@@ -230,27 +250,34 @@ function backpropagate(node, winner, played, playedPattern, rootPlayer) {
   function childMover(n) { return -n.mover; }
 
   function updateRave(node, won, played, playedPattern, chooser) {
-    const T = RAVE_T;
-    const useGate = T > 0;
-    const np = node.nodePattern;
-    const rv = node.raveVisits;
-    const rw = node.raveWins;
+    const useGate = RAVE_T > 0;
+    const np  = node.nodePattern;
+    const rv  = node.raveVisits;
+    const rw  = node.raveWins;
+    const prv = node.ravePatVisits;
+    const prw = node.ravePatWins;
     if (chooser === BLACK) {
       for (let k = 0; k < played.length; k++) {
         const weight = played[k];
         if (weight > 0) {
-          if (useGate && rv[k] >= T && playedPattern[k] !== np[k]) continue;
           rv[k] += weight;
           rw[k] += won * weight;
+          if (useGate && playedPattern[k] === np[k]) {
+            prv[k] += weight;
+            prw[k] += won * weight;
+          }
         }
       }
     } else {
       for (let k = 0; k < played.length; k++) {
         const weight = played[k];
         if (weight < 0) {
-          if (useGate && rv[k] >= T && playedPattern[k] !== np[k]) continue;
           rv[k] -= weight;
           rw[k] -= won * weight;
+          if (useGate && playedPattern[k] === np[k]) {
+            prv[k] -= weight;
+            prw[k] -= won * weight;
+          }
         }
       }
     }
