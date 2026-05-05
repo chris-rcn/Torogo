@@ -44,7 +44,8 @@ const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '9',  10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
-const EVAL_AGENT = opts.eval  || 'random';
+const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
+const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
@@ -236,9 +237,10 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
-// Load eval agent from ai/ folder.
-const { getMove: evalGetMove } =
-  require(path.join(__dirname, 'ai', EVAL_AGENT + '.js'));
+// Load eval agent from ai/ folder (only when --eval was supplied).
+const evalGetMove = EVAL_AGENT
+  ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
+  : null;
 
 // Load positions for move-quality eval (optional).
 let evalPositionsPool = null;
@@ -257,7 +259,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
@@ -268,8 +270,8 @@ console.log([
   'elapsedS'.padStart(8),
   'tGameMs'.padStart(7),
   'weights'.padStart(8),
-  'win%'   .padStart(6) + '(' + 'n'.padStart(3) + ')',
-  'winAvg%'.padStart(7),
+  ...(evalGetMove ? ['win%'.padStart(6) + '(' + 'n'.padStart(3) + ')',
+                     'winAvg%'.padStart(7)] : []),
   'avglen' .padStart(6),
   'acc%'   .padStart(5),
   ...(ACCURACY_FILE    ? ['vacc%' .padStart(6)] : []),
@@ -278,7 +280,7 @@ console.log([
   'rms(w)' .padStart(7),
   'max|w|' .padStart(7),
   'tTrain' .padStart(7),
-  'tTest'  .padStart(6),
+  ...(evalGetMove ? ['tTest'.padStart(6)] : []),
   'turnMs' .padStart(6),
 ].join('  '));
 
@@ -312,24 +314,28 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    const resultsBatch = [];
-    while (true) {
-      const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
-      for (const r of results) resultsBatch.push(r);
-      const tTestMs   = Date.now() - tTestStart;
-      if (tTestMs > 0.3 * intervalTrainMs) break;
-      if (resultsBatch.length >= 998) break;
+    let latestPct = null, avgPct = null, resultsBatchLen = 0;
+    if (evalGetMove) {
+      const resultsBatch = [];
+      while (true) {
+        const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        for (const r of results) resultsBatch.push(r);
+        const tTestMs   = Date.now() - tTestStart;
+        if (tTestMs > 0.3 * intervalTrainMs) break;
+        if (resultsBatch.length >= 998) break;
+      }
+      for (const r of resultsBatch) evalHistory.push(r);
+
+      // Latest interval win rate.
+      const latestWR  = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
+      latestPct = (100 * latestWR).toFixed(1);
+
+      // Rolling average over the most recent half of all recorded games.
+      const half    = Math.max(1, Math.floor(evalHistory.length / 2));
+      const avgWR   = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
+      avgPct  = (100 * avgWR).toFixed(1);
+      resultsBatchLen = resultsBatch.length;
     }
-    for (const r of resultsBatch) evalHistory.push(r);
-
-    // Latest interval win rate.
-    const latestWR  = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
-    const latestPct = (100 * latestWR).toFixed(1);
-
-    // Rolling average over the most recent half of all recorded games.
-    const half    = Math.max(1, Math.floor(evalHistory.length / 2));
-    const avgWR   = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
-    const avgPct  = (100 * avgWR).toFixed(1);
 
     const avgLen   = (intervalMoves / intervalGames).toFixed(1);
     const tGameMs  = (intervalTrainMs / intervalGames).toFixed(1);
@@ -371,8 +377,8 @@ while (true) {
       elapsedS                           .padStart(8),
       tGameMs                            .padStart(7),
       String(weights.size)               .padStart(8),
-      (latestPct + '%')                  .padStart(6) + '(' + String(resultsBatch.length).padStart(3) + ')',
-      (avgPct + '%')                     .padStart(7),
+      ...(evalGetMove ? [(latestPct + '%').padStart(6) + '(' + String(resultsBatchLen).padStart(3) + ')',
+                         (avgPct    + '%').padStart(7)] : []),
       avgLen                             .padStart(6),
       (avgAcc + '%')                     .padStart(5),
       ...(vaccCol    ? [vaccCol]                    : []),
@@ -381,10 +387,16 @@ while (true) {
       wRms.toFixed(3)                    .padStart(7),
       wAbsMax.toFixed(3)                 .padStart(7),
       tTrainStr                            .padStart(7),
-      ((tTestMs / 1000).toFixed(1) + 's')          .padStart(6),
+      ...(evalGetMove ? [((tTestMs / 1000).toFixed(1) + 's').padStart(6)] : []),
       timePerMoveMs.toFixed(1)           .padStart(6),
     ].join('  '));
     saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
+  }
+
+  if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
+    saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
+    console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
+    break;
   }
 }
