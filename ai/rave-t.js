@@ -72,7 +72,7 @@ function playTracked(game2, node, played, playedPattern) {
   if (RAVE_T > 0) playedPattern.fill(-1, 0, cap);
 
   const moveLimit = 3 * game2.emptyCount + 20;
-  const weightStep = 1 / cap;
+  const weightStep = 1 / (2 * cap);  // half the baseline rave decay rate
   let moves = 0;
   let weight = 1.0;
 
