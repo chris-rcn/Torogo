@@ -266,12 +266,8 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
           buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
 
-          let stones = 0;
-          for (let i = 0; i < 9; i++) if (buf[i]) stones++;
-          if (stones > 0 && (stones < 5 || stones > 7)) {
-            const r = canonicalize(buf, PERMS_3x3, mix3);
-            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
-          }
+          const r = canonicalize(buf, PERMS_3x3, mix3);
+          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
         }
       }
     }
