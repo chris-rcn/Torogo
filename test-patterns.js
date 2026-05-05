@@ -6,7 +6,7 @@
 const { Game2, BLACK, WHITE } = require('./game2.js');
 const { rawState, canonicalize, extractFeatures: _extractFeatures,
         prepareSpecs, evaluateFeatures,
-        PERMS_2x2, PERMS_3x3, PERMS_4x4 } = require('./vpatterns.js');
+        PERMS_2x2, PERMS_3x3 } = require('./vpatterns.js');
 const _prepCache = new Map();
 function extractFeatures(game, specs, ...rest) {
   if (!_prepCache.has(specs)) _prepCache.set(specs, prepareSpecs(specs));
@@ -204,41 +204,6 @@ section('extractFeatures – size 3');
   const keysW = new Set(fW.map(f => f.key));
   check(keysB.size === keysW.size && [...keysB].every(k => keysW.has(k)),
     'size-3: color symmetry — B and W produce same set of keys');
-}
-
-// ── extractFeatures – size 4 ──────────────────────────────────────────────────
-
-section('extractFeatures – size 4');
-{
-  const SPEC = [{ size: 4, maxLibs: 1 }];
-
-  // Empty board → no features.
-  const g = new Game2(9, false);
-  check(extractFeatures(g, SPEC).length === 0, 'size-4: empty board → no features');
-}
-{
-  const SPEC = [{ size: 4, maxLibs: 1 }];
-
-  // Single B stone: all 4×4 windows containing it have stones < 16 so the
-  // filter suppresses them → 0 features.
-  const g = new Game2(9, false);
-  g.play(40);
-  check(extractFeatures(g, SPEC).length === 0, 'size-4: single B stone → 0 features (stones filter)');
-}
-{
-  const SPEC = [{ size: 4, maxLibs: 1 }];
-
-  // Dense game-end boards contain fully-occupied 4×4 windows.
-  // Aggregate across several games to get a reliable non-zero feature count.
-  let total = 0;
-  for (let i = 0; i < 10; i++) {
-    const g = new Game2(9, false);
-    while (!g.gameOver) g.play(g.randomLegalMove());
-    total += extractFeatures(g, SPEC).length;
-  }
-  const ps = _prepCache.get(SPEC);
-  check(total > 0,              'size-4: game-end boards → at least one feature extracted');
-  check(ps.lut4.get(1).cacheP.size > 0, 'size-4: lut4 cache populated after extraction');
 }
 
 // ── maxLibs key isolation ─────────────────────────────────────────────────────

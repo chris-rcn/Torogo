@@ -43,17 +43,7 @@ const PERMS_3x3 = [
   [8, 5, 2, 7, 4, 1, 6, 3, 0],   // TransposeAD
 ];
 
-// 4×4 grid, row-major: 0=TL, 15=BR
-const PERMS_4x4 = [
-  [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15],  // Identity
-  [12,  8,  4,  0, 13,  9,  5,  1, 14, 10,  6,  2, 15, 11,  7,  3],  // Rot90CW
-  [15, 14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,  0],  // Rot180
-  [ 3,  7, 11, 15,  2,  6, 10, 14,  1,  5,  9, 13,  0,  4,  8, 12],  // Rot270CW
-  [ 3,  2,  1,  0,  7,  6,  5,  4, 11, 10,  9,  8, 15, 14, 13, 12],  // FlipH
-  [12, 13, 14, 15,  8,  9, 10, 11,  4,  5,  6,  7,  0,  1,  2,  3],  // FlipV
-  [ 0,  4,  8, 12,  1,  5,  9, 13,  2,  6, 10, 14,  3,  7, 11, 15],  // TransposeMD
-  [15, 11,  7,  3, 14, 10,  6,  2, 13,  9,  5,  1, 12,  8,  4,  0],  // TransposeAD
-];
+// 4×4 grid removed; only sizes 1, 2, 3 are supported.
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
@@ -120,12 +110,6 @@ function prepareSpecs(specs) {
 
   const lut2 = new Map();
   const lut3 = new Map();
-  // lut4: Map<maxLibs, { cacheK, cacheP, mix, base, b2..b15, ml }>
-  //   cacheK/cacheP: lazily populated Maps keyed by base^16 pattern index.
-  //   Unlike lut2/lut3 (fully precomputed typed arrays), lut4 uses on-demand
-  //   caching — the pattern space (3^16 = 43M) is too large to precompute in
-  //   full, but only a small fraction of windows pass the stones filter in practice.
-  const lut4 = new Map();
   for (const maxLibs of sortedMaxLibs) {
     const sizes = byMaxLibs.get(maxLibs);
     const base  = 2 * maxLibs + 1;
@@ -164,19 +148,14 @@ function prepareSpecs(specs) {
     }
 
     if (sizes.includes(4)) {
-      const mix = 1637 * maxLibs;
-      const b2  = base*base,  b3  = b2*base,  b4  = b3*base,  b5  = b4*base,
-            b6  = b5*base,   b7  = b6*base,  b8  = b7*base,  b9  = b8*base,
-            b10 = b9*base,   b11 = b10*base, b12 = b11*base, b13 = b12*base,
-            b14 = b13*base,  b15 = b14*base;
-      lut4.set(maxLibs, { cacheK: new Map(), cacheP: new Map(), perms: PERMS_4x4, mix, base, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, ml: maxLibs });
+      throw new Error('vpatterns: size 4 is no longer supported');
     }
   }
 
   let totalSizes = 0;
   for (const sizes of byMaxLibs.values()) totalSizes += sizes.length;
 
-  return { byMaxLibs, sortedMaxLibs, lut2, lut3, lut4, totalSizes };
+  return { byMaxLibs, sortedMaxLibs, lut2, lut3, totalSizes };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -207,9 +186,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     cells[nextMove] = game.current;
   }
 
-  const { byMaxLibs, sortedMaxLibs, lut2, lut3, lut4 } = prepSpecs;
+  const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize (up to 4×4)
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize (up to 3×3)
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
@@ -227,7 +206,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do1   = sizes.includes(1);
     const do2   = sizes.includes(2);
     const do3   = sizes.includes(3);
-    const do4   = sizes.includes(4);
 
     if (do1) {
       const k1base = 131 * maxLibs;
@@ -298,45 +276,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
     }
 
-    if (do4) {
-      const { cacheK, cacheP, perms: perms4, mix: mix4,
-              base: base4, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, ml } = lut4.get(maxLibs);
-      for (let idx = 0; idx < cap; idx++) {
-//        buf[0]  = raw[idx];               buf[1]  = raw[(idx+1)      %cap]; buf[2]  = raw[(idx+2)      %cap]; buf[3]  = raw[(idx+3)      %cap];
-//        buf[4]  = raw[(idx+N)      %cap]; buf[5]  = raw[(idx+N+1)    %cap]; buf[6]  = raw[(idx+N+2)    %cap]; buf[7]  = raw[(idx+N+3)    %cap];
-//        buf[8]  = raw[(idx+2*N)    %cap]; buf[9]  = raw[(idx+2*N+1)  %cap]; buf[10] = raw[(idx+2*N+2)  %cap]; buf[11] = raw[(idx+2*N+3)  %cap];
-//        buf[12] = raw[(idx+3*N)    %cap]; buf[13] = raw[(idx+3*N+1)  %cap]; buf[14] = raw[(idx+3*N+2)  %cap]; buf[15] = raw[(idx+3*N+3)  %cap];
-
-        // Or with rounded corners:
-        buf[0]  = 0                     ; buf[1]  = raw[(idx+1)      %cap]; buf[2]  = raw[(idx+2)      %cap]; buf[3]  = 0                     ;
-        buf[4]  = raw[(idx+N)      %cap]; buf[5]  = raw[(idx+N+1)    %cap]; buf[6]  = raw[(idx+N+2)    %cap]; buf[7]  = raw[(idx+N+3)    %cap];
-        buf[8]  = raw[(idx+2*N)    %cap]; buf[9]  = raw[(idx+2*N+1)  %cap]; buf[10] = raw[(idx+2*N+2)  %cap]; buf[11] = raw[(idx+2*N+3)  %cap];
-        buf[12] = 0                     ; buf[13] = raw[(idx+3*N+1)  %cap]; buf[14] = raw[(idx+3*N+2)  %cap]; buf[15] = 0                     ;
-
-        let stones = 0;
-        for (let i = 0; i < 16; i++) if (buf[i]) stones++;
-        if (stones > 0 && stones === 2) {
-          const li =
-            (buf[0]+ml)       + base4*(buf[1]+ml)  + b2*(buf[2]+ml)  + b3*(buf[3]+ml)  +
-            b4*(buf[4]+ml)    + b5*(buf[5]+ml)     + b6*(buf[6]+ml)  + b7*(buf[7]+ml)  +
-            b8*(buf[8]+ml)    + b9*(buf[9]+ml)     + b10*(buf[10]+ml)+ b11*(buf[11]+ml)+
-            b12*(buf[12]+ml)  + b13*(buf[13]+ml)   + b14*(buf[14]+ml)+ b15*(buf[15]+ml);
-          let pol = cacheP.get(li);
-          if (pol === undefined) {
-            const r = canonicalize(buf, perms4, mix4);
-            if (r !== null) {
-              cacheK.set(li, r.key);
-              cacheP.set(li, r.polarity);
-              outKeys[count] = r.key; outPols[count] = r.polarity; count++;
-            } else {
-              cacheP.set(li, 0);
-            }
-          } else if (pol !== 0) {
-            outKeys[count] = cacheK.get(li); outPols[count] = pol; count++;
-          }
-        }
-      }
-    }
   }
   if (doSetNext) {
     for (let c = 0; c < captures.length; c++) {
@@ -407,7 +346,6 @@ const Patterns = {
   saveWeights,
   PERMS_2x2,
   PERMS_3x3,
-  PERMS_4x4,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;
