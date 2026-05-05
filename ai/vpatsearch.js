@@ -41,7 +41,10 @@ let model = { weights: new Map(), specs: defaultSpecs, preparedSpecs: prepareSpe
 
 function search(game, m, depth = 1, dither = 0) {
   const evaluate = g => evaluateFeatures(extractFeatures(g, m.preparedSpecs), m.weights);
-  return abSearch(game, depth, evaluate, dither);
+  // proactivePass=false: never return PASS unless forced (no legal moves)
+  // or the opponent already passed.  Necessary for value functions that
+  // systematically over-rate the do-nothing position relative to any move.
+  return abSearch(game, depth, evaluate, dither, false);
 }
 
 function getMove(game) {
