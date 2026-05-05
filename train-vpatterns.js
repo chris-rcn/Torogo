@@ -312,6 +312,9 @@ while (true) {
   intervalTrainMs += elapsedMs;
   const timePerMoveMs = moveElapsedMs / totalMoves;
 
+  // Force a final stats row when the game limit is reached.
+  if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) nextPrintAt = 0;
+
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
     let latestPct = null, avgPct = null, resultsBatchLen = 0;
@@ -395,7 +398,6 @@ while (true) {
   }
 
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
-    saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
     break;
   }
