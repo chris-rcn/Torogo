@@ -62,7 +62,7 @@ function playTracked(game2, node, played) {
     const current = game2.current;
     const idx = game2.randomLegalMove();
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
-    if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
+    if (weight > 0 && played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
     moves++;
     weight -= weightStep;
