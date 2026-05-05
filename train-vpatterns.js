@@ -60,7 +60,7 @@ const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
 let specs = [
 //  { size: 1, maxLibs: 1 },
-  { size: 2, maxLibs: 1 },
+  { size: 2, maxLibs: 2 },
 //  { size: 3, maxLibs: 1 },
 ];
 let prepSpecs = prepareSpecs(specs);
