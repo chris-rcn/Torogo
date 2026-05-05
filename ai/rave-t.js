@@ -80,7 +80,7 @@ function playTracked(game2, node, played, playedPattern) {
     const current = game2.current;
     const idx = game2.randomLegalMove();
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
-    if (played[idx] === 0) {
+    if (weight > 0 && played[idx] === 0) {
       played[idx] = current === BLACK ? weight : -weight;
       if (RAVE_T > 0) playedPattern[idx] = patternAt(game2.cells, idx, N);
     }
