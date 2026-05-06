@@ -45,6 +45,7 @@ const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '9',  10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
+const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
 const POSITIONS_FILE  = opts['positions-file']   || null;
@@ -62,8 +63,6 @@ let specs = [
 //  { size: 1, maxLibs: 1 },
   { size: 2, maxLibs: 1 },
   { size: 2, maxLibs: 2 },
-  { size: 2, maxLibs: 3 },
-  { size: 2, maxLibs: 4 },
 //  { size: 3, maxLibs: 1 },
 ];
 let prepSpecs = prepareSpecs(specs);
@@ -174,6 +173,8 @@ function trainGame(N) {
     let move;
     if (Math.random() < EPSILON) {
       move = game.randomLegalMove();
+    } else if (extGetMove) {
+      move = extGetMove(game).move;
     } else {
       move = search1ply(game);
     }
@@ -245,6 +246,11 @@ const evalGetMove = EVAL_AGENT
   ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
   : null;
 
+// Load off-policy move-source agent (only when --ext was supplied).
+const extGetMove = EXT_AGENT
+  ? require(path.join(__dirname, 'ai', EXT_AGENT + '.js')).getMove
+  : null;
+
 // Load positions for move-quality eval (optional).
 let evalPositionsPool = null;
 if (POSITIONS_FILE) {
@@ -262,7 +268,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
