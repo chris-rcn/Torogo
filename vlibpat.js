@@ -9,13 +9,17 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
+const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
+const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Cell state encoding (signed, color-canonicalized):
-//   0            = empty
-//  +1 .. +maxLibs = BLACK stone with that many liberties (capped)
-//  -1 .. -maxLibs = WHITE stone with that many liberties (capped)
+// Cell state encoding (signed, color-canonicalized) — ladder-aware:
+//   0   = empty
+//  ±1   = stone in group with > 2 liberties (safe)
+//  ±2   = stone in 1-2 liberty group that dies under optimal play
+//  ±3   = stone in 1-2 liberty group that escapes under optimal play
+// Sign encodes color (+ BLACK, − WHITE).  maxLibs in spec caps |code|.
 
 // ── D4 symmetry permutations ─────────────────────────────────────────────────
 
@@ -47,13 +51,52 @@ const PERMS_3x3 = [
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
-// Returns the raw state of the cell at idx: 0 for empty, 1-maxLibs for BLACK
-// with that many liberties (capped), maxLibs+1 .. 2*maxLibs for WHITE.
+// Compute per-cell ladder-aware codes for `game3` (Int8Array(cap)):
+//   0          empty
+//  ±1          stone in group with >2 liberties (safe)
+//  ±2          stone in 1-2 liberty group that dies under optimal play
+//  ±3          stone in 1-2 liberty group that escapes under optimal play
+// Sign encodes color.  Caller may clamp via |code| ≤ maxLibs.
+function computeLadderCodes(game3) {
+  const N = game3.N;
+  const cap = N * N;
+  const codes = new Int8Array(cap);
+  // Default: stones get ±1 (safe), empties stay 0.
+  for (let i = 0; i < cap; i++) codes[i] = game3.cells[i];
+  if (game3.emptyCount === cap) return codes;
+
+  const infos = getAllLadderStatuses(game3);
+  const cur = game3.current;
+  const codeByGid = new Map();
+  for (const info of infos) {
+    if (!info.status) continue;
+    const moverSucceeds = info.status.moverSucceeds;
+    const defending = info.color === cur;
+    const escapes = defending ? moverSucceeds : !moverSucceeds;
+    const sign = info.color > 0 ? 1 : -1;
+    codeByGid.set(info.gid, (escapes ? 3 : 2) * sign);
+  }
+  if (codeByGid.size === 0) return codes;
+  for (let i = 0; i < cap; i++) {
+    if (game3.cells[i] === 0) continue;
+    const code = codeByGid.get(game3.groupIdAt(i));
+    if (code !== undefined) codes[i] = code;
+  }
+  return codes;
+}
+
+// Single-cell convenience wrapper (slow: rebuilds game3 + ladder analysis each
+// call).  Kept for tests / external callers.  Internally extractFeatures uses
+// computeLadderCodes once per position.
 function rawState(game, maxLibs, idx) {
-  const color = game.cells[idx];
-  if (maxLibs === 1 || color === 0) return color;
-  const libs = Math.min(game.groupLibertyCount(game.groupIdAt(idx)), maxLibs);
-  return color * libs;
+  if (game.cells[idx] === 0) return 0;
+  if (maxLibs === 1) return game.cells[idx];
+  const game3 = game3FromGame2(game);
+  const codes = computeLadderCodes(game3);
+  let v = codes[idx];
+  if (v >  maxLibs) v =  maxLibs;
+  if (v < -maxLibs) v = -maxLibs;
+  return v;
 }
 
 // Given an array of raw cell states and a set of D4 permutation arrays,
@@ -166,7 +209,6 @@ function prepareSpecs(specs) {
 //     replace the 8-permutation canonicalize loop with a single array index.
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
 function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
-  const cells = game.cells;
   const cap   = game.N * game.N;
   const N     = game.N;
 
@@ -177,14 +219,17 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
-  let captures;
+
+  // Build a Game3 mirror so we can apply candidate moves with full play/undo
+  // and run ladder analysis on the resulting position.
+  const game3 = game3FromGame2(game);
+  let movePlayed = false;
   if (doSetNext) {
-    captures = game.captureList(nextMove);
-    for (let c = 0; c < captures.length; c++) {
-      cells[captures[c]] = EMPTY;
-    }
-    cells[nextMove] = game.current;
+    movePlayed = game3.play(nextMove);
   }
+
+  // Compute ladder codes once for this (possibly post-move) position.
+  const codes = computeLadderCodes(game3);
 
   const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
 
@@ -194,9 +239,14 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   for (const maxLibs of sortedMaxLibs) {
     if (raw === null) {
       raw = new Int8Array(cap);
-      for (let i = 0; i < cap; i++) raw[i] = rawState(game, maxLibs, i);
+      for (let i = 0; i < cap; i++) {
+        let v = codes[i];
+        if      (v >  maxLibs) v =  maxLibs;
+        else if (v < -maxLibs) v = -maxLibs;
+        raw[i] = v;
+      }
     } else {
-      // Clamp in-place: rawState(maxLibs) = sign * min(|rawState(prevMaxLibs)|, maxLibs).
+      // Clamp in-place: code(maxLibs) = sign * min(|code(prevMaxLibs)|, maxLibs).
       for (let i = 0; i < cap; i++) {
         if      (raw[i] >  maxLibs) raw[i] =  maxLibs;
         else if (raw[i] < -maxLibs) raw[i] = -maxLibs;
@@ -273,12 +323,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     }
 
   }
-  if (doSetNext) {
-    for (let c = 0; c < captures.length; c++) {
-      cells[captures[c]] = -game.current;
-    }
-    cells[nextMove] = EMPTY;
-  }
+  if (movePlayed) game3.undo();
   return { keys: outKeys, pols: outPols, count, val: 0.5 };
 }
 
