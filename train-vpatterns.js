@@ -48,6 +48,7 @@ const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
+const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '0'), 0.9999);  // share of moves from own search1ply when --ext is set
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
@@ -174,8 +175,11 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = features;
     let move;
-    if (Math.random() < EPSILON) {
+    const r = Math.random();
+    if (r < EPSILON) {
       move = game.randomLegalMove();
+    } else if (extGetMove && r < EPSILON + ON_POLICY) {
+      move = search1ply(game);
     } else if (extGetMove) {
       move = extGetMove(game).move;
     } else {
@@ -271,7 +275,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
