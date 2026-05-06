@@ -14,3 +14,10 @@
   every placement must be legal and no placement may cause a capture. If either
   happens, the "position" was never reachable by legal play, or the replay
   order/colour is wrong.
+
+## Workflow
+
+- **After a background job completes, cat the log file.** When a Bash command
+  was started with `run_in_background: true` and the harness reports its
+  completion, immediately `cat` the output file so the user can review it
+  before deciding next steps.
