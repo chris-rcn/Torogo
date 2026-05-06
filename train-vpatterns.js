@@ -63,6 +63,8 @@ let specs = [
 //  { size: 1, maxLibs: 1 },
   { size: 2, maxLibs: 1 },
   { size: 2, maxLibs: 2 },
+  { size: 2, maxLibs: 3 },
+  { size: 2, maxLibs: 4 },
 //  { size: 3, maxLibs: 1 },
 ];
 let prepSpecs = prepareSpecs(specs);
