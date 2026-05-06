@@ -8,17 +8,18 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
+const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Cell state encoding (signed, color-canonicalized) — ladder-aware:
+// Cell state encoding (signed, color-canonicalized) — ladder-aware,
+// turn-independent:
 //   0   = empty
-//  ±1   = stone in group with > 2 liberties (safe)
-//  ±2   = stone in 1-2 liberty group that dies under optimal play
-//  ±3   = stone in 1-2 liberty group that escapes under optimal play
+//  ±1   = alive  (libs > 2, or 1-2 lib group surviving regardless of turn)
+//  ±2   = dead   (1-2 lib group captured regardless of turn)
+//  ±3   = unsettled (1-2 lib group whose fate depends on whose turn it is)
 // Sign encodes color (+ BLACK, − WHITE).  maxLibs in spec caps |code|.
 
 // ── D4 symmetry permutations ─────────────────────────────────────────────────
@@ -51,30 +52,63 @@ const PERMS_3x3 = [
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
-// Compute per-cell ladder-aware codes for `game3` (Int8Array(cap)):
+// Compute per-cell ladder-aware codes for `game3` (Int8Array(cap)) — turn-
+// independent (the encoding does NOT depend on whose move it is).
 //   0          empty
-//  ±1          stone in group with >2 liberties (safe)
-//  ±2          stone in 1-2 liberty group that dies under optimal play
-//  ±3          stone in 1-2 liberty group that escapes under optimal play
-// Sign encodes color.  Caller may clamp via |code| ≤ maxLibs.
+//  ±1          alive: group with > 2 liberties, OR 1-2 lib group that survives
+//              optimal play regardless of who moves next
+//  ±2          dead: 1-2 lib group that gets captured regardless of who moves
+//  ±3          unsettled: 1-2 lib group whose fate depends on whose turn it is
+// Sign encodes color (+ BLACK, − WHITE).  Caller may clamp via |code| ≤ maxLibs.
 function computeLadderCodes(game3) {
   const N = game3.N;
   const cap = N * N;
   const codes = new Int8Array(cap);
-  // Default: stones get ±1 (safe), empties stay 0.
+  // Default: stones get ±1 (alive), empties stay 0.
   for (let i = 0; i < cap; i++) codes[i] = game3.cells[i];
   if (game3.emptyCount === cap) return codes;
 
-  const infos = getAllLadderStatuses(game3);
-  const cur = game3.current;
+  // Run ladder analysis from BOTH colours' perspectives so the encoding is
+  // independent of whose turn it is.  getLadderStatus uses game.current to
+  // decide "mover", and play/undo restore game.current — so manually toggling
+  // game3.current between the two passes is safe.
+  const origCurrent = game3.current;
+  game3.current = BLACK;
+  const infosB = getAllLadderStatuses(game3);
+  game3.current = WHITE;
+  const infosW = getAllLadderStatuses(game3);
+  game3.current = origCurrent;
+
+  if (infosB.length === 0) return codes;
+
+  // Both passes visit the same gids (group structure & liberties don't depend
+  // on whose turn it is).  Pair them by gid.
+  const msW = new Map();
+  for (const info of infosW) {
+    if (info.status) msW.set(info.gid, info.status.moverSucceeds);
+  }
+
   const codeByGid = new Map();
-  for (const info of infos) {
+  for (const info of infosB) {
     if (!info.status) continue;
-    const moverSucceeds = info.status.moverSucceeds;
-    const defending = info.color === cur;
-    const escapes = defending ? moverSucceeds : !moverSucceeds;
-    const sign = info.color > 0 ? 1 : -1;
-    codeByGid.set(info.gid, (escapes ? 3 : 2) * sign);
+    const gid = info.gid;
+    if (!msW.has(gid)) continue;
+    const ms_b = info.status.moverSucceeds;
+    const ms_w = msW.get(gid);
+    const groupColor = info.color;
+    // "lives" if the group avoids capture from that side's tempo:
+    //   BLACK to move → BLACK group: defender succeeds = ms_b
+    //                   WHITE group: attacker (BLACK) fails = !ms_b
+    //   WHITE to move → BLACK group: attacker (WHITE) fails = !ms_w
+    //                   WHITE group: defender succeeds = ms_w
+    const livesIfB = (groupColor === BLACK) ?  ms_b : !ms_b;
+    const livesIfW = (groupColor === BLACK) ? !ms_w :  ms_w;
+    const sign = groupColor > 0 ? 1 : -1;
+    let mag;
+    if      ( livesIfB &&  livesIfW) mag = 1;  // alive
+    else if (!livesIfB && !livesIfW) mag = 2;  // dead
+    else                              mag = 3;  // unsettled
+    codeByGid.set(gid, mag * sign);
   }
   if (codeByGid.size === 0) return codes;
   for (let i = 0; i < cap; i++) {
