@@ -22,7 +22,7 @@
 // Evaluation: play eval games against a configurable reference agent to
 //   measure how much the policy has improved.  Eval games do not update weights.
 //
-// Features: pattern1 + pattern2 + pattern3 (maxLibs = 1), all cells.
+// Features: pattern1 + pattern2 + pattern3 (ladder-aware encoding), all cells.
 //
 // Status is printed at an exponentially increasing interval (× 1.5 each time).
 //
@@ -61,13 +61,9 @@ const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 // ── Features ───────────────────────────
 
 let specs = [
-//  { size: 1, maxLibs: 1 },
-//  { size: 2, maxLibs: 1 },
-//  { size: 2, maxLibs: 2 },
-//  { size: 2, maxLibs: 3 },
-//  { size: 2, maxLibs: 4 },
-  { size: 2, maxLibs: 5 },
-//  { size: 3, maxLibs: 1 },
+//  { size: 1 },
+  { size: 2 },
+//  { size: 3 },
 ];
 let prepSpecs = prepareSpecs(specs);
 

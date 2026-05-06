@@ -8,7 +8,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { BLACK, WHITE, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
+const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
@@ -20,7 +20,7 @@ const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladd
 //  ±1   = alive  (libs > 2, or 1-2 lib group surviving regardless of turn)
 //  ±2   = dead   (1-2 lib group captured regardless of turn)
 //  ±3   = unsettled (1-2 lib group whose fate depends on whose turn it is)
-// Sign encodes color (+ BLACK, − WHITE).  maxLibs in spec caps |code|.
+// Sign encodes color (+ BLACK, − WHITE).  Spec is just { size: 1|2|3 }.
 
 // ── D4 symmetry permutations ─────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ const PERMS_3x3 = [
 //              optimal play regardless of who moves next
 //  ±2          dead: 1-2 lib group that gets captured regardless of who moves
 //  ±3          unsettled: 1-2 lib group whose fate depends on whose turn it is
-// Sign encodes color (+ BLACK, − WHITE).  Caller may clamp via |code| ≤ maxLibs.
+// Sign encodes color (+ BLACK, − WHITE).  |code| ∈ {0, 1, 2, 3}.
 function computeLadderCodes(game3) {
   const N = game3.N;
   const cap = N * N;
@@ -68,47 +68,33 @@ function computeLadderCodes(game3) {
   for (let i = 0; i < cap; i++) codes[i] = game3.cells[i];
   if (game3.emptyCount === cap) return codes;
 
-  // Run ladder analysis from BOTH colours' perspectives so the encoding is
-  // independent of whose turn it is.  getLadderStatus uses game.current to
-  // decide "mover", and play/undo restore game.current — so manually toggling
-  // game3.current between the two passes is safe.
-  const origCurrent = game3.current;
-  game3.current = BLACK;
-  const infosB = getAllLadderStatuses(game3);
-  game3.current = WHITE;
-  const infosW = getAllLadderStatuses(game3);
-  game3.current = origCurrent;
-
-  if (infosB.length === 0) return codes;
-
-  // Both passes visit the same gids (group structure & liberties don't depend
-  // on whose turn it is).  Pair them by gid.
-  const msW = new Map();
-  for (const info of infosW) {
-    if (info.status) msW.set(info.gid, info.status.moverSucceeds);
-  }
-
+  // Single ladder pass.  For each 1-2 lib group, classify alive/dead/unsettled
+  // from the {moverSucceeds, urgentLibs} pair (turn-independent because:
+  //   urgentLibs.length === 0 → mover doesn't need to act, so the same outcome
+  //   holds even if the other side moves first).
+  const infos = getAllLadderStatuses(game3);
+  if (infos.length === 0) return codes;
+  const cur = game3.current;
   const codeByGid = new Map();
-  for (const info of infosB) {
+  for (const info of infos) {
     if (!info.status) continue;
-    const gid = info.gid;
-    if (!msW.has(gid)) continue;
-    const ms_b = info.status.moverSucceeds;
-    const ms_w = msW.get(gid);
+    const { moverSucceeds, urgentLibs } = info.status;
     const groupColor = info.color;
-    // "lives" if the group avoids capture from that side's tempo:
-    //   BLACK to move → BLACK group: defender succeeds = ms_b
-    //                   WHITE group: attacker (BLACK) fails = !ms_b
-    //   WHITE to move → BLACK group: attacker (WHITE) fails = !ms_w
-    //                   WHITE group: defender succeeds = ms_w
-    const livesIfB = (groupColor === BLACK) ?  ms_b : !ms_b;
-    const livesIfW = (groupColor === BLACK) ? !ms_w :  ms_w;
-    const sign = groupColor > 0 ? 1 : -1;
+    const defending  = groupColor === cur;
+    const sign       = groupColor > 0 ? 1 : -1;
     let mag;
-    if      ( livesIfB &&  livesIfW) mag = 1;  // alive
-    else if (!livesIfB && !livesIfW) mag = 2;  // dead
-    else                              mag = 3;  // unsettled
-    codeByGid.set(gid, mag * sign);
+    if (urgentLibs.length > 0) {
+      // Either side can flip the outcome by playing an urgent lib first.
+      mag = 3;  // unsettled
+    } else if (moverSucceeds) {
+      // Mover's preferred outcome is already locked in (no action needed).
+      // Defender's wish is "live", attacker's wish is "die".
+      mag = defending ? 1 : 2;
+    } else {
+      // Mover can't change the outcome; result is opposite of mover's wish.
+      mag = defending ? 2 : 1;
+    }
+    codeByGid.set(info.gid, mag * sign);
   }
   if (codeByGid.size === 0) return codes;
   for (let i = 0; i < cap; i++) {
@@ -122,15 +108,11 @@ function computeLadderCodes(game3) {
 // Single-cell convenience wrapper (slow: rebuilds game3 + ladder analysis each
 // call).  Kept for tests / external callers.  Internally extractFeatures uses
 // computeLadderCodes once per position.
-function rawState(game, maxLibs, idx) {
+function rawState(game, idx) {
   if (game.cells[idx] === 0) return 0;
-  if (maxLibs === 1) return game.cells[idx];
   const game3 = game3FromGame2(game);
   const codes = computeLadderCodes(game3);
-  let v = codes[idx];
-  if (v >  maxLibs) v =  maxLibs;
-  if (v < -maxLibs) v = -maxLibs;
-  return v;
+  return codes[idx];
 }
 
 // Given an array of raw cell states and a set of D4 permutation arrays,
@@ -171,74 +153,65 @@ function canonicalize(cells, perms, mixer) {
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
-// Given an array of specs [{ size: 1|2|3, maxLibs: N }, ...], scans every cell
-// prepareSpecs: convert a specs array into the internal structure used by
-// extractFeatures.  Call once per unique specs array and reuse the result.
-// Also precomputes lookup tables for size:2 and size:3:
-//   lut2/lut3: Map<maxLibs, { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }>
-//   Index = Σ (cell[i]+maxLibs) * base^i.  pols[i]===0 → skip (symmetric/empty).
+// Cell codes are bounded |c| ≤ ML, so the LUT base is fixed.
+const ML   = 3;
+const BASE = 2 * ML + 1;  // 7
+
+// Given an array of specs [{ size: 1|2|3 }, ...], precomputes lookup tables
+// for size:2 and size:3 and returns the structure used by extractFeatures.
+//
+//   lut2/lut3: { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }
+//   Index = Σ (cell[i] + ML) * BASE^i.  pols[i]===0 → skip (symmetric/empty).
 function prepareSpecs(specs) {
-  const byMaxLibs = new Map();
-  for (const spec of specs) {
-    if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
-    byMaxLibs.get(spec.maxLibs).push(spec.size);
-  }
-  const sortedMaxLibs = [...byMaxLibs.keys()].sort((a, b) => b - a);
+  const sizes = new Set();
+  for (const spec of specs) sizes.add(spec.size);
 
-  const lut2 = new Map();
-  const lut3 = new Map();
-  for (const maxLibs of sortedMaxLibs) {
-    const sizes = byMaxLibs.get(maxLibs);
-    const base  = 2 * maxLibs + 1;
+  let lut2 = null, lut3 = null;
 
-    if (sizes.includes(2)) {
-      const mix  = 131 * maxLibs;
-      const n    = base ** 4;
-      const keys = new Int32Array(n);
-      const pols = new Int8Array(n);
-      const c    = [0, 0, 0, 0];
-      for (let i = 0; i < n; i++) {
-        let tmp = i;
-        for (let j = 0; j < 4; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
-        const r = canonicalize(c, PERMS_2x2, mix);
-        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-      }
-      const b2 = base * base, b3 = b2 * base;
-      lut2.set(maxLibs, { keys, pols, base, b2, b3, ml: maxLibs });
+  if (sizes.has(2)) {
+    const mix  = 131 * ML;
+    const n    = BASE ** 4;
+    const keys = new Int32Array(n);
+    const pols = new Int8Array(n);
+    const c    = [0, 0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      let tmp = i;
+      for (let j = 0; j < 4; j++) { c[j] = (tmp % BASE) - ML; tmp = (tmp / BASE) | 0; }
+      const r = canonicalize(c, PERMS_2x2, mix);
+      if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
     }
-
-    if (sizes.includes(3) && base ** 9 <= 4000000) {
-      const mix  = 537 * maxLibs;
-      const n    = base ** 9;
-      const keys = new Int32Array(n);
-      const pols = new Int8Array(n);
-      const c    = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-      for (let i = 0; i < n; i++) {
-        let tmp = i;
-        for (let j = 0; j < 9; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
-        const r = canonicalize(c, PERMS_3x3, mix);
-        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-      }
-      const b2 = base*base, b3 = b2*base, b4 = b3*base, b5 = b4*base,
-            b6 = b5*base,   b7 = b6*base, b8 = b7*base;
-      lut3.set(maxLibs, { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml: maxLibs });
-    }
-
-    if (sizes.includes(4)) {
-      throw new Error('vlibpat: size 4 is no longer supported');
-    }
+    const b2 = BASE * BASE, b3 = b2 * BASE;
+    lut2 = { keys, pols, base: BASE, b2, b3, ml: ML };
   }
 
-  let totalSizes = 0;
-  for (const sizes of byMaxLibs.values()) totalSizes += sizes.length;
+  if (sizes.has(3) && BASE ** 9 <= 4000000) {
+    const mix  = 537 * ML;
+    const n    = BASE ** 9;
+    const keys = new Int32Array(n);
+    const pols = new Int8Array(n);
+    const c    = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      let tmp = i;
+      for (let j = 0; j < 9; j++) { c[j] = (tmp % BASE) - ML; tmp = (tmp / BASE) | 0; }
+      const r = canonicalize(c, PERMS_3x3, mix);
+      if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
+    }
+    const b2 = BASE*BASE, b3 = b2*BASE, b4 = b3*BASE, b5 = b4*BASE,
+          b6 = b5*BASE,   b7 = b6*BASE, b8 = b7*BASE;
+    lut3 = { keys, pols, base: BASE, b2, b3, b4, b5, b6, b7, b8, ml: ML };
+  }
 
-  return { byMaxLibs, sortedMaxLibs, lut2, lut3, totalSizes };
+  if (sizes.has(4)) {
+    throw new Error('vlibpat: size 4 is not supported');
+  }
+
+  return { sizes, lut2, lut3, totalSizes: sizes.size };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
 //
 // Optimisations vs calling pattern1/2/3 individually:
-//   - Raw cell states are precomputed once per unique maxLibs value.
+//   - Raw cell states are precomputed once per position via computeLadderCodes.
 //   - size:2 and size:3 use precomputed lookup tables (built by prepareSpecs) to
 //     replace the 8-permutation canonicalize loop with a single array index.
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
@@ -263,100 +236,47 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   }
 
   // Compute ladder codes once for this (possibly post-move) position.
-  const codes = computeLadderCodes(game3);
+  const raw = computeLadderCodes(game3);
 
-  const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
+  const { sizes, lut2, lut3 } = prepSpecs;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize (up to 3×3)
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for size-3 canonicalize
 
-  let raw = null;
-  for (const maxLibs of sortedMaxLibs) {
-    if (raw === null) {
-      raw = new Int8Array(cap);
-      for (let i = 0; i < cap; i++) {
-        let v = codes[i];
-        if      (v >  maxLibs) v =  maxLibs;
-        else if (v < -maxLibs) v = -maxLibs;
-        raw[i] = v;
-      }
-    } else {
-      // Clamp in-place: code(maxLibs) = sign * min(|code(prevMaxLibs)|, maxLibs).
-      for (let i = 0; i < cap; i++) {
-        if      (raw[i] >  maxLibs) raw[i] =  maxLibs;
-        else if (raw[i] < -maxLibs) raw[i] = -maxLibs;
+  if (sizes.has(1)) {
+    const k1base = 131 * ML;
+    for (let idx = 0; idx < cap; idx++) {
+      const s = raw[idx];
+      if (s !== 0) {
+        const mag = s > 0 ? s : -s;
+        outKeys[count] = mag + k1base;
+        outPols[count] = s > 0 ? 1 : -1;
+        count++;
       }
     }
-    const sizes = byMaxLibs.get(maxLibs);
-    const do1   = sizes.includes(1);
-    const do2   = sizes.includes(2);
-    const do3   = sizes.includes(3);
-
-    if (do1) {
-      const k1base = 131 * maxLibs;
-      for (let idx = 0; idx < cap; idx++) {
-        const s = raw[idx];
-        if (s !== 0) {
-          const libs = s > 0 ? s : -s;
-          outKeys[count] = libs + k1base;
-          outPols[count] = s > 0 ? 1 : -1;
-          count++;
-        }
-      }
-    }
-
-    if (do2) {
-      const lut = lut2.get(maxLibs);
-      if (lut) {
-        const { keys, pols, base, b2, b3, ml } = lut;
-        for (let idx = 0; idx < cap; idx++) {
-          const li = (raw[idx]+ml) + base*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
-          const pol = pols[li];
-          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
-        }
-      } else {
-        const mix2 = 131 * maxLibs;
-        for (let idx = 0; idx < cap; idx++) {
-          buf[0] = raw[idx]; buf[1] = raw[(idx+1)%cap];
-          buf[2] = raw[(idx+N)%cap]; buf[3] = raw[(idx+N+1)%cap];
-          const r = canonicalize(buf, PERMS_2x2, mix2);
-          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
-        }
-      }
-    }
-
-    if (do3) {
-      const lut = lut3.get(maxLibs);
-      if (false && lut) {
-        const { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
-        for (let idx = 0; idx < cap; idx++) {
-          const li =
-            (raw[idx]           +ml)       +
-            base*(raw[(idx+1)  %cap]+ml)   +
-            b2  *(raw[(idx+2)  %cap]+ml)   +
-            b3  *(raw[(idx+N)  %cap]+ml)   +
-            b4  *(raw[(idx+N+1)%cap]+ml)   +
-            b5  *(raw[(idx+N+2)%cap]+ml)   +
-            b6  *(raw[(idx+2*N)  %cap]+ml) +
-            b7  *(raw[(idx+2*N+1)%cap]+ml) +
-            b8  *(raw[(idx+2*N+2)%cap]+ml);
-          const pol = pols[li];
-          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
-        }
-      } else {
-        const mix3 = 537 * maxLibs;
-        for (let idx = 0; idx < cap; idx++) {
-          buf[0] = raw[idx];
-          buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
-          buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
-          buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
-
-          const r = canonicalize(buf, PERMS_3x3, mix3);
-          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
-        }
-      }
-    }
-
   }
+
+  if (sizes.has(2) && lut2) {
+    const { keys, pols, b2, b3, ml } = lut2;
+    for (let idx = 0; idx < cap; idx++) {
+      const li = (raw[idx]+ml) + BASE*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
+      const pol = pols[li];
+      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+    }
+  }
+
+  if (sizes.has(3)) {
+    const mix3 = 537 * ML;
+    for (let idx = 0; idx < cap; idx++) {
+      buf[0] = raw[idx];
+      buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
+      buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
+      buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
+
+      const r = canonicalize(buf, PERMS_3x3, mix3);
+      if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+    }
+  }
+
   if (movePlayed) game3.undo();
   return { keys: outKeys, pols: outPols, count, val: 0.5 };
 }
