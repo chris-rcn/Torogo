@@ -137,7 +137,7 @@ function search1ply(game) {
   if (game.consecutivePasses > 0 || game.emptyCount < area/2) {
     const passFeatures = extractFeatures(game, prepSpecs);
     evaluateFeatures(passFeatures, weights);
-    if (isBlack === (passFeatures.val >= bestScore)) { 
+    if (isBlack === (passFeatures.val > bestScore)) {
       bestScore = passFeatures.val;
       bestMove = PASS;
     }
