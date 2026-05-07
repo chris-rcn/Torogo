@@ -35,3 +35,5 @@
 - **Eval reporting.** When summarising selfplay/eval results, report the
   win-rate (e.g. p2 win% or p1 win%) and game count.  Do **not** report
   the `p2Better%` column.
+- **Training reporting.** When summarising training-run output, do **not**
+  report the training-accuracy (`acc%`) column — it's not informative.
