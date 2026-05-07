@@ -312,9 +312,7 @@ console.log([
   'acc%'   .padStart(5),
   ...(ACCURACY_FILE    ? ['vacc%' .padStart(6)] : []),
   ...(evalPositionsPool ? ['rmsErr'.padStart(7), 'rmsAvg'.padStart(7)] : []),
-  'avg|w|' .padStart(7),
-  'rms(w)' .padStart(7),
-  'max|w|' .padStart(7),
+  'avg|w|' .padStart(8),
   'tTrain' .padStart(7),
   ...(evalGetMove ? ['tTest'.padStart(6)] : []),
   'turnMs' .padStart(6),
@@ -404,15 +402,11 @@ while (true) {
       rmsCol    = rmsErr.toFixed(4).padStart(7);
       rmsAvgCol = rmsAvg.toFixed(4).padStart(7);
     }
-    let wAbsSum = 0, wAbsMax = 0, wSqSum = 0;
+    let wAbsSum = 0;
     for (const w of weights.values()) {
-      const a = Math.abs(w);
-      wAbsSum += a;
-      wSqSum  += w * w;
-      if (a > wAbsMax) wAbsMax = a;
+      wAbsSum += Math.abs(w);
     }
     const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
-    const wRms = weights.size > 0 ? Math.sqrt(wSqSum / weights.size) : 0;
 
     const tTestMs   = Date.now() - tTestStart;
     const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
@@ -430,9 +424,7 @@ while (true) {
       (avgAcc + '%')                     .padStart(5),
       ...(vaccCol    ? [vaccCol]                    : []),
       ...(rmsCol     ? [rmsCol, rmsAvgCol]          : []),
-      wAvg.toFixed(3)                    .padStart(7),
-      wRms.toFixed(3)                    .padStart(7),
-      wAbsMax.toFixed(3)                 .padStart(7),
+      wAvg.toFixed(4)                    .padStart(8),
       tTrainStr                            .padStart(7),
       ...(evalGetMove ? [((tTestMs / 1000).toFixed(1) + 's').padStart(6)] : []),
       timePerMoveMs.toFixed(1)           .padStart(6),
