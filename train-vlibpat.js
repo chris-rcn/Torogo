@@ -334,10 +334,15 @@ let refBudgetMs = BUDGET;
 const evalHistory = [];   // per-interval game results (1/0.5/0)
 const rmsHistory  = [];   // per-interval rmsErr values
 
+// Apply EMA every EMA_PERIOD games to amortize the O(weight_count) cost.
+// With period=20 and alpha=0.999, EMA half-life ≈ 13860 games (slow smoothing).
+// To track faster lower alpha (e.g. --ema-alpha=0.99 → half-life ≈ 1380 games).
+const EMA_PERIOD = 20;
+
 while (true) {
   g++;
   const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
-  applyEMA(EMA_ALPHA);
+  if (g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
