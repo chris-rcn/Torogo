@@ -55,7 +55,7 @@ const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
-const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.999');  // Polyak per-game EMA
+const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.9975');  // per-call decay (period=50)
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
@@ -335,9 +335,10 @@ const evalHistory = [];   // per-interval game results (1/0.5/0)
 const rmsHistory  = [];   // per-interval rmsErr values
 
 // Apply EMA every EMA_PERIOD games to amortize the O(weight_count) cost.
-// With period=20 and alpha=0.999, EMA half-life ≈ 13860 games (slow smoothing).
-// To track faster lower alpha (e.g. --ema-alpha=0.99 → half-life ≈ 1380 games).
-const EMA_PERIOD = 20;
+// Default alpha=0.9975 with period=50 ⇒ time constant ≈ 20 000 games (gentle
+// long-horizon smoothing).  --ema-alpha tunes per-call decay (alpha=0.99 gives
+// ~5 000-game tc, alpha=0.95 gives ~1 000-game tc).
+const EMA_PERIOD = 50;
 
 while (true) {
   g++;
