@@ -55,7 +55,7 @@ const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
-const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.9975');  // per-call decay (period=50)
+const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.95');  // per-call decay (period=50, ≈hpatterns per-game 0.999)
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
@@ -335,9 +335,10 @@ const evalHistory = [];   // per-interval game results (1/0.5/0)
 const rmsHistory  = [];   // per-interval rmsErr values
 
 // Apply EMA every EMA_PERIOD games to amortize the O(weight_count) cost.
-// Default alpha=0.9975 with period=50 ⇒ time constant ≈ 20 000 games (gentle
-// long-horizon smoothing).  --ema-alpha tunes per-call decay (alpha=0.99 gives
-// ~5 000-game tc, alpha=0.95 gives ~1 000-game tc).
+// Default alpha=0.95 with period=50 ⇒ time constant ≈ 1 000 games — matches
+// hpatterns per-game alpha=0.999.  Use --ema-alpha to tune (per-call):
+//   alpha=0.99  → 5 000-game tc
+//   alpha=0.9975→ 20 000-game tc
 const EMA_PERIOD = 50;
 
 while (true) {
