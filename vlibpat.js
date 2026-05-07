@@ -206,12 +206,18 @@ function prepareSpecs(specs) {
     const b = BASE;
     lut2L = { ...lut, b2: b*b, b3: b*b*b };
   }
-  if (need.s3L && BASE ** 9 <= 4000000) {
-    // BASE=7, 7^9=40M — currently disabled; LUT path stays on the fallback
-    // canonicalize (kept for parity with prior versions).
-    const lut = _buildLUT(9, PERMS_3x3, ML, mixL3);
+  if (need.s3L) {
+    // 7^9 = 40M raw configs — too many to fully enumerate.  Use a lazy/sparse
+    // cache populated on first lookup of each pattern.
     const b = BASE;
-    lut3L = { ...lut, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8 };
+    lut3L = {
+      sparse: true,
+      cacheKey: new Map(),
+      cachePol: new Map(),
+      mix: mixL3,
+      base: b, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8,
+      ml: ML,
+    };
   }
   if (need.s2NL) {
     const lut = _buildLUT(4, PERMS_2x2, ML_NL, mixNL2);
@@ -257,7 +263,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     movePlayed = game3.play(nextMove);
   }
 
-  const { need, lut2L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3 } = prepSpecs;
+  const { need, lut2L, lut3L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3 } = prepSpecs;
 
   // Compute ladder codes only if any ladder spec is requested.
   const rawL  = (need.s1L || need.s2L || need.s3L)    ? computeLadderCodes(game3) : null;
@@ -309,14 +315,27 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   }
 
   // ── size 3 ─────────────────────────────────────────────────────────────────
-  if (need.s3L) {  // ladder: no LUT (BASE^9 = 40M too big to enumerate); fallback canonicalize
+  if (need.s3L && lut3L) {  // ladder: sparse LUT, populated on first lookup
+    const { cacheKey, cachePol, mix, b2, b3, b4, b5, b6, b7, b8, ml } = lut3L;
     for (let idx = 0; idx < cap; idx++) {
       buf[0] = rawL[idx];
       buf[1] = rawL[(idx+1)    %cap]; buf[2] = rawL[(idx+2)    %cap];
       buf[3] = rawL[(idx+N)    %cap]; buf[4] = rawL[(idx+N+1)  %cap]; buf[5] = rawL[(idx+N+2)  %cap];
       buf[6] = rawL[(idx+2*N)  %cap]; buf[7] = rawL[(idx+2*N+1)%cap]; buf[8] = rawL[(idx+2*N+2)%cap];
-      const r = canonicalize(buf, PERMS_3x3, mixL3);
-      if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+      const li =
+        (buf[0]+ml)       + BASE*(buf[1]+ml)  + b2*(buf[2]+ml)  +
+        b3*(buf[3]+ml)    + b4*(buf[4]+ml)    + b5*(buf[5]+ml)  +
+        b6*(buf[6]+ml)    + b7*(buf[7]+ml)    + b8*(buf[8]+ml);
+      let pol = cachePol.get(li);
+      if (pol === undefined) {
+        const r = canonicalize(buf, PERMS_3x3, mix);
+        if (r === null) { cachePol.set(li, 0); continue; }
+        cacheKey.set(li, r.key);
+        cachePol.set(li, r.polarity);
+        outKeys[count] = r.key; outPols[count] = r.polarity; count++;
+      } else if (pol !== 0) {
+        outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+      }
     }
   }
   if (need.s3NL && lut3NL) {  // no-ladder: 3^9 = 19683, full LUT
