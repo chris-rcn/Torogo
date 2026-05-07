@@ -15,10 +15,11 @@ const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladd
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 // Cell state encoding (signed, color-canonicalized) — ladder-aware,
-// turn-independent.  5 states (open / dead / other × {empty, B, W}):
-//   0   = empty (open)
-//  ±1   = dead  (1-2 lib group captured regardless of turn)
-//  ±2   = other (alive: libs > 2 or 1-2 lib survives; unsettled: tempo-dependent)
+// turn-independent:
+//   0   = empty
+//  ±1   = alive  (libs > 2, or 1-2 lib group surviving regardless of turn)
+//  ±2   = dead   (1-2 lib group captured regardless of turn)
+//  ±3   = unsettled (1-2 lib group whose fate depends on whose turn it is)
 // Sign encodes color (+ BLACK, − WHITE).  Spec is { size: 1|2|3, ladder?: bool }.
 
 // ── D4 symmetry permutations ─────────────────────────────────────────────────
@@ -53,23 +54,22 @@ const PERMS_3x3 = [
 
 // Compute per-cell ladder-aware codes for `game3` (Int8Array(cap)) — turn-
 // independent (the encoding does NOT depend on whose move it is).
-//   0          empty (open)
-//  ±1          dead:  1-2 lib group captured regardless of who moves
-//  ±2          other: alive (libs > 2 or 1-2 lib survives) or unsettled
-// Sign encodes color (+ BLACK, − WHITE).  |code| ∈ {0, 1, 2}.
+//   0          empty
+//  ±1          alive: group with > 2 liberties, OR 1-2 lib group that survives
+//              optimal play regardless of who moves next
+//  ±2          dead: 1-2 lib group that gets captured regardless of who moves
+//  ±3          unsettled: 1-2 lib group whose fate depends on whose turn it is
+// Sign encodes color (+ BLACK, − WHITE).  |code| ∈ {0, 1, 2, 3}.
 function computeLadderCodes(game3) {
   const N = game3.N;
   const cap = N * N;
   const codes = new Int8Array(cap);
-  // Default: stones get ±2 (other = "alive or unsettled"), empties stay 0.
-  for (let i = 0; i < cap; i++) {
-    const c = game3.cells[i];
-    if (c !== 0) codes[i] = 2 * c;
-  }
+  // Default: stones get ±1 (alive), empties stay 0.
+  for (let i = 0; i < cap; i++) codes[i] = game3.cells[i];
   if (game3.emptyCount === cap) return codes;
 
-  // Single ladder pass.  For each 1-2 lib group, classify dead vs other from
-  // the {moverSucceeds, urgentLibs} pair (turn-independent because:
+  // Single ladder pass.  For each 1-2 lib group, classify alive/dead/unsettled
+  // from the {moverSucceeds, urgentLibs} pair (turn-independent because:
   //   urgentLibs.length === 0 → mover doesn't need to act, so the same outcome
   //   holds even if the other side moves first).
   const infos = getAllLadderStatuses(game3);
@@ -82,14 +82,17 @@ function computeLadderCodes(game3) {
     const groupColor = info.color;
     const defending  = groupColor === cur;
     const sign       = groupColor > 0 ? 1 : -1;
-    // Reduce to dead vs other:
-    //   urgentLibs > 0     → unsettled → other (mag=2)
-    //   moverSucceeds=true → defender wins (alive=other) / attacker captures (dead)
-    //   moverSucceeds=false→ defender can't save (dead) / attacker can't kill (other)
     let mag;
-    if (urgentLibs.length > 0)  mag = 2;                 // unsettled → other
-    else if (moverSucceeds)     mag = defending ? 2 : 1; // alive vs dead
-    else                        mag = defending ? 1 : 2; // dead vs alive
+    if (urgentLibs.length > 0) {
+      // Either side can flip the outcome by playing an urgent lib first.
+      mag = 3;  // unsettled
+    } else if (moverSucceeds) {
+      // Mover's preferred outcome is already locked in (no action needed).
+      mag = defending ? 1 : 2;
+    } else {
+      // Mover can't change the outcome; result is opposite of mover's wish.
+      mag = defending ? 2 : 1;
+    }
     codeByGid.set(info.gid, mag * sign);
   }
   if (codeByGid.size === 0) return codes;
@@ -149,9 +152,9 @@ function canonicalize(cells, perms, mixer) {
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
-// Ladder-aware code range: |c| ≤ 2 (5 states: empty / dead-{B,W} / other-{B,W}).
-// No-ladder (presence-only): |c| ≤ 1 (3 states, just sign of game.cells[]).
-const ML       = 2, BASE    = 2 * ML + 1;        // ladder:    5
+// Ladder-aware code range: |c| ≤ 3 (7 states).  No-ladder (presence-only):
+// |c| ≤ 1 (3 states, just sign of game.cells[]).
+const ML       = 3, BASE    = 2 * ML + 1;        // ladder:    7
 const ML_NL    = 1, BASE_NL = 2 * ML_NL + 1;     // no-ladder: 3
 
 // All LUTs are sparse Map-based caches, populated on first lookup of each
