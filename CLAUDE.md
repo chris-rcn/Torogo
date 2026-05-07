@@ -22,9 +22,16 @@
   completion, immediately `cat` the output file so the user can review it
   before deciding next steps.
 
-- **Reference player: `vlibpat-ref-2x2`.** Use `ai/vlibpat-ref-2x2.js` as the
-  default reference player for both training (`--ext vlibpat-ref-2x2`) and
-  evaluation (`--p1 vlibpat-ref-2x2` or `--p2 vlibpat-ref-2x2`). It's a
+- **Evaluation reference player: `vlibpat-ref-2x2`.** Use
+  `ai/vlibpat-ref-2x2.js` as the default reference player for **evaluation
+  only** (`--p1 vlibpat-ref-2x2` or `--p2 vlibpat-ref-2x2`). It's a
   hardcoded-config 234k-game vlibpat checkpoint with verified strength of
   68.5% / 200g vs rave-500 and 62.5% / 200g vs npat.  Do not pass any env
   vars when using it; all parameters are baked into the agent file.
+- **Training external policy: `npat`.** For training runs that need an
+  external opponent (`--ext`), use `npat` — it's fast.  Do **not** use
+  `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight model and runs its
+  own search at every move, roughly doubling per-move cost.
+- **Eval reporting.** When summarising selfplay/eval results, report the
+  win-rate (e.g. p2 win% or p1 win%) and game count.  Do **not** report
+  the `p2Better%` column.
