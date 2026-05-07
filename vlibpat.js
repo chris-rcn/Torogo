@@ -158,20 +158,20 @@ function canonicalize(cells, perms, mixer) {
 const ML       = 3, BASE    = 2 * ML + 1;        // ladder:    7
 const ML_NL    = 1, BASE_NL = 2 * ML_NL + 1;     // no-ladder: 3
 
-// Build a LUT: enumerate all base^cellCount raw configs, canonicalize each.
-function _buildLUT(cellCount, perms, ml, mix) {
+// All LUTs are sparse Map-based caches, populated on first lookup of each
+// distinct raw pattern.  Storage scales with patterns actually encountered,
+// not the worst-case raw configuration count.
+function _makeSparseLUT(cellCount, perms, ml, mix) {
   const base = 2 * ml + 1;
-  const n    = base ** cellCount;
-  const keys = new Int32Array(n);
-  const pols = new Int8Array(n);
-  const c    = new Array(cellCount).fill(0);
-  for (let i = 0; i < n; i++) {
-    let tmp = i;
-    for (let j = 0; j < cellCount; j++) { c[j] = (tmp % base) - ml; tmp = (tmp / base) | 0; }
-    const r = canonicalize(c, perms, mix);
-    if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-  }
-  return { keys, pols, base, ml };
+  const lut = {
+    cacheKey: new Map(),
+    cachePol: new Map(),
+    perms, mix, base, ml,
+  };
+  // Precompute base powers (b1..b{cellCount-1}) for index computation.
+  let p = 1;
+  for (let j = 1; j < cellCount; j++) { p *= base; lut['b' + j] = p; }
+  return lut;
 }
 
 // Spec = { size: 1|2|3, ladder?: boolean }.  ladder defaults to true.
@@ -198,42 +198,66 @@ function prepareSpecs(specs) {
   const mixNL2 = 1093;         // size 2 no-ladder
   const mixNL3 = 2741;         // size 3 no-ladder
 
-  let lut2L  = null, lut3L  = null;
-  let lut2NL = null, lut3NL = null;
-
-  if (need.s2L) {
-    const lut = _buildLUT(4, PERMS_2x2, ML, mixL2);
-    const b = BASE;
-    lut2L = { ...lut, b2: b*b, b3: b*b*b };
-  }
-  if (need.s3L) {
-    // 7^9 = 40M raw configs — too many to fully enumerate.  Use a lazy/sparse
-    // cache populated on first lookup of each pattern.
-    const b = BASE;
-    lut3L = {
-      sparse: true,
-      cacheKey: new Map(),
-      cachePol: new Map(),
-      mix: mixL3,
-      base: b, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8,
-      ml: ML,
-    };
-  }
-  if (need.s2NL) {
-    const lut = _buildLUT(4, PERMS_2x2, ML_NL, mixNL2);
-    const b = BASE_NL;
-    lut2NL = { ...lut, b2: b*b, b3: b*b*b };
-  }
-  if (need.s3NL) {  // 3^9 = 19683, easily enumerable
-    const lut = _buildLUT(9, PERMS_3x3, ML_NL, mixNL3);
-    const b = BASE_NL;
-    lut3NL = { ...lut, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8 };
-  }
+  const lut2L  = need.s2L  ? _makeSparseLUT(4, PERMS_2x2, ML,    mixL2)  : null;
+  const lut3L  = need.s3L  ? _makeSparseLUT(9, PERMS_3x3, ML,    mixL3)  : null;
+  const lut2NL = need.s2NL ? _makeSparseLUT(4, PERMS_2x2, ML_NL, mixNL2) : null;
+  const lut3NL = need.s3NL ? _makeSparseLUT(9, PERMS_3x3, ML_NL, mixNL3) : null;
 
   let totalSizes = 0;
   for (const k of Object.keys(need)) if (need[k]) totalSizes++;
 
-  return { need, lut2L, lut3L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3, totalSizes };
+  return { need, lut2L, lut3L, lut2NL, lut3NL, totalSizes };
+}
+
+// Sparse-LUT-driven size-2 extraction.  raw is a per-cell code array (Int8/Uint8);
+// lut is from _makeSparseLUT (with cacheKey/cachePol Maps + base/ml/perms/mix +
+// b1=base, b2=base^2, b3=base^3).
+function _extractSize2(raw, cap, N, lut, outKeys, outPols, count, buf) {
+  const { cacheKey, cachePol, perms, mix, base, b2, b3, ml } = lut;
+  for (let idx = 0; idx < cap; idx++) {
+    buf[0] = raw[idx];
+    buf[1] = raw[(idx+1)  %cap];
+    buf[2] = raw[(idx+N)  %cap];
+    buf[3] = raw[(idx+N+1)%cap];
+    const li = (buf[0]+ml) + base*(buf[1]+ml) + b2*(buf[2]+ml) + b3*(buf[3]+ml);
+    let pol = cachePol.get(li);
+    if (pol === undefined) {
+      const r = canonicalize(buf, perms, mix);
+      if (r === null) { cachePol.set(li, 0); continue; }
+      cacheKey.set(li, r.key);
+      cachePol.set(li, r.polarity);
+      outKeys[count] = r.key; outPols[count] = r.polarity; count++;
+    } else if (pol !== 0) {
+      outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+    }
+  }
+  return count;
+}
+
+// Sparse-LUT-driven size-3 extraction.  Mirrors _extractSize2 with a 3×3 window.
+function _extractSize3(raw, cap, N, lut, outKeys, outPols, count, buf) {
+  const { cacheKey, cachePol, perms, mix, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
+  for (let idx = 0; idx < cap; idx++) {
+    buf[0] = raw[idx];
+    buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
+    buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
+    buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
+    const li =
+      (buf[0]+ml)    + base*(buf[1]+ml) + b2*(buf[2]+ml) +
+      b3*(buf[3]+ml) + b4  *(buf[4]+ml) + b5*(buf[5]+ml) +
+      b6*(buf[6]+ml) + b7  *(buf[7]+ml) + b8*(buf[8]+ml);
+    let pol = cachePol.get(li);
+    if (pol === undefined) {
+      const r = canonicalize(buf, perms, mix);
+      if (r === null) { cachePol.set(li, 0); continue; }
+      cacheKey.set(li, r.key);
+      cachePol.set(li, r.polarity);
+      outKeys[count] = r.key; outPols[count] = r.polarity; count++;
+    } else if (pol !== 0) {
+      outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+    }
+  }
+  return count;
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -297,64 +321,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   }
 
   // ── size 2 ─────────────────────────────────────────────────────────────────
-  if (need.s2L && lut2L) {
-    const { keys, pols, b2, b3, ml } = lut2L;
-    for (let idx = 0; idx < cap; idx++) {
-      const li = (rawL[idx]+ml) + BASE*(rawL[(idx+1)%cap]+ml) + b2*(rawL[(idx+N)%cap]+ml) + b3*(rawL[(idx+N+1)%cap]+ml);
-      const pol = pols[li];
-      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
-    }
-  }
-  if (need.s2NL && lut2NL) {
-    const { keys, pols, b2, b3, ml } = lut2NL;
-    for (let idx = 0; idx < cap; idx++) {
-      const li = (rawNL[idx]+ml) + BASE_NL*(rawNL[(idx+1)%cap]+ml) + b2*(rawNL[(idx+N)%cap]+ml) + b3*(rawNL[(idx+N+1)%cap]+ml);
-      const pol = pols[li];
-      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
-    }
-  }
+  if (need.s2L)  count = _extractSize2(rawL,  cap, N, lut2L,  outKeys, outPols, count, buf);
+  if (need.s2NL) count = _extractSize2(rawNL, cap, N, lut2NL, outKeys, outPols, count, buf);
 
   // ── size 3 ─────────────────────────────────────────────────────────────────
-  if (need.s3L && lut3L) {  // ladder: sparse LUT, populated on first lookup
-    const { cacheKey, cachePol, mix, b2, b3, b4, b5, b6, b7, b8, ml } = lut3L;
-    for (let idx = 0; idx < cap; idx++) {
-      buf[0] = rawL[idx];
-      buf[1] = rawL[(idx+1)    %cap]; buf[2] = rawL[(idx+2)    %cap];
-      buf[3] = rawL[(idx+N)    %cap]; buf[4] = rawL[(idx+N+1)  %cap]; buf[5] = rawL[(idx+N+2)  %cap];
-      buf[6] = rawL[(idx+2*N)  %cap]; buf[7] = rawL[(idx+2*N+1)%cap]; buf[8] = rawL[(idx+2*N+2)%cap];
-      const li =
-        (buf[0]+ml)       + BASE*(buf[1]+ml)  + b2*(buf[2]+ml)  +
-        b3*(buf[3]+ml)    + b4*(buf[4]+ml)    + b5*(buf[5]+ml)  +
-        b6*(buf[6]+ml)    + b7*(buf[7]+ml)    + b8*(buf[8]+ml);
-      let pol = cachePol.get(li);
-      if (pol === undefined) {
-        const r = canonicalize(buf, PERMS_3x3, mix);
-        if (r === null) { cachePol.set(li, 0); continue; }
-        cacheKey.set(li, r.key);
-        cachePol.set(li, r.polarity);
-        outKeys[count] = r.key; outPols[count] = r.polarity; count++;
-      } else if (pol !== 0) {
-        outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
-      }
-    }
-  }
-  if (need.s3NL && lut3NL) {  // no-ladder: 3^9 = 19683, full LUT
-    const { keys, pols, b2, b3, b4, b5, b6, b7, b8, ml } = lut3NL;
-    for (let idx = 0; idx < cap; idx++) {
-      const li =
-        (rawNL[idx]            +ml)       +
-        BASE_NL*(rawNL[(idx+1)    %cap]+ml) +
-        b2     *(rawNL[(idx+2)    %cap]+ml) +
-        b3     *(rawNL[(idx+N)    %cap]+ml) +
-        b4     *(rawNL[(idx+N+1)  %cap]+ml) +
-        b5     *(rawNL[(idx+N+2)  %cap]+ml) +
-        b6     *(rawNL[(idx+2*N)  %cap]+ml) +
-        b7     *(rawNL[(idx+2*N+1)%cap]+ml) +
-        b8     *(rawNL[(idx+2*N+2)%cap]+ml);
-      const pol = pols[li];
-      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
-    }
-  }
+  if (need.s3L)  count = _extractSize3(rawL,  cap, N, lut3L,  outKeys, outPols, count, buf);
+  if (need.s3NL) count = _extractSize3(rawNL, cap, N, lut3NL, outKeys, outPols, count, buf);
 
   if (movePlayed) game3.undo();
   return { keys: outKeys, pols: outPols, count, val: 0.5 };
