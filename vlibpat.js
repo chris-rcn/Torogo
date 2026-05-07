@@ -153,59 +153,81 @@ function canonicalize(cells, perms, mixer) {
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
-// Cell codes are bounded |c| ≤ ML, so the LUT base is fixed.
-const ML   = 3;
-const BASE = 2 * ML + 1;  // 7
+// Ladder-aware code range: |c| ≤ 3 (7 states).  No-ladder (presence-only):
+// |c| ≤ 1 (3 states, just sign of game.cells[]).
+const ML       = 3, BASE    = 2 * ML + 1;        // ladder:    7
+const ML_NL    = 1, BASE_NL = 2 * ML_NL + 1;     // no-ladder: 3
 
-// Given an array of specs [{ size: 1|2|3 }, ...], precomputes lookup tables
-// for size:2 and size:3 and returns the structure used by extractFeatures.
-//
-//   lut2/lut3: { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }
-//   Index = Σ (cell[i] + ML) * BASE^i.  pols[i]===0 → skip (symmetric/empty).
+// Build a LUT: enumerate all base^cellCount raw configs, canonicalize each.
+function _buildLUT(cellCount, perms, ml, mix) {
+  const base = 2 * ml + 1;
+  const n    = base ** cellCount;
+  const keys = new Int32Array(n);
+  const pols = new Int8Array(n);
+  const c    = new Array(cellCount).fill(0);
+  for (let i = 0; i < n; i++) {
+    let tmp = i;
+    for (let j = 0; j < cellCount; j++) { c[j] = (tmp % base) - ml; tmp = (tmp / base) | 0; }
+    const r = canonicalize(c, perms, mix);
+    if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
+  }
+  return { keys, pols, base, ml };
+}
+
+// Spec = { size: 1|2|3, ladder?: boolean }.  ladder defaults to true.
+//   ladder:true  → 7-state ladder-aware encoding (alive/dead/unsettled/+sign)
+//   ladder:false → 3-state presence-only encoding (empty/black/white)
+// Different mixer constants ensure no key collisions across variants.
 function prepareSpecs(specs) {
-  const sizes = new Set();
-  for (const spec of specs) sizes.add(spec.size);
-
-  let lut2 = null, lut3 = null;
-
-  if (sizes.has(2)) {
-    const mix  = 131 * ML;
-    const n    = BASE ** 4;
-    const keys = new Int32Array(n);
-    const pols = new Int8Array(n);
-    const c    = [0, 0, 0, 0];
-    for (let i = 0; i < n; i++) {
-      let tmp = i;
-      for (let j = 0; j < 4; j++) { c[j] = (tmp % BASE) - ML; tmp = (tmp / BASE) | 0; }
-      const r = canonicalize(c, PERMS_2x2, mix);
-      if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-    }
-    const b2 = BASE * BASE, b3 = b2 * BASE;
-    lut2 = { keys, pols, base: BASE, b2, b3, ml: ML };
+  const need = { s1L:false, s2L:false, s3L:false,
+                 s1NL:false, s2NL:false, s3NL:false };
+  for (const spec of specs) {
+    if (spec.size === 4) throw new Error('vlibpat: size 4 is not supported');
+    const ladder = spec.ladder !== false;  // default true
+    if      (spec.size === 1 && ladder)  need.s1L  = true;
+    else if (spec.size === 1 && !ladder) need.s1NL = true;
+    else if (spec.size === 2 && ladder)  need.s2L  = true;
+    else if (spec.size === 2 && !ladder) need.s2NL = true;
+    else if (spec.size === 3 && ladder)  need.s3L  = true;
+    else if (spec.size === 3 && !ladder) need.s3NL = true;
   }
 
-  if (sizes.has(3) && BASE ** 9 <= 4000000) {
-    const mix  = 537 * ML;
-    const n    = BASE ** 9;
-    const keys = new Int32Array(n);
-    const pols = new Int8Array(n);
-    const c    = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-    for (let i = 0; i < n; i++) {
-      let tmp = i;
-      for (let j = 0; j < 9; j++) { c[j] = (tmp % BASE) - ML; tmp = (tmp / BASE) | 0; }
-      const r = canonicalize(c, PERMS_3x3, mix);
-      if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-    }
-    const b2 = BASE*BASE, b3 = b2*BASE, b4 = b3*BASE, b5 = b4*BASE,
-          b6 = b5*BASE,   b7 = b6*BASE, b8 = b7*BASE;
-    lut3 = { keys, pols, base: BASE, b2, b3, b4, b5, b6, b7, b8, ml: ML };
+  // Mixer constants (chosen distinct to avoid cross-variant key collisions).
+  const mixL2  = 131 * ML;     // size 2 ladder
+  const mixL3  = 537 * ML;     // size 3 ladder
+  const mixNL2 = 1093;         // size 2 no-ladder
+  const mixNL3 = 2741;         // size 3 no-ladder
+
+  let lut2L  = null, lut3L  = null;
+  let lut2NL = null, lut3NL = null;
+
+  if (need.s2L) {
+    const lut = _buildLUT(4, PERMS_2x2, ML, mixL2);
+    const b = BASE;
+    lut2L = { ...lut, b2: b*b, b3: b*b*b };
+  }
+  if (need.s3L && BASE ** 9 <= 4000000) {
+    // BASE=7, 7^9=40M — currently disabled; LUT path stays on the fallback
+    // canonicalize (kept for parity with prior versions).
+    const lut = _buildLUT(9, PERMS_3x3, ML, mixL3);
+    const b = BASE;
+    lut3L = { ...lut, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8 };
+  }
+  if (need.s2NL) {
+    const lut = _buildLUT(4, PERMS_2x2, ML_NL, mixNL2);
+    const b = BASE_NL;
+    lut2NL = { ...lut, b2: b*b, b3: b*b*b };
+  }
+  if (need.s3NL) {  // 3^9 = 19683, easily enumerable
+    const lut = _buildLUT(9, PERMS_3x3, ML_NL, mixNL3);
+    const b = BASE_NL;
+    lut3NL = { ...lut, b2: b*b, b3: b**3, b4: b**4, b5: b**5, b6: b**6, b7: b**7, b8: b**8 };
   }
 
-  if (sizes.has(4)) {
-    throw new Error('vlibpat: size 4 is not supported');
-  }
+  let totalSizes = 0;
+  for (const k of Object.keys(need)) if (need[k]) totalSizes++;
 
-  return { sizes, lut2, lut3, totalSizes: sizes.size };
+  return { need, lut2L, lut3L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3, totalSizes };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -235,45 +257,83 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     movePlayed = game3.play(nextMove);
   }
 
-  // Compute ladder codes once for this (possibly post-move) position.
-  const raw = computeLadderCodes(game3);
+  const { need, lut2L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3 } = prepSpecs;
 
-  const { sizes, lut2, lut3 } = prepSpecs;
+  // Compute ladder codes only if any ladder spec is requested.
+  const rawL  = (need.s1L || need.s2L || need.s3L)    ? computeLadderCodes(game3) : null;
+  // No-ladder codes = sign-only cell values (-1, 0, +1) — i.e. game3.cells.
+  const rawNL = (need.s1NL || need.s2NL || need.s3NL) ? game3.cells : null;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for size-3 canonicalize
+  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for size-3 canonicalize fallback
 
-  if (sizes.has(1)) {
-    const k1base = 131 * ML;
+  // ── size 1 ─────────────────────────────────────────────────────────────────
+  if (need.s1L) {
+    const k1base = 131 * ML;  // ladder magnitude ∈ {1, 2, 3} → keys k1base+1..3
     for (let idx = 0; idx < cap; idx++) {
-      const s = raw[idx];
+      const s = rawL[idx];
       if (s !== 0) {
-        const mag = s > 0 ? s : -s;
-        outKeys[count] = mag + k1base;
+        outKeys[count] = (s > 0 ? s : -s) + k1base;
+        outPols[count] = s > 0 ? 1 : -1;
+        count++;
+      }
+    }
+  }
+  if (need.s1NL) {
+    const k1base = 131 * ML_NL;  // distinct from ladder size-1 base
+    for (let idx = 0; idx < cap; idx++) {
+      const s = rawNL[idx];
+      if (s !== 0) {
+        outKeys[count] = 1 + k1base;  // magnitude is always 1 for presence-only
         outPols[count] = s > 0 ? 1 : -1;
         count++;
       }
     }
   }
 
-  if (sizes.has(2) && lut2) {
-    const { keys, pols, b2, b3, ml } = lut2;
+  // ── size 2 ─────────────────────────────────────────────────────────────────
+  if (need.s2L && lut2L) {
+    const { keys, pols, b2, b3, ml } = lut2L;
     for (let idx = 0; idx < cap; idx++) {
-      const li = (raw[idx]+ml) + BASE*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
+      const li = (rawL[idx]+ml) + BASE*(rawL[(idx+1)%cap]+ml) + b2*(rawL[(idx+N)%cap]+ml) + b3*(rawL[(idx+N+1)%cap]+ml);
+      const pol = pols[li];
+      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+    }
+  }
+  if (need.s2NL && lut2NL) {
+    const { keys, pols, b2, b3, ml } = lut2NL;
+    for (let idx = 0; idx < cap; idx++) {
+      const li = (rawNL[idx]+ml) + BASE_NL*(rawNL[(idx+1)%cap]+ml) + b2*(rawNL[(idx+N)%cap]+ml) + b3*(rawNL[(idx+N+1)%cap]+ml);
       const pol = pols[li];
       if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
     }
   }
 
-  if (sizes.has(3)) {
-    const mix3 = 537 * ML;
+  // ── size 3 ─────────────────────────────────────────────────────────────────
+  if (need.s3L) {  // ladder: no LUT (BASE^9 = 40M too big to enumerate); fallback canonicalize
     for (let idx = 0; idx < cap; idx++) {
-      buf[0] = raw[idx];
-      buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
-      buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
-      buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
-
-      const r = canonicalize(buf, PERMS_3x3, mix3);
+      buf[0] = rawL[idx];
+      buf[1] = rawL[(idx+1)    %cap]; buf[2] = rawL[(idx+2)    %cap];
+      buf[3] = rawL[(idx+N)    %cap]; buf[4] = rawL[(idx+N+1)  %cap]; buf[5] = rawL[(idx+N+2)  %cap];
+      buf[6] = rawL[(idx+2*N)  %cap]; buf[7] = rawL[(idx+2*N+1)%cap]; buf[8] = rawL[(idx+2*N+2)%cap];
+      const r = canonicalize(buf, PERMS_3x3, mixL3);
       if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+    }
+  }
+  if (need.s3NL && lut3NL) {  // no-ladder: 3^9 = 19683, full LUT
+    const { keys, pols, b2, b3, b4, b5, b6, b7, b8, ml } = lut3NL;
+    for (let idx = 0; idx < cap; idx++) {
+      const li =
+        (rawNL[idx]            +ml)       +
+        BASE_NL*(rawNL[(idx+1)    %cap]+ml) +
+        b2     *(rawNL[(idx+2)    %cap]+ml) +
+        b3     *(rawNL[(idx+N)    %cap]+ml) +
+        b4     *(rawNL[(idx+N+1)  %cap]+ml) +
+        b5     *(rawNL[(idx+N+2)  %cap]+ml) +
+        b6     *(rawNL[(idx+2*N)  %cap]+ml) +
+        b7     *(rawNL[(idx+2*N+1)%cap]+ml) +
+        b8     *(rawNL[(idx+2*N+2)%cap]+ml);
+      const pol = pols[li];
+      if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
     }
   }
 
