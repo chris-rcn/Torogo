@@ -55,6 +55,7 @@ const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
+const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.999');  // Polyak per-game EMA
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
@@ -69,8 +70,27 @@ let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
-let weights  = new Map();  // pattern key (int32) → weight (float)
+let weights    = new Map();  // pattern key (int32) → weight (float)
+let weightsEMA = new Map();  // Polyak-averaged shadow (saved on disk for eval)
+let weightsEMAInit = false;  // first applyEMA seeds EMA = weights
 let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
+
+// Polyak / SWA averaging.  Updates weightsEMA in-place to track a smoothed
+// version of weights:
+//   weightsEMA[k] = alpha * weightsEMA[k] + (1 - alpha) * weights[k]
+function applyEMA(alpha) {
+  if (!weightsEMAInit) {
+    for (const [k, v] of weights) weightsEMA.set(k, v);
+    weightsEMAInit = true;
+    return;
+  }
+  // Update existing EMA entries; seed new keys (added since last applyEMA).
+  for (const [k, v] of weights) {
+    const e = weightsEMA.get(k);
+    if (e === undefined) weightsEMA.set(k, v);
+    else weightsEMA.set(k, alpha * e + (1 - alpha) * v);
+  }
+}
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -264,6 +284,10 @@ if (POSITIONS_FILE) {
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    // Seed EMA shadow from the loaded weights so subsequent applyEMA continues
+    // averaging on top of the persisted (already-EMA) values.
+    weightsEMA = new Map(weights);
+    weightsEMAInit = true;
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -271,7 +295,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
@@ -313,6 +337,7 @@ const rmsHistory  = [];   // per-interval rmsErr values
 while (true) {
   g++;
   const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
+  applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
@@ -405,7 +430,10 @@ while (true) {
       ...(evalGetMove ? [((tTestMs / 1000).toFixed(1) + 's').padStart(6)] : []),
       timePerMoveMs.toFixed(1)           .padStart(6),
     ].join('  '));
-    saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
+    // Persist Polyak-averaged weights for eval (slight rewind on resume).
+    // Falls back to live weights before the first applyEMA.
+    const saveSrc = weightsEMAInit ? weightsEMA : weights;
+    saveWeights(SAVE_PATH, { weights: saveSrc, specs, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 
