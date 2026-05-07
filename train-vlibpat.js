@@ -62,8 +62,9 @@ const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 // ── Features ───────────────────────────
 
 let specs = [
-//  { size: 1 },
   { size: 2 },                      // ladder-aware (7-state)
+  { size: 3 },                      // ladder-aware (7-state)
+  { size: 3, ladder: false },       // plain (3-state)
 ];
 let prepSpecs = prepareSpecs(specs);
 
