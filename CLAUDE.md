@@ -28,10 +28,14 @@
   hardcoded-config 234k-game vlibpat checkpoint with verified strength of
   68.5% / 200g vs rave-500 and 62.5% / 200g vs npat.  Do not pass any env
   vars when using it; all parameters are baked into the agent file.
-- **Training external policy: `npat`.** For training runs that need an
-  external opponent (`--ext`), use `npat` — it's fast.  Do **not** use
-  `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight model and runs its
-  own search at every move, roughly doubling per-move cost.
+- **Training external policy: `ref-npat-softmax`.** For training runs that
+  need an external opponent (`--ext`), use `ref-npat-softmax` — same npat
+  weights as plain `npat` but with softmax sampling instead of greedy
+  argmax, so it provides stochastic moves.  All parameters are hardcoded
+  in the agent file; do **not** pass any env vars when using it.
+  Do **not** use `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight
+  model and runs its own search at every move, roughly doubling per-move
+  cost.
 - **Eval reporting.** When summarising selfplay/eval results, report the
   win-rate (e.g. p2 win% or p1 win%) and game count.  Do **not** report
   the `p2Better%` column.
