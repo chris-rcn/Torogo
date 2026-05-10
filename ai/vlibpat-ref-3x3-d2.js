@@ -12,7 +12,7 @@ const { search: abSearch } = require('../ab-search.js');
 
 // ── Hardcoded configuration ──────────────────────────────────────────────────
 
-const WEIGHTS_PATH = path.join(__dirname, '..', 'out', 'vlibpat-9-2L3L3NL-onpol70-9.js');
+const WEIGHTS_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-9-2L3L3NL-onpol70-9.js');
 const DEPTH        = 2;
 const DITHER       = 0.002;
 

@@ -14,7 +14,7 @@ const NPat = require('../npat-lib.js');
 const { PASS } = require('../game2.js');
 const { game3FromGame2 } = require('../game3.js');
 
-const WEIGHTS_PATH = path.join(__dirname, '..', 'out', 'npat-distill-3k.js');
+const WEIGHTS_PATH = path.join(__dirname, '..', 'ref', 'npat-distill-3k.js');
 
 const raw = require(path.resolve(WEIGHTS_PATH));
 if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {

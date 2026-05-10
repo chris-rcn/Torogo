@@ -15,7 +15,7 @@ const { game3FromGame2 } = require('../game3.js');
 
 // ── Hardcoded configuration ──────────────────────────────────────────────────
 
-const WEIGHTS_PATH = path.join(__dirname, '..', 'out', 'npat-9-QD-pat4-6.js');
+const WEIGHTS_PATH = path.join(__dirname, '..', 'ref', 'npat-9-QD-pat4-6.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
 
