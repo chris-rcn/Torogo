@@ -22,12 +22,14 @@
   completion, immediately `cat` the output file so the user can review it
   before deciding next steps.
 
-- **Evaluation reference player: `vlibpat-ref-2x2`.** Use
-  `ai/vlibpat-ref-2x2.js` as the default reference player for **evaluation
-  only** (`--p1 vlibpat-ref-2x2` or `--p2 vlibpat-ref-2x2`). It's a
-  hardcoded-config 234k-game vlibpat checkpoint with verified strength of
-  68.5% / 200g vs rave-500 and 62.5% / 200g vs npat.  Do not pass any env
-  vars when using it; all parameters are baked into the agent file.
+- **Evaluation reference player: `vlibpat-ref-3x3`.** Use
+  `ai/vlibpat-ref-3x3.js` as the default reference player for **evaluation
+  only** (`--p1 vlibpat-ref-3x3` or `--p2 vlibpat-ref-3x3`). It's a
+  hardcoded-config 655k-game vlibpat checkpoint (3-component spec, ~207k
+  weights), DEPTH=1 DITHER=0.002, equivalent to ~rave-1700.  Do not pass
+  any env vars when using it; all parameters are baked into the agent
+  file.  The older `vlibpat-ref-2x2` (234k size-2-only) remains available
+  for legacy comparisons.
 - **Training external policy: `ref-npat-softmax`.** For training runs that
   need an external opponent (`--ext`), use `ref-npat-softmax` — same npat
   weights as plain `npat` but with softmax sampling instead of greedy
