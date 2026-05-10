@@ -22,7 +22,7 @@
 // Evaluation: play eval games against a configurable reference agent to
 //   measure how much the policy has improved.  Eval games do not update weights.
 //
-// Features: pattern1 + pattern2 + pattern3 (maxLibs = 1), all cells.
+// Features: pattern1 + pattern2 + pattern3 (ladder-aware encoding), all cells.
 //
 // Status is printed at an exponentially increasing interval (× 1.5 each time).
 //
@@ -30,8 +30,8 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vpatterns.js');
-const { search } = require('./ai/vpatsearch.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vlibpat.js');
+const { search } = require('./ai/vlibpat.js');
 const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
@@ -42,7 +42,7 @@ const fs = require('fs');
 const opts       = Util.parseArgs(process.argv.slice(2));
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '9',  10);
-const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
+const SAVE_PATH  = opts.save  || `out/vlibpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
@@ -55,26 +55,42 @@ const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
+const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.95');  // per-call decay (period=50, ≈hpatterns per-game 0.999)
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
 // ── Features ───────────────────────────
 
 let specs = [
-//  { size: 1, maxLibs: 1 },
-//  { size: 2, maxLibs: 1 },
-//  { size: 2, maxLibs: 2 },
-//  { size: 2, maxLibs: 3 },
-//  { size: 2, maxLibs: 4 },
-  { size: 2, maxLibs: 5 },
-//  { size: 3, maxLibs: 1 },
+  { size: 2 },                      // ladder-aware (7-state)
+  { size: 3 },                      // ladder-aware (7-state)
+  { size: 3, ladder: false },       // plain (3-state)
 ];
 let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
-let weights  = new Map();  // pattern key (int32) → weight (float)
+let weights    = new Map();  // pattern key (int32) → weight (float)
+let weightsEMA = new Map();  // Polyak-averaged shadow (saved on disk for eval)
+let weightsEMAInit = false;  // first applyEMA seeds EMA = weights
 let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
+
+// Polyak / SWA averaging.  Updates weightsEMA in-place to track a smoothed
+// version of weights:
+//   weightsEMA[k] = alpha * weightsEMA[k] + (1 - alpha) * weights[k]
+function applyEMA(alpha) {
+  if (!weightsEMAInit) {
+    for (const [k, v] of weights) weightsEMA.set(k, v);
+    weightsEMAInit = true;
+    return;
+  }
+  // Update existing EMA entries; seed new keys (added since last applyEMA).
+  for (const [k, v] of weights) {
+    const e = weightsEMA.get(k);
+    if (e === undefined) weightsEMA.set(k, v);
+    else weightsEMA.set(k, alpha * e + (1 - alpha) * v);
+  }
+}
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -268,6 +284,10 @@ if (POSITIONS_FILE) {
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    // Seed EMA shadow from the loaded weights so subsequent applyEMA continues
+    // averaging on top of the persisted (already-EMA) values.
+    weightsEMA = new Map(weights);
+    weightsEMAInit = true;
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -275,7 +295,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
@@ -312,9 +332,17 @@ let refBudgetMs = BUDGET;
 const evalHistory = [];   // per-interval game results (1/0.5/0)
 const rmsHistory  = [];   // per-interval rmsErr values
 
+// Apply EMA every EMA_PERIOD games to amortize the O(weight_count) cost.
+// Default alpha=0.95 with period=50 ⇒ time constant ≈ 1 000 games — matches
+// hpatterns per-game alpha=0.999.  Use --ema-alpha to tune (per-call):
+//   alpha=0.99  → 5 000-game tc
+//   alpha=0.9975→ 20 000-game tc
+const EMA_PERIOD = 50;
+
 while (true) {
   g++;
   const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
+  if (g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
@@ -401,7 +429,10 @@ while (true) {
       ...(evalGetMove ? [((tTestMs / 1000).toFixed(1) + 's').padStart(6)] : []),
       timePerMoveMs.toFixed(1)           .padStart(6),
     ].join('  '));
-    saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
+    // Persist Polyak-averaged weights for eval (slight rewind on resume).
+    // Falls back to live weights before the first applyEMA.
+    const saveSrc = weightsEMAInit ? weightsEMA : weights;
+    saveWeights(SAVE_PATH, { weights: saveSrc, specs, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 
