@@ -9,7 +9,7 @@
 //const PAT1_MAX_STONES   = Util.envInt('PAT1_MAX_STONES', 1);
 
 const minChainSize  = 1;
-const maxStoneCount = 8;
+const maxStoneCount = 1;
 
 const { getAllLadderStatuses } = typeof require === 'function' ? require('./ladder2.js') : window.Ladder2;
 

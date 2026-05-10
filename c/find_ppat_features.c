@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     int moves = argc > 2 ? atoi(argv[2]) : 60;
 
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(9);
     ppat_init();
 
     int bits[7] = {0};
@@ -27,12 +27,15 @@ int main(int argc, char **argv) {
 
     for (int t = 0; t < games; t++) {
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, 9);
         for (int m = 0; m < moves && !g.game_over; m++) {
             ppat_extract(&g, &st);
+            int prev_base = ppat_phase_count * ppat_num_patterns;
             for (int i = 0; i < st.count; i++) {
-                for (int b = 0; b < 7; b++)
-                    if (st.prev_masks[i] & (1 << b)) bits[b]++;
+                for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++) {
+                    int key = st.feat[fi];
+                    if (key >= prev_base) bits[(key - prev_base) % 7]++;
+                }
                 total++;
             }
             g2_play(&g, g2_random_legal_move(&g));

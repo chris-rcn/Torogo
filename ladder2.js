@@ -130,7 +130,7 @@ function getLadderStatus(game, stoneIdx) {
   return { libs, moverSucceeds, urgentLibs };
 }
 
-const _exports = { getLadderStatus, getAllLadderStatuses };
+const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Ladder2 = _exports;
 

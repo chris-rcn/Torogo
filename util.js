@@ -50,7 +50,19 @@ const Util = (() => {
     return opts;
   }
 
-  return { shuffle, envStr, envFloat, envInt, parseArgs };
+  function makeZobrist(seed, size) {
+    const t = new Int32Array(size);
+    let s = seed;
+    for (let p = 0; p < size; p++) {
+      s ^= s << 13;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      t[p] = s + 1234567;
+    }
+    return t;
+  }
+
+  return { shuffle, envStr, envFloat, envInt, parseArgs, makeZobrist };
 
 })();
 

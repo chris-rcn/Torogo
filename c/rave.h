@@ -31,7 +31,7 @@
 #define RAVE_RESIGN_MIN_PLAYOUTS 20000
 
 /* Max legal moves per position (CAP non-eyes + 1 pass) */
-#define MAX_MOVES (CAP + 1)
+#define MAX_MOVES (MAX_CAP + 1)
 
 /* Nodes per chunk in the pool allocator */
 #define RAVE_CHUNK_SIZE 1024
@@ -54,8 +54,8 @@ struct RaveNode {
     float     wins[MAX_MOVES];
     float     visits[MAX_MOVES];
 
-    float     rave_wins[CAP];
-    float     rave_visits[CAP];
+    float     rave_wins[MAX_CAP];
+    float     rave_visits[MAX_CAP];
 };
 
 /* ── Node pool (linked chunks, never moves existing nodes) ─────────────────── */
@@ -71,7 +71,7 @@ typedef struct {
     RaveChunk *cur;         /* current chunk being filled */
     int32_t    cur_used;    /* nodes used in current chunk */
     int32_t    total_used;  /* total nodes allocated across all chunks */
-    float      played[CAP]; /* playout tracking buffer */
+    float      played[MAX_CAP]; /* playout tracking buffer */
 } RaveState;
 
 /* ── Result ────────────────────────────────────────────────────────────────── */

@@ -19,10 +19,12 @@
 #include <time.h>
 
 /* Convert flat index to coordinate string (e.g. 10 on 9x9 → "b2") */
+static int board_size;
+
 static void coord_str(int32_t move, char *buf) {
     if (move == PASS) { buf[0]='p'; buf[1]='a'; buf[2]='s'; buf[3]='s'; buf[4]=0; return; }
-    int x = move % BOARD_SIZE;
-    int y = move / BOARD_SIZE;
+    int x = move % board_size;
+    int y = move / board_size;
     buf[0] = 'a' + x;
     int n = y + 1;
     if (n >= 10) { buf[1] = '0' + n/10; buf[2] = '0' + n%10; buf[3] = 0; }
@@ -30,21 +32,22 @@ static void coord_str(int32_t move, char *buf) {
 }
 
 int main(int argc, char **argv) {
-    int playouts      = argc > 1 ? atoi(argv[1]) : 100;
-    int eval_playouts = argc > 2 ? atoi(argv[2]) : 1000;
+    board_size        = argc > 1 ? atoi(argv[1]) : 9;
+    int playouts      = argc > 2 ? atoi(argv[2]) : 100;
+    int eval_playouts = argc > 3 ? atoi(argv[3]) : 1000;
 
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(board_size);
 
     RaveState *s = rave_create();
 
-    int32_t moves[4 * CAP];
+    int32_t moves[4 * MAX_CAP];
     char cbuf[8];
 
     for (;;) {
         /* Play a full game recording every move */
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, board_size);
         int nmoves = 0;
         while (!g.game_over) {
             RaveResult r = rave_search(s, &g, playouts, 0);
@@ -67,7 +70,7 @@ int main(int argc, char **argv) {
 
         /* Replay the game up to that position */
         Game2 replay;
-        g2_new(&replay);
+        g2_new(&replay, board_size);
         for (int i = 0; i < pos; i++) g2_play(&replay, moves[i]);
 
         /* Re-evaluate with the eval budget */
@@ -75,7 +78,7 @@ int main(int argc, char **argv) {
         float win_ratio = r.win_ratio;
 
         /* Emit: size move1,move2,... winRatio bestMove */
-        fprintf(stdout, "%d ", BOARD_SIZE);
+        fprintf(stdout, "%d ", board_size);
         for (int i = 0; i < pos; i++) {
             if (i > 0) fputc(',', stdout);
             coord_str(moves[i], cbuf);

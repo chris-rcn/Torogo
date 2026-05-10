@@ -19,7 +19,7 @@ static void check(const char *label, int ok) {
 
 static void test_basic_search(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     RaveState *s = rave_create();
     RaveResult r = rave_search(s, &g, 100, 0);
     check("basic: returns a move", r.move >= 0 || r.move == PASS);
@@ -30,7 +30,7 @@ static void test_basic_search(void) {
 
 static void test_game_over(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     g2_play(&g, PASS);
     g2_play(&g, PASS);
     check("gameover: game is over", g.game_over);
@@ -43,7 +43,7 @@ static void test_game_over(void) {
 
 static void test_obvious_pass(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     for (int i = 0; i < 40 && !g.game_over; i++) {
         int32_t m = g2_random_legal_move(&g);
         g2_play(&g, m >= 0 ? m : PASS);
@@ -67,7 +67,7 @@ static void test_obvious_pass(void) {
 
 static void test_move_is_legal(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     RaveState *s = rave_create();
     for (int i = 0; i < 20 && !g.game_over; i++) {
         RaveResult r = rave_search(s, &g, 50, 0);
@@ -79,7 +79,7 @@ static void test_move_is_legal(void) {
 
 static void test_more_playouts_better(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     for (int i = 0; i < 10 && !g.game_over; i++) {
         int32_t m = g2_random_legal_move(&g);
         g2_play(&g, m >= 0 ? m : PASS);
@@ -111,10 +111,10 @@ static void test_more_playouts_better(void) {
 
 static void test_full_game(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     RaveState *s = rave_create();
     int moves = 0;
-    while (!g.game_over && moves < 4 * CAP) {
+    while (!g.game_over && moves < 4 * g.cap) {
         RaveResult r = rave_search(s, &g, 50, 0);
         g2_play(&g, r.move);
         moves++;
@@ -128,7 +128,7 @@ static void test_full_game(void) {
 static void test_pool_reuse(void) {
     RaveState *s = rave_create();
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     rave_search(s, &g, 100, 0);
     int used1 = s->total_used;
     rave_search(s, &g, 100, 0);
@@ -142,7 +142,7 @@ static void test_node_pool_sufficient(void) {
     /* Verify pool sized at playouts/N_EXPAND+1 is sufficient */
     RaveState *s = rave_create();
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     RaveResult r = rave_search(s, &g, 5000, 0);
     check("pool_sufficient: completes 5000 playouts", r.playouts == 5000);
     check("pool_sufficient: allocated nodes > 0", s->total_used > 0);
@@ -153,7 +153,7 @@ static void test_time_based(void) {
     /* Time-based search with default pool */
     RaveState *s = rave_create(); /* default pool for time-based */
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     RaveResult r = rave_search(s, &g, 0, 200); /* 200ms */
     check("time_based: did some playouts", r.playouts > 0);
     check("time_based: returns a move", r.move >= 0 || r.move == PASS);
@@ -165,7 +165,7 @@ static void test_time_based(void) {
 static void bench_search(void) {
     RaveState *s = rave_create();
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     for (int i = 0; i < 5; i++) {
         int32_t m = g2_random_legal_move(&g);
         g2_play(&g, m >= 0 ? m : PASS);
@@ -190,7 +190,7 @@ static void bench_search(void) {
 
 int main(void) {
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(9);
 
     test_basic_search();
     test_game_over();

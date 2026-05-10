@@ -13,11 +13,12 @@
 #include <time.h>
 
 int main(int argc, char **argv) {
-    int po_a = argc > 1 ? atoi(argv[1]) : 1000;
-    int po_b = argc > 2 ? atoi(argv[2]) : 2000;
+    int size = argc > 1 ? atoi(argv[1]) : 9;
+    int po_a = argc > 2 ? atoi(argv[2]) : 1000;
+    int po_b = argc > 3 ? atoi(argv[3]) : 2000;
 
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(size);
 
     RaveState *sa = rave_create();
     RaveState *sb = rave_create();
@@ -26,7 +27,7 @@ int main(int argc, char **argv) {
     clock_t t0 = clock();
     double next_print = 1.0;
 
-    printf("A: %d playouts  B: %d playouts  board: %dx%d\n", po_a, po_b, BOARD_SIZE, BOARD_SIZE);
+    printf("A: %d playouts  B: %d playouts  board: %dx%d\n", po_a, po_b, size, size);
     printf("%6s  %8s  %7s\n", "games", "elapsed", "B win%");
 
     for (;;) {
@@ -34,7 +35,7 @@ int main(int argc, char **argv) {
         int8_t a_color = (games % 2 == 0) ? BLACK : WHITE;
 
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, size);
         while (!g.game_over) {
             RaveState *s;
             int po;

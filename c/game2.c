@@ -3,40 +3,67 @@
  */
 #include "game2.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <stddef.h>
 
 /* ── RNG ───────────────────────────────────────────────────────────────────── */
 
 uint32_t g2_rng_state = 1;
 
 void g2_seed(uint32_t seed) {
-    g2_rng_state = seed ? seed : 1;  /* state must never be 0 */
+    g2_rng_state = seed ? seed : 1;
 }
 
 /* ── Topology ──────────────────────────────────────────────────────────────── */
 
-int32_t g2_nbr[CAP * 4];
-int32_t g2_dnbr[CAP * 4];
+int32_t g2_nbr[MAX_CAP * 4];
+int32_t g2_dnbr[MAX_CAP * 4];
 
-void g2_init_topology(void) {
-    const int N = BOARD_SIZE;
+void g2_init_topology(int N) {
+    if (N > MAX_BOARD_SIZE) {
+        fprintf(stderr, "g2_init_topology: N=%d exceeds MAX_BOARD_SIZE=%d\n", N, MAX_BOARD_SIZE);
+        exit(1);
+    }
     for (int y = 0; y < N; y++) {
         for (int x = 0; x < N; x++) {
             int i = y * N + x;
-            g2_nbr[i*4+0] = ((y-1+N)%N)*N + x;          /* N */
-            g2_nbr[i*4+1] = ((y+1  )%N)*N + x;          /* S */
-            g2_nbr[i*4+2] = y*N + (x-1+N)%N;            /* W */
-            g2_nbr[i*4+3] = y*N + (x+1  )%N;            /* E */
-            g2_dnbr[i*4+0] = ((y-1+N)%N)*N + (x-1+N)%N; /* NW */
-            g2_dnbr[i*4+1] = ((y-1+N)%N)*N + (x+1  )%N; /* NE */
-            g2_dnbr[i*4+2] = ((y+1  )%N)*N + (x-1+N)%N; /* SW */
-            g2_dnbr[i*4+3] = ((y+1  )%N)*N + (x+1  )%N; /* SE */
+            g2_nbr[i*4+0] = ((y-1+N)%N)*N + x;
+            g2_nbr[i*4+1] = ((y+1  )%N)*N + x;
+            g2_nbr[i*4+2] = y*N + (x-1+N)%N;
+            g2_nbr[i*4+3] = y*N + (x+1  )%N;
+            g2_dnbr[i*4+0] = ((y-1+N)%N)*N + (x-1+N)%N;
+            g2_dnbr[i*4+1] = ((y-1+N)%N)*N + (x+1  )%N;
+            g2_dnbr[i*4+2] = ((y+1  )%N)*N + (x-1+N)%N;
+            g2_dnbr[i*4+3] = ((y+1  )%N)*N + (x+1  )%N;
         }
+    }
+}
+
+/* ── Komi ──────────────────────────────────────────────────────────────────── */
+
+float g2_komi(int N) {
+    switch (N) {
+        case 5: return 24.5f;
+        case 6: return 35.5f;
+        case 7: return 48.5f;
+        default: return 3.5f;
     }
 }
 
 /* ── Internal: place a stone, merge groups ─────────────────────────────────── */
 
+static inline int32_t g2_alloc_gid(Game2 *g) {
+    if (g->n_free_gids > 0)
+        return (int32_t)g->free_gids[--g->n_free_gids];
+    return g->next_gid++;
+}
+
+static inline void g2_free_gid(Game2 *g, int32_t gid) {
+    g->free_gids[g->n_free_gids++] = (int16_t)gid;
+}
+
 static int32_t g2_place(Game2 *g, int32_t idx, int8_t color) {
+    const int W = g->W;
     g->cells[idx] = color;
     g->empty_count--;
 
@@ -52,56 +79,53 @@ static int32_t g2_place(Game2 *g, int32_t idx, int8_t color) {
         }
     }
 
-    /* Remove idx from liberties of all adjacent groups */
-    {
-        int32_t seen[4] = {-1, -1, -1, -1};
-        int ns = 0;
-        int base = idx * 4;
-        uint32_t m  = 1u << (idx & 31);
-        int      wi = idx >> 5;
-        for (int i = 0; i < 4; i++) {
-            int32_t ni  = g2_nbr[base + i];
-            int32_t gid = g->gid[ni];
-            if (gid == -1) continue;
-            /* deduplicate */
-            bool dup = false;
-            for (int j = 0; j < ns; j++) if (seen[j] == gid) { dup = true; break; }
-            if (dup) continue;
-            seen[ns++] = gid;
-            int32_t lb = gid * BW;
-            if (g->lw[lb + wi] & m) { g->lw[lb + wi] &= ~m; g->ls[gid]--; }
-        }
-    }
-
-    /* Collect same-color neighbor groups and own liberties */
+    /* Single pass over 4 neighbors: remove idx from liberties + collect groups and own liberties */
     int32_t sg[4] = {-1, -1, -1, -1};
     int     ns = 0;
-    int32_t ml[4] = {-1, -1, -1, -1};
+    int32_t ml[4];
     int     nml = 0;
     {
         int base = idx * 4;
+        uint32_t m  = 1u << (idx & 31);
+        int      wi = idx >> 5;
+        int32_t lib_seen[4] = {-1, -1, -1, -1};
+        int nls = 0;
         for (int i = 0; i < 4; i++) {
-            int32_t ni = g2_nbr[base + i];
-            int8_t  c  = g->cells[ni];
-            if (c == color) {
-                int32_t gid = g->gid[ni];
-                bool dup = false;
-                for (int j = 0; j < ns; j++) if (sg[j] == gid) { dup = true; break; }
-                if (!dup) sg[ns++] = gid;
-            } else if (c == EMPTY) {
+            int32_t ni  = g2_nbr[base + i];
+            int16_t gid = g->gid[ni];
+            if (gid == -1) {
+                /* EMPTY neighbor = own liberty */
                 ml[nml++] = ni;
+            } else {
+                int8_t c = g->cells[ni];
+                /* Remove idx from this group's liberties (dedup) */
+                bool dup = false;
+                for (int j = 0; j < nls; j++) if (lib_seen[j] == gid) { dup = true; break; }
+                if (!dup) {
+                    lib_seen[nls++] = gid;
+                    int32_t lb = gid * W;
+                    if (g->lw[lb + wi] & m) { g->lw[lb + wi] &= ~m; g->ls[gid]--; }
+                }
+                /* Collect same-color groups (dedup) */
+                if (c == color) {
+                    bool dup2 = false;
+                    for (int j = 0; j < ns; j++) if (sg[j] == gid) { dup2 = true; break; }
+                    if (!dup2) sg[ns++] = gid;
+                }
             }
         }
     }
 
     if (ns == 0) {
-        /* New singleton group */
-        int32_t gid = g->next_gid++;
+        int32_t gid = g2_alloc_gid(g);
         g->gid[idx] = gid;
         g->gc[gid]  = color;
-        g->sw[gid * BW + (idx >> 5)] |= (1u << (idx & 31));
+        /* Clear bitsets for reused slot */
+        memset(&g->sw[gid * W], 0, W * sizeof(uint32_t));
+        memset(&g->lw[gid * W], 0, W * sizeof(uint32_t));
+        g->sw[gid * W + (idx >> 5)] |= (1u << (idx & 31));
         g->ss[gid] = 1;
-        int32_t lb = gid * BW;
+        int32_t lb = gid * W;
         int lc = 0;
         for (int i = 0; i < nml; i++) {
             uint32_t m = 1u << (ml[i] & 31);
@@ -112,32 +136,29 @@ static int32_t g2_place(Game2 *g, int32_t idx, int8_t color) {
         return gid;
     }
 
-    /* Merge into largest same-color neighbor group */
     int32_t main_gid = sg[0];
     for (int i = 1; i < ns; i++)
         if (g->ss[sg[i]] > g->ss[main_gid]) main_gid = sg[i];
 
-    int32_t gb = main_gid * BW;
+    int32_t gb = main_gid * W;
 
     g->sw[gb + (idx >> 5)] |= (1u << (idx & 31));
     g->ss[main_gid]++;
     g->gid[idx] = main_gid;
 
-    /* Add own empty neighbors as liberties */
     for (int i = 0; i < nml; i++) {
         uint32_t m = 1u << (ml[i] & 31);
         int      w = ml[i] >> 5;
         if (!(g->lw[gb + w] & m)) { g->lw[gb + w] |= m; g->ls[main_gid]++; }
     }
 
-    /* Merge smaller groups into main */
     bool need_recount = false;
     for (int si = 0; si < ns; si++) {
         if (sg[si] == main_gid) continue;
         need_recount = true;
         int32_t other = sg[si];
-        int32_t ob = other * BW;
-        for (int wi = 0; wi < BW; wi++) {
+        int32_t ob = other * W;
+        for (int wi = 0; wi < W; wi++) {
             uint32_t w = g->sw[ob + wi];
             while (w) {
                 int bit = __builtin_ctz(w);
@@ -147,13 +168,14 @@ static int32_t g2_place(Game2 *g, int32_t idx, int8_t color) {
             g->sw[gb + wi] |= g->sw[ob + wi];
         }
         g->ss[main_gid] += g->ss[other];
-        for (int wi = 0; wi < BW; wi++)
+        for (int wi = 0; wi < W; wi++)
             g->lw[gb + wi] |= g->lw[ob + wi];
+        g2_free_gid(g, other);
     }
 
     if (need_recount) {
         int lc = 0;
-        for (int wi = 0; wi < BW; wi++) lc += g2_popcount(g->lw[gb + wi]);
+        for (int wi = 0; wi < W; wi++) lc += g2_popcount(g->lw[gb + wi]);
         g->ls[main_gid] = lc;
     }
 
@@ -163,10 +185,11 @@ static int32_t g2_place(Game2 *g, int32_t idx, int8_t color) {
 /* ── Internal: remove a group from the board ───────────────────────────────── */
 
 static int32_t g2_remove(Game2 *g, int32_t gid, int32_t ncap0) {
-    int32_t sb = gid * BW;
+    const int W = g->W;
+    int32_t sb = gid * W;
     int32_t ncap = ncap0;
 
-    for (int wi = 0; wi < BW; wi++) {
+    for (int wi = 0; wi < W; wi++) {
         uint32_t w = g->sw[sb + wi];
         while (w) {
             int bit = __builtin_ctz(w);
@@ -174,17 +197,15 @@ static int32_t g2_remove(Game2 *g, int32_t gid, int32_t ncap0) {
             g->last_captures[ncap++] = idx;
             g->cells[idx] = EMPTY;
             g->gid[idx] = -1;
-            /* Add back to empty list */
             g->empty_slot[idx] = g->empty_count;
             g->empty_cells[g->empty_count++] = idx;
-            /* Restore liberty to adjacent groups */
             int base = idx * 4;
             uint32_t m  = 1u << (idx & 31);
             int      nwi = idx >> 5;
             for (int i = 0; i < 4; i++) {
                 int32_t ngid = g->gid[g2_nbr[base + i]];
                 if (ngid != -1 && ngid != gid) {
-                    int32_t nlb = ngid * BW;
+                    int32_t nlb = ngid * W;
                     if (!(g->lw[nlb + nwi] & m)) { g->lw[nlb + nwi] |= m; g->ls[ngid]++; }
                 }
             }
@@ -196,7 +217,7 @@ static int32_t g2_remove(Game2 *g, int32_t gid, int32_t ncap0) {
 
 /* ── Legality checks ──────────────────────────────────────────────────────── */
 
-static bool g2_is_single_suicide(const Game2 *g, int32_t idx, int8_t color) {
+bool g2_is_single_suicide(const Game2 *g, int32_t idx, int8_t color) {
     int base = idx * 4;
     for (int i = 0; i < 4; i++) {
         int32_t ni = g2_nbr[base + i];
@@ -209,7 +230,8 @@ static bool g2_is_single_suicide(const Game2 *g, int32_t idx, int8_t color) {
     return true;
 }
 
-static bool g2_is_multi_suicide(const Game2 *g, int32_t idx, int8_t color) {
+bool g2_is_multi_suicide(const Game2 *g, int32_t idx, int8_t color) {
+    const int W = g->W;
     int base = idx * 4;
     bool has_friendly = false;
     int32_t seen[4] = {-1, -1, -1, -1};
@@ -226,18 +248,19 @@ static bool g2_is_multi_suicide(const Game2 *g, int32_t idx, int8_t color) {
         if (c == color) {
             has_friendly = true;
             if (g->ls[gid] > 1) return false;
-            if (g->ls[gid] == 1 && !((g->lw[gid * BW + (idx >> 5)] >> (idx & 31)) & 1))
+            if (g->ls[gid] == 1 && !((g->lw[gid * W + (idx >> 5)] >> (idx & 31)) & 1))
                 return false;
         } else {
-            if (g->ls[gid] == 1 && ((g->lw[gid * BW + (idx >> 5)] >> (idx & 31)) & 1))
+            if (g->ls[gid] == 1 && ((g->lw[gid * W + (idx >> 5)] >> (idx & 31)) & 1))
                 return false;
         }
     }
     return has_friendly;
 }
 
-static bool g2_is_ko(const Game2 *g, int32_t idx, int8_t color) {
+bool g2_is_ko(const Game2 *g, int32_t idx, int8_t color) {
     if (idx != g->ko) return false;
+    const int W = g->W;
     int8_t opp = -color;
     int base = idx * 4;
     int32_t seen[4] = {-1, -1, -1, -1};
@@ -251,7 +274,7 @@ static bool g2_is_ko(const Game2 *g, int32_t idx, int8_t color) {
         for (int j = 0; j < ns; j++) if (seen[j] == gid) { dup = true; break; }
         if (dup) continue;
         seen[ns++] = gid;
-        if (g->ls[gid] == 1 && ((g->lw[gid * BW + (idx >> 5)] >> (idx & 31)) & 1))
+        if (g->ls[gid] == 1 && ((g->lw[gid * W + (idx >> 5)] >> (idx & 31)) & 1))
             captured += g->ss[gid];
     }
     return captured == 1;
@@ -309,20 +332,20 @@ bool g2_is_true_eye(const Game2 *g, int32_t idx) {
 
 /* ── Initialization ────────────────────────────────────────────────────────── */
 
-static void g2_init_common(Game2 *g) {
-    memset(g->cells, 0, sizeof(g->cells));
-    memset(g->gid, 0xFF, sizeof(g->gid));  /* fill with -1 */
+static void g2_init_common(Game2 *g, int N) {
+    g->N   = N;
+    g->cap = N * N;
+    g->W   = (g->cap + 31) >> 5;
+    memset(g->cells, 0, g->cap * sizeof(g->cells[0]));
+    memset(g->gid, 0xFF, g->cap * sizeof(g->gid[0]));
     g->next_gid = 0;
-    memset(g->gc, 0, sizeof(g->gc));
-    memset(g->ss, 0, sizeof(g->ss));
-    memset(g->ls, 0, sizeof(g->ls));
-    memset(g->sw, 0, sizeof(g->sw));
-    memset(g->lw, 0, sizeof(g->lw));
-    for (int i = 0; i < CAP; i++) {
+    g->n_free_gids = 0;
+    /* gc/ss/ls/sw/lw are zeroed per-group in g2_place, no bulk init needed */
+    for (int i = 0; i < g->cap; i++) {
         g->empty_cells[i] = i;
         g->empty_slot[i]  = i;
     }
-    g->empty_count = CAP;
+    g->empty_count = g->cap;
     g->current = BLACK;
     g->ko = PASS;
     g->ko_stone[0] = g->ko_stone[1] = g->ko_stone[2] = PASS;
@@ -333,38 +356,58 @@ static void g2_init_common(Game2 *g) {
     g->last_capture_count = 0;
 }
 
-void g2_new_empty(Game2 *g) {
-    g2_init_common(g);
+void g2_new_empty(Game2 *g, int N) {
+    g2_init_common(g, N);
 }
 
-void g2_new(Game2 *g) {
-    g2_init_common(g);
-    int center = (BOARD_SIZE >> 1) * BOARD_SIZE + (BOARD_SIZE >> 1);
+void g2_new(Game2 *g, int N) {
+    g2_init_common(g, N);
+    int center = (N >> 1) * N + (N >> 1);
     g2_place(g, center, BLACK);
     g->current = WHITE;
     g->move_count = 1;
 }
 
 void g2_clone(Game2 *dst, const Game2 *src) {
-    memcpy(dst, src, sizeof(Game2));
+    /* Copy everything up to (but not including) sw/lw */
+    memcpy(dst, src, offsetof(Game2, sw));
+    /* Copy only the used portion of sw and lw */
+    int32_t used = src->next_gid * src->W;
+    memcpy(dst->sw, src->sw, used * sizeof(uint32_t));
+    memcpy(dst->lw, src->lw, used * sizeof(uint32_t));
 }
 
 /* ── Parse ASCII board ─────────────────────────────────────────────────────── */
 
 void g2_parse_board(Game2 *g, const char *board, int8_t to_move) {
-    g2_init_common(g);
-    /* Parse rows top-to-bottom (row N down to row 1). */
+    /* First pass: count rows to determine board size */
+    int size = 0;
     const char *p = board;
-    int row = BOARD_SIZE - 1;
-    while (*p && row >= 0) {
-        /* Skip leading whitespace and optional row number */
+    while (*p) {
         while (*p == ' ' || *p == '\t') p++;
         if (*p >= '0' && *p <= '9') { while (*p >= '0' && *p <= '9') p++; while (*p == ' ') p++; }
         int col = 0;
-        while (*p && *p != '\n' && col < BOARD_SIZE) {
+        while (*p && *p != '\n') {
+            if (*p == 'X' || *p == 'O' || *p == '.') col++;
+            p++;
+        }
+        if (*p == '\n') p++;
+        if (col > 0) size++;
+    }
+
+    g2_init_common(g, size);
+
+    /* Second pass: place stones */
+    p = board;
+    int row = size - 1;
+    while (*p && row >= 0) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p >= '0' && *p <= '9') { while (*p >= '0' && *p <= '9') p++; while (*p == ' ') p++; }
+        int col = 0;
+        while (*p && *p != '\n' && col < size) {
             if (*p == 'X' || *p == 'O' || *p == '.') {
-                if (*p == 'X') g2_place(g, row * BOARD_SIZE + col, BLACK);
-                else if (*p == 'O') g2_place(g, row * BOARD_SIZE + col, WHITE);
+                if (*p == 'X') g2_place(g, row * size + col, BLACK);
+                else if (*p == 'O') g2_place(g, row * size + col, WHITE);
                 col++;
             }
             p++;
@@ -381,6 +424,7 @@ void g2_parse_board(Game2 *g, const char *board, int8_t to_move) {
 
 bool g2_play(Game2 *g, int32_t idx) {
     if (g->game_over) return false;
+    const int W = g->W;
     int8_t color = g->current;
     int8_t opp   = -color;
 
@@ -417,9 +461,11 @@ bool g2_play(Game2 *g, int32_t idx) {
         seen[ns_seen++] = gid;
         if (g->ls[gid] == 0) {
             int32_t ncap_before = ncap;
+            int32_t gsize = g->ss[gid];
             ncap = g2_remove(g, gid, ncap);
-            if (g->ss[gid] == 1) captured_idx = g->last_captures[ncap_before];
+            if (gsize == 1) captured_idx = g->last_captures[ncap_before];
             nchains++;
+            g2_free_gid(g, gid);
         }
     }
     g->last_capture_count = ncap;
@@ -430,7 +476,7 @@ bool g2_play(Game2 *g, int32_t idx) {
     if (ncap == 1 && captured_idx != PASS) {
         int32_t my_gid = g->gid[idx];
         if (g->ss[my_gid] == 1 && g->ls[my_gid] == 1 &&
-            ((g->lw[my_gid * BW + (captured_idx >> 5)] >> (captured_idx & 31)) & 1)) {
+            ((g->lw[my_gid * W + (captured_idx >> 5)] >> (captured_idx & 31)) & 1)) {
             g->ko = captured_idx;
             g->ko_stone[color + 1] = idx;
         }
@@ -440,8 +486,71 @@ bool g2_play(Game2 *g, int32_t idx) {
     g->current = opp;
     g->move_count++;
     g->last_move = idx;
-    if (g->move_count >= 4 * CAP) g->game_over = true;
+    if (g->move_count >= 4 * g->cap) g->game_over = true;
     return true;
+}
+
+void g2_play_unchecked(Game2 *g, int32_t idx) {
+    const int W = g->W;
+    int8_t color = g->current;
+    int8_t opp   = -color;
+
+    if (idx == PASS) {
+        g->consecutive_passes++;
+        if (g->consecutive_passes >= 2) g->game_over = true;
+        g->current = opp;
+        g->ko = PASS;
+        g->ko_stone[color + 1] = PASS;
+        g->move_count++;
+        g->last_move = PASS;
+        g->last_capture_count = 0;
+        return;
+    }
+
+    g2_place(g, idx, color);
+
+    int base = idx * 4;
+    int32_t seen[4] = {-1, -1, -1, -1};
+    int ns_seen = 0;
+    int32_t captured_idx = PASS;
+    int32_t ncap = 0, nchains = 0;
+
+    for (int i = 0; i < 4; i++) {
+        int32_t ni = g2_nbr[base + i];
+        if (g->cells[ni] != opp) continue;
+        int32_t gid = g->gid[ni];
+        if (gid == -1) continue;
+        bool dup = false;
+        for (int j = 0; j < ns_seen; j++) if (seen[j] == gid) { dup = true; break; }
+        if (dup) continue;
+        seen[ns_seen++] = gid;
+        if (g->ls[gid] == 0) {
+            int32_t ncap_before = ncap;
+            int32_t gsize = g->ss[gid];
+            ncap = g2_remove(g, gid, ncap);
+            if (gsize == 1) captured_idx = g->last_captures[ncap_before];
+            nchains++;
+            g2_free_gid(g, gid);
+        }
+    }
+    g->last_capture_count = ncap;
+
+    g->ko = PASS;
+    g->ko_stone[color + 1] = PASS;
+    if (ncap == 1 && captured_idx != PASS) {
+        int32_t my_gid = g->gid[idx];
+        if (g->ss[my_gid] == 1 && g->ls[my_gid] == 1 &&
+            ((g->lw[my_gid * W + (captured_idx >> 5)] >> (captured_idx & 31)) & 1)) {
+            g->ko = captured_idx;
+            g->ko_stone[color + 1] = idx;
+        }
+    }
+
+    g->consecutive_passes = 0;
+    g->current = opp;
+    g->move_count++;
+    g->last_move = idx;
+    if (g->move_count >= 4 * g->cap) g->game_over = true;
 }
 
 /* ── Random legal move ─────────────────────────────────────────────────────── */
@@ -452,7 +561,6 @@ int32_t g2_random_legal_move(Game2 *g) {
         int ri  = g2_rand_n(end + 1);
         int32_t idx = g->empty_cells[ri];
         if (!g2_is_true_eye(g, idx) && g2_is_legal(g, idx)) return idx;
-        /* Swap to back */
         int32_t t = g->empty_cells[end];
         g->empty_cells[ri]  = t;
         g->empty_cells[end] = idx;
@@ -465,8 +573,9 @@ int32_t g2_random_legal_move(Game2 *g) {
 /* ── Scoring ───────────────────────────────────────────────────────────────── */
 
 Score g2_estimate_score(const Game2 *g) {
+    const int cap = g->cap;
     float black = 0, white = 0;
-    for (int i = 0; i < CAP; i++) {
+    for (int i = 0; i < cap; i++) {
         int8_t c = g->cells[i];
         if (c == BLACK) { black++; continue; }
         if (c == WHITE) { white++; continue; }
@@ -480,7 +589,7 @@ Score g2_estimate_score(const Game2 *g) {
         if (b_adj && !w_adj) black++;
         else if (w_adj && !b_adj) white++;
     }
-    white += g2_komi();
+    white += g2_komi(g->N);
     return (Score){ black, white };
 }
 

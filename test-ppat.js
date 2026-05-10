@@ -1,6 +1,6 @@
 'use strict';
 
-const { createState, extractFeatures, evaluate, NUM_PATTERNS } = require('./ppat-lib.js');
+const { createState, extractFeatures, evaluate, ppatMove, totalWeights, NUM_PATTERNS, PHASE_COUNT } = require('./ppat-lib.js');
 // NUM_PATTERNS is the count of canonical IDs under D4 spatial symmetry only
 // (color swap is NOT applied since the encoding is already mover-relative).
 const { Game2, BLACK, WHITE, PASS, parseBoard } = require('./game2.js');
@@ -74,7 +74,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
     const st = createState(N);
     extractFeatures(g, st);
     for (let i = 0; i < st.count; i++) {
-      if (st.moves[i] === candidateCell) return { patId: st.patIds[i] };
+      if (st.moves[i] === candidateCell) return { patId: getPatId(st, i) };
     }
     return null;
   }
@@ -118,7 +118,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   gA.play(northOf); gA.play(PASS); // BLACK at north, pass (now BLACK's turn again)
   const stA = createState(N); extractFeatures(gA, stA);
   let rA = null;
-  for (let i = 0; i < stA.count; i++) if (stA.moves[i] === center) { rA = { id: stA.patIds[i] }; break; }
+  for (let i = 0; i < stA.count; i++) if (stA.moves[i] === center) { rA = { id: getPatId(stA, i) }; break; }
 
   // B: WHITE stone at northOf (FOE for BLACK)
   // Place WHITE there: BLACK passes, then WHITE plays, then it's BLACK's turn.
@@ -126,7 +126,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   gB.play(PASS); gB.play(northOf); // pass by BLACK, WHITE plays at north
   const stB = createState(N); extractFeatures(gB, stB);
   let rB = null;
-  for (let i = 0; i < stB.count; i++) if (stB.moves[i] === center) { rB = { id: stB.patIds[i] }; break; }
+  for (let i = 0; i < stB.count; i++) if (stB.moves[i] === center) { rB = { id: getPatId(stB, i) }; break; }
 
   // FRIEND at N and FOE at N are genuinely different patterns in a mover-relative
   // encoding — no color-swap symmetry is applied, so they must have different patIds.
@@ -167,7 +167,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
 
   const st = createState(N); extractFeatures(g, st);
   let got = null;
-  for (let i = 0; i < st.count; i++) if (st.moves[i] === cand) { got = { id: st.patIds[i] }; break; }
+  for (let i = 0; i < st.count; i++) if (st.moves[i] === cand) { got = { id: getPatId(st, i) }; break; }
   check('atari candidate found', got !== null);
 
   // Compare with the same position but cell 31 has 2+ liberties (not in atari).
@@ -180,7 +180,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
 
   const st2 = createState(N); extractFeatures(g2, st2);
   let got2 = null;
-  for (let i = 0; i < st2.count; i++) if (st2.moves[i] === cand) { got2 = { id: st2.patIds[i] }; break; }
+  for (let i = 0; i < st2.count; i++) if (st2.moves[i] === cand) { got2 = { id: getPatId(st2, i) }; break; }
   check('non-atari candidate found', got2 !== null);
 
   // The atari version should have a different patId than the non-atari version
@@ -203,9 +203,15 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   const st = createState(N); extractFeatures(g, st);
   const nbrs8 = new Set([11, 29, 19, 21, 12, 10, 28, 30]);
 
+  const prevBase = PHASE_COUNT * NUM_PATTERNS;
   let allNbrsHaveBit0 = true, nonNbrsLackBit0 = true;
   for (let i = 0; i < st.count; i++) {
-    const m = st.moves[i], mask = st.prevMasks[i];
+    const m = st.moves[i];
+    let mask = 0;
+    for (let fi = st.featStart[i]; fi < st.featStart[i + 1]; fi++) {
+      const key = st.feat[fi];
+      if (key >= prevBase) mask |= 1 << ((key - prevBase) % 7);
+    }
     if (nbrs8.has(m)) {
       if (!(mask & 1)) { allNbrsHaveBit0 = false; console.error('  move', m, 'is 8-nbr but lacks bit 0, mask=', mask); }
     } else {
@@ -263,7 +269,14 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   const st = createState(N); extractFeatures(g, st);
   let libMask = 0;
   for (let i = 0; i < st.count; i++) {
-    if (st.moves[i] === singleLib) { libMask = st.prevMasks[i]; break; }
+    if (st.moves[i] === singleLib) {
+      const pb = PHASE_COUNT * NUM_PATTERNS;
+      for (let fi = st.featStart[i]; fi < st.featStart[i + 1]; fi++) {
+        const key = st.feat[fi];
+        if (key >= pb) libMask |= 1 << ((key - pb) % 7);
+      }
+      break;
+    }
   }
   // Bit 3 = Feature 4 (save by extension, not self-atari)
   // Bit 4 = Feature 5 (save by extension, self-atari)
@@ -271,11 +284,26 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   check('F4/5: also has bit 0 (contiguous)', (libMask & 1) !== 0);
 }
 
-// ── Helper: extract prevMask for a specific candidate cell ───────────────────
+// ── Helpers for reading flat feature state ────────────────────────────────────
+// Extract pattern ID (phase-stripped) from feature keys.
+function getPatId(st, i) {
+  return st.feat[st.featStart[i]] % NUM_PATTERNS;
+}
+
+// Reconstruct prevMask for a specific candidate from flat feature keys.
 function getMask(game, cell) {
   const st = createState(game.N);
   extractFeatures(game, st);
-  for (let i = 0; i < st.count; i++) if (st.moves[i] === cell) return st.prevMasks[i];
+  const prevBase = PHASE_COUNT * NUM_PATTERNS;
+  for (let i = 0; i < st.count; i++) {
+    if (st.moves[i] !== cell) continue;
+    let mask = 0;
+    for (let fi = st.featStart[i]; fi < st.featStart[i + 1]; fi++) {
+      const key = st.feat[fi];
+      if (key >= prevBase) mask |= 1 << ((key - prevBase) % 7);
+    }
+    return mask;
+  }
   return -1;
 }
 
@@ -518,7 +546,7 @@ function getMask(game, cell) {
   extractFeatures(g, st);
   let allValid = true;
   for (let i = 0; i < st.count; i++) {
-    if (st.patIds[i] < 0 || st.patIds[i] >= NUM_PATTERNS) { allValid = false; break; }
+    if (getPatId(st, i) < 0 || getPatId(st, i) >= NUM_PATTERNS) { allValid = false; break; }
   }
   check('all patIds in [0, NUM_PATTERNS) and pols ±1', allValid);
   check('at least 1 move found in mid-game', st.count > 0);

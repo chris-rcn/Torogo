@@ -12,6 +12,7 @@ const { performance } = require('perf_hooks');
  *   --size    <n>        Board size: 9, 13, or 19    (required)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
+ *   --rand-moves <n>     Play n random moves at the start of each position (default 0)
  *   --help               Show this help message
  *
  * Env variables:
@@ -50,6 +51,7 @@ const p2Name    = opts.p2   || p1Name;
 if (!opts.size) { console.error('--size is required'); process.exit(1); }
 const boardSize = parseInt(opts.size, 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
+const randMoves = parseInt(opts['rand-moves'] || '0', 10);
 
 if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');
@@ -81,6 +83,7 @@ console.log(
   `${'games'.padStart(6)}  ` +
   `${'elapsed'.padStart(8)}  ` +
   `${'black%'.padStart(6)}  ` +
+  `${'avgLen'.padStart(6)}  ` +
   `${'maxLen'.padStart(6)}  ` +
   `${'p1ms'.padStart(7)}  ` +
   `${'p2ms'.padStart(7)}  ` +
@@ -92,6 +95,7 @@ let printPeriodMs  = 1000;
 let lastPrintTime  = startTime;
 let lastPrintGames = 0;
 let blackWinCount = 0;
+let totalGameLen = 0;
 let maxGameLen = 0;
 
 function printStats(gamesPlayed) {
@@ -99,7 +103,8 @@ function printStats(gamesPlayed) {
   const strGames = String(gamesPlayed);
   const strElapsed = (((now - startTime) / 1000).toFixed(1) + 's');
   const strBlackWin = (100 * blackWinCount / gamesPlayed).toFixed(1) + '%';
-  const strGameLen = String(maxGameLen);
+  const strAvgLen = (totalGameLen / gamesPlayed).toFixed(0);
+  const strMaxLen = String(maxGameLen);
   const strAvgMs = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—');
   const strWinRatio = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%');
   const strP2Better = (100 * probPlayerBetter(tally.p2, gamesPlayed)).toFixed(1) + '%';
@@ -107,7 +112,8 @@ function printStats(gamesPlayed) {
     `${strGames.padStart(6)}  ` +
     `${strElapsed.padStart(8)}  ` +
     `${strBlackWin.padStart(6)}  ` +
-    `${strGameLen.padStart(6)}  ` +
+    `${strAvgLen.padStart(6)}  ` +
+    `${strMaxLen.padStart(6)}  ` +
     `${strAvgMs(stats.p1).padStart(7)}  ` +
     `${strAvgMs(stats.p2).padStart(7)}  ` +
     `${strWinRatio(tally.p2).padStart(6)}  ` +
@@ -229,18 +235,15 @@ function logGamma(z) {
   return -tmp + Math.log(2.5066282746310005 * ser / x);
 }
 
-// Run games until the limit (or forever if no limit).
-for (let g = 0; g < gameLimit; g++) {
-  const p1IsBlack = g % 2 === 0;
-  const names = [ p1IsBlack ? p1Name : p2Name, p1IsBlack ? p2Name : p1Name]
+// Play one game from a given starting position with assigned colors.
+function playGame(startGame, p1IsBlack) {
+  const names = [ p1IsBlack ? p1Name : p2Name, p1IsBlack ? p2Name : p1Name];
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
 
-  if (VERBOSE) {
-    console.log(`${names[0]} ● vs ${names[1]} ○`);
-  }
+  if (VERBOSE) console.log(`${names[0]} ● vs ${names[1]} ○`);
 
-  const game = new Game2(boardSize);
+  const game = startGame.clone();
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === BLACK;
@@ -260,8 +263,9 @@ for (let g = 0; g < gameLimit; g++) {
       printBoard(game);
       console.log(`Agent info: ${move.info}`);
       console.log();
-    };
+    }
   }
+  totalGameLen += game.moveCount;
   maxGameLen = Math.max(maxGameLen, game.moveCount);
   const winner = game.calcWinner();
   if (winner === BLACK) {
@@ -270,11 +274,26 @@ for (let g = 0; g < gameLimit; g++) {
   } else if (winner === WHITE) {
     tally[p1IsBlack ? 'p2' : 'p1']++;
   }
+}
 
-  maybePrint(g + 1);
+// Run games until the limit (or forever if no limit).
+// Each opening is played twice with swapped colors.
+let gamesPlayed = 0;
+while (gamesPlayed < gameLimit) {
+  // Generate a random opening position.
+  const opening = new Game2(boardSize);
+  for (let i = 0; i < randMoves && !opening.gameOver; i++)
+    opening.play(opening.randomLegalMove());
+
+  // Play from this opening with both color assignments.
+  for (let swap = 0; swap < 2 && gamesPlayed < gameLimit; swap++) {
+    playGame(opening, swap === 0);
+    gamesPlayed++;
+    maybePrint(gamesPlayed);
+  }
 }
 
 // Final stats row (always printed, even if maybePrint already fired).
-printStats(tally.p1 + tally.p2);
+printStats(gamesPlayed);
 
 

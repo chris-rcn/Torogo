@@ -33,7 +33,8 @@ const _D4 = [
 // swap is NOT a symmetry.  Only the 8 D4 spatial transforms are applied.
 // CANON_ID maps raw → dense canonical ID (0-based).
 
-const _CANON_ID = new Int32Array(50625);
+const _CANON_ID = new Int16Array(50625);
+let PHASE_COUNT = 1;  // set via setPhaseCount() before use
 
 const NUM_PATTERNS = (function _buildTables() {
   const v  = new Int32Array(8);
@@ -196,6 +197,16 @@ function _notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lw, W, cur, foe)
   return false;
 }
 
+// ── Static buffers (avoid per-call allocation / GC pressure) ─────────────────
+const _atariGids    = new Int32Array(8);
+const _atariLibsArr = new Int32Array(8);
+const _twoLibGids   = new Int32Array(8);
+const _sbcCells     = new Int32Array(64);   // save-by-capture cell indices
+const _semCells     = new Int32Array(64);   // semeai candidate cell indices
+const _semEgids     = new Int32Array(64);   // semeai candidate enemy gids
+const _koSolveLibs  = new Int32Array(4);
+const _seenBuf      = new Int32Array(16);   // dedup scratch
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 // Allocate reusable output buffers for a board of size N.
@@ -203,12 +214,15 @@ function createState(N) {
   const cap = N * N;
   return {
     moves:          new Int32Array(cap),
-    patIds:         new Int32Array(cap),
-    prevMasks:      new Uint8Array(cap),
+    feat:           new Int32Array(cap * 8),  // flat feature keys (max 8 per candidate)
+    featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
     prevNeighborSet: new Uint8Array(cap),
     count:          0,
   };
 }
+
+function setPhaseCount(n) { PHASE_COUNT = n; }
+function totalWeights() { return PHASE_COUNT * (NUM_PATTERNS + 7); }
 
 // Extract features for all legal non-true-eye moves from game into state.
 //
@@ -231,6 +245,10 @@ function extractFeatures(game, state) {
   const lwArr  = game._lw;
   const swArr  = game._sw;
   const W      = game._W;
+
+  const phase = PHASE_COUNT * (cap - game.emptyCount) / cap | 0;
+  const patOffset = phase * NUM_PATTERNS;
+  const prevOffset = PHASE_COUNT * NUM_PATTERNS + phase * 7;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -242,38 +260,107 @@ function extractFeatures(game, state) {
   const myKoStone = game.koStone[cur + 1];
 
   // ── Pre-scan: build prevNeighborSet + find friendly strings in atari or with 2 libs ──
-  // KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
-  // adjacent to prev, but don't verify that prev *caused* the atari. The spec says
-  // "new atari" — the string should have had >1 liberty before the opponent's move.
-  // KNOWN LIMITATION (Feature 7): Same issue — we find strings with 2 liberties but
-  // don't verify prev reduced them to 2.
   const prevNeighborSet = state.prevNeighborSet;
-  let new1LibGids = null;  // Set<gid>: friendly groups with 1 liberty adjacent to prev
-  let new2LibGids = null;  // Set<gid>: friendly groups with 2 liberties adjacent to prev
+  const atariGids = _atariGids;     // reuse static arrays (no GC)
+  const atariLibsArr = _atariLibsArr;
+  let nAtari = 0;
+  const twoLibGids = _twoLibGids;
+  let nTwo = 0;
+
   if (hasPrev) {
     const pb4 = prev * 4;
     for (let di = 0; di < 4; di++) {
       prevNeighborSet[nbr[pb4 + di]]  = 1;
       prevNeighborSet[dnbr[pb4 + di]] = 1;
-      // Only orthogonal neighbors can have had a liberty removed by prev.
       const ni = nbr[pb4 + di];
       if (cells[ni] !== cur) continue;
       const gid = gidArr[ni];
       const ls  = lsArr[gid];
-      if (ls === 1) { if (!new1LibGids) new1LibGids = new Set(); new1LibGids.add(gid); }
-      else if (ls === 2) { if (!new2LibGids) new2LibGids = new Set(); new2LibGids.add(gid); }
+      if (ls === 1) {
+        let dup = false;
+        for (let j = 0; j < nAtari; j++) if (atariGids[j] === gid) { dup = true; break; }
+        if (!dup) atariGids[nAtari++] = gid;
+      } else if (ls === 2) {
+        let dup = false;
+        for (let j = 0; j < nTwo; j++) if (twoLibGids[j] === gid) { dup = true; break; }
+        if (!dup) twoLibGids[nTwo++] = gid;
+      }
+    }
+    for (let i = 0; i < nAtari; i++)
+      atariLibsArr[i] = _firstLib(atariGids[i], lwArr, W, cap);
+  }
+
+  // Precompute save-by-capture cells (avoid per-candidate _canSaveByCapture).
+  let nSbc = 0;
+  if (nAtari > 0) {
+    const seen = _seenBuf;
+    let nSeen = 0;
+    for (let ai = 0; ai < nAtari; ai++) {
+      const sgid = atariGids[ai];
+      const sb = sgid * W;
+      for (let wi = 0; wi < W; wi++) {
+        let w = swArr[sb + wi];
+        while (w) {
+          const lsb = w & -w;
+          const si = wi * 32 + (31 - Math.clz32(lsb));
+          if (si < cap) {
+            const b4s = si * 4;
+            for (let d = 0; d < 4; d++) {
+              const ni = nbr[b4s + d];
+              if (cells[ni] !== foe) continue;
+              const egid = gidArr[ni];
+              if (lsArr[egid] !== 1) continue;
+              let dup = false;
+              for (let j = 0; j < nSeen; j++) if (seen[j] === egid) { dup = true; break; }
+              if (dup) continue;
+              if (nSeen < 16) seen[nSeen++] = egid;
+              const lib = _firstLib(egid, lwArr, W, cap);
+              if (lib >= 0) _sbcCells[nSbc++] = lib;
+            }
+          }
+          w ^= lsb;
+        }
+      }
     }
   }
 
-  // Cache single liberty for each new-atari group (for Feature 4/5 check).
-  let atariLibs = null;
-  if (new1LibGids) {
-    atariLibs = new Map();
-    for (const gid of new1LibGids) atariLibs.set(gid, _firstLib(gid, lwArr, W, cap));
+  // Precompute semeai candidates (avoid per-candidate _gives2LibAtari).
+  let nSem = 0;
+  if (nTwo > 0) {
+    const seen = _seenBuf;
+    let nSeen = 0;
+    for (let ti = 0; ti < nTwo; ti++) {
+      const sgid = twoLibGids[ti];
+      const sb = sgid * W;
+      for (let wi = 0; wi < W; wi++) {
+        let w = swArr[sb + wi];
+        while (w) {
+          const lsb = w & -w;
+          const si = wi * 32 + (31 - Math.clz32(lsb));
+          if (si < cap) {
+            const b4s = si * 4;
+            for (let d = 0; d < 4; d++) {
+              const ni = nbr[b4s + d];
+              if (cells[ni] !== foe) continue;
+              const egid = gidArr[ni];
+              if (lsArr[egid] !== 2) continue;
+              let dup = false;
+              for (let j = 0; j < nSeen; j++) if (seen[j] === egid) { dup = true; break; }
+              if (dup) continue;
+              if (nSeen < 16) seen[nSeen++] = egid;
+              const [l0, l1] = _twoLibs(egid, lwArr, W, cap);
+              if (l0 >= 0) { _semCells[nSem] = l0; _semEgids[nSem] = egid; nSem++; }
+              if (l1 >= 0) { _semCells[nSem] = l1; _semEgids[nSem] = egid; nSem++; }
+            }
+          }
+          w ^= lsb;
+        }
+      }
+    }
   }
 
-  // Feature 6 pre-scan: find liberty cells that capture enemy groups adjacent to our ko stone.
-  let koSolveLibs = null;
+  // Feature 6 pre-scan
+  let nKoSolve = 0;
   if (myKoStone !== PASS) {
     const ks4 = myKoStone * 4;
     for (let d = 0; d < 4; d++) {
@@ -282,60 +369,90 @@ function extractFeatures(game, state) {
       const egid = gidArr[ni];
       if (lsArr[egid] === 1) {
         const lib = _firstLib(egid, lwArr, W, cap);
-        if (lib >= 0) {
-          if (!koSolveLibs) koSolveLibs = [];
-          koSolveLibs.push(lib);
-        }
+        if (lib >= 0) _koSolveLibs[nKoSolve++] = lib;
       }
     }
   }
 
+  const ko = game.ko;
   let count = 0;
+  let nf = 0;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
-    if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
-
-    // ── 3×3 pattern ──────────────────────────────────────────────────────────
-    // game2 neighbor order: _nbr[i*4+0]=N(row−1), +1=S(row+1), +2=W(col−1), +3=E(col+1)
-    //                       _dnbr[i*4+0]=NW, +1=NE, +2=SW, +3=SE
     const b4 = idx * 4;
-    // Inline _adj: 0=EMPTY, 1=FRIEND, 2=FRIEND_ATARI, 3=FOE, 4=FOE_ATARI
-    const niN = nbr[b4],     cN = cells[niN];
-    const niE = nbr[b4 + 3], cE = cells[niE];
-    const niS = nbr[b4 + 1], cS = cells[niS];
-    const niW = nbr[b4 + 2], cW = cells[niW];
-    const vN = cN === 0 ? 0 : (lsArr[gidArr[niN]] === 1 ? (cN === cur ? 2 : 4) : (cN === cur ? 1 : 3));
-    const vE = cE === 0 ? 0 : (lsArr[gidArr[niE]] === 1 ? (cE === cur ? 2 : 4) : (cE === cur ? 1 : 3));
-    const vS = cS === 0 ? 0 : (lsArr[gidArr[niS]] === 1 ? (cS === cur ? 2 : 4) : (cS === cur ? 1 : 3));
-    const vW = cW === 0 ? 0 : (lsArr[gidArr[niW]] === 1 ? (cW === cur ? 2 : 4) : (cW === cur ? 1 : 3));
-    // Inline _diag: 0=EMPTY, 1=FRIEND, 2=FOE
-    const cNE = cells[dnbr[b4 + 1]], vNE = cNE === 0 ? 0 : (cNE === cur ? 1 : 2);
-    const cSE = cells[dnbr[b4 + 3]], vSE = cSE === 0 ? 0 : (cSE === cur ? 1 : 2);
-    const cSW = cells[dnbr[b4 + 2]], vSW = cSW === 0 ? 0 : (cSW === cur ? 1 : 2);
-    const cNW = cells[dnbr[b4]],     vNW = cNW === 0 ? 0 : (cNW === cur ? 1 : 2);
 
-    const rawIdx = vN + 5*(vE + 5*(vS + 5*(vW + 5*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+    // Inlined legality check
+    const niN = nbr[b4], niS = nbr[b4 + 1], niW = nbr[b4 + 2], niE = nbr[b4 + 3];
+    const cN = cells[niN], cS = cells[niS], cW = cells[niW], cE = cells[niE];
+    const anyEmpty = (cN === 0) | (cS === 0) | (cW === 0) | (cE === 0);
+    if (anyEmpty) {
+      if (idx === ko && game._isKo(idx, cur)) continue;
+    } else {
+      if (game._isSingleSuicide(idx, cur)) continue;
+      if (game._isMultiSuicide(idx, cur)) continue;
+      if (idx === ko && game._isKo(idx, cur)) continue;
+    }
 
-    state.moves[count]  = idx;
-    state.patIds[count] = _CANON_ID[rawIdx];
+    // Inlined true-eye check + adj_val computation
+    let friendCount = 0, emptyNbr = 0, firstGid = -2, sameGroup = 0;
+    let vN, vS2, vW2, vE2;
+    if (cN === 0) { emptyNbr++; vN = 0; }
+    else { const g_ = gidArr[niN]; const a_ = lsArr[g_] === 1;
+      if (cN === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vN = a_ ? 2 : 1; }
+      else vN = a_ ? 4 : 3; }
+    if (cS === 0) { emptyNbr++; vS2 = 0; }
+    else { const g_ = gidArr[niS]; const a_ = lsArr[g_] === 1;
+      if (cS === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vS2 = a_ ? 2 : 1; }
+      else vS2 = a_ ? 4 : 3; }
+    if (cW === 0) { emptyNbr++; vW2 = 0; }
+    else { const g_ = gidArr[niW]; const a_ = lsArr[g_] === 1;
+      if (cW === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vW2 = a_ ? 2 : 1; }
+      else vW2 = a_ ? 4 : 3; }
+    if (cE === 0) { emptyNbr++; vE2 = 0; }
+    else { const g_ = gidArr[niE]; const a_ = lsArr[g_] === 1;
+      if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = a_ ? 2 : 1; }
+      else vE2 = a_ ? 4 : 3; }
+
+    if (friendCount === 3 && emptyNbr === 1 && sameGroup === 3) continue;
+    if (friendCount === 4) {
+      if (sameGroup === 4) continue;
+      let dc = 0;
+      if (cells[dnbr[b4]]     === cur) dc++;
+      if (cells[dnbr[b4 + 1]] === cur) dc++;
+      if (cells[dnbr[b4 + 2]] === cur) dc++;
+      if (cells[dnbr[b4 + 3]] === cur) dc++;
+      if (dc >= 3) continue;
+    }
+
+    // Diag values
+    const cNE2 = cells[dnbr[b4 + 1]], vNE = cNE2 === 0 ? 0 : (cNE2 === cur ? 1 : 2);
+    const cSE2 = cells[dnbr[b4 + 3]], vSE = cSE2 === 0 ? 0 : (cSE2 === cur ? 1 : 2);
+    const cSW2 = cells[dnbr[b4 + 2]], vSW = cSW2 === 0 ? 0 : (cSW2 === cur ? 1 : 2);
+    const cNW2 = cells[dnbr[b4]],     vNW = cNW2 === 0 ? 0 : (cNW2 === cur ? 1 : 2);
+
+    const rawIdx = vN + 5*(vE2 + 5*(vS2 + 5*(vW2 + 5*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+
+    state.moves[count] = idx;
+    state.featStart[count] = nf;
+
+    // Pattern feature
+    state.feat[nf++] = patOffset + _CANON_ID[rawIdx];
 
     // ── Previous-move features ────────────────────────────────────────────────
     let mask = 0;
+    if (hasPrev && prevNeighborSet[idx]) mask = 1;
 
-    // Feature 1: 8-neighborhood of prev.
-    if (hasPrev && prevNeighborSet[idx]) {
-      mask = 1;
-    }
-
-    // Features 2–5: save a string in new atari by capture or extension.
-    // Capture (F2/3) takes priority over extension (F4/5).
-    if (new1LibGids) {
-      let feat2 = _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe);
+    // Features 2–5: precomputed save-by-capture + extension check
+    if (nAtari > 0) {
+      let feat2 = false;
+      for (let si = 0; si < nSbc; si++) {
+        if (_sbcCells[si] === idx) { feat2 = true; break; }
+      }
       let feat4 = false;
       if (!feat2) {
-        for (const gid of new1LibGids) {
-          if (atariLibs.get(gid) === idx) { feat4 = true; break; }
+        for (let i = 0; i < nAtari; i++) {
+          if (atariLibsArr[i] === idx) { feat4 = true; break; }
         }
       }
       if (feat2 || feat4) {
@@ -351,28 +468,33 @@ function extractFeatures(game, state) {
       }
     }
 
-    // Feature 7: 2-point semeai — give atari to an enemy group adjacent to our 2-lib string.
-    // Only fires if the atari likely kills (opponent's other liberty doesn't join to a non-atari group).
-    if (new2LibGids && _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lwArr, swArr, W, cap, foe))
-      mask |= 64;
-
-    // Feature 6: ko-solve capture.
-    if (koSolveLibs) {
-      for (let ki = 0; ki < koSolveLibs.length; ki++) {
-        if (idx === koSolveLibs[ki]) { mask |= 32; break; }
+    // Feature 7: precomputed semeai candidates
+    if (nSem > 0) {
+      for (let si = 0; si < nSem; si++) {
+        if (_semCells[si] === idx &&
+            !_opponentCanSave(idx, _semEgids[si], nbr, cells, gidArr, lsArr, lwArr, W, cap, foe)) {
+          mask |= 64; break;
+        }
       }
     }
 
-    // Bit 0 piggyback: active for all features 2-7.
+    // Feature 6: ko-solve capture
+    for (let ki = 0; ki < nKoSolve; ki++) {
+      if (idx === _koSolveLibs[ki]) { mask |= 32; break; }
+    }
+
     if (mask & 0x7E) mask |= 1;
 
-    state.prevMasks[count] = mask;
+    // Emit prev feature keys
+    for (let b = 0; b < 7; b++)
+      if (mask & (1 << b)) state.feat[nf++] = prevOffset + b;
+
     count++;
   }
 
+  state.featStart[count] = nf;
   state.count = count;
 
-  // Clear prevNeighborSet for reuse.
   if (hasPrev) {
     const pb4 = prev * 4;
     for (let di = 0; di < 4; di++) {
@@ -382,20 +504,14 @@ function extractFeatures(game, state) {
   }
 }
 
-// Score all moves with a linear model and return them sorted by score descending.
-// score(move) = patWeights[patId] + sum_{active bits b} prevWeights[b]
-// patWeights : Float32Array(NUM_PATTERNS) or Map<int32, number>
-// prevWeights: Float32Array(7) indexed by bit position 0–6  (may be null/undefined)
-function evaluate(game, state, patWeights, prevWeights) {
+// Score all moves with a flat weight array and return sorted by score descending.
+function evaluate(game, state, weights) {
   extractFeatures(game, state);
-  const isMap = patWeights instanceof Map;
   const out = [];
   for (let i = 0; i < state.count; i++) {
-    let score = isMap ? (patWeights.get(state.patIds[i]) || 0) : (patWeights[state.patIds[i]] || 0);
-    if (prevWeights) {
-      let m = state.prevMasks[i];
-      for (let b = 0; m; b++, m >>= 1) if (m & 1) score += prevWeights[b];
-    }
+    let score = 0;
+    for (let fi = state.featStart[i]; fi < state.featStart[i + 1]; fi++)
+      score += weights[state.feat[fi]];
     out.push({ move: state.moves[i], score });
   }
   return out.sort((a, b) => b.score - a.score);
@@ -409,40 +525,68 @@ function evaluate(game, state, patWeights, prevWeights) {
 // After return, state is populated with the extracted features.
 
 let _logits = new Float32Array(512);
-let _probs  = new Float32Array(512);
+
+// Fast approximate exp using the Schraudolph IEEE-754 trick.
+const _expBuf = new Float64Array(1);
+const _expInt = new Int32Array(_expBuf.buffer);
+function _fastExp(x) {
+  if (x < -20) return 0;
+  // Schraudolph: write to high 32 bits of float64
+  _expInt[1] = (1512775 * x + 1072632447) | 0;
+  _expInt[0] = 0;
+  return _expBuf[0];
+}
 
 function ppatMove(game, state, weights) {
   extractFeatures(game, state);
   const n = state.count;
   if (n === 0) return PASS;
 
-  if (_logits.length < n) {
-    _logits = new Float32Array(n * 2);
-    _probs  = new Float32Array(n * 2);
-  }
+  if (_logits.length < n) _logits = new Float32Array(n * 2);
 
-  const patW  = weights.pat;
-  const prevW = weights.prev;
+  const feat = state.feat;
+  const fs = state.featStart;
+
+  // Compute logits and find max in one pass
+  let max = -1e30;
   for (let i = 0; i < n; i++) {
-    let v = patW[state.patIds[i]];
-    let m = state.prevMasks[i];
-    for (let b = 0; m; b++, m >>= 1) if (m & 1) v += prevW[b];
+    let v = 0;
+    for (let fi = fs[i]; fi < fs[i + 1]; fi++) v += weights[feat[fi]];
     _logits[i] = v;
+    if (v > max) max = v;
   }
 
-  let max = _logits[0];
-  for (let i = 1; i < n; i++) if (_logits[i] > max) max = _logits[i];
+  // Compute unnormalized weights and sample in two passes
   let sum = 0;
-  for (let i = 0; i < n; i++) { _probs[i] = Math.exp(_logits[i] - max); sum += _probs[i]; }
-  const inv = 1 / sum;
-  for (let i = 0; i < n; i++) _probs[i] *= inv;
+  for (let i = 0; i < n; i++) {
+    const e = _fastExp(_logits[i] - max);
+    _logits[i] = e;
+    sum += e;
+  }
 
-  let r = Math.random(), chosen = n - 1;
-  for (let i = 0; i < n; i++) { r -= _probs[i]; if (r <= 0) { chosen = i; break; } }
+  let r = Math.random() * sum, chosen = n - 1;
+  for (let i = 0; i < n; i++) { r -= _logits[i]; if (r <= 0) { chosen = i; break; } }
   return state.moves[chosen];
 }
 
-const PPatterns = { createState, extractFeatures, evaluate, ppatMove, NUM_PATTERNS };
+// Load a weights file (JS module with { weights, phases, numPatterns }).
+// Sets PHASE_COUNT and returns the flat Float32Array, or null.
+function loadWeights(pathOrObj) {
+  let raw = pathOrObj;
+  if (typeof raw === 'string') {
+    const _path = _isNode ? require('path') : null;
+    try { raw = require(_path.resolve(raw)); } catch (e) { return null; }
+  }
+  if (!raw || !raw.weights) return null;
+  if (raw.phases) PHASE_COUNT = raw.phases;
+  return raw.weights;
+}
+
+const PPatterns = {
+  createState, extractFeatures, evaluate, ppatMove,
+  setPhaseCount, totalWeights, loadWeights,
+  NUM_PATTERNS, get PHASE_COUNT() { return PHASE_COUNT; },
+};
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;
 

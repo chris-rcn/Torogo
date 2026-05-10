@@ -24,15 +24,24 @@ static bool play_seq(Game2 *g, const int32_t *moves, int n) {
     return true;
 }
 
-/* Get prevMask for a specific candidate cell. Returns -1 if not found. */
+/* Reconstruct prevMask for a specific candidate from flat feature keys. */
 static int get_mask(const Game2 *g, int32_t cell) {
     PpatState st;
     memset(&st, 0, sizeof(st));
     ppat_extract(g, &st);
-    for (int i = 0; i < st.count; i++)
-        if (st.moves[i] == cell) return st.prev_masks[i];
+    int prev_base = ppat_phase_count * ppat_num_patterns;
+    for (int i = 0; i < st.count; i++) {
+        if (st.moves[i] != cell) continue;
+        int mask = 0;
+        for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++) {
+            int key = st.feat[fi];
+            if (key >= prev_base) mask |= 1 << ((key - prev_base) % 7);
+        }
+        return mask;
+    }
     return -1;
 }
+
 
 /* ── Tests ─────────────────────────────────────────────────────────────────── */
 
@@ -42,7 +51,7 @@ static void test_pattern_count(void) {
 
 static void test_extract_basic(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     PpatState st;
     memset(&st, 0, sizeof(st));
     ppat_extract(&g, &st);
@@ -50,14 +59,14 @@ static void test_extract_basic(void) {
     /* All patIds in valid range */
     int valid = 1;
     for (int i = 0; i < st.count; i++) {
-        if (st.pat_ids[i] < 0 || st.pat_ids[i] >= ppat_num_patterns) { valid = 0; break; }
+        if ((st.feat[st.feat_start[i]] % ppat_num_patterns) < 0 || (st.feat[st.feat_start[i]] % ppat_num_patterns) >= ppat_num_patterns) { valid = 0; break; }
     }
     check("extract: all patIds valid", valid);
 }
 
 static void test_d4_symmetry(void) {
     /* FRIEND at N vs E vs S vs W of center should all have same patId */
-    int N = BOARD_SIZE;
+    const int N = 9;
     int center = (N/2)*N + (N/2);
     int cells[4];
     cells[0] = g2_nbr[center*4+0]; /* N */
@@ -68,7 +77,7 @@ static void test_d4_symmetry(void) {
     int32_t ids[4];
     for (int d = 0; d < 4; d++) {
         Game2 g;
-        g2_new_empty(&g);
+        g2_new_empty(&g, 9);
         g2_play(&g, cells[d]); /* B at neighbor */
         g2_play(&g, PASS);     /* W pass → B's turn */
         PpatState st;
@@ -76,7 +85,7 @@ static void test_d4_symmetry(void) {
         ppat_extract(&g, &st);
         ids[d] = -1;
         for (int i = 0; i < st.count; i++) {
-            if (st.moves[i] == center) { ids[d] = st.pat_ids[i]; break; }
+            if (st.moves[i] == center) { ids[d] = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
         }
     }
     check("D4: N and E same patId", ids[0] >= 0 && ids[0] == ids[1]);
@@ -86,31 +95,31 @@ static void test_d4_symmetry(void) {
 
 static void test_mover_relative(void) {
     /* FRIEND at N vs FOE at N should have different patIds */
-    int N = BOARD_SIZE;
+    const int N = 9;
     int center = (N/2)*N + (N/2);
     int north  = g2_nbr[center*4+0];
 
     Game2 gA, gB;
-    g2_new_empty(&gA);
+    g2_new_empty(&gA, 9);
     g2_play(&gA, north); g2_play(&gA, PASS); /* B at north, B's turn */
-    g2_new_empty(&gB);
+    g2_new_empty(&gB, 9);
     g2_play(&gB, PASS); g2_play(&gB, north); /* W at north, B's turn */
 
     PpatState st;
     memset(&st, 0, sizeof(st));
     int32_t idA = -1, idB = -1;
     ppat_extract(&gA, &st);
-    for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idA = st.pat_ids[i]; break; }
+    for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idA = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     ppat_extract(&gB, &st);
-    for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idB = st.pat_ids[i]; break; }
+    for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idB = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     check("mover-relative: FRIEND vs FOE different patIds", idA >= 0 && idB >= 0 && idA != idB);
 }
 
 static void test_atari_encoding(void) {
     /* B@31 in atari (surround with W except one lib). Pattern should differ from non-atari. */
     Game2 g1, g2;
-    g2_new_empty(&g1);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g1, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2); /* 40 on 9x9 */
     int atari_cell = g2_nbr[c*4+0]; /* N of center = 31 on 9x9 */
     int n_n = g2_nbr[atari_cell*4+0]; /* N of 31 = 22 */
@@ -123,7 +132,7 @@ static void test_atari_encoding(void) {
     check("atari setup: in atari", g1.gid[atari_cell] >= 0 && g1.ls[g1.gid[atari_cell]] == 1);
 
     /* Non-atari: B@31 with W@22, W@30 only. 2 libs. */
-    g2_new_empty(&g2);
+    g2_new_empty(&g2, 9);
     int32_t seq2[] = {atari_cell, n_n, 0, n_w, 1, PASS};
     play_seq(&g2, seq2, 6);
     check("non-atari setup: 2 libs", g2.gid[atari_cell] >= 0 && g2.ls[g2.gid[atari_cell]] == 2);
@@ -132,17 +141,17 @@ static void test_atari_encoding(void) {
     memset(&st, 0, sizeof(st));
     int32_t id1 = -1, id2 = -1;
     ppat_extract(&g1, &st);
-    for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id1 = st.pat_ids[i]; break; }
+    for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id1 = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     ppat_extract(&g2, &st);
-    for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id2 = st.pat_ids[i]; break; }
+    for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id2 = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     check("atari vs non-atari: different patId", id1 >= 0 && id2 >= 0 && id1 != id2);
 }
 
 static void test_feature1_contiguity(void) {
     /* Feature 1: bit 0 set for 8-neighbors of lastMove, not for others */
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2);
     int other = g2_nbr[g2_nbr[c*4+0]*4+0]; /* 2 steps N of center */
     g2_play(&g, c);     /* B@center */
@@ -153,31 +162,36 @@ static void test_feature1_contiguity(void) {
     ppat_extract(&g, &st);
 
     /* Build set of 8-neighbors of other */
-    uint8_t is_nbr[CAP];
+    uint8_t is_nbr[MAX_CAP];
     memset(is_nbr, 0, sizeof(is_nbr));
     for (int d = 0; d < 4; d++) {
         is_nbr[g2_nbr[other*4+d]]  = 1;
         is_nbr[g2_dnbr[other*4+d]] = 1;
     }
 
+    int prev_base = ppat_phase_count * ppat_num_patterns;
     int all_nbr_ok = 1, all_non_ok = 1;
     for (int i = 0; i < st.count; i++) {
         int m = st.moves[i];
-        if (is_nbr[m]) { if (!(st.prev_masks[i] & 1)) all_nbr_ok = 0; }
-        else           { if (st.prev_masks[i] & 1) all_non_ok = 0; }
+        /* Check if bit 0 (contiguous) is present in feature keys */
+        int has_bit0 = 0;
+        for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++)
+            if (st.feat[fi] >= prev_base && (st.feat[fi] - prev_base) % 7 == 0) { has_bit0 = 1; break; }
+        if (is_nbr[m]) { if (!has_bit0) all_nbr_ok = 0; }
+        else           { if (has_bit0) all_non_ok = 0; }
     }
     check("F1: 8-neighbors have bit 0", all_nbr_ok);
     check("F1: non-neighbors lack bit 0", all_non_ok);
 }
 
-#if BOARD_SIZE == 9
+#if MAX_BOARD_SIZE >= 9
 /* The following tests use specific 9x9 coordinates */
 
 static void test_feature2_save_by_capture(void) {
     /* 2a: B@31 in atari (lib=22). W@32 in atari (lib=41). lastMove=W@40.
      * Candidate 41 captures W@32, saving B@31. Not self-atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {31, 32, 23, 30, 33, 40};
         play_seq(&g, seq, 6);
         check("F2a setup: B@31 atari", g.ls[g.gid[31]] == 1);
@@ -189,7 +203,7 @@ static void test_feature2_save_by_capture(void) {
     }
     /* 2b: B@40 in atari (lib=31). W@39 in atari (lib=48). lastMove=W@49. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {40, 39, 30, 41, 38, 49};
         play_seq(&g, seq, 6);
         check("F2b setup: B@40 atari", g.ls[g.gid[40]] == 1);
@@ -204,7 +218,7 @@ static void test_feature2_save_by_capture(void) {
 static void test_feature3_capture_self_atari(void) {
     /* 3a: Same as 2a but W@50,W@42 make capture self-atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {31, 32, 23, 30, 33, 50, 0, 42, 1, 40};
         play_seq(&g, seq, 10);
         int mask = get_mask(&g, 41);
@@ -214,7 +228,7 @@ static void test_feature3_capture_self_atari(void) {
     }
     /* 3b: Same as 2b but W@57,W@47 make capture self-atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {40, 39, 30, 41, 38, 57, 0, 47, 1, 49};
         play_seq(&g, seq, 10);
         int mask = get_mask(&g, 48);
@@ -260,7 +274,7 @@ static void test_feature4_extend(void) {
     /* 4a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal).
      * Candidate 40 (SE of 30, in 8-nbr) extends B@31. Not self-atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {31, 22, 0, 32, 1, 30};
         play_seq(&g, seq, 6);
         check("F4a setup: B@31 atari", g.ls[g.gid[31]] == 1);
@@ -271,7 +285,7 @@ static void test_feature4_extend(void) {
     }
     /* 4b: Multi-stone {40,41} in atari (lib=42). lastMove=W@50. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {40, 31, 41, 32, 0, 39, 1, 49, 2, 50};
         play_seq(&g, seq, 10);
         check("F4b setup: {40,41} atari", g.ls[g.gid[40]] == 1);
@@ -286,7 +300,7 @@ static void test_feature5_extend_self_atari(void) {
     /* 5a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal). W@49,W@39 block.
      * Extend at 40 = self-atari (only lib=41 after). */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {31, 22, 0, 32, 1, 49, 2, 39, 3, 30};
         play_seq(&g, seq, 10);
         check("F5a setup: B@31 atari", g.ls[g.gid[31]] == 1);
@@ -297,7 +311,7 @@ static void test_feature5_extend_self_atari(void) {
     }
     /* 5b: B@39 in atari (lib=40). W@31,W@49 block. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {39, 30, 0, 38, 1, 31, 2, 49, 3, 48};
         play_seq(&g, seq, 10);
         check("F5b setup: B@39 atari", g.ls[g.gid[39]] == 1);
@@ -344,7 +358,7 @@ static void test_feature6_ko_solve(void) {
 static void test_feature7_semeai(void) {
     /* 7a: B@31 2 libs. W@30 2 libs. lastMove=W@40. c=39 gives W@30 atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {31, 30, 21, 40};
         play_seq(&g, seq, 4);
         check("F7a setup: B@31 2 libs", g.ls[g.gid[31]] == 2);
@@ -355,7 +369,7 @@ static void test_feature7_semeai(void) {
     }
     /* 7b: B@39 2 libs. W@30 2 libs. lastMove=W@40. c=31 gives atari. */
     {
-        Game2 g; g2_new_empty(&g);
+        Game2 g; g2_new_empty(&g, 9);
         int32_t seq[] = {39, 30, 21, 40};
         play_seq(&g, seq, 4);
         check("F7b setup: B@39 2 libs", g.ls[g.gid[39]] == 2);
@@ -394,20 +408,18 @@ static void test_feature7_realistic(void) {
     check("F7c: E5 bit 6 set (kills)", maskE5 != -1 && (maskE5 & 64));
     check("F7c: D5 bit 6 NOT set (does not kill)", !(maskD5 & 64));
 }
-#endif /* BOARD_SIZE == 9 */
+#endif /* MAX_BOARD_SIZE >= 9 */
 
 static void test_policy_move(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     /* Zero weights → uniform policy, should still return a legal move */
-    float pat[6810];
-    float prev[7];
-    memset(pat, 0, sizeof(pat));
-    memset(prev, 0, sizeof(prev));
-    PpatWeights w = { pat, prev };
+    int total = ppat_total_weights();
+    float *weights = calloc(total, sizeof(float));
     PpatState st;
     memset(&st, 0, sizeof(st));
-    int32_t m = ppat_policy_move(&g, &st, &w);
+    int32_t m = ppat_policy_move(&g, &st, weights);
+    free(weights);
     check("policy: returns legal move", m == PASS || g2_is_legal(&g, m));
     check("policy: not a true eye", m == PASS || !g2_is_true_eye(&g, m));
 }
@@ -420,12 +432,14 @@ static void test_consistency_with_js(void) {
     memset(&st, 0, sizeof(st));
     for (int trial = 0; trial < 50 && ok; trial++) {
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, 9);
         while (!g.game_over) {
             ppat_extract(&g, &st);
             for (int i = 0; i < st.count; i++) {
-                if (st.pat_ids[i] < 0 || st.pat_ids[i] >= ppat_num_patterns) { ok = 0; break; }
-                if (st.prev_masks[i] & 0x80) { ok = 0; break; } /* only bits 0-6 valid */
+                if ((st.feat[st.feat_start[i]] % ppat_num_patterns) < 0 || (st.feat[st.feat_start[i]] % ppat_num_patterns) >= ppat_num_patterns) { ok = 0; break; }
+                /* Check all feature keys are in valid range */
+                for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++)
+                    if (st.feat[fi] < 0 || st.feat[fi] >= ppat_total_weights()) { ok = 0; break; }
             }
             if (!ok) break;
             int32_t m = g2_random_legal_move(&g);
@@ -435,13 +449,41 @@ static void test_consistency_with_js(void) {
     check("consistency: 50 random games, all features valid", ok);
 }
 
+static void test_save_load_weights(void) {
+    int total = ppat_total_weights();
+    float *weights = malloc(total * sizeof(float));
+    for (int i = 0; i < total; i++) weights[i] = (float)i * 0.001f;
+
+    const char *path = "/tmp/test_ppat_weights.js";
+    ppat_save_weights(path, weights, total, "test");
+
+    int saved_phases = ppat_phase_count;
+    ppat_phase_count = 999; /* corrupt it to verify load restores */
+    float *loaded = ppat_load_weights(path);
+    check("save/load: load succeeded", loaded != NULL);
+    check("save/load: phases restored", ppat_phase_count == saved_phases);
+    check("save/load: total matches", ppat_total_weights() == total);
+
+    int match = 1;
+    if (loaded) {
+        for (int i = 0; i < total; i++) {
+            if (fabsf(loaded[i] - weights[i]) > 1e-6f) { match = 0; break; }
+        }
+    }
+    check("save/load: weights match", match);
+
+    free(weights);
+    free(loaded);
+    remove(path);
+}
+
 /* ── Performance benchmark ─────────────────────────────────────────────────── */
 
 static void bench_extract(void) {
     /* Generate 200 positions, benchmark extractFeatures */
-    Game2 positions[200];
+    Game2 *positions = malloc(200 * sizeof(Game2));
     for (int p = 0; p < 200; p++) {
-        g2_new(&positions[p]);
+        g2_new(&positions[p], 9);
         int moves = 15 + ((p * 7) % 40);
         for (int i = 0; i < moves && !positions[p].game_over; i++) {
             int32_t m = g2_random_legal_move(&positions[p]);
@@ -465,13 +507,14 @@ static void bench_extract(void) {
     double us_per_call = elapsed / calls * 1e6;
     printf("bench: %.1f µs/call avg (%.1f moves/pos avg, %d calls in %.1fs)\n",
            us_per_call, (double)total_moves / calls, calls, elapsed);
+    free(positions);
 }
 
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(void) {
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(9);
     ppat_init();
 
     test_pattern_count();
@@ -481,7 +524,7 @@ int main(void) {
     test_atari_encoding();
     test_feature1_contiguity();
 
-#if BOARD_SIZE == 9
+#if MAX_BOARD_SIZE >= 9
     test_feature2_save_by_capture();
     test_feature3_capture_self_atari();
     test_feature23_realistic();
@@ -494,6 +537,7 @@ int main(void) {
 
     test_policy_move();
     test_consistency_with_js();
+    test_save_load_weights();
 
     printf("\n%d passed, %d failed\n\n", passed, failed);
 

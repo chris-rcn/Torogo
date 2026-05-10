@@ -13,11 +13,11 @@
 #include <time.h>
 
 /* Parse coordinate string (e.g. "b2") to flat index. "pass" → PASS. */
-static int32_t parse_move(const char *s) {
+static int32_t parse_move(const char *s, int N) {
     if (s[0] == 'p') return PASS;
     int x = s[0] - 'a';
     int y = atoi(s + 1) - 1;
-    return y * BOARD_SIZE + x;
+    return y * N + x;
 }
 
 int main(int argc, char **argv) {
@@ -30,7 +30,6 @@ int main(int argc, char **argv) {
     int eval_playouts = argc > 3 ? atoi(argv[3]) : 200000;
 
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
 
     FILE *f = fopen(filename, "r");
     if (!f) { fprintf(stderr, "cannot open %s\n", filename); return 1; }
@@ -51,7 +50,14 @@ int main(int argc, char **argv) {
 
     if (nlines == 0) { fprintf(stderr, "no lines in file\n"); return 1; }
 
-    /* Sample n_positions evenly spaced lines */
+    /* Determine board size from first line */
+    int board_size = 0;
+    sscanf(lines[0], "%d", &board_size);
+    if (board_size <= 0 || board_size > MAX_BOARD_SIZE) {
+        fprintf(stderr, "invalid board size %d\n", board_size); return 1;
+    }
+    g2_init_topology(board_size);
+
     RaveState *s = rave_create();
 
     printf("%5s  %8s  %8s  %8s\n", "pos", "file_val", "c_val", "delta");
@@ -63,20 +69,18 @@ int main(int argc, char **argv) {
     for (int li = 0; li < nlines && li / step < n_positions; li += step) {
         char *line = lines[li];
 
-        /* Parse: "<size> <moves> <value>" */
         int size;
         char moves_str[8192];
         double file_value;
         if (sscanf(line, "%d %s %lf", &size, moves_str, &file_value) != 3) continue;
-        if (size != BOARD_SIZE) continue;
+        if (size != board_size) continue;
 
-        /* Replay moves */
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, board_size);
         char *tok = strtok(moves_str, ",");
         int ok = 1;
         while (tok) {
-            int32_t m = parse_move(tok);
+            int32_t m = parse_move(tok, board_size);
             if (!g2_play(&g, m)) { ok = 0; break; }
             tok = strtok(NULL, ",");
         }

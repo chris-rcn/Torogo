@@ -31,13 +31,14 @@ static RaveNode *alloc_node(RaveState *s) {
 /* ── Get legal moves ───────────────────────────────────────────────────────── */
 
 static int get_legal_moves(const Game2 *g, int32_t *out) {
+    const int cap = g->cap;
     int n = 0;
-    for (int i = 0; i < CAP; i++) {
+    for (int i = 0; i < cap; i++) {
         if (g->cells[i] != EMPTY) continue;
         if (g2_is_true_eye(g, i)) continue;
         if (g2_is_legal(g, i)) out[n++] = i;
     }
-    if (n < CAP / 3 || g->consecutive_passes > 0)
+    if (n < cap / 3 || g->consecutive_passes > 0)
         out[n++] = PASS;
     return n;
 }
@@ -64,14 +65,15 @@ static RaveNode *make_node(RaveState *s, int32_t move, RaveNode *parent,
         n->visits[i]   = RAVE_PRIOR_VISITS;
     }
 
+    const int cap = game->cap;
     if (parent == NULL || parent->parent == NULL) {
-        for (int i = 0; i < CAP; i++) {
+        for (int i = 0; i < cap; i++) {
             n->rave_wins[i]   = RAVE_PRIOR_WINS;
             n->rave_visits[i] = RAVE_PRIOR_VISITS;
         }
     } else {
         const RaveNode *gp = parent->parent;
-        for (int i = 0; i < CAP; i++) {
+        for (int i = 0; i < cap; i++) {
             n->rave_wins[i]   = RAVE_INHERIT * gp->rave_wins[i];
             n->rave_visits[i] = RAVE_INHERIT * gp->rave_visits[i];
         }
@@ -102,10 +104,11 @@ static float ucb_score(int move_idx, const RaveNode *node) {
 /* ── Playout (tracked) ─────────────────────────────────────────────────────── */
 
 static int8_t play_tracked(Game2 *g, float *played) {
-    memset(played, 0, sizeof(float) * CAP);
+    const int cap = g->cap;
+    memset(played, 0, sizeof(float) * cap);
 
     int move_limit = 3 * g->empty_count + 20;
-    float weight_step = 1.0f / CAP;
+    float weight_step = 1.0f / cap;
     int moves = 0;
     float weight = 1.0f;
 
@@ -177,9 +180,9 @@ static SelectResult select_and_expand(RaveState *s, RaveNode *root, const Game2 
 
 /* ── Backpropagate ─────────────────────────────────────────────────────────── */
 
-static void update_rave(RaveNode *node, float won, const float *played, int8_t chooser) {
+static void update_rave(RaveNode *node, float won, const float *played, int8_t chooser, int cap) {
     if (chooser == BLACK) {
-        for (int k = 0; k < CAP; k++) {
+        for (int k = 0; k < cap; k++) {
             float w = played[k];
             if (w > 0.0f) {
                 node->rave_visits[k] += w;
@@ -187,7 +190,7 @@ static void update_rave(RaveNode *node, float won, const float *played, int8_t c
             }
         }
     } else {
-        for (int k = 0; k < CAP; k++) {
+        for (int k = 0; k < cap; k++) {
             float w = played[k];
             if (w < 0.0f) {
                 node->rave_visits[k] -= w;
@@ -197,7 +200,7 @@ static void update_rave(RaveNode *node, float won, const float *played, int8_t c
     }
 }
 
-static void backpropagate(RaveNode *node, int8_t winner, const float *played) {
+static void backpropagate(RaveNode *node, int8_t winner, const float *played, int cap) {
     /* Update leaf child stats */
     int leaf = node->selected_child;
     if (leaf != -1) {
@@ -206,7 +209,7 @@ static void backpropagate(RaveNode *node, int8_t winner, const float *played) {
         node->visits[leaf]++;
         node->wins[leaf] += won;
         node->total_visits++;
-        update_rave(node, won, played, chooser);
+        update_rave(node, won, played, chooser, cap);
     }
 
     /* Walk up the tree */
@@ -217,7 +220,7 @@ static void backpropagate(RaveNode *node, int8_t winner, const float *played) {
         node->parent->visits[ci]++;
         node->parent->wins[ci] += won;
         node->parent->total_visits++;
-        update_rave(node->parent, won, played, chooser);
+        update_rave(node->parent, won, played, chooser, cap);
         node = node->parent;
     }
 }
@@ -266,7 +269,7 @@ RaveResult rave_search(RaveState *s, const Game2 *root_game,
         for (int p = 0; p < playout_limit; p++) {
             SelectResult sr = select_and_expand(s, root, root_game);
             int8_t winner = play_tracked(&sr.game, s->played);
-            backpropagate(sr.node, winner, s->played);
+            backpropagate(sr.node, winner, s->played, root_game->cap);
             playouts++;
         }
     } else {
@@ -274,7 +277,7 @@ RaveResult rave_search(RaveState *s, const Game2 *root_game,
         do {
             SelectResult sr = select_and_expand(s, root, root_game);
             int8_t winner = play_tracked(&sr.game, s->played);
-            backpropagate(sr.node, winner, s->played);
+            backpropagate(sr.node, winner, s->played, root_game->cap);
             playouts++;
         } while (clock() < deadline);
     }
@@ -298,7 +301,7 @@ RaveResult rave_search(RaveState *s, const Game2 *root_game,
 
     /* Give up if no winning line in late game. Only reliable with enough playouts. */
     if (playouts >= RAVE_RESIGN_MIN_PLAYOUTS &&
-        root_game->empty_count <= CAP / 2 &&
+        root_game->empty_count <= root_game->cap / 2 &&
         root->wins[best_idx] <= RAVE_PRIOR_WINS)
         return (RaveResult){ PASS, win_ratio, playouts };
 

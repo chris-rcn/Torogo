@@ -62,17 +62,21 @@ function makeIntMap(minCap) {
     }
   }
 
+  let warnOnZero = true;
+
   return {
+    suppressZeroWarning() { warnOnZero = false; },
+
     // Returns stored value, or -1 if not found.
     get(key) {
-      if (key === 0) return -1;
+      if (key === 0) { if (warnOnZero) console.error('int-map: key 0 is reserved (get)'); return -1; }
       const i = probe(key);
       return i < 0 ? -1 : vals[i];
     },
 
     // Inserts or updates key → val.
     set(key, val) {
-      if (key === 0) return;
+      if (key === 0) { if (warnOnZero) console.error('int-map: key 0 is reserved (set)'); return; }
       let i = probe(key);
       if (i < 0) {
         i = ~i;

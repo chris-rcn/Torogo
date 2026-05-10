@@ -70,3 +70,110 @@ Expected feature e^x:
 6: 6.37
 7: 141.80
 
+
+The ppat training system seeks to match a position value.  I'd like to create a new system that learns in a similar way
+but has the more direct goal of simply winning games.  Let's put it in a single javascript file for now.  It will not
+read a file of positions.  Instead, it will generate positions as needed.  And the pattern system will be pattern1.js.
+
+
+$ node train-ladder-pol.js  # maxStoneCount=1
+size: 9  lr: 0.01
+ games  weights   avg|w|  avgLen  vsRand     ku     su     kw     sw   elapsed
+     1     3611   0.0007      98     54%   0.13   0.14   0.10   0.16      3.2s
+    29     4823   0.0061     116     44%   0.15   0.18   0.12   0.25      8.5s
+   103     5627   0.0109     117     82%   0.26   0.22   0.17   0.19     15.9s
+   255     6165   0.0166     119     96%   0.44   0.27   0.39   0.24     26.5s
+   632     6595   0.0241     121    100%   0.79   0.54   0.52   0.21     42.1s
+  1307     7024   0.0324     124    100%   0.82   0.68   0.58   0.32     65.3s
+  2517     7315   0.0425     125     96%   0.86   0.76   0.50   0.31     99.8s
+  4198     7535   0.0518     125    100%   0.89   0.71   0.55   0.13    151.9s
+  7107     7714   0.0691     122     96%   0.89   0.76   0.32   0.03    230.3s
+ 11266     7888   0.0883     121    100%   0.88   0.72   0.45   0.04    347.9s
+ 16895     8021   0.1123     121    100%   0.85   0.78   0.28   0.02    524.4s
+ 22293     8160   0.1286     121    100%   0.81   0.75   0.23   0.01    789.3s
+ 32253     8282   0.1549     121    100%   0.82   0.67   0.09   0.03   1186.9s
+
+$ node train-ladder-pol.js  # maxStoneCount=2
+
+Here is something I find odd.  We see that training ladder-pat, it learns to select the urgent liberties quite often (70% and 86%):
+
+$ node train-ladder-pol.js --max-adj-libs 1 --max-ladder-stones 8
+size: 9  lr: 0.01  maxAdjLibs: 1  maxLadderStones: 8  ref: ai/ref-fast.js  out: out/ladder-pat-mnwaq1ns.js
+  games  weights   avg|w|  avgLen  gameMs   vsRef     ku     su     kw     sw   elapsed
+     21      969   0.0110     116      52      0%   0.08   0.09   0.07   0.23      3.7s
+     67      970   0.0205     115      45      0%   0.11   0.10   0.07   0.22      8.0s
+    161      970   0.0336     115      44      0%   0.12   0.14   0.07   0.25     14.4s
+    344      970   0.0500     112      42      0%   0.16   0.20   0.06   0.28     24.3s
+    662      970   0.0714     113      40      0%   0.26   0.32   0.08   0.26     38.8s
+   1385      970   0.1037     111      33      0%   0.57   0.60   0.25   0.23     60.5s
+   3009      970   0.1532     109      25      0%   0.68   0.82   0.50   0.14     93.0s
+   5555      970   0.2178     109      22      4%   0.65   0.95   0.38   0.12    141.7s
+   9570      970   0.2968     106      20      4%   0.67   0.95   0.45   0.12    214.9s
+  15539      970   0.3922     104      19      5%   0.72   0.96   0.56   0.13    325.4s
+  23613      970   0.5028     108      20      6%   0.73   0.95   0.42   0.12    491.1s
+  33846      970   0.6313     109      21      8%   0.73   0.94   0.38   0.13    738.8s
+  52884      970   0.8972     110      20     18%   0.73   0.94   0.28   0.12   1110.2s
+  93878      970   1.3286     110      17     34%   0.79   0.93   0.27   0.10   1667.5s
+ 146745      970   1.7212     108      17     27%   0.65   0.94   0.14   0.10   2503.2s
+ 211127      970   2.1110     108      18     40%   0.70   0.86   0.17   0.11   3756.8s
+
+But when testing that policy directly against ladders, it almost never plays the urgent move:
+
+$ LAD_WEIGHTS=out/ladder-pat-mnwaq1ns.js node evalladders.js --agent ladder-pat --budget 1 --trials 10
+Agent: ladder-pat  budget: 1ms  trials: 10
+
+ position                 pass   ratio
+ ----------------------  -----  ------
+ Attack 2 stones         10/10  100.0%
+ Attack 2 stones (fail)  10/10  100.0%
+ Extend 2 stones          0/10    0.0%
+ Extend 2 stones (fail)  10/10  100.0%
+ Attack 3 stones          0/10    0.0%
+ Attack 3 stones (fail)  10/10  100.0%
+ Extend 3 stones          0/10    0.0%
+ Extend 3 stones (fail)   3/10   30.0%
+ Attack 4 stones          0/10    0.0%
+ Attack 4 stones (fail)  10/10  100.0%
+ Extend 4 stones          0/10    0.0%
+ Extend 4 stones (fail)  10/10  100.0%
+ Attack 5 stones          0/10    0.0%
+ Attack 5 stones (fail)  10/10  100.0%
+ Extend 5 stones          0/10    0.0%
+ Extend 5 stones (fail)   3/10   30.0%
+ Attack 6 stones          0/10    0.0%
+ Attack 6 stones (fail)  10/10  100.0%
+ Extend 6 stones          0/10    0.0%
+ Extend 6 stones (fail)  10/10  100.0%
+
+Overall: 96/200 (48.0%)  elapsed: 0.3s
+
+
+Current high-level strategy for building a Go AI that can beat me (a weak human):
+MCTS - A good base to build upon.
+RAVE - Guides the tree portion of MCTS in early visits.  Highly effective.
+PPAT - Playout patterns. Guides the playout portion of MCTS. Trained by simulation balancing. Promising; still WIP.
+LadderPat - Patterns that provide tree node priors. Captures ladder search results. Trained by REINFORCE. Promising; still WIP.
+Aspirational:
+Use TD valuation as a tree prior.
+Use TD valuation as a replacement for the tail of a playout (low variance).
+No fit:
+TD search - Very cool, but doesn't seem to have a place.
+
+Why fewer patterns when the output file is loaded back in?
+
+$ node train-ladder-pat.js --size 13 --load out/ref-fast-weights.js --out out/ref-fast-weights.js
+loaded 9252 weights from out/ref-fast-weights.js
+size: 13  lr: 0.01  maxAdjLibs: 3  maxLadderStones: 8  ref: ai/ref-fast.js  out: out/ref-fast-weights.js
+  games  weights   avg|w|  avgLen  gameMs   vsRef     ku     su     kw     sw   elapsed
+...
+ 107038     9307   0.4964     205      84     69%   0.67   0.67   0.20   0.01   9143.0s
+ 142550     9314   0.5328     206      95     78%   0.61   0.73   0.19   0.01  13745.0s
+ 197688     9325   0.5786     205     103     75%   0.56   0.79   0.17   0.01  20642.3s
+ 265148     9344   0.6261     205     116     81%   0.63   0.74   0.14   0.01  30992.7s
+ 366384     9358   0.7000     204     126     81%   0.56   0.65   0.13   0.01  46519.3s
+
+$ node train-ladder-pat.js --size 13 --load out/ref-fast-weights.js --lr 0.003
+loaded 9322 weights from out/ref-fast-weights.js
+size: 13  lr: 0.003  maxAdjLibs: 3  maxLadderStones: 8  ref: ai/ref-fast.js  out: out/ladder-pat-mnxj1pcz.js
+  games  weights   avg|w|  avgLen  gameMs   vsRef     ku     su     kw     sw   elapsed
+      7     9322   0.7026     191     181     53%   0.32   0.51   0.11   0.03     35.5s

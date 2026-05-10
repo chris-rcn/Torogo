@@ -35,6 +35,7 @@ function runTests({ makeIntMap }) {
   // ── Key 0 is ignored ──────────────────────────────────────────────────────
   {
     const m = makeIntMap();
+    m.suppressZeroWarning();
     m.set(0, 7);
     check(m.get(0) === -1,    'key 0: get returns -1 (not insertable)');
     check(m.size === 0,       'key 0: size unchanged');

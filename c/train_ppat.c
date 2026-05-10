@@ -44,8 +44,11 @@ static float  cfg_filter       = 0.0f;
 static int    cfg_iter_limit   = 0;      /* 0 = infinite */
 static int    cfg_overfit      = 0;
 static int    cfg_init         = 0;
-static int    cfg_policy_moves = -1;  /* -1 = unlimited; else ppat for first N moves, then uniform */
+static int    cfg_train_moves = -1;  /* -1 = unlimited; else ppat for first N moves, then uniform */
+static int    cfg_test_moves  = -1;  /* same, but for test rollouts */
+static int    cfg_phase        = -1;   /* -1 = all phases; >= 0 = train/test only this phase */
 static const char *cfg_file    = NULL;
+static const char *cfg_load    = NULL;  /* path to weights file to load */
 
 /* ── Training data ─────────────────────────────────────────────────────────── */
 
@@ -55,6 +58,8 @@ static const char *cfg_file    = NULL;
 typedef struct {
     int32_t history[MAX_HISTORY];
     int     history_len;
+    int     board_size;
+    int     phase;       /* game phase at this position */
     float   value;       /* in [-1,1] */
     int32_t best_move;   /* preferred next move from eval, or PASS if absent */
 } Position;
@@ -79,8 +84,8 @@ static float    *g_buf;
 static float    *batch_buf;
 static int      batch_count = 0;
 
-static float    rollout_logits[CAP];
-static float    rollout_probs[CAP];
+static float    rollout_logits[MAX_CAP];
+static float    rollout_probs[MAX_CAP];
 
 /* ── Parse command line ────────────────────────────────────────────────────── */
 
@@ -96,6 +101,12 @@ static float get_float_arg(int argc, char **argv, const char *flag, float def) {
     return def;
 }
 
+static const char *get_str_arg(int argc, char **argv, const char *flag, const char *def) {
+    for (int i = 1; i < argc - 1; i++)
+        if (strcmp(argv[i], flag) == 0) return argv[i+1];
+    return def;
+}
+
 static int has_flag(int argc, char **argv, const char *flag) {
     for (int i = 1; i < argc; i++)
         if (strcmp(argv[i], flag) == 0) return 1;
@@ -104,11 +115,11 @@ static int has_flag(int argc, char **argv, const char *flag) {
 
 /* ── Parse concise format ──────────────────────────────────────────────────── */
 
-static int32_t parse_move(const char *s) {
+static int32_t parse_move(const char *s, int N) {
     if (s[0] == 'p') return PASS;
     int x = s[0] - 'a';
     int y = atoi(s + 1) - 1;
-    return y * BOARD_SIZE + x;
+    return y * N + x;
 }
 
 static int parse_position(const char *line, Position *pos) {
@@ -118,13 +129,14 @@ static int parse_position(const char *line, Position *pos) {
     double value;
     int fields = sscanf(line, "%d %4095s %lf %15s", &size, moves_buf, &value, best_buf);
     if (fields < 3) return 0;
-    if (size != BOARD_SIZE) return 0;
+    if (size > MAX_BOARD_SIZE) return 0;
+    pos->board_size = size;
     pos->value = 2.0f * (float)value - 1.0f;
-    pos->best_move = (fields >= 4) ? parse_move(best_buf) : PASS;
+    pos->best_move = (fields >= 4) ? parse_move(best_buf, size) : PASS;
     pos->history_len = 0;
     char *tok = strtok(moves_buf, ",");
     while (tok && pos->history_len < MAX_HISTORY) {
-        pos->history[pos->history_len++] = parse_move(tok);
+        pos->history[pos->history_len++] = parse_move(tok, size);
         tok = strtok(NULL, ",");
     }
     return 1;
@@ -132,26 +144,47 @@ static int parse_position(const char *line, Position *pos) {
 
 /* ── Load data ─────────────────────────────────────────────────────────────── */
 
-static void load_data(void) {
+static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx);
+
+static void load_positions(void) {
     FILE *f = fopen(cfg_file, "r");
     if (!f) { fprintf(stderr, "cannot open %s\n", cfg_file); exit(1); }
     char buf[8192];
     int lineno = 0;
     int skipped = 0;
+    int topo_init = 0;
+    float filter_threshold = 1.0f - 2.0f * cfg_filter;
+
     while (fgets(buf, sizeof(buf), f) && n_all < MAX_LINES) {
         lineno++;
         if (buf[0] == '\n' || buf[0] == '\0') continue;
-        if (parse_position(buf, &all_positions[n_all])) {
-            n_all++;
-        } else {
+        Position pos;
+        if (!parse_position(buf, &pos)) {
             skipped++;
             if (skipped <= 5) {
-                /* Trim trailing newline for cleaner output */
                 size_t len = strlen(buf);
                 if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
                 fprintf(stderr, "warning: skipping line %d: %s\n", lineno, buf);
             }
+            continue;
         }
+
+        /* Init topology on first valid position */
+        if (!topo_init) { g2_init_topology(pos.board_size); topo_init = 1; }
+
+        /* Value filter */
+        if (cfg_filter > 0 && fabsf(pos.value) > filter_threshold) continue;
+
+        /* Compute and filter by phase */
+        Game2 g;
+        int bad;
+        if (replay_position(&pos, &g, &bad) > 0)
+            pos.phase = ppat_phase_count * (g.cap - g.empty_count) / g.cap;
+        else
+            pos.phase = -1;
+        if (cfg_phase >= 0 && pos.phase != cfg_phase) continue;
+
+        all_positions[n_all++] = pos;
     }
     fclose(f);
     if (skipped > 5)
@@ -160,8 +193,6 @@ static void load_data(void) {
 }
 
 static void split_data(void) {
-    float filter_threshold = 1.0f - 2.0f * cfg_filter;
-
     if (cfg_overfit) {
         int nt = cfg_train_pos > 0 ? (cfg_train_pos < n_all ? cfg_train_pos : n_all) : n_all;
         int ne = cfg_test_pos > 0 ? (cfg_test_pos < n_all ? cfg_test_pos : n_all) : n_all;
@@ -184,17 +215,13 @@ static void split_data(void) {
         }
 
         /* Test from front, train from back */
-        for (int i = 0; i < n_test_want; i++) test_idx[i] = i;
         n_test = n_test_want;
+        for (int i = 0; i < n_test_want; i++) test_idx[i] = i;
 
-        /* Train pool: filter extreme values */
         n_train = 0;
         int train_limit = cfg_train_pos > 0 ? cfg_train_pos : n_all;
-        for (int i = n_test_want; i < n_all && n_train < train_limit; i++) {
-            if (cfg_filter > 0 && fabsf(all_positions[i].value) > filter_threshold)
-                continue;
+        for (int i = n_test_want; i < n_all && n_train < train_limit; i++)
             train_idx[n_train++] = i;
-        }
     }
 }
 
@@ -213,7 +240,7 @@ static void shuffle_train(void) {
 
 /* Returns: 1 = ok, 0 = game over, -1 = illegal move (sets *bad_move_idx) */
 static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx) {
-    g2_new(g);
+    g2_new(g, pos->board_size);
     for (int i = 0; i < pos->history_len; i++) {
         if (!g2_play(g, pos->history[i])) { *bad_move_idx = i; return -1; }
     }
@@ -230,10 +257,9 @@ static int policy_select(Game2 *g) {
     if (n == 0) return -1;
 
     for (int i = 0; i < n; i++) {
-        float v = theta[rollout_feat_st.pat_ids[i]];
-        uint8_t m = rollout_feat_st.prev_masks[i];
-        for (int b = 0; m; b++, m >>= 1)
-            if (m & 1) v += theta[ppat_num_patterns + b];
+        float v = 0;
+        for (int fi = rollout_feat_st.feat_start[i]; fi < rollout_feat_st.feat_start[i + 1]; fi++)
+            v += theta[rollout_feat_st.feat[fi]];
         rollout_logits[i] = v;
     }
 
@@ -256,10 +282,10 @@ static int policy_select(Game2 *g) {
 /* Returns z ∈ {-1, +1} from player's perspective.
  * If grad_acc != NULL, accumulates ψ(s,a) per step. */
 
-static int rollout(const Game2 *game, int8_t player, float *grad_acc) {
+static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_moves) {
     Game2 sim;
     g2_clone(&sim, game);
-    int pm = cfg_policy_moves;
+    int pm = ppat_moves;
 
     for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
@@ -271,15 +297,11 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc) {
             /* ψ(s,a) = φ(s,a) − Σ_b π(b|s)φ(s,b) */
             for (int i = 0; i < n; i++) {
                 float p = rollout_probs[i];
-                grad_acc[rollout_feat_st.pat_ids[i]] -= p;
-                uint8_t m = rollout_feat_st.prev_masks[i];
-                for (int b = 0; m; b++, m >>= 1)
-                    if (m & 1) grad_acc[ppat_num_patterns + b] -= p;
+                for (int fi = rollout_feat_st.feat_start[i]; fi < rollout_feat_st.feat_start[i + 1]; fi++)
+                    grad_acc[rollout_feat_st.feat[fi]] -= p;
             }
-            grad_acc[rollout_feat_st.pat_ids[chosen]] += 1.0f;
-            uint8_t m = rollout_feat_st.prev_masks[chosen];
-            for (int b = 0; m; b++, m >>= 1)
-                if (m & 1) grad_acc[ppat_num_patterns + b] += 1.0f;
+            for (int fi = rollout_feat_st.feat_start[chosen]; fi < rollout_feat_st.feat_start[chosen + 1]; fi++)
+                grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
         }
 
         g2_play(&sim, rollout_feat_st.moves[chosen]);
@@ -298,7 +320,7 @@ static void update_theta(const Game2 *game, float v_star) {
 
     /* V: M rollouts, no gradient */
     float V = 0;
-    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL);
+    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, cfg_train_moves);
     V /= cfg_M;
 
     /* g: N rollouts with gradient */
@@ -306,7 +328,7 @@ static void update_theta(const Game2 *game, float v_star) {
     memset(g_buf, 0, sizeof(float) * TOTAL);
     for (int j = 0; j < N; j++) {
         memset(rollout_grad_buf, 0, sizeof(float) * TOTAL);
-        int z = rollout(game, player, rollout_grad_buf);
+        int z = rollout(game, player, rollout_grad_buf, cfg_train_moves);
         float scale = (float)z / N;
         for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
     }
@@ -338,17 +360,16 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 /* Returns the softmax probability the current policy assigns to `move`. */
 static float move_probability(const Game2 *g, int32_t move) {
     static PpatState st;
-    static float logits[CAP];
+    static float logits[MAX_CAP];
     ppat_extract(g, &st);
     int n = st.count;
     if (n == 0) return 0;
     float mx = -1e30f;
     int target = -1;
     for (int i = 0; i < n; i++) {
-        float v = theta[st.pat_ids[i]];
-        uint8_t m = st.prev_masks[i];
-        for (int b = 0; m; b++, m >>= 1)
-            if (m & 1) v += theta[ppat_num_patterns + b];
+        float v = 0;
+        for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++)
+            v += theta[st.feat[fi]];
         logits[i] = v;
         if (v > mx) mx = v;
         if (st.moves[i] == move) target = i;
@@ -382,7 +403,7 @@ static TestResult measure_test(int use_uniform) {
         int8_t player = g.current;
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
-            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL);
+            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, cfg_test_moves);
         float d = pos->value - sum / cfg_test_playouts;
         abs_sum += fabsf(d);
         sq_sum += d * d;
@@ -399,25 +420,11 @@ static TestResult measure_test(int use_uniform) {
 static char weights_file[256];
 
 static void save_weights(int iterations, int total_positions, const char *elapsed) {
-    FILE *f = fopen(weights_file, "w");
-    if (!f) return;
-    fprintf(f, "'use strict';\n");
-    fprintf(f, "// Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s\n",
-            iterations, total_positions, elapsed);
-    fprintf(f, "const _w = { pat: new Float32Array([");
-    for (int i = 0; i < ppat_num_patterns; i++) {
-        if (i > 0) fputc(',', f);
-        fprintf(f, "%.8g", theta[i]);
-    }
-    fprintf(f, "]), prev: new Float32Array([");
-    for (int i = 0; i < 7; i++) {
-        if (i > 0) fputc(',', f);
-        fprintf(f, "%.8g", theta[ppat_num_patterns + i]);
-    }
-    fprintf(f, "]) };\n");
-    fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
-    fprintf(f, "else window.PPATWeights = _w;\n");
-    fclose(f);
+    char comment[256];
+    snprintf(comment, sizeof(comment),
+             "Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s, phases: %d",
+             iterations, total_positions, elapsed, ppat_phase_count);
+    ppat_save_weights(weights_file, theta, TOTAL, comment);
 }
 
 /* ── Print stats ───────────────────────────────────────────────────────────── */
@@ -435,13 +442,27 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
     char elapsed_buf[32];
     snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fs", elapsed_s);
 
-    printf("%6d  %9d  %6.3f  %6.3f  %5.1f%%  %5.1fs  %8s",
+    double train_s = elapsed_s - cumulative_test_s;
+    double pos_ms = total_positions > 0 ? 1000.0 * train_s / total_positions : 0;
+
+    printf("%6d  %9d  %6.3f  %6.3f  %5.1f  %6.1f  %8s  %6.1f",
            iterations, total_positions, mean_abs, rms, tr.move_match * 100.0f,
-           cumulative_test_s, elapsed_buf);
+           cumulative_test_s, elapsed_buf, pos_ms);
     if (show_weights) {
-        printf("  [");
-        for (int i = 0; i < 7; i++)
-            printf("%8.3f", expf(theta[ppat_num_patterns + i]));
+        int prev_base = ppat_phase_count * ppat_num_patterns;
+        printf("  [ ");
+        if (cfg_phase >= 0) {
+            int pb = prev_base + cfg_phase * 7;
+            for (int i = 0; i < 7; i++)
+                printf("%6.2f ", expf(theta[pb + i]));
+        } else {
+            for (int i = 0; i < 7; i++) {
+                float avg = 0;
+                for (int p = 0; p < ppat_phase_count; p++)
+                    avg += expf(theta[prev_base + p * 7 + i]);
+                printf("%6.2f ", avg / ppat_phase_count);
+            }
+        }
         printf("]");
     }
     printf("\n");
@@ -478,37 +499,49 @@ int main(int argc, char **argv) {
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
     cfg_init         = get_int_arg(argc, argv, "--init", 0);
-    cfg_policy_moves = get_int_arg(argc, argv, "--policy-moves", -1);
+    cfg_train_moves = get_int_arg(argc, argv, "--train-moves", -1);
+    cfg_test_moves  = get_int_arg(argc, argv, "--test-moves", 20);
+    ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
+    cfg_load = get_str_arg(argc, argv, "--load", NULL);
+    cfg_phase = get_int_arg(argc, argv, "--phase", -1);
 
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
     ppat_init();
 
-    TOTAL = ppat_num_patterns + 7;
+    load_positions();
+    split_data();
+
+    TOTAL = ppat_total_weights();
     theta           = calloc(TOTAL, sizeof(float));
-    if (cfg_init) {
+    if (cfg_load) {
+        float *loaded = ppat_load_weights(cfg_load);
+        if (!loaded) { fprintf(stderr, "failed to load weights\n"); exit(1); }
+        TOTAL = ppat_total_weights();
+        free(theta);
+        theta = loaded;
+    } else if (cfg_init) {
         static const float init_prev[7] = {7.43f, 151.04f, 0.53f, 23.11f, 0.02f, 6.37f, 141.80f};
-        for (int i = 0; i < 7; i++) theta[ppat_num_patterns + i] = logf(init_prev[i]);
+        int prev_base = ppat_phase_count * ppat_num_patterns;
+        for (int p = 0; p < ppat_phase_count; p++)
+            for (int i = 0; i < 7; i++)
+                theta[prev_base + p * 7 + i] = logf(init_prev[i]);
     }
     rollout_grad_buf = calloc(TOTAL, sizeof(float));
     g_buf           = calloc(TOTAL, sizeof(float));
     batch_buf       = calloc(TOTAL, sizeof(float));
     memset(&rollout_feat_st, 0, sizeof(rollout_feat_st));
 
-    load_data();
-    split_data();
-
     /* Output filename */
     snprintf(weights_file, sizeof(weights_file), "out/ppat-data-%08x.js", g2_rand());
 
-    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  policy-moves: %d\n",
+    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d\n",
            cfg_file, n_train, cfg_lr, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_filter,
-           cfg_init ? "true" : "false", cfg_policy_moves);
-    printf("test: %d positions  test-playouts: %d  output: %s\n",
-           n_test, cfg_test_playouts, weights_file);
-    printf("%6s  %9s  %6s  %6s  %6s  %6s  %8s\n",
-           "iters", "positions", "|ΔV|", "RMS", "move%", "test", "elapsed");
+           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase);
+    printf("test: %d positions  test-playouts: %d  test-moves: %d  output: %s\n",
+           n_test, cfg_test_playouts, cfg_test_moves, weights_file);
+    printf("%6s  %9s  %6s  %6s  %6s  %6s  %8s  %6s\n",
+           "iters", "positions", "|ΔV|", "RMS", "move%", "testS", "elapsedS", "posMs");
 
     start_time = clock();
     int total_positions = 0;

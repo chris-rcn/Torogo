@@ -27,30 +27,30 @@ static bool play_seq(Game2 *g, const int32_t *moves, int n) {
 
 static void test_init(void) {
     Game2 g;
-    g2_new(&g);
-    int center = (BOARD_SIZE >> 1) * BOARD_SIZE + (BOARD_SIZE >> 1);
+    g2_new(&g, 9);
+    int center = (9 >> 1) * 9 + (9 >> 1);
     check("init: center stone is BLACK", g.cells[center] == BLACK);
     check("init: current is WHITE", g.current == WHITE);
     check("init: move_count is 1", g.move_count == 1);
-    check("init: empty_count is CAP-1", g.empty_count == CAP - 1);
+    check("init: empty_count is CAP-1", g.empty_count == 9*9 - 1);
     check("init: not game_over", !g.game_over);
     check("init: ko is PASS", g.ko == PASS);
 }
 
 static void test_init_empty(void) {
     Game2 g;
-    g2_new_empty(&g);
+    g2_new_empty(&g, 9);
     check("init_empty: current is BLACK", g.current == BLACK);
     check("init_empty: move_count is 0", g.move_count == 0);
-    check("init_empty: empty_count is CAP", g.empty_count == CAP);
+    check("init_empty: empty_count is CAP", g.empty_count == 9*9);
     int any_stone = 0;
-    for (int i = 0; i < CAP; i++) if (g.cells[i] != EMPTY) any_stone = 1;
+    for (int i = 0; i < g.cap; i++) if (g.cells[i] != EMPTY) any_stone = 1;
     check("init_empty: no stones", !any_stone);
 }
 
 static void test_toroidal_neighbors(void) {
     /* Top-left corner (0,0) = cell 0 */
-    int N = BOARD_SIZE;
+    const int N = 9;
     check("topo: 0 N wraps", g2_nbr[0*4+0] == (N-1)*N + 0);
     check("topo: 0 W wraps", g2_nbr[0*4+2] == 0*N + (N-1));
     /* Bottom-right corner */
@@ -61,8 +61,8 @@ static void test_toroidal_neighbors(void) {
 
 static void test_play_and_capture(void) {
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     /* Place B stone at center, surround with W, then W captures */
     int c = (N/2)*N + (N/2);
     int n0 = g2_nbr[c*4+0]; /* N */
@@ -87,8 +87,8 @@ static void test_play_and_capture(void) {
 
 static void test_suicide_illegal(void) {
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2);
     int n0 = g2_nbr[c*4+0];
     int n1 = g2_nbr[c*4+1];
@@ -116,8 +116,8 @@ static void test_ko(void) {
      *          B@41 captures W@40 → ko at 40.
      */
     Game2 g;
-    g2_new_empty(&g);
-#if BOARD_SIZE == 9
+    g2_new_empty(&g, 9);
+#if MAX_BOARD_SIZE >= 9
     int32_t seq[] = {31, 40, 49, 32, 39, 50, 0, 42};
     play_seq(&g, seq, 8);
     check("ko setup: W@40 in atari", g.ls[g.gid[40]] == 1);
@@ -140,7 +140,7 @@ static void test_ko(void) {
 
 static void test_consecutive_passes(void) {
     Game2 g;
-    g2_new_empty(&g);
+    g2_new_empty(&g, 9);
     g2_play(&g, PASS);
     check("pass: 1 consecutive", g.consecutive_passes == 1);
     check("pass: not game_over", !g.game_over);
@@ -151,8 +151,8 @@ static void test_consecutive_passes(void) {
 
 static void test_true_eye(void) {
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2);
     int n_n = g2_nbr[c*4+0];  /* N of center */
     int n_s = g2_nbr[c*4+1];  /* S */
@@ -186,7 +186,7 @@ static void test_true_eye(void) {
 
 static void test_clone(void) {
     Game2 g, g2;
-    g2_new(&g);
+    g2_new(&g, 9);
     g2_play(&g, 0);
     g2_play(&g, 1);
     g2_clone(&g2, &g);
@@ -201,10 +201,10 @@ static void test_clone(void) {
 
 static void test_random_legal_move(void) {
     Game2 g;
-    g2_new(&g);
+    g2_new(&g, 9);
     /* Play many random moves; game should eventually end */
     int moves = 0;
-    while (!g.game_over && moves < 4 * CAP) {
+    while (!g.game_over && moves < 4 * g.cap) {
         int32_t m = g2_random_legal_move(&g);
         g2_play(&g, m >= 0 ? m : PASS);
         moves++;
@@ -215,7 +215,7 @@ static void test_random_legal_move(void) {
 
 static void test_scoring(void) {
     Game2 g;
-    g2_new_empty(&g);
+    g2_new_empty(&g, 9);
     /* Play until game over, then check scoring doesn't crash */
     while (!g.game_over) {
         int32_t m = g2_random_legal_move(&g);
@@ -230,8 +230,8 @@ static void test_scoring(void) {
 
 static void test_is_capture(void) {
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2);
     int n0 = g2_nbr[c*4+0];
     int n1 = g2_nbr[c*4+1];
@@ -253,8 +253,8 @@ static void test_is_capture(void) {
 
 static void test_group_tracking(void) {
     Game2 g;
-    g2_new_empty(&g);
-    int N = BOARD_SIZE;
+    g2_new_empty(&g, 9);
+    const int N = 9;
     int c = (N/2)*N + (N/2);
     int e = g2_nbr[c*4+3]; /* E of center */
 
@@ -268,9 +268,9 @@ static void test_group_tracking(void) {
 
 static void test_move_limit(void) {
     Game2 g;
-    g2_new_empty(&g);
+    g2_new_empty(&g, 9);
     /* Force game to move limit */
-    int limit = 4 * CAP;
+    int limit = 4 * g.cap;
     for (int i = 0; i < limit && !g.game_over; i++) {
         int32_t m = g2_random_legal_move(&g);
         g2_play(&g, m >= 0 ? m : PASS);
@@ -283,29 +283,29 @@ static void test_consistency_random_games(void) {
     int ok = 1;
     for (int trial = 0; trial < 100 && ok; trial++) {
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, 9);
         while (!g.game_over) {
             int32_t m = g2_random_legal_move(&g);
             g2_play(&g, m >= 0 ? m : PASS);
 
             /* Check: empty_count matches actual empties */
             int actual_empty = 0;
-            for (int i = 0; i < CAP; i++) if (g.cells[i] == EMPTY) actual_empty++;
+            for (int i = 0; i < g.cap; i++) if (g.cells[i] == EMPTY) actual_empty++;
             if (actual_empty != g.empty_count) { ok = 0; break; }
 
             /* Check: every stone has a valid gid */
-            for (int i = 0; i < CAP; i++) {
+            for (int i = 0; i < g.cap; i++) {
                 if (g.cells[i] != EMPTY && g.gid[i] == -1) { ok = 0; break; }
                 if (g.cells[i] == EMPTY && g.gid[i] != -1) { ok = 0; break; }
             }
             if (!ok) break;
 
             /* Check: every group's liberty count matches its bitset */
-            for (int i = 0; i < CAP; i++) {
+            for (int i = 0; i < g.cap; i++) {
                 if (g.cells[i] == EMPTY) continue;
                 int32_t gid = g.gid[i];
                 int lc = 0;
-                for (int wi = 0; wi < BW; wi++) lc += g2_popcount(g.lw[gid * BW + wi]);
+                for (int wi = 0; wi < g.W; wi++) lc += g2_popcount(g.lw[gid * g.W + wi]);
                 if (lc != g.ls[gid]) { ok = 0; break; }
             }
         }
@@ -322,7 +322,7 @@ static void bench_random_games(void) {
     double target = 2.0; /* seconds */
     while ((double)(clock() - t0) / CLOCKS_PER_SEC < target) {
         Game2 g;
-        g2_new(&g);
+        g2_new(&g, 9);
         while (!g.game_over) {
             int32_t m = g2_random_legal_move(&g);
             g2_play(&g, m >= 0 ? m : PASS);
@@ -341,7 +341,7 @@ static void bench_random_games(void) {
 
 int main(void) {
     g2_seed((uint32_t)time(NULL));
-    g2_init_topology();
+    g2_init_topology(9);
 
     test_init();
     test_init_empty();
