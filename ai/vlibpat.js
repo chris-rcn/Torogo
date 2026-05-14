@@ -19,7 +19,8 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { extractFeatures, evaluateFeatures, loadWeights, prepareSpecs } = _isNode ? require('../vlibpat.js') : window.VlibPat;
-const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
+const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
+const { search: abSearch } = _isNode ? require('../ab-search3.js') : window.ABSearch3;
 const Util = _isNode ? require('../util.js') : window.Util;
 
 const DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
@@ -35,8 +36,10 @@ let model = { weights: new Map(), specs: defaultSpecs, preparedSpecs: prepareSpe
 // ── Search ────────────────────────────────────────────────────────────────────
 
 function search(game, m, depth = 1, dither = 0) {
+  const game3 = game3FromGame2(game);
+  // extractFeatures auto-detects Game3 and skips the per-call rebuild.
   const evaluate = g => evaluateFeatures(extractFeatures(g, m.preparedSpecs), m.weights);
-  return abSearch(game, depth, evaluate, dither);
+  return abSearch(game3, depth, evaluate, dither);
 }
 
 function getMove(game) {

@@ -19,15 +19,16 @@ const MAX_BOARD_SIZE = 13;
 const MAX_CAP = MAX_BOARD_SIZE * MAX_BOARD_SIZE;
 const MAX_PREV_DIST = 10;
 
-const { getAllLadderStatuses: _getAllLadderStatuses } = typeof require === 'function'
-  ? require('./ladder2.js') : window.Ladder2;
-const { game3FromGame2 } = typeof require === 'function'
-  ? require('./game3.js') : window.Game3;
-const { makeZobrist } = typeof require === 'function'
-  ? require('./util.js') : window.Util;
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
+const { getAllLadderStatuses: _getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
+const { game3FromGame2 }                              = Util.load('./game3.js', 'Game3');
+const { makeZobrist }                                 = Util;
 
-// ladder2.js operates on Game3 (play/undo). Convert from Game2 at the call site.
-const getAllLadderStatuses = (game2, min) => _getAllLadderStatuses(game3FromGame2(game2), min);
+// ladder2.js operates on Game3 (play/undo).  Accept either a Game2 or a Game3
+// here so callers that already hold a Game3 can pass it directly and skip the
+// rebuild (Game3 is detected via the presence of `.undo`).
+const getAllLadderStatuses = (game, min) =>
+  _getAllLadderStatuses(typeof game.undo === 'function' ? game : game3FromGame2(game), min);
 
 // ── D4 position permutations ─────────────────────────────────────────────────
 // Positions 0–7: N=0, E=1, S=2, W=3, NE=4, SE=5, SW=6, NW=7

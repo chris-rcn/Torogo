@@ -1,97 +1,154 @@
 'use strict';
 
-// BROWSER-COMPATIBLE: no Node.js-only APIs (require, process, etc.).
-// Wrapped in an IIFE to avoid polluting the global namespace.
-// Loaded as a plain <script> tag; do not add require/module/process at top level.
+// Fixed-config reference agent: RAVE with npat-seeded priors and top-K
+// candidate pruning at every node.
+//
+// All parameters are hardcoded.  This script reads no environment variables —
+// use it when a stable, reproducible reference policy is needed.
+//
+// In the browser, set window.npatModel to the loaded weights before requiring.
+//
+// Boost formula (per candidate move m with npat softmax probability p):
+//   dv = V          dw = V * p
+// Top-K pruning: at every new node, the candidate list is cut to the K
+// placements with the highest npat probability (PASS, if originally legal,
+// is always retained as a fallback).
 
 (function () {
 
-/**
- * RAVE (Rapid Action Value Estimation) MCTS policy.
- *
- * Node structure: all stats kept in compact child-indexed arrays on the parent.
- * Child nodes are promoted lazily after N_EXPAND playout visits.
- */
+const Util = (typeof require === 'function') ? require('../util.js') : window.Util;
+const { PASS, BLACK, WHITE } = Util.load('./game2.js', 'Game2');
+const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
+const NPat                   = Util.load('./npat-lib.js', 'NPatterns');
+const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 
-const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const performance = (typeof window !== 'undefined' && window.performance)
+  ? window.performance : require('perf_hooks').performance;
 
-const performance = (typeof window !== 'undefined') ? window.performance
-  : require('perf_hooks').performance;
+// ── Hardcoded configuration ──────────────────────────────────────────────────
 
-const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
-const Util = _isNode ? require('../util.js') : window.Util;
+const EXPLORATION_C = 0.4;
+const RAVE_K        = 1200;
+const N_EXPAND      = 3;
+const RAVE_INHERIT  = 0.2;
 
-const EXPLORATION_C = 1.4;
+const PRIOR_WINS   = 0.001;
+const PRIOR_VISITS = 2 * PRIOR_WINS;
 
-// Equivalence parameter.  Override with RAVE_EQUIV=<n>.
-const RAVE_EQUIV = 5000;
+const RESIGN_MIN_PLAYOUTS = 20000;
+
+const RAVE_NPAT_VISITS = 50;
+const RAVE_NPAT_K      = 40;
 
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PROD_PLAYOUTS', 0);
 
-// Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = 3;
+let npatWeights = null;
+const npatStateByN = new Map();
+
+{
+  let raw, modelName;
+  if (typeof window !== 'undefined') {
+    if (!window.npatModel) {
+      throw new Error('ref-rave-npat-prune: window.npatModel is not set — load the npat weights script first');
+    }
+    raw = window.npatModel;
+    modelName = 'window.npatModel';
+  } else {
+    const path = require('path');
+    const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
+    raw = require(path.resolve(NPAT_PATH));
+    modelName = path.basename(NPAT_PATH);
+  }
+  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
+    throw new Error(
+      `ref-rave-npat-prune: TACT_STONE_LIMIT mismatch — file ${modelName} ` +
+      `was trained at ${raw.tactStoneLimit}, runtime is ${NPat.TACT_STONE_LIMIT}. ` +
+      `Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
+    );
+  }
+  let has33c = false, hasP12 = false;
+  for (const [k] of raw.weights) {
+    if (typeof k === 'string') continue;
+    if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
+    else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
+  }
+  npatWeights = NPat.createWeights({
+    initialCapacity: Math.max(1024, raw.weights.size | 0),
+    use33c: has33c, useP12: hasP12,
+  });
+  for (const [k, v] of raw.weights) {
+    const idx = NPat.internWeight(npatWeights, k);
+    npatWeights.vals[idx] = v;
+  }
+}
+
+// Run npat extraction + softmax for `game2`.  Returns the shared state (with
+// state.moves and state.probs populated) or null if not applicable.
+function _runNpat(game2) {
+  if (!npatWeights || game2.gameOver) return null;
+  const N = game2.N;
+  let state = npatStateByN.get(N);
+  if (!state) { state = NPat.createState(N); npatStateByN.set(N, state); }
+  const game3 = game3FromGame2(game2);
+  NPat.extractFeatures(game2, state, undefined, game3, npatWeights);
+  if (state.count === 0) return null;
+  NPat.computeSoftmax(state, npatWeights);
+  return state;
+}
+
+function applyNpatPriorFromState(node, state, V) {
+  const moves = state.moves;
+  const probs = state.probs;
+  const rv = node.raveVisits;
+  const rw = node.raveWins;
+  for (let i = 0; i < state.count; i++) {
+    const m = moves[i];
+    rv[m] += V;
+    rw[m] += V * probs[i];
+  }
+}
+
+// When K > 0, keep only the K placements with the highest npat probability.
+// PASS (if originally in the move list) is always kept as a fallback.
+function _pruneToTopK(allMoves, state, K, N) {
+  if (K <= 0 || !state) return allMoves;
+  const probByMove = new Float64Array(N * N);
+  for (let i = 0; i < state.count; i++) probByMove[state.moves[i]] = state.probs[i];
+  const placements = [];
+  let hasPass = false;
+  for (const m of allMoves) {
+    if (m === PASS) hasPass = true;
+    else placements.push(m);
+  }
+  placements.sort((a, b) => probByMove[b] - probByMove[a]);
+  const top = placements.slice(0, K);
+  if (hasPass) top.push(PASS);
+  return top;
+}
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-// Random playout using Game2.  Records the flat cell indices of every non-pass
-// move made by each player.  Returns { winner, blackPlayed, whitePlayed }.
-function playTracked(game2) {
+function playTracked(game2, node, played) {
   const wasAlreadyOver = game2.gameOver;
-  const N     = game2.N;
-  const cap   = N * N;
-  const cells = game2.cells;
-  const nbr   = game2._nbr;
-  const blackPlayed = [];
-  const whitePlayed = [];
+  const N   = game2.N;
+  const cap = N * N;
 
-  const empty = [];
-  for (let i = 0; i < cap; i++) {
-    if (cells[i] === 0) empty.push(i);
-  }
+  played.fill(0, 0, cap);
 
-  const moveLimit = empty.length + 20;
+  const moveLimit = 3 * game2.emptyCount + 20;
+  const weightStep = 1 / cap;
   let moves = 0;
+  let weight = 1.0;
 
   while (!game2.gameOver && moves < moveLimit) {
-    let placed = false;
-    let end = empty.length;
     const current = game2.current;
-
-    while (end > 0) {
-      const ri  = Math.floor(Math.random() * end);
-      const idx = empty[ri];
-      empty[ri] = empty[end - 1];
-      empty[end - 1] = idx;
-      end--;
-
-      if (game2.isTrueEye(idx)) continue;
-      if (!game2.isLegal(idx))  continue;
-
-      if (current === BLACK) blackPlayed.push(idx);
-      else                    whitePlayed.push(idx);
-
-      // Snapshot neighbour occupancy to detect captures after play.
-      const base = idx * 4;
-      const n0 = cells[nbr[base]], n1 = cells[nbr[base + 1]],
-            n2 = cells[nbr[base + 2]], n3 = cells[nbr[base + 3]];
-      game2.play(idx);
-      empty[end] = empty[empty.length - 1];
-      empty.pop();
-
-      // If any previously occupied neighbour became empty, captures occurred.
-      if ((n0 && !cells[nbr[base]])     || (n1 && !cells[nbr[base + 1]]) ||
-          (n2 && !cells[nbr[base + 2]]) || (n3 && !cells[nbr[base + 3]])) {
-        empty.length = 0;
-        for (let i = 0; i < cap; i++) if (cells[i] === 0) empty.push(i);
-      }
-
-      placed = true;
-      moves++;
-      break;
-    }
-
-    if (!placed) { game2.play(PASS); moves++; }
+    const idx = game2.randomLegalMove();
+    if (idx === PASS) { game2.play(PASS); moves++; continue; }
+    if (weight > 0 && played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
+    game2.play(idx);
+    moves++;
+    weight -= weightStep;
   }
 
   let winner;
@@ -100,13 +157,11 @@ function playTracked(game2) {
   } else {
     winner = game2.estimateWinner();
   }
-  return { winner, blackPlayed, whitePlayed };
+  return { winner, played };
 }
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
 
-// Enumerate legal non-true-eye moves from a Game2 state as integers.
-// Place moves are y*N+x; pass is PASS (-1).
 function getLegalMoves(game2) {
   const N     = game2.N;
   const cap   = N * N;
@@ -117,75 +172,86 @@ function getLegalMoves(game2) {
     if (game2.isTrueEye(i)) continue;
     if (game2.isLegal(i)) moves.push(i);
   }
-  // Pass move must be at the end (if present).
   if (moves.length < cap / 3 || game2.consecutivePasses > 0) {
     moves.push(PASS);
   }
   return moves;
 }
 
-// Create a node for the position reached by `move`.
-// `game2` is the game state AFTER `move` was played (or initial state for root).
-// `ci`    is this node's index in parent.children / parent.child* arrays (-1 for root).
-// `mover` is the player who played `move` (null at root).
-// Priors (ladder + pattern) are computed eagerly from the current game state.
-function makeNode(move, parent, ci, mover, game2, N) {
-  const movesArr = getLegalMoves(game2);
+function makeNode(move, parent, ci, game2, N) {
+  // Compute npat softmax once — reused for top-K pruning and the RAVE prior.
+  const npatState = _runNpat(game2);
+  let movesArr = getLegalMoves(game2);
+  if (RAVE_NPAT_K > 0) movesArr = _pruneToTopK(movesArr, npatState, RAVE_NPAT_K, N);
   const M = movesArr.length;
+  const area = N * N;
 
   const legalMoves = new Int32Array(M);
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
-  const children    = new Array(M).fill(null);
-  const wins        = new Float32Array(M).fill(0.01);
-  const visits      = new Float32Array(M).fill(0.02);
-  const raveWins    = new Float32Array(N * N).fill(0.01);
-  const raveVisits  = new Float32Array(N * N).fill(0.02);
+  const children   = new Array(M).fill(null);
+  const wins       = new Float32Array(M).fill(PRIOR_WINS);
+  const visits     = new Float32Array(M).fill(PRIOR_VISITS);
+  const raveWins   = new Float32Array(area);
+  const raveVisits = new Float32Array(area);
 
-  return {
+  if (parent === null || parent.parent === null) {
+    raveWins.fill(PRIOR_WINS);
+    raveVisits.fill(PRIOR_VISITS);
+  } else {
+    const gparent = parent.parent;
+    for (let m = 0; m < area; m++) {
+      raveWins[m]   = RAVE_INHERIT * gparent.raveWins[m];
+      raveVisits[m] = RAVE_INHERIT * gparent.raveVisits[m];
+    }
+  }
+
+  const mover = -game2.current;
+
+  const node = {
     move,
     parent,
-    ci,           // this node's index in parent.children / parent.child* arrays (-1 for root)
-    mover,        // player who made `move` to reach this node (null at root)
-    totalVisits:  1,  // sum of visits; incremented each playout
-    selectedChild: -1,  // set by selectAndExpand; read by backpropagate
+    ci,
+    mover,
+    totalVisits:  0.1,
+    selectedChild: -1,
 
-    legalMoves,   // Int32Array(M)
-    children,     // Array(M) — promoted child node or null
+    legalMoves,
+    children,
 
-    wins,    // Float32Array(M) — playout wins per child
-    visits,  // Float32Array(M) — playout visits per child
+    wins,
+    visits,
 
-    raveWins,     // Float32Array(N*N) — RAVE wins indexed by cell; updated by rollouts
+    raveWins,
     raveVisits
   };
-}
 
-// RAVE-blended UCT score for child index i of node.                                                                                                                                                         
-// Children with no real playout visits (cv === 0) get a large bonus so they                                                                                                                                 
-// are always preferred over visited children.  RAVE (seeded with pattern                                                                                                                                    
-// priors) ranks them within the unvisited tier.                                                                                                                                                             
-// A separate priorBonus term decays as bonus/(1+realV), so ladder priors                                                                                                                                    
-// guide early exploration without ever diluting the RAVE statistics.                                                                
-function raveScore(moveIdx, node) {
-  const move   = node.legalMoves[moveIdx];
-  const realW  = node.wins[moveIdx];
-  const realV  = node.visits[moveIdx];
-  const raveW  = move === PASS ? 0 : node.raveWins[move];
-  const raveV  = move === PASS ? 1 : node.raveVisits[move];
-  const raveWR = raveW / raveV;
-  const wr = (realW + raveWR * RAVE_EQUIV) / (realV + RAVE_EQUIV);
-  if (realV < 1) {
-    return 10 + wr + 0.001 * Math.random();
+  if (npatState && RAVE_NPAT_VISITS > 0) {
+    applyNpatPriorFromState(node, npatState, RAVE_NPAT_VISITS);
   }
-  return 0.001 * Math.random() +
-    wr +
-    EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
+
+  return node;
 }
 
-// ── RAVE-MCTS core ────────────────────────────────────────────────────────────
+function ucbScore(moveIdx, node, rng) {
+  const move  = node.legalMoves[moveIdx];
 
-function selectAndExpand(root, rootGame2, N) {
+  const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
+
+  const realW = node.wins[moveIdx];
+  const realV = node.visits[moveIdx];
+  const realWR = realW / realV;
+
+  const raveWeight = RAVE_K / (RAVE_K + realV);
+  const realWeight = 1 - raveWeight;
+
+  const wr = realWeight * realWR + raveWeight * raveWR;
+
+  const scoreBase = wr + 0.001 * rng.random();
+  return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
+}
+
+function selectAndExpand(root, rootGame2, N, rng) {
   let node = root;
   const game2 = rootGame2.clone();
 
@@ -193,42 +259,30 @@ function selectAndExpand(root, rootGame2, N) {
     const M = node.legalMoves.length;
     if (M === 0) break;
 
-    // Select best child by RAVE-blended score.
     let best = 0, bestScore = -Infinity;
     for (let i = 0; i < M; i++) {
-      const s = raveScore(i, node);
+      const s = ucbScore(i, node, rng);
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
-    const mover = game2.current;   // player making this move
     game2.play(node.legalMoves[best]);
 
-    // Promote child to a full node once it has accumulated enough visits.
-    // Fall through to the descent check so the loop continues into the new node;
-    // its children all have cv=0 < N_EXPAND, so the leaf case fires next iteration
-    // (exactly one makeNode per playout, same as rave2's one-expansion-per-playout).
     if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
-      node.children[best] = makeNode(node.legalMoves[best], node, best, mover, game2, N);
+      node.children[best] = makeNode(node.legalMoves[best], node, best, game2, N);
     }
 
-    // After a pass, always force a second pass so the playout scores the current
-    // board position (consecutive passes end the game).  This prevents rollouts
-    // from a single-pass state playing on for many random moves and inflating
-    // the pass move's apparent win rate.
     if (!game2.gameOver && game2.consecutivePasses > 0) {
       game2.play(PASS);
       node.selectedChild = best;
       break;
     }
 
-    // Descend into the promoted child, if available.
     if (node.children[best] !== null) {
       node = node.children[best];
-      node.selectedChild = -1;  // reset in case game ends before we select below
+      node.selectedChild = -1;
       continue;
     }
 
-    // Unpromoted leaf — run playout from here.
     node.selectedChild = best;
     break;
   }
@@ -236,33 +290,31 @@ function selectAndExpand(root, rootGame2, N) {
   return { node, game2 };
 }
 
-// Backpropagate playout result and update RAVE statistics.
-//
-// node.selectedChild holds the unpromoted child index that was played last,
-// or -1 if we descended all the way to a promoted node (game already over).
-//
-// childMover(n): the player choosing the next move from node n.
-//   - rootPlayer if n is the root (n.mover === null)
-//   - opponent(n.mover) otherwise
-function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
+function backpropagate(node, winner, played, rootPlayer) {
   function childMover(n) {
-    return n.mover === null ? rootPlayer : (n.mover === BLACK ? WHITE : BLACK);
+    return -n.mover;
   }
 
-  function updateRave(node, won, played) {
-    const invPlayedCount = 1 / (1 + played.length)
-    let weight = 1;
-    for (let k = 0; k < played.length; k++) {
-      const move = played[k];
-      node.raveVisits[move] += weight;
-      node.raveWins[move] += won * weight;
-      weight -= invPlayedCount;
+  function updateRave(node, won, played, chooser) {
+    if (chooser === BLACK) {
+      for (let k = 0; k < played.length; k++) {
+        const weight = played[k];
+        if (weight > 0) {
+          node.raveVisits[k] += weight;
+          node.raveWins[k]   += won * weight;
+        }
+      }
+    } else {
+      for (let k = 0; k < played.length; k++) {
+        const weight = played[k];
+        if (weight < 0) {
+          node.raveVisits[k] -= weight;
+          node.raveWins[k]   -= won * weight;
+        }
+      }
     }
   }
 
-  // Update the unpromoted leaf child stats (if we stopped before descending).
-  // Also update RAVE at this node so root's RAVE is populated even when no
-  // deeper promoted nodes exist (e.g. N_EXPAND=9999).
   const leafIdx = node.selectedChild;
   if (leafIdx !== -1) {
     const chooser = childMover(node);
@@ -270,63 +322,57 @@ function backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer) {
     node.visits[leafIdx]++;
     node.wins[leafIdx] += won;
     node.totalVisits++;
-
-    const played = chooser === BLACK ? blackPlayed : whitePlayed;
-    updateRave(node, won, played);
+    updateRave(node, won, played, chooser);
   }
 
-  // Walk up the tree, updating each parent's child arrays and RAVE arrays.
   while (node.parent !== null) {
-    const ci  = node.ci;   // stored at promotion time — no lookup needed
-    const won = winner === node.mover ? 1 : 0;
+    const ci      = node.ci;
+    const chooser = childMover(node.parent);
+    const won     = winner === chooser ? 1 : 0;
     node.parent.visits[ci]++;
     node.parent.wins[ci] += won;
     node.parent.totalVisits++;
-
-    // RAVE update at node.parent: credit the parent's chooser's playout moves.
-    const chooser = childMover(node.parent);
-    const played  = chooser === BLACK ? blackPlayed : whitePlayed;
-    const rWon    = winner === chooser ? 1 : 0;
-    updateRave(node.parent, rWon, played);
-
+    updateRave(node.parent, won, played, chooser);
     node = node.parent;
   }
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-function getMove(game, timeBudgetMs) {
-  if (game.gameOver) return { type: 'pass', move: PASS, info: 'Game already over.' };
+function getMove(game, timeBudgetMs, options = {}) {
+  if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
   const N          = game.cells ? game.N : game.boardSize;
   const game2      = game.cells ? game.clone() : game.toGame2();
   const rootPlayer = game2.current;
 
-  // Obvious pass: opponent just passed and we're already winning — end the game.
   if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
-    return { type: 'pass', move: PASS, info: 'Pass to end game, since winning on points.', rootWinRatio: 1 };
+    return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
-  const root = makeNode(null, null, -1, null, game2, N);
+  const rng = options.rng || makeRng();
+  const root = makeNode(null, null, -1, game2, N);
 
+  const played = new Float32Array(N * N);
+
+  const playoutLimit = options.playoutLimit || PLAYOUTS;
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 
   do {
     playouts++;
-    const { node, game2: simGame2 } = selectAndExpand(root, game2, N);
-    const { winner, blackPlayed, whitePlayed } = playTracked(simGame2);
-    backpropagate(node, winner, blackPlayed, whitePlayed, rootPlayer);
-  } while (PLAYOUTS > 0 ? playouts < PLAYOUTS : performance.now() < deadline);
+    const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
+    const { winner, played: p } = playTracked(simGame2, node, played);
+    backpropagate(node, winner, p, rootPlayer);
+  } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 
-  // Best child: most playout visits; ties broken by RAVE-blended score.
   const M = root.legalMoves.length;
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
   for (let i = 0; i < M; i++) {
     const cv = root.visits[i];
-    if (cv > bestVisits || (cv === bestVisits && raveScore(i, root) > bestScore)) {
+    if (cv > bestVisits || (cv === bestVisits && ucbScore(i, root, rng) > bestScore)) {
       bestVisits = cv;
-      bestScore  = raveScore(i, root);
+      bestScore  = ucbScore(i, root, rng);
       bestIdx    = i;
     }
   }
@@ -344,10 +390,10 @@ function getMove(game, timeBudgetMs) {
 
   let totalChildWins = 0;
   for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
-  const rootWinRatio = root.totalVisits > 0 ? totalChildWins / root.totalVisits : 0.5;
+  const rootWinRatio = totalChildWins / root.totalVisits;
 
-  if (root.wins[bestIdx] === 0 && game.moveCount >= N * N / 2) {
-    return { type: 'pass', move: PASS, info: 'No winning line found.', children, rootWinRatio };
+  if (playouts >= RESIGN_MIN_PLAYOUTS && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] <= PRIOR_WINS) {
+    return { type: 'pass', move: PASS, info: 'no winning line found', children, rootWinRatio };
   }
 
   const m = root.legalMoves[bestIdx];
@@ -356,7 +402,7 @@ function getMove(game, timeBudgetMs) {
 
   const result = m === PASS ? { type: 'pass', move: PASS, children, rootWinRatio }
                             : { type: 'place', move: m, x: m % N, y: (m / N) | 0, children, rootWinRatio };
-  result.info = `value=${bestWinRatio.toFixed(3)}`;
+  result.info = `value=${(game.current===BLACK?bestWinRatio:(1-bestWinRatio)).toFixed(3)}`;
   return result;
 }
 

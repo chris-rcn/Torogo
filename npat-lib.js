@@ -2,11 +2,11 @@
 
 // npat-lib.js — pattern-based policy features with stone-indexed tactical bits.
 //
-// For each candidate move we extract up to three shape windows (centered 3×3,
-// Type A, Type B — each optional via cfg flags) plus four tactical feature
-// types expanded into per-stone-index sub-features.  The move's logit is the
-// sum of active-shape weights and the tactical contributions; moves are
-// sampled by softmax over logits.
+// For each candidate move we extract zero or more shape windows (centered 3×3
+// via cfg.use33c, 12-cell diamond P12 via cfg.useP12) plus four tactical
+// feature types expanded into per-stone-index sub-features.  The move's logit
+// is the sum of the active shape weights and the tactical contributions;
+// moves are sampled by softmax over logits.
 //
 // Cell encoding (mover-relative, 3 values — pure shape, no tactical bits):
 //   0 = EMPTY     empty point
@@ -47,10 +47,10 @@
 
 (function () {
 
-const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const { PASS }          = _isNode ? require('./game2.js')  : window.Game2;
-const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
-const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
+const { PASS }                 = Util.load('./game2.js', 'Game2');
+const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
+const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
 
 // ── D4 position permutations on a 3×3 grid ────────────────────────────────────
 // Positions linearised as i = row*3 + col, row,col ∈ {0,1,2}.
@@ -110,23 +110,24 @@ const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 // tactical block.
 const SHAPE33C_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
 
-// Type E shape window (12 cells, 3-wide × 4-tall block, hflip-symmetric):
+// Type P12 shape: the 12 closest cells (Manhattan distance 1 and 2) around the
+// candidate, in a diamond pattern.  The candidate cell itself is excluded (it
+// is always empty by construction).  D4-canonicalised; raw range 3^12.
 //
-//     x    x    x    (-1, -1) (-1, 0) (-1, +1)
-//     x    *    x    (0, -1)  (0, 0)  (0, +1)
-//     x    x    x    (+1, -1) (+1, 0) (+1, +1)
-//     x    x    x    (+2, -1) (+2, 0) (+2, +1)
+//          (-2, 0)
+//   (-1,-1)(-1, 0)(-1, 1)
+//   ( 0,-2)( 0,-1)  *   ( 0, 1)( 0, 2)
+//   ( 1,-1)( 1, 0)( 1, 1)
+//          ( 2, 0)
 //
-// 3^12 = 531k raw slots; flat Int32Array cache.
-//
-// TYPE_E_RAW_BASE preserves the offset from when types A, B, D, T existed,
-// so existing E-trained checkpoints continue to load.  The legacy chain was
-//   SHAPE33C + 9*CELLS_BASE (was A) + 59049 (A_BASE) + 177147 (B_BASE)
-//                                   + 531441 (D_BASE) + 81 (T_BASE).
-const TYPE_E_CELLS       = 12;
-const TYPE_E_BASE        = 531441; // 3^12
-const TYPE_E_RAW_BASE    = SHAPE33C_RAW_BASE + 9 * CELLS_BASE
-                         + 59049 + 177147 + 531441 + 81;
+// P12_RAW_BASE is placed past the legacy A/B/D/T offset region (occupied by
+// removed-but-still-present weights in older checkpoints) so new P12 raw keys
+// can't collide with stale legacy entries.  The chain matches the old
+// TYPE_E_RAW_BASE offset: 9*CELLS_BASE + 59049 + 177147 + 531441 + 81.
+const P12_CELLS    = 12;
+const P12_BASE     = 531441; // 3^12
+const P12_RAW_BASE = SHAPE33C_RAW_BASE + 9 * CELLS_BASE
+                   + 59049 + 177147 + 531441 + 81;
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
@@ -179,8 +180,9 @@ function annotateLadders(game, out, game3) {
 // ── State ─────────────────────────────────────────────────────────────────────
 //
 // moves     [count]                       flat board index of move i
-// patIds33c [count]                        canonical 3×3c key per move
-// tact      [count * N_TACT_SLOTS]         tactical feature counts per move (uint8)
+// patIds33c [count]                       canonical 3×3c key per move
+// patIdsP12 [count]                       canonical P12 key per move
+// tact      [count * N_TACT_SLOTS]        tactical feature counts per move (uint8)
 // logits    [count]                        scratch buffer for softmax
 // probs     [count]                        scratch buffer for softmax
 // ladder    { tactCount }                  reusable ladder-annotation buffer
@@ -213,14 +215,14 @@ function createState(N) {
     N,
     moves:     new Int32Array(cap),
     patIds33c: new Int32Array(cap),
-    patIdsE:   new Int32Array(cap),
+    patIdsP12: new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
     ladder:    { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
-    // Reusable touched-index scratch for reinforceUpdate.  Two shape types
-    // (3×3c + E), one dense idx per (chosen + each move).
+    // Reusable touched-index scratch for reinforceUpdate.  Up to two shape
+    // types (3×3c + P12), one dense idx per (chosen + each move).
     touched:   new Int32Array(2 * (cap + 1)),
     count:     0,
   };
@@ -243,28 +245,26 @@ function createState(N) {
 
 function createWeights(opts) {
   // opts may be a number (initialCapacity, legacy) or an options object
-  //   { initialCapacity, use33, use34, useL }.
+  //   { initialCapacity, useTactical, use33c, useP12 }.
   // Feature-gating flags default to false — tactical features are always on.
   let initialCapacity = 1024;
   let useTactical = true;
-  let use33c = false, useE = false;
+  let use33c = false, useP12 = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
     if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
     if (opts.useTactical === false) useTactical = false;
     if (opts.use33c) use33c = true;
-    if (opts.useE)   useE   = true;
+    if (opts.useP12) useP12 = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
     vals:  new Float64Array(initialCapacity),      // weights[dense idx]
-    valsEMA: new Float64Array(initialCapacity),    // Polyak-averaged weights for eval
     delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
-    valsEMAInit: false,                            // first applyEMA seeds valsEMA = vals
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { useTactical, use33c, useE },
+    cfg:   { useTactical, use33c, useP12 },
   };
   if (useTactical) {
     for (let k = 0; k < N_TACT_SLOTS; k++) {
@@ -282,33 +282,11 @@ function _internWeight(w, rawPid) {
   if (idx >= w.vals.length) {
     const cap = w.vals.length * 2;
     const nv = new Float64Array(cap); nv.set(w.vals); w.vals = nv;
-    const ne = new Float64Array(cap); ne.set(w.valsEMA); w.valsEMA = ne;
     const nd = new Float64Array(cap); nd.set(w.delta); w.delta = nd;
   }
   map.set(rawPid, idx);
   w.size = idx + 1;
   return idx;
-}
-
-// Polyak / SWA averaging.  Updates valsEMA in-place to track a smoothed copy
-// of vals.  First call seeds valsEMA = vals (so we don't average against the
-// zero initialisation).  Subsequent calls do
-//   valsEMA[i] = alpha * valsEMA[i] + (1 - alpha) * vals[i]
-// for every interned weight.  Call this periodically (e.g. once per training
-// game).  Caller picks alpha based on the desired effective window — with one
-// snapshot per game, alpha=0.999 averages over ~1000 recent games.
-function applyEMA(w, alpha) {
-  const n = w.size;
-  const v = w.vals, e = w.valsEMA;
-  if (!w.valsEMAInit) {
-    for (let i = 0; i < n; i++) e[i] = v[i];
-    w.valsEMAInit = true;
-    return;
-  }
-  const beta = 1 - alpha;
-  for (let i = 0; i < n; i++) {
-    e[i] = alpha * e[i] + beta * v[i];
-  }
 }
 
 // ── Runtime D4 canonicalisation ──────────────────────────────────────────────
@@ -375,49 +353,50 @@ function canonKey(relPos, cells) {
 const _windowCells  = new Int32Array(9);
 const _patch5       = new Int32Array(25); // 5×5 (rows [-2,+2] × cols [-2,+2])
 
-// Type E shape (12 cells, full 3×4 block including the candidate cell,
-// hflip-symmetric).  Row-major layout, candidate at index 4.
-const _EShape = [
-  [-1, -1], [-1,  0], [-1, +1],
-  [ 0, -1], [ 0,  0], [ 0, +1],
-  [+1, -1], [+1,  0], [+1, +1],
-  [+2, -1], [+2,  0], [+2, +1],
+// Type P12 shape: the 12 closest non-centre cells (Manhattan distance 1 and 2)
+// in a diamond.  Canonical key = min over 8 D4 symmetries of
+//   raw = Σ_i patch[shape[σ(i)]] · 3^i.
+// Storage: _P12PatchIdx[s*12 + i] is the 5×5-patch flat index of the cell that
+// occupies P12 position i under symmetry s.  Per-cell weight is 3^i.
+const _P12Shape = [
+  [-1,  0], [ 0,  1], [ 1,  0], [ 0, -1],   // 0..3: N, E, S, W (ring 1)
+  [-2,  0], [-1,  1], [ 0,  2], [ 1,  1],   // 4..7: N2, NE, E2, SE
+  [ 2,  0], [ 1, -1], [ 0, -2], [-1, -1],   // 8..11: S2, SW, W2, NW
 ];
-
-const _EPatchIdx    = new Int32Array(8 * TYPE_E_CELLS);
-const _ECellWeights = new Int32Array(TYPE_E_CELLS);
+const _P12PatchIdx    = new Int32Array(8 * P12_CELLS);
+const _P12CellWeights = new Int32Array(P12_CELLS);
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
     (r, c) => [ r, -c], (r, c) => [-r,  c], (r, c) => [ c,  r], (r, c) => [-c, -r],
   ];
   for (let s = 0; s < 8; s++) {
-    for (let i = 0; i < TYPE_E_CELLS; i++) {
-      const [r, c] = d4[s](_EShape[i][0], _EShape[i][1]);
-      _EPatchIdx[s * TYPE_E_CELLS + i] = (r + 2) * 5 + (c + 2);
+    for (let i = 0; i < P12_CELLS; i++) {
+      const [r, c] = d4[s](_P12Shape[i][0], _P12Shape[i][1]);
+      _P12PatchIdx[s * P12_CELLS + i] = (r + 2) * 5 + (c + 2);
     }
   }
   let w = 1;
-  for (let i = 0; i < TYPE_E_CELLS; i++) { _ECellWeights[i] = w; w *= CELL_BASE; }
+  for (let i = 0; i < P12_CELLS; i++) { _P12CellWeights[i] = w; w *= CELL_BASE; }
 })();
 
-const _canonKeyECache = new Int32Array(TYPE_E_BASE).fill(-1); // 2.1MB
+const _canonKeyP12Cache = new Int32Array(P12_BASE).fill(-1); // 2.1MB
 
-function canonKeyE(patch) {
-  const idx = _EPatchIdx;
-  const cw  = _ECellWeights;
+function canonKeyP12(patch) {
+  const idx = _P12PatchIdx;
+  const cw  = _P12CellWeights;
   let cacheKey = 0;
-  for (let i = 0; i < TYPE_E_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
-  const cached = _canonKeyECache[cacheKey];
+  for (let i = 0; i < P12_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
+  const cached = _canonKeyP12Cache[cacheKey];
   if (cached !== -1) return cached;
   let best = cacheKey;
   for (let s = 1; s < 8; s++) {
-    const o = s * TYPE_E_CELLS;
+    const o = s * P12_CELLS;
     let raw = 0;
-    for (let i = 0; i < TYPE_E_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
+    for (let i = 0; i < P12_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
     if (raw < best) best = raw;
   }
-  _canonKeyECache[cacheKey] = best;
+  _canonKeyP12Cache[cacheKey] = best;
   return best;
 }
 
@@ -459,9 +438,9 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3)) : null;
   const tactCount = li ? li.tactCount : null;
   const doUse33c = !cfg || cfg.use33c;
-  const doUseE   = !cfg || cfg.useE;
+  const doUseP12 = !cfg || cfg.useP12;
   const patIds33c = state.patIds33c;
-  const patIdsE   = state.patIdsE;
+  const patIdsP12 = state.patIdsP12;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -494,10 +473,10 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
       patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
     }
 
-    // Type E shape — 12-cell 3×4 block including the candidate cell.
-    if (doUseE) {
-      const rawE = TYPE_E_RAW_BASE + canonKeyE(patch);
-      patIdsE[count] = wMap ? _internWeight(weights, rawE) : rawE;
+    // P12 diamond — 12 closest non-centre cells, D4-canonicalised.
+    if (doUseP12) {
+      const rawP12 = P12_RAW_BASE + canonKeyP12(patch);
+      patIdsP12[count] = wMap ? _internWeight(weights, rawP12) : rawP12;
     }
 
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
@@ -531,7 +510,7 @@ function _score(state, i, weights) {
     for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
   }
   if (cfg.use33c) s += vals[state.patIds33c[i]];
-  if (cfg.useE)   s += vals[state.patIdsE[i]];
+  if (cfg.useP12) s += vals[state.patIdsP12[i]];
   return s;
 }
 
@@ -545,7 +524,11 @@ function evaluate(game, state, weights) {
   return out.sort((a, b) => b.score - a.score);
 }
 
-function _computeSoftmax(state, weights) {
+// Populate state.logits and state.probs from the current weights.  At
+// `temperature` = 1 this is the standard softmax; at 0 the distribution
+// collapses to one-hot on the argmax (argmax fast-path); at intermediate T it
+// is exp(logit / T) / Z.
+function _computeSoftmax(state, weights, temperature = 1) {
   const n   = state.count;
   if (n === 0) return 0;
   const tact  = state.tact;
@@ -560,9 +543,9 @@ function _computeSoftmax(state, weights) {
     for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
   }
   const pid33c = cfg.use33c ? state.patIds33c : null;
-  const pidE   = cfg.useE   ? state.patIdsE   : null;
+  const pidP12 = cfg.useP12 ? state.patIdsP12 : null;
 
-  let maxL = -Infinity;
+  let maxL = -Infinity, maxI = 0;
   for (let i = 0; i < n; i++) {
     let s = 0;
     if (useTact) {
@@ -570,26 +553,42 @@ function _computeSoftmax(state, weights) {
       for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
     }
     if (pid33c) s += vals[pid33c[i]];
-    if (pidE)   s += vals[pidE[i]];
+    if (pidP12) s += vals[pidP12[i]];
     lg[i] = s;
-    if (s > maxL) maxL = s;
+    if (s > maxL) { maxL = s; maxI = i; }
   }
+  if (temperature === 0) {
+    for (let i = 0; i < n; i++) pr[i] = 0;
+    pr[maxI] = 1;
+    return n;
+  }
+  const invT = 1 / temperature;
   let sum = 0;
-  for (let i = 0; i < n; i++) { pr[i] = Math.exp(lg[i] - maxL); sum += pr[i]; }
+  for (let i = 0; i < n; i++) { pr[i] = Math.exp((lg[i] - maxL) * invT); sum += pr[i]; }
   const inv = 1 / sum;
   for (let i = 0; i < n; i++) pr[i] *= inv;
   return n;
 }
 
-// Extract features, softmax over logits, sample an action.
-// Returns { move, index, prob }.  Optional game3 kept in lockstep with game.
-function policyMove(game, state, weights, rng, game3) {
+// Extract features, softmax over logits (scaled by `temperature`), sample an
+// action.  Returns { move, index, prob }.  `temperature` defaults to 1 (the
+// standard softmax sample); 0 short-circuits to a deterministic argmax (no rng
+// is consulted); values in between sharpen (< 1) or flatten (> 1) the
+// distribution.  Optional game3 kept in lockstep with game.
+function policyMove(game, state, weights, rng, game3, temperature = 1) {
   extractFeatures(game, state, undefined, game3, weights);
   const n = state.count;
   if (n === 0) return { move: PASS, index: -1, prob: 1 };
 
-  _computeSoftmax(state, weights);
+  _computeSoftmax(state, weights, temperature);
   const probs = state.probs;
+
+  if (temperature === 0) {
+    // Argmax fast-path — _computeSoftmax wrote a one-hot vector.
+    let bestI = 0;
+    for (let i = 1; i < n; i++) if (probs[i] > probs[bestI]) bestI = i;
+    return { move: state.moves[bestI], index: bestI, prob: 1 };
+  }
 
   const R = (rng || Math).random();
   let r = R, chosen = n - 1;
@@ -600,17 +599,12 @@ function policyMove(game, state, weights, rng, game3) {
   return { move: state.moves[chosen], index: chosen, prob: probs[chosen] };
 }
 
-// Greedy argmax move (no sampling).  Optional game3 kept in lockstep.
+// Near-greedy move.  Thin wrapper around policyMove with temperature = 0.1 —
+// almost always picks the argmax but breaks near-ties stochastically.  For
+// strict argmax use policyMove with T = 0; for full softmax sampling use the
+// policyMove default T = 1.  Optional game3 kept in lockstep.
 function greedyMove(game, state, weights, game3) {
-  extractFeatures(game, state, undefined, game3, weights);
-  const n = state.count;
-  if (n === 0) return PASS;
-  let best = -Infinity, bestI = 0;
-  for (let i = 0; i < n; i++) {
-    const s = _score(state, i, weights);
-    if (s > best) { best = s; bestI = i; }
-  }
-  return state.moves[bestI];
+  return policyMove(game, state, weights, undefined, game3, 0.1).move;
 }
 
 // ── REINFORCE step ────────────────────────────────────────────────────────────
@@ -640,7 +634,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const touched  = state.touched;
   const cfg      = weights.cfg;
   const patIds33c = cfg.use33c ? state.patIds33c : null;
-  const patIdsE   = cfg.useE   ? state.patIdsE   : null;
+  const patIdsP12 = cfg.useP12 ? state.patIdsP12 : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -650,8 +644,8 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     touched[tc++] = idx;
     delta[idx] += step;
   }
-  if (patIdsE) {
-    const idx = patIdsE[chosenIndex];
+  if (patIdsP12) {
+    const idx = patIdsP12[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -665,8 +659,8 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
-    if (patIdsE) {
-      const idx = patIdsE[i];
+    if (patIdsP12) {
+      const idx = patIdsP12[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -703,84 +697,6 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   return tc + (cfg.useTactical !== false ? N_TACT_SLOTS : 0);
 }
 
-// ── Entropy-bonus step ────────────────────────────────────────────────────────
-//
-// Keep the softmax distribution from collapsing by pushing weights in the
-// direction of higher per-state entropy H = −Σ π_i log π_i.  The gradient
-//   ∂H/∂w = Σ_i π_i · (−log π_i − H) · (feat_i − <feat>)
-// has the same sum-over-moves structure as REINFORCE, so per move i the
-// contribution is c_i · feat_i with
-//   c_i = β · π_i · (−log π_i − H)
-// and a balancing −Σ_i π_i·c_i term that we fold in via the same <feat>
-// baseline trick: writing c_i as is, Σ_i c_i · <feat> = 0 because Σ c_i = 0
-// (by construction of H).  So we can just apply Δw[k] += c_i · feat_i_k for
-// every move i and the baseline cancels itself across moves.
-//
-// state.probs must already be populated (by policyMove / _computeSoftmax).
-
-let _entScratch = new Float64Array(0);
-
-function entropyBonusUpdate(state, weights, beta) {
-  const n = state.count;
-  if (n === 0 || beta === 0) return;
-
-  const probs    = state.probs;
-  const tact     = state.tact;
-  const vals     = weights.vals;
-  const delta    = weights.delta;
-  const tIds     = weights.tactIds;
-  const touched  = state.touched;
-  const cfg      = weights.cfg;
-  const patIds33c = cfg.use33c ? state.patIds33c : null;
-  const patIdsE   = cfg.useE   ? state.patIdsE   : null;
-  if (_entScratch.length < n) _entScratch = new Float64Array(n);
-  const logs    = _entScratch;  // scratch for −log(π_i); not on state (snapshots omit it)
-  let tc = 0;
-
-  // Compute H = −Σ π_i log π_i and cache −log(π_i).
-  let H = 0;
-  for (let i = 0; i < n; i++) {
-    const pi = probs[i];
-    const lp = pi > 0 ? -Math.log(pi) : 0;
-    logs[i] = lp;
-    H += pi * lp;
-  }
-
-  // Accumulate per-move coefficients onto shape pids, and tactical totals.
-  const acc = _tactScratch;
-  for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] = 0;
-  for (let i = 0; i < n; i++) {
-    const pi = probs[i];
-    if (pi === 0) continue;
-    const ci = beta * pi * (logs[i] - H);
-    if (ci === 0) continue;
-    if (patIds33c) {
-      const idx = patIds33c[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (patIdsE) {
-      const idx = patIdsE[i];
-      touched[tc++] = idx;
-      delta[idx] += ci;
-    }
-    if (cfg.useTactical !== false) {
-      const tOff = i * N_TACT_SLOTS;
-      for (let k = 0; k < N_TACT_SLOTS; k++) acc[k] += ci * tact[tOff + k];
-    }
-  }
-  for (let i = 0; i < tc; i++) {
-    const idx = touched[i];
-    const d = delta[idx];
-    if (d !== 0) { vals[idx] += d; delta[idx] = 0; }
-  }
-  if (cfg.useTactical !== false) {
-    for (let k = 0; k < N_TACT_SLOTS; k++) {
-      if (acc[k] !== 0) vals[tIds[k]] += acc[k];
-    }
-  }
-}
-
 // ── Module exports ────────────────────────────────────────────────────────────
 
 const NPatterns = {
@@ -793,11 +709,9 @@ const NPatterns = {
   greedyMove,
   computeSoftmax: _computeSoftmax,
   reinforceUpdate,
-  entropyBonusUpdate,
-  applyEMA,
   annotateLadders,
   canonKey,
-  canonKeyE,
+  canonKeyP12,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -807,7 +721,7 @@ const NPatterns = {
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
   SHAPE33C_RAW_BASE,
-  TYPE_E_CELLS, TYPE_E_BASE, TYPE_E_RAW_BASE,
+  P12_CELLS, P12_BASE, P12_RAW_BASE,
   // Exposed for tests.
   _D4,
 };

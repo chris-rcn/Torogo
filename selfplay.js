@@ -79,17 +79,17 @@ const PW = 6;   // percentage  "66.7%"
 const MW = 7;   // ms/move     "123.45"
 const EW = 8;   // elapsed     "1234.5s"
 
-console.log(
-  `${'games'.padStart(6)}  ` +
-  `${'elapsed'.padStart(8)}  ` +
-  `${'black%'.padStart(6)}  ` +
-  `${'avgLen'.padStart(6)}  ` +
-  `${'maxLen'.padStart(6)}  ` +
-  `${'p1ms'.padStart(7)}  ` +
-  `${'p2ms'.padStart(7)}  ` +
-  `${'p2%'.padStart(6)}  ` +
-  `${'p2Better%'.padStart(9)}  ` +
-  ``);
+console.log([
+  'games'   .padStart(5),
+  'elapsed' .padStart(7),
+  'blkWR'   .padStart(5),
+  'avgLen'  .padStart(6),
+  'maxLen'  .padStart(6),
+  'tP1mv'   .padStart(5),
+  'tP2Mv'   .padStart(5),
+  'P2WR'    .padStart(4),
+  'P2Better'.padStart(8),
+].join('  '));
 
 let printPeriodMs  = 1000;
 let lastPrintTime  = startTime;
@@ -100,25 +100,18 @@ let maxGameLen = 0;
 
 function printStats(gamesPlayed) {
   const now = performance.now();
-  const strGames = String(gamesPlayed);
-  const strElapsed = (((now - startTime) / 1000).toFixed(1) + 's');
-  const strBlackWin = (100 * blackWinCount / gamesPlayed).toFixed(1) + '%';
-  const strAvgLen = (totalGameLen / gamesPlayed).toFixed(0);
-  const strMaxLen = String(maxGameLen);
-  const strAvgMs = (s) => (s.moves ? (s.ms / s.moves).toFixed(2) : '—');
-  const strWinRatio = (w) => ((100 * w / gamesPlayed).toFixed(1) + '%');
-  const strP2Better = (100 * probPlayerBetter(tally.p2, gamesPlayed)).toFixed(1) + '%';
-  console.log(
-    `${strGames.padStart(6)}  ` +
-    `${strElapsed.padStart(8)}  ` +
-    `${strBlackWin.padStart(6)}  ` +
-    `${strAvgLen.padStart(6)}  ` +
-    `${strMaxLen.padStart(6)}  ` +
-    `${strAvgMs(stats.p1).padStart(7)}  ` +
-    `${strAvgMs(stats.p2).padStart(7)}  ` +
-    `${strWinRatio(tally.p2).padStart(6)}  ` +
-    `${strP2Better.padStart(9)}  ` +
-    ``);
+  const avgMs = (s) => (s.moves ? Util.fmtMs(s.ms / s.moves) : '    -').padStart(5);
+  console.log([
+    Util.fmt4(gamesPlayed)                                 .padStart(5),
+    Util.fmtMs(now - startTime)                            .padStart(7),
+    Util.fmtRatio4(blackWinCount / gamesPlayed)            .padStart(5),
+    Util.fmt4(totalGameLen / gamesPlayed)                  .padStart(6),
+    Util.fmt4(maxGameLen)                                  .padStart(6),
+    avgMs(stats.p1),
+    avgMs(stats.p2),
+    Util.fmtRatio4(tally.p2 / gamesPlayed)                 .padStart(4),
+    Util.fmtRatio4(probPlayerBetter(tally.p2, gamesPlayed)).padStart(8),
+  ].join('  '));
 }
 
 function maybePrint(gamesPlayed) {

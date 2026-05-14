@@ -12,7 +12,7 @@ const Util = require('./util.js');
  *
  * Options:
  *   --agent   <name>   AI policy to evaluate (default: random)
- *   --budget  <ms>     Time budget per move in ms (required)
+ *   --budget  <ms>     Time budget per move in ms (default: 1)
  *   --trials  <n>      Trials per position (default: 10)
  *   --help             Show this help message
  *
@@ -26,8 +26,7 @@ if (opts.help) {
 }
 
 const agentName = opts.agent  || 'random';
-if (!opts.budget) { console.error('--budget is required'); process.exit(1); }
-const budgetMs  = parseInt(opts.budget, 10);
+const budgetMs  = parseInt(opts.budget || '1', 10);
 const trials    = parseInt(opts.trials || '10',  10);
 
 if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }

@@ -11,6 +11,9 @@ const { Game2, PASS, BLACK, WHITE, KOMI } = window.Game2;
 // the toroidal topology more intuitive.
 const OVERLAP = 2;
 
+// Duration of the smooth pan animation when re-centering on a played move.
+const PAN_DURATION_MS = 400;
+
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 class Renderer {
@@ -289,7 +292,7 @@ class Renderer {
 
 // ─── AI (calls into ai/ravepat2.js loaded via <script> tag) ───────────────────
 
-const UI_BUDGET_MS = 2000; // 2 seconds per move for interactive play
+const UI_BUDGET_MS = 1500; // 1.5 seconds per move for interactive play
 
 let computerBusy = false;
 let computerPassedLast = false;
@@ -389,7 +392,7 @@ function scheduleComputerMove() {
         let dy = rawTargetY - renderer.panY;
         dx -= Math.round(dx / ts) * ts;
         dy -= Math.round(dy / ts) * ts;
-        animatePan(renderer.panX + dx, renderer.panY + dy, 500, applyMove);
+        animatePan(renderer.panX + dx, renderer.panY + dy, PAN_DURATION_MS, applyMove);
       } else {
         applyMove();
       }
@@ -562,7 +565,7 @@ canvas.addEventListener('pointerup', (e) => {
       const ry = py - renderer.padding - renderer.panY;
       const targetPanX = W / 2 - renderer.padding - Math.round(rx / cs) * cs;
       const targetPanY = H / 2 - renderer.padding - Math.round(ry / cs) * cs;
-      animatePan(targetPanX, targetPanY, 500, scheduleComputerMove);
+      animatePan(targetPanX, targetPanY, PAN_DURATION_MS, scheduleComputerMove);
     } else {
       console.log(`            human     (${pos.x}, ${pos.y})  — illegal`);
       const legal = game.play(pos.y * N + pos.x);

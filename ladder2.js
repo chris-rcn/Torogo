@@ -4,7 +4,8 @@
 
 (function() {
 
-const { PASS } = typeof require === 'function' ? require('./game3.js') : window.Game3;
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
+const { PASS } = Util.load('./game3.js', 'Game3');
 
 // Returns true when the group at stoneIdx can reach 3+ liberties despite best
 // attacker play. Uses play/undo instead of clone.

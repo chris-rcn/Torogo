@@ -21,7 +21,8 @@ const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS = -1;
 
 // Import coordStr from game2 for coordinate display
-const { coordStr } = require('./game2.js');
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
+const { coordStr } = Util.load('./game2.js', 'Game2');
 
 // Operation types (integers, not strings)
 const OP_ADD_STONE = 0;

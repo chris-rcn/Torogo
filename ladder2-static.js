@@ -7,9 +7,10 @@
 
 (function() {
 
-const { PASS, coordStr } = typeof require === 'function' ? require('./game2.js') : window.Game2;
-const Ladder2 = typeof require === 'function' ? require('./ladder2.js') : window.Ladder2;
-const { game3FromGame2 } = typeof require === 'function' ? require('./game3.js') : window.Game3;
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
+const { PASS, coordStr } = Util.load('./game2.js', 'Game2');
+const Ladder2 = Util.load('./ladder2.js', 'Ladder2');
+const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 
 // ── Pre-allocated scratch buffers ───────────────────────────────────────────
 
@@ -480,9 +481,11 @@ function _staticCanReach3Libs(game2, stoneIdx, current) {
 }
 
 // Delegate to ladder2.js _canReach3Libs (includes capture-escape search).
-// ladder2.js operates on Game3 (play/undo); convert from Game2 at the call site.
-function _fallbackCanReach3Libs(game2, idx) {
-  return Ladder2._canReach3Libs(game3FromGame2(game2), idx);
+// ladder2.js operates on Game3 (play/undo); accept either a Game2 or a Game3
+// here — Game3 is detected via the presence of `.undo` and used directly.
+function _fallbackCanReach3Libs(game, idx) {
+  const game3 = typeof game.undo === 'function' ? game : game3FromGame2(game);
+  return Ladder2._canReach3Libs(game3, idx);
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

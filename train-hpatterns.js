@@ -26,7 +26,7 @@ const Util = require('./util.js');
 
 const opts       = Util.parseArgs(process.argv.slice(2));
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
-const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '9',  10);
+const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games

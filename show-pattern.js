@@ -19,8 +19,11 @@ const { Game2, BLACK, WHITE } = require('./game2.js');
 const { getPatternHashes }    = require('./pattern1.js');
 const { getLadderStatus: _getLadderStatus } = require('./ladder2.js');
 const { game3FromGame2 }      = require('./game3.js');
-// ladder2.js operates on Game3; callers here pass Game2 positions — convert on call.
-const getLadderStatus = (g2, idx) => _getLadderStatus(game3FromGame2(g2), idx);
+// ladder2.js operates on Game3.  Accept either a Game2 or a Game3 here so
+// callers that already hold a Game3 can skip the rebuild (Game3 is detected
+// via the presence of `.undo`).
+const getLadderStatus = (game, idx) =>
+  _getLadderStatus(typeof game.undo === 'function' ? game : game3FromGame2(game), idx);
 
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };

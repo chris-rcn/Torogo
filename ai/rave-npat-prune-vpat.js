@@ -1,17 +1,28 @@
 'use strict';
 
-// RAVE with priors seeded from npat softmax probabilities.
+// RAVE with priors seeded from npat softmax probabilities, plus a vlibpat
+// per-move RAVE boost applied at first selection.
 //
-// Identical to ai/rave.js except: when RAVE_NPAT_VISITS > 0, every newly
-// created tree node has its raveVisits/raveWins boosted using npat's softmax
-// over the candidate moves at that position.
+// On top of the npat-softmax RAVE prior applied to every new tree node, this
+// agent uses vlibpat to evaluate the position that results from playing each
+// move once its parent visit count hits VPAT_VISIT_THRESH (default 1, i.e.
+// after one real playout), and folds that value into the parent's raveWins /
+// raveVisits at that move's index.
 //
-// Boost formula (per candidate move m with npat softmax probability p):
-//   dv = V          dw = V * p
-// i.e. uniform virtual visits across all candidates, with a wr=p value claim.
+// In the browser, set window.npatModel (and window.vlibpatModel when
+// RAVE_VPAT_VISITS > 0) before requiring this module.
 //
-// Browser: load this after util/game2/game3/ladder2/npat-lib/xorshift and
-// expose the npat weights as `window.npatModel` before requiring getMove.
+// Boost formulas:
+//   npat (per candidate move m at a new node, softmax probability p):
+//     dv = V_npat     dw = V_npat * p
+//   vpat (once m's parent visit count hits VPAT_VISIT_THRESH, chooser's POV):
+//     dv = V_vpat     dw = V_vpat * value(s')
+//   where s' is the position after playing m and value(s') is vlibpat's
+//   P(BLACK wins) converted to the chooser's perspective.
+//
+// When RAVE_NPAT_K > 0 (default 0 = disabled), each new node's candidate list
+// is pruned to the K placements with the highest npat probability (PASS, if
+// originally legal, is always retained as a fallback).
 
 (function () {
 
@@ -20,33 +31,31 @@ const { PASS, BLACK, WHITE } = Util.load('./game2.js', 'Game2');
 const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
 const NPat                   = Util.load('./npat-lib.js', 'NPatterns');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
+const VLib                   = Util.load('./vlibpat.js', 'VlibPat');
 
-// `performance` is a global in browsers; in Node it lives in perf_hooks.
 const performance = (typeof window !== 'undefined' && window.performance)
   ? window.performance : require('perf_hooks').performance;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
-const RAVE_K        = Util.envFloat('RAVE_K', 800);
+const RAVE_K        = Util.envFloat('RAVE_K', 1200);
 const PLAYOUTS      = Util.envInt('PLAYOUTS', 0);
-const N_EXPAND      = Util.envInt('N_EXPAND', 2);
+const N_EXPAND      = Util.envInt('N_EXPAND', 4);
 const RAVE_INHERIT  = Util.envFloat('RAVE_INHERIT', 0.2);
-
-const PRIOR_WINS   = 0.001;
-const PRIOR_VISITS = 2 * PRIOR_WINS;
 
 const RESIGN_MIN_PLAYOUTS = 20000;
 
-// ── npat prior ────────────────────────────────────────────────────────────────
+const RAVE_NPAT_VISITS = Util.envFloat('RAVE_NPAT_VISITS', 50);
+const RAVE_NPAT_K      = Util.envInt  ('RAVE_NPAT_K', 40);
 
-const RAVE_NPAT_VISITS = Util.envFloat('RAVE_NPAT_VISITS', 5);
+const VPAT_VISIT_THRESH = Util.envInt('VPAT_VISIT_THRESH', 0);
+const RAVE_VPAT_VISITS = Util.envFloat('RAVE_VPAT_VISITS', 0);
 
 let npatWeights = null;
 const npatStateByN = new Map();
 
-if (RAVE_NPAT_VISITS > 0) {
+if (RAVE_NPAT_VISITS > 0 || RAVE_NPAT_K > 0) {
   let raw, modelName;
   if (typeof window !== 'undefined') {
-    // Browser: caller must pre-load window.npatModel.
     if (!window.npatModel) {
       throw new Error('rave-npat: window.npatModel is not set — load the npat weights script first');
     }
@@ -80,33 +89,77 @@ if (RAVE_NPAT_VISITS > 0) {
     const idx = NPat.internWeight(npatWeights, k);
     npatWeights.vals[idx] = v;
   }
-  console.error(`rave-npat: loaded ${npatWeights.size} npat weights from ${modelName} ` +
-    `(visits=${RAVE_NPAT_VISITS} 3x3c=${has33c} p12=${hasP12})`);
+  console.log(`rave-npat-prune-vpat: loaded ${npatWeights.size} npat weights from ${modelName} ` +
+    `(visits=${RAVE_NPAT_VISITS} k=${RAVE_NPAT_K} 3x3c=${has33c} p12=${hasP12})`);
 }
 
-function applyNpatPrior(node, game2) {
-  if (!npatWeights || RAVE_NPAT_VISITS <= 0 || game2.gameOver) return;
+// ── vlibpat prior ─────────────────────────────────────────────────────────────
+
+// Resolve concrete weights source.
+const vpatPath = (typeof process !== 'undefined' && process.env.VPAT_WEIGHTS)
+  ? require('path').resolve(process.env.VPAT_WEIGHTS)
+  : './ref/vlibpat-9-2L3L3NL-onpol70-9.js';
+
+// Load it.
+const vpatRaw = Util.load(vpatPath, 'vlibpatModel');
+if (!vpatRaw) {
+  throw new Error('rave-npat-prune-vpat: vlibpat model not loaded — set window.vlibpatModel before requiring');
+}
+const vpatModel = {
+  specs: vpatRaw.specs,
+  preparedSpecs: VLib.prepareSpecs(vpatRaw.specs),
+  weights: new Map(vpatRaw.weights),
+};
+console.log(`rave-npat-prune-vpat: loaded ${vpatModel.weights.size} vlibpat weights from ${vpatPath} (visits=${RAVE_VPAT_VISITS})`);
+
+// vlibpat value at `game2` — P(BLACK wins).
+function _vlibpatEval(game2) {
+  const f = VLib.extractFeatures(game2, vpatModel.preparedSpecs);
+  return VLib.evaluateFeatures(f, vpatModel.weights);
+}
+
+// Run npat extraction + softmax for `game2`.  Returns the shared state (with
+// state.moves and state.probs populated) or null if not applicable.
+function _runNpat(game2) {
+  if (!npatWeights || game2.gameOver) return null;
   const N = game2.N;
   let state = npatStateByN.get(N);
   if (!state) { state = NPat.createState(N); npatStateByN.set(N, state); }
-
   const game3 = game3FromGame2(game2);
   NPat.extractFeatures(game2, state, undefined, game3, npatWeights);
-  if (state.count === 0) return;
+  if (state.count === 0) return null;
   NPat.computeSoftmax(state, npatWeights);
+  return state;
+}
 
+function applyNpatPriorFromState(node, state, V) {
   const moves = state.moves;
   const probs = state.probs;
   const rv = node.raveVisits;
   const rw = node.raveWins;
-  const V = RAVE_NPAT_VISITS;
-
   for (let i = 0; i < state.count; i++) {
     const m = moves[i];
-    const p = probs[i];
     rv[m] += V;
-    rw[m] += V * p;
+    rw[m] += V * probs[i];
   }
+}
+
+// When K > 0, keep only the K placements with the highest npat probability.
+// PASS (if originally in the move list) is always kept as a fallback.
+function _pruneToTopK(allMoves, state, K, N) {
+  if (K <= 0 || !state) return allMoves;
+  const probByMove = new Float64Array(N * N);
+  for (let i = 0; i < state.count; i++) probByMove[state.moves[i]] = state.probs[i];
+  const placements = [];
+  let hasPass = false;
+  for (const m of allMoves) {
+    if (m === PASS) hasPass = true;
+    else placements.push(m);
+  }
+  placements.sort((a, b) => probByMove[b] - probByMove[a]);
+  const top = placements.slice(0, K);
+  if (hasPass) top.push(PASS);
+  return top;
 }
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
@@ -161,7 +214,10 @@ function getLegalMoves(game2) {
 }
 
 function makeNode(move, parent, ci, game2, N) {
-  const movesArr = getLegalMoves(game2);
+  // Compute npat softmax once — reused for top-K pruning and the RAVE prior.
+  const npatState = _runNpat(game2);
+  let movesArr = getLegalMoves(game2);
+  if (RAVE_NPAT_K > 0) movesArr = _pruneToTopK(movesArr, npatState, RAVE_NPAT_K, N);
   const M = movesArr.length;
   const area = N * N;
 
@@ -169,14 +225,14 @@ function makeNode(move, parent, ci, game2, N) {
   for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
   const children   = new Array(M).fill(null);
-  const wins       = new Float32Array(M).fill(PRIOR_WINS);
-  const visits     = new Float32Array(M).fill(PRIOR_VISITS);
+  const wins       = new Float32Array(M);
+  const visits     = new Float32Array(M);
   const raveWins   = new Float32Array(area);
   const raveVisits = new Float32Array(area);
 
   if (parent === null || parent.parent === null) {
-    raveWins.fill(PRIOR_WINS);
-    raveVisits.fill(PRIOR_VISITS);
+    raveWins.fill(0.001);
+    raveVisits.fill(0.002);
   } else {
     const gparent = parent.parent;
     for (let m = 0; m < area; m++) {
@@ -205,7 +261,9 @@ function makeNode(move, parent, ci, game2, N) {
     raveVisits
   };
 
-  applyNpatPrior(node, game2);
+  if (npatState && RAVE_NPAT_VISITS > 0) {
+    applyNpatPriorFromState(node, npatState, RAVE_NPAT_VISITS);
+  }
 
   return node;
 }
@@ -215,8 +273,8 @@ function ucbScore(moveIdx, node, rng) {
 
   const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
 
-  const realW = node.wins[moveIdx];
-  const realV = node.visits[moveIdx];
+  const realW = 0.5 + node.wins[moveIdx];
+  const realV = 1.0 + node.visits[moveIdx];
   const realWR = realW / realV;
 
   const raveWeight = RAVE_K / (RAVE_K + realV);
@@ -242,7 +300,17 @@ function selectAndExpand(root, rootGame2, N, rng) {
       if (s > bestScore) { bestScore = s; best = i; }
     }
 
-    game2.play(node.legalMoves[best]);
+
+    const move = node.legalMoves[best];
+    game2.play(move);
+
+    if (move !== PASS && RAVE_VPAT_VISITS > 0 && node.visits[best] === VPAT_VISIT_THRESH) {
+      const val = _vlibpatEval(game2);
+      const chooser = -node.mover;
+      const valueForChooser = chooser === BLACK ? val : (1 - val);
+      node.raveVisits[move] += RAVE_VPAT_VISITS;
+      node.raveWins[move]   += RAVE_VPAT_VISITS * valueForChooser;
+    }
 
     if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
       node.children[best] = makeNode(node.legalMoves[best], node, best, game2, N);
@@ -369,7 +437,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
   const rootWinRatio = totalChildWins / root.totalVisits;
 
-  if (playouts >= RESIGN_MIN_PLAYOUTS && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] <= PRIOR_WINS) {
+  if (playouts >= RESIGN_MIN_PLAYOUTS && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] === 0) {
     return { type: 'pass', move: PASS, info: 'no winning line found', children, rootWinRatio };
   }
 
@@ -384,6 +452,6 @@ function getMove(game, timeBudgetMs, options = {}) {
 }
 
 if (typeof module !== 'undefined') module.exports = { getMove };
-else window.RaveNpat = { getMove };
+else window.RaveNpatPruneVpat = { getMove };
 
 })();

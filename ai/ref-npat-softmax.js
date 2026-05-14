@@ -2,7 +2,7 @@
 
 // Softmax-sampling npat policy with hardcoded weights file.
 //
-// Same weights as ai/npat.js (out/npat-9-QD-pat4-6.js) but uses softmax
+// Same weights as ai/npat.js (npat-data.js) but uses softmax
 // sampling over the logits (NPat.policyMove) instead of greedy argmax.
 // Provides a stochastic external move source for training runs (--ext).
 //
@@ -15,7 +15,7 @@ const { game3FromGame2 } = require('../game3.js');
 
 // ── Hardcoded configuration ──────────────────────────────────────────────────
 
-const WEIGHTS_PATH = path.join(__dirname, '..', 'out', 'npat-9-QD-pat4-6.js');
+const WEIGHTS_PATH = path.join(__dirname, '..', 'npat-data.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
 
@@ -27,15 +27,15 @@ if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_L
   );
 }
 
-let has33c = false, hasE = false;
+let has33c = false, hasP12 = false;
 for (const [k] of raw.weights) {
   if (typeof k === 'string') continue;
-  if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.TYPE_E_RAW_BASE) has33c = true;
-  else if (k >= NPat.TYPE_E_RAW_BASE)                                hasE   = true;
+  if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
+  else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
 }
 const weights = NPat.createWeights({
   initialCapacity: Math.max(1024, raw.weights.size | 0),
-  use33c: has33c, useE: hasE,
+  use33c: has33c, useP12: hasP12,
 });
 for (const [k, v] of raw.weights) {
   const idx = NPat.internWeight(weights, k);
@@ -54,6 +54,6 @@ function getMove(game) {
 }
 
 console.error(`ref-npat-softmax: loaded ${weights.size} weights from ${path.basename(WEIGHTS_PATH)} ` +
-  `(3x3c=${has33c} E=${hasE}) [softmax sampling]`);
+  `(3x3c=${has33c} p12=${hasP12}) [softmax sampling]`);
 
 module.exports = { getMove };

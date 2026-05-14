@@ -124,6 +124,9 @@ if (require.main === module) {
   }
 
   printStats(positions.length);
+  console.log('Done');
+  // Sleep indefinitely so the process stays alive for inspection.
+  setInterval(() => {}, 1 << 30);
 }
 
 // Evaluate agent on a random sample of n positions from the pool.

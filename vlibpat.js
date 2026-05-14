@@ -6,11 +6,11 @@
 
 (function () {
 
-const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
 
-const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
-const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
-const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
+const { BLACK, EMPTY, PASS }   = Util.load('./game2.js', 'Game2');
+const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
+const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -266,7 +266,15 @@ function _extractSize3(raw, cap, N, lut, outKeys, outPols, count, buf) {
 //   - size:2 and size:3 use precomputed lookup tables (built by prepareSpecs) to
 //     replace the 8-permutation canonicalize loop with a single array index.
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
-function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
+// `game` accepts either a Game2 or a Game3.
+//   - Game3 is detected via the presence of `game.undo` and used directly (no
+//     rebuild — the hot-path optimisation that callers like ab-search3 rely on).
+//   - Game2 falls back to building a Game3 mirror via game3FromGame2(game),
+//     unless the caller supplies `externalGame3` for a lockstep instance to
+//     avoid the per-call rebuild.
+// When `doSetNext` is true the move is played+undone on whichever game3 we
+// end up using (caller-provided or built).
+function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3) {
   const cap   = game.N * game.N;
   const N     = game.N;
 
@@ -278,9 +286,10 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
 
   if (nextMove === PASS) doSetNext = false;
 
-  // Build a Game3 mirror so we can apply candidate moves with full play/undo
-  // and run ladder analysis on the resulting position.
-  const game3 = game3FromGame2(game);
+  // Resolve the Game3 we'll analyse on.
+  const game3 = (typeof game.undo === 'function')
+    ? game                                      // already a Game3
+    : (externalGame3 || game3FromGame2(game));  // build from Game2
   let movePlayed = false;
   if (doSetNext) {
     movePlayed = game3.play(nextMove);

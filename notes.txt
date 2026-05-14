@@ -151,9 +151,12 @@ Overall: 96/200 (48.0%)  elapsed: 0.3s
 Current high-level strategy for building a Go AI that can beat me (a weak human):
 MCTS - A good base to build upon.
 RAVE - Guides the tree portion of MCTS in early visits.  Highly effective.
-PPAT - Playout patterns. Guides the playout portion of MCTS. Trained by simulation balancing. Promising; still WIP.
-LadderPat - Patterns that provide tree node priors. Captures ladder search results. Trained by REINFORCE. Promising; still WIP.
-Aspirational:
+NPAT - Pattern policy (with ladder tactics) trained by REINFORCE.  Initializes RAVE stats on node creation.
+PPAT - Playout patterns. Guides the playout portion of MCTS. Trained by simulation balancing.
+       Promising; still WIP.
+       Try including ladder tactics.
+       This requires good unbiased position evals.  Should we use NPAT in RAVE tree?  Probably yes, otherwise it will surely misread ladders.
+Maybe:
 Use TD valuation as a tree prior.
 Use TD valuation as a replacement for the tail of a playout (low variance).
 No fit:
@@ -177,3 +180,7 @@ loaded 9322 weights from out/ref-fast-weights.js
 size: 13  lr: 0.003  maxAdjLibs: 3  maxLadderStones: 8  ref: ai/ref-fast.js  out: out/ladder-pat-mnxj1pcz.js
   games  weights   avg|w|  avgLen  gameMs   vsRef     ku     su     kw     sw   elapsed
       7     9322   0.7026     191     181     53%   0.32   0.51   0.11   0.03     35.5s
+
+
+To try:
+Now that we have tuned RAVE_NPAT_VISITS, we need to re-tune RAVE_K.

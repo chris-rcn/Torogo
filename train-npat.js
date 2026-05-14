@@ -11,13 +11,13 @@
 // Per-step update (for the mover at step t):
 //   Δw[p] = lr · A_t · ( count(p, f_{a_t}) − Σ_i π(i|s_t) · count(p, f_i) )
 // where A_t = R_t − b   (R_t ∈ {−1, 0, +1} from mover's perspective, b is an
-// exponential-moving-average baseline to reduce variance).
+// EMA of past rewards as a REINFORCE baseline (variance reduction).
 //
 // Weights are stored sparsely in a Map<pid, weight>.  They are saved at every
 // progress print (interval grows geometrically).  Ctrl-C to stop.
 //
 // Usage:
-//   node train-npat.js [--size 9] [--lr 0.05] [--baseline 0.95]
+//   node train-npat.js [--size 9] [--lr 0.02] [--reward-ema 0.99]
 //                      [--load path] [--save path] [--eval-agent random]
 
 const path = require('path');
@@ -31,16 +31,14 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'no-tactical', 'force-tactical-limit', 'use-3x3c', 'use-E']);
+  ['help', 'no-tactical', 'force-tactical-limit', 'use-3x3c', 'use-p12']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
-const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '9', 10);
-const LR         = parseFloat(opts.lr || '0.05');
-const BASELINE   = parseFloat(opts.baseline || '0.95');   // EMA decay for reward baseline; 0 disables
-const EPSILON    = Math.min(parseFloat(opts.epsilon || '0.0'), 0.9999);
-const BETA       = parseFloat(opts.beta || '0.0');          // entropy-bonus coefficient; 0 disables
-const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.999'); // Polyak EMA decay (per game)
+const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '13', 10);
+const LR         = parseFloat(opts.lr || '0.02');
+const REWARD_EMA = parseFloat(opts['reward-ema'] || '0.99');   // EMA decay for the reward baseline (variance reduction); 0 disables
+const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
 const USE_33C    = !!opts['use-3x3c'];                        // enable centered 3×3 window
-const USE_E      = !!opts['use-E'];                           // enable 12-cell 3×4 block pattern
+const USE_P12    = !!opts['use-p12'];                          // enable 12-cell diamond shape window
 const USE_TACT   = !opts['no-tactical'];                       // tactical features (default ON)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -48,17 +46,14 @@ const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ useTactical: USE_TACT, use33c: USE_33C, useE: USE_E });
+let weights = NPat.createWeights({ useTactical: USE_TACT, use33c: USE_33C, useP12: USE_P12 });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 let totalUpdates = 0;                // cumulative weight-update count across resumed runs
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function saveWeights(filePath, w, meta) {
-  // Persist Polyak-averaged weights when available (better for eval, slight
-  // rewind on resume).  Falls back to live weights before the first EMA snap.
-  const useEMA = w.valsEMAInit;
-  const source = useEMA ? w.valsEMA : w.vals;
+  const source = w.vals;
   const parts = [];
   for (const [rawId, denseIdx] of w.map) {
     parts.push(`[${JSON.stringify(rawId)},${+source[denseIdx].toFixed(6)}]`);
@@ -71,8 +66,6 @@ function saveWeights(filePath, w, meta) {
     `  ema: ${+meta.ema.toFixed(6)},`,
     `  totalUpdates: ${Math.round(meta.totalUpdates)},`,
     `  tactStoneLimit: ${NPat.TACT_STONE_LIMIT},`,
-    `  emaAlpha: ${+meta.emaAlpha.toFixed(6)},`,
-    `  weightsAreEMA: ${useEMA},`,
     `  weights: new Map(${list}),`,
     `};`,
     "if (typeof module !== 'undefined') module.exports = npatModel;",
@@ -103,18 +96,12 @@ function loadWeights(filePath) {
   }
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, raw.weights.size | 0),
-    useTactical: USE_TACT, use33c: USE_33C, useE: USE_E,
+    useTactical: USE_TACT, use33c: USE_33C, useP12: USE_P12,
   });
   for (const [rawId, val] of raw.weights) {
     const idx = NPat.internWeight(w, rawId);
     w.vals[idx] = val;
-    w.valsEMA[idx] = val;
   }
-  // Files saved after EMA was wired up store the Polyak-averaged values, so
-  // we mark valsEMA as initialised — subsequent applyEMA calls continue
-  // averaging on top.  Older files don't have weightsAreEMA; we still seed
-  // valsEMA = vals for them, which is the same as the first applyEMA would do.
-  w.valsEMAInit = true;
   // Older save files truncated totalUpdates to int32; clamp away negatives.
   const tu = raw.totalUpdates ?? 0;
   return { weights: w, ema: raw.ema ?? 0, totalUpdates: tu < 0 ? 0 : tu, tactStoneLimit: raw.tactStoneLimit };
@@ -139,20 +126,7 @@ function trainGame(N) {
   let moves = 0;
   while (!game.gameOver && moves < maxMoves) {
     const player = game.current;
-    let choice;
-
-    if (EPSILON > 0 && Math.random() < EPSILON) {
-      // Uniform exploration over legal non-eye moves.  Still need features
-      // (and π) for the gradient, so run the same extraction path.
-      const mv = NPat.policyMove(game, state, weights, Math, game3);
-      if (state.count === 0) { choice = { move: PASS, index: -1, prob: 1 }; }
-      else {
-        const i = Math.floor(Math.random() * state.count);
-        choice = { move: state.moves[i], index: i, prob: state.probs[i] };
-      }
-    } else {
-      choice = NPat.policyMove(game, state, weights, Math, game3);
-    }
+    const choice = NPat.policyMove(game, state, weights, Math, game3, TEMPERATURE);
 
     if (choice.index >= 0) {
       // Snapshot features + distribution (copy just the slice we need).
@@ -161,13 +135,13 @@ function trainGame(N) {
       const n = state.count;
       const patIds33c = new Int32Array(n);
       patIds33c.set(state.patIds33c.subarray(0, n));
-      const patIdsE = new Int32Array(n);
-      patIdsE.set(state.patIdsE.subarray(0, n));
+      const patIdsP12 = new Int32Array(n);
+      patIdsP12.set(state.patIdsP12.subarray(0, n));
       const tact = new Uint8Array(n * NPat.N_TACT_SLOTS);
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsE, tact, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, patIds33c, patIdsP12, tact, probs, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -179,24 +153,23 @@ function trainGame(N) {
   const winner = game.calcWinner();
   const outcomeBlack = winner === BLACK ? 1 : (winner === 0 ? 0 : -1);
 
-  // REINFORCE: apply Δw per step with advantage = R − baseline, where R is from
-  // the MOVER'S perspective.
+  // REINFORCE: apply Δw per step with advantage = R − rewardBaseline, where R
+  // is from the MOVER'S perspective.
   let stepsApplied = 0;
   let weightUpdates = 0;
   for (const s of steps) {
     const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
-    const adv = BASELINE > 0 ? (R - ema) : R;
+    const adv = REWARD_EMA > 0 ? (R - ema) : R;
     weightUpdates += NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR) || 0;
-    if (BETA > 0) NPat.entropyBonusUpdate(s, weights, LR * BETA);
     stepsApplied++;
   }
 
-  if (BASELINE > 0 && steps.length > 0) {
+  if (REWARD_EMA > 0 && steps.length > 0) {
     // Update EMA towards the black-perspective outcome (so it's consistent).
     // Note: we subtract ema from mover-perspective R in the step update, which
     // is a small approximation — the baseline is still unbiased only if it is
     // independent of mover.  In practice the asymmetry washes out quickly.
-    ema = BASELINE * ema + (1 - BASELINE) * outcomeBlack;
+    ema = REWARD_EMA * ema + (1 - REWARD_EMA) * outcomeBlack;
   }
 
   // Sum of max(softmax) across the snapshotted steps (top-1 confidence).
@@ -253,15 +226,15 @@ function evalVsReference(N, refGetMove, nGames) {
 
 if (opts.help) {
   console.log(`Usage: node train-npat.js [options]
-  --size N         | --train-size N | --eval-size N   (default 9)
-  --lr F           learning rate (default 0.05)
-  --baseline F     EMA decay for reward baseline (default 0.95; 0 disables)
-  --epsilon F      uniform-random exploration rate (default 0)
-  --beta F         entropy-bonus coefficient (default 0; applied on top of lr)
+  --size N         | --train-size N (default 9) | --eval-size N (default 13)
+  --lr F           learning rate (default 0.02)
+  --reward-ema F   EMA decay for the reward baseline (variance reduction).
+                   Default 0.99; 0 disables.
+  --temperature F  softmax sampling temperature for training moves;
+                   0 = argmax, 1 = standard softmax (default 1)
   --use-3x3c       enable the centered 3×3 shape window (default off)
-  --use-E          enable the 12-cell 3×4 block shape window (default off)
+  --use-p12        enable the 12-cell diamond shape window (default off)
   --no-tactical    disable the ladder/tactical features (default on)
-  --ema-alpha F    Polyak EMA decay per game; eval reads valsEMA (default 0.999)
   --eval-agent S   reference agent in ai/ (default random)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -284,26 +257,35 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`lr=${LR}  baseline=${BASELINE}  epsilon=${EPSILON}  beta=${BETA}  ema-alpha=${EMA_ALPHA}`);
-console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  E=${USE_E ? 'ON' : 'off'}`);
+console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  temperature=${TEMPERATURE}`);
+console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  p12=${USE_P12 ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 
 console.log([
-  'games'  .padStart(7),
-  'weights'.padStart(9),
-  'avg|w|' .padStart(7),
-  'upd/pat'.padStart(7),
-  'maxP'   .padStart(6),
+  'game'.padStart(4),
+  'tElp'.padStart(5),
+  'tGm '.padStart(5),
+  'nWts'.padStart(4),
+  'avgW'.padStart(6),
+  'u/pa'.padStart(4),
+  'maxP'.padStart(4),
+  'gRef'.padStart(4),
+  'wrRf'.padStart(4),
+  'wrAv'.padStart(4),
 ].join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 const t0 = Date.now();
 let nextPrintAt = t0 + 1000;
+let lastPrintAt = t0;
 let g = 0;
 let maxProbSumWindow = 0, maxProbNWindow = 0;
+let lastPrintG = 0;
+let elapsedMsAcc = 0;
+const evalHistory = [];   // per-game eval results (1 / 0); rolling-half avgWR uses this
 
 while (true) {
   g++;
@@ -311,8 +293,7 @@ while (true) {
   totalUpdates += r.weightUpdates;
   maxProbSumWindow += r.maxProbSum;
   maxProbNWindow   += r.maxProbN;
-  // Polyak / SWA: nudge valsEMA toward the post-update vals once per game.
-  NPat.applyEMA(weights, EMA_ALPHA);
+  elapsedMsAcc     += r.elapsedMs;
 
   if (Date.now() >= nextPrintAt) {
     // Count only interned pids that have received a non-zero gradient: pids
@@ -333,16 +314,48 @@ while (true) {
     const nextMs = Date.now() - t0;
 
     const maxPAvg = maxProbNWindow > 0 ? maxProbSumWindow / maxProbNWindow : 0;
+
+    // Eval vs reference for up to 20% of the interval's training time, capped
+    // at 1000 games.  greedy npat policy on this side vs evalGetMove on the
+    // other side, colours alternating.
+    const intervalMs   = Date.now() - lastPrintAt;
+    const evalBudgetMs = intervalMs * 0.2;
+    const evalStart    = Date.now();
+    let evalWins = 0, evalGames = 0;
+    while (evalGames < 1000 && Date.now() - evalStart < evalBudgetMs) {
+      const results = evalVsReference(EVAL_SIZE, evalGetMove, 1);
+      evalHistory.push(results[0]);
+      evalWins += results[0];
+      evalGames++;
+    }
+    const avgHalf = Math.max(1, Math.floor(evalHistory.length / 2));
+    const avgWR   = evalHistory.length > 0
+      ? evalHistory.slice(-avgHalf).reduce((s, r) => s + r, 0) / avgHalf
+      : 0;
+    const wrRefStr = evalGames > 0 ? (evalWins / evalGames).toFixed(3) : '-';
+
+    const elapsedMs      = Date.now() - t0;
+    const cycleN         = g - lastPrintG;
+    const cycleAvgGameMs = cycleN > 0 ? elapsedMsAcc / cycleN : 0;
+
     console.log([
-      String(g)                .padStart(7),
-      String(wNonZero)         .padStart(9),
-      wAvg.toFixed(3)          .padStart(7),
-      updPerPat.toFixed(1)     .padStart(7),
-      maxPAvg.toFixed(3)       .padStart(6),
+      Util.fmt4(g),
+      Util.fmtMs(elapsedMs),
+      Util.fmtMs(cycleAvgGameMs),
+      Util.fmt4(wNonZero),
+      wAvg.toFixed(4).padStart(6),
+      Util.fmt4(updPerPat),
+      Util.fmtRatio4(maxPAvg),
+      Util.fmt4(evalGames),
+      evalGames > 0 ? Util.fmtRatio4(evalWins / evalGames) : '   -',
+      evalHistory.length > 0 ? Util.fmtRatio4(avgWR) : '   -',
     ].join('  '));
     maxProbSumWindow = 0; maxProbNWindow = 0;
+    elapsedMsAcc = 0;
+    lastPrintG = g;
 
-    saveWeights(SAVE_PATH, weights, { ema, totalUpdates, emaAlpha: EMA_ALPHA });
+    saveWeights(SAVE_PATH, weights, { ema, totalUpdates });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
+    lastPrintAt = Date.now();
   }
 }
