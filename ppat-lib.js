@@ -201,9 +201,9 @@ function _notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lw, W, cur, foe)
 const _atariGids    = new Int32Array(8);
 const _atariLibsArr = new Int32Array(8);
 const _twoLibGids   = new Int32Array(8);
-const _sbcCells     = new Int32Array(64);   // save-by-capture cell indices
-const _semCells     = new Int32Array(64);   // semeai candidate cell indices
-const _semEgids     = new Int32Array(64);   // semeai candidate enemy gids
+let _sbcCells       = new Int32Array(64);   // save-by-capture cell indices (grown to cap)
+let _semCells       = new Int32Array(64);   // semeai candidate cell indices (grown to cap)
+let _semEgids       = new Int32Array(64);   // semeai candidate enemy gids (grown to cap)
 const _koSolveLibs  = new Int32Array(4);
 const _seenBuf      = new Int32Array(16);   // dedup scratch
 
@@ -239,6 +239,11 @@ function totalWeights() { return PHASE_COUNT * (NUM_PATTERNS + 7); }
 function extractFeatures(game, state) {
   const N      = game.N;
   const cap    = N * N;
+  if (_sbcCells.length < cap) {
+    _sbcCells = new Int32Array(cap);
+    _semCells = new Int32Array(cap);
+    _semEgids = new Int32Array(cap);
+  }
   const cells  = game.cells;
   const gidArr = game._gid;
   const lsArr  = game._ls;
@@ -531,6 +536,7 @@ const _expBuf = new Float64Array(1);
 const _expInt = new Int32Array(_expBuf.buffer);
 function _fastExp(x) {
   if (x < -20) return 0;
+  if (x > 20) x = 20;
   // Schraudolph: write to high 32 bits of float64
   _expInt[1] = (1512775 * x + 1072632447) | 0;
   _expInt[0] = 0;
@@ -578,6 +584,10 @@ function loadWeights(pathOrObj) {
     try { raw = require(_path.resolve(raw)); } catch (e) { return null; }
   }
   if (!raw || !raw.weights) return null;
+  if (raw.numPatterns != null && raw.numPatterns !== NUM_PATTERNS) {
+    console.error(`ppat loadWeights: numPatterns=${raw.numPatterns} in file but ${NUM_PATTERNS} expected`);
+    return null;
+  }
   if (raw.phases) PHASE_COUNT = raw.phases;
   return raw.weights;
 }
