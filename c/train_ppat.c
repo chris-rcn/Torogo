@@ -23,6 +23,7 @@
  *     --overfit             use same data for train and test
  */
 #include "game2.h"
+#include "game3.h"
 #include "ppat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,7 @@ static int    cfg_init         = 0;
 static int    cfg_train_moves = -1;  /* -1 = unlimited; else ppat for first N moves, then uniform */
 static int    cfg_test_moves  = -1;  /* same, but for test rollouts */
 static int    cfg_phase        = -1;   /* -1 = all phases; >= 0 = train/test only this phase */
+static int    cfg_ladder       = 0;    /* 0 = no ladder features; 1 = enable (requires Game3 mirror) */
 static const char *cfg_file    = NULL;
 static const char *cfg_load    = NULL;  /* path to weights file to load */
 
@@ -76,6 +78,35 @@ static int     n_test = 0;
 
 static int    TOTAL;
 static float *theta;
+
+/* Persistent Game3 used for ladder analysis.  Replayed from each training
+ * position once via g3_from_game2(), then kept in sync with the Game2 sim
+ * during rollouts via mirrored g3_play / g3_undo. */
+static Game3 *sim_g3 = NULL;
+
+static void ladder_g3_ensure(int N) {
+    if (!cfg_ladder) return;
+    if (!sim_g3 || sim_g3->N != N) {
+        if (sim_g3) g3_free(sim_g3);
+        sim_g3 = g3_new(N);
+    }
+}
+
+/* Sync sim_g3 to match the given Game2 position.  Call once per training
+ * position before any rollouts. */
+static void ladder_g3_sync(const Game2 *g) {
+    if (!cfg_ladder) return;
+    ladder_g3_ensure(g->N);
+    if (!g3_from_game2(sim_g3, g)) {
+        fprintf(stderr, "train_ppat: g3_from_game2 failed during ladder sync\n");
+        exit(1);
+    }
+}
+
+/* Returns the Game3 pointer passed to ppat_extract (NULL when ladder off). */
+static inline Game3 *ladder_g3(void) {
+    return cfg_ladder ? sim_g3 : NULL;
+}
 
 /* Scratch buffers */
 static PpatState rollout_feat_st;
@@ -252,7 +283,7 @@ static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx) {
  * Leaves rollout_feat_st and rollout_probs populated. */
 
 static int policy_select(Game2 *g) {
-    ppat_extract(g, &rollout_feat_st);
+    ppat_extract(g, ladder_g3(), &rollout_feat_st);
     int n = rollout_feat_st.count;
     if (n == 0) return -1;
 
@@ -286,10 +317,15 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
     Game2 sim;
     g2_clone(&sim, game);
     int pm = ppat_moves;
+    int g3_depth = 0;       /* moves mirrored into sim_g3 (for rewind on exit) */
 
     for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
-        if (chosen == -1) { g2_play(&sim, PASS); continue; }
+        if (chosen == -1) {
+            g2_play(&sim, PASS);
+            if (cfg_ladder) { g3_play(sim_g3, PASS); g3_depth++; }
+            continue;
+        }
 
         int n = rollout_feat_st.count;
 
@@ -304,11 +340,18 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
                 grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
         }
 
-        g2_play(&sim, rollout_feat_st.moves[chosen]);
+        int32_t mv = rollout_feat_st.moves[chosen];
+        g2_play(&sim, mv);
+        if (cfg_ladder) { g3_play(sim_g3, mv); g3_depth++; }
     }
 
-    /* Finish game with uniform random play */
+    /* Finish game with uniform random play.  No need to mirror — ladder isn't
+     * consulted past the policy phase. */
     while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim));
+
+    /* Rewind sim_g3 to its state at rollout entry so the next rollout starts
+     * from the same base position. */
+    if (cfg_ladder) for (int i = 0; i < g3_depth; i++) g3_undo(sim_g3);
 
     return g2_estimate_winner(&sim) == player ? 1 : -1;
 }
@@ -317,6 +360,10 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
 
 static void update_theta(const Game2 *game, float v_star) {
     int8_t player = game->current;
+
+    /* Sync ladder Game3 to this training position once; rollouts then keep it
+     * in lockstep via mirrored play/undo. */
+    ladder_g3_sync(game);
 
     /* V: M rollouts, no gradient */
     float V = 0;
@@ -361,7 +408,8 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 static float move_probability(const Game2 *g, int32_t move) {
     static PpatState st;
     static float logits[MAX_CAP];
-    ppat_extract(g, &st);
+    ladder_g3_sync(g);
+    ppat_extract(g, ladder_g3(), &st);
     int n = st.count;
     if (n == 0) return 0;
     float mx = -1e30f;
@@ -449,18 +497,34 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
            iterations, total_positions, mean_abs, rms, tr.move_match * 100.0f,
            cumulative_test_s, elapsed_buf, pos_ms);
     if (show_weights) {
-        int prev_base = ppat_phase_count * ppat_num_patterns;
+        int prev_base   = ppat_phase_count * ppat_num_patterns;
+        int ladder_base = ppat_phase_count * (ppat_num_patterns + 7);
         printf("  [ ");
         if (cfg_phase >= 0) {
             int pb = prev_base + cfg_phase * 7;
             for (int i = 0; i < 7; i++)
                 printf("%6.2f ", expf(theta[pb + i]));
+            if (cfg_ladder) {
+                int lb = ladder_base + cfg_phase * PPAT_NUM_LADDER;
+                printf("| ");
+                for (int i = 0; i < PPAT_NUM_LADDER; i++)
+                    printf("%6.2f ", expf(theta[lb + i]));
+            }
         } else {
             for (int i = 0; i < 7; i++) {
                 float avg = 0;
                 for (int p = 0; p < ppat_phase_count; p++)
                     avg += expf(theta[prev_base + p * 7 + i]);
                 printf("%6.2f ", avg / ppat_phase_count);
+            }
+            if (cfg_ladder) {
+                printf("| ");
+                for (int i = 0; i < PPAT_NUM_LADDER; i++) {
+                    float avg = 0;
+                    for (int p = 0; p < ppat_phase_count; p++)
+                        avg += expf(theta[ladder_base + p * PPAT_NUM_LADDER + i]);
+                    printf("%6.2f ", avg / ppat_phase_count);
+                }
             }
         }
         printf("]");
@@ -483,7 +547,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--filter <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--overfit]\n");
+        fprintf(stderr, "       [--overfit] [--ladder]\n");
         return 1;
     }
 
@@ -504,6 +568,11 @@ int main(int argc, char **argv) {
     ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_phase = get_int_arg(argc, argv, "--phase", -1);
+    cfg_ladder = has_flag(argc, argv, "--ladder");
+
+    /* When loading, the file's `ladder` field is authoritative — ppat_load_weights
+     * sets ppat_ladder_enabled.  For fresh runs, --ladder controls layout. */
+    if (!cfg_load) ppat_ladder_enabled = cfg_ladder;
 
     g2_seed((uint32_t)time(NULL));
     ppat_init();
@@ -516,6 +585,13 @@ int main(int argc, char **argv) {
     if (cfg_load) {
         float *loaded = ppat_load_weights(cfg_load);
         if (!loaded) { fprintf(stderr, "failed to load weights\n"); exit(1); }
+        if (cfg_ladder && !ppat_ladder_enabled) {
+            fprintf(stderr, "warning: --ladder set but loaded file has no ladder weights; running without ladder features\n");
+            cfg_ladder = 0;
+        } else if (!cfg_ladder && ppat_ladder_enabled) {
+            fprintf(stderr, "note: loaded file has ladder weights; enabling ladder features\n");
+            cfg_ladder = 1;
+        }
         TOTAL = ppat_total_weights();
         free(theta);
         theta = loaded;
@@ -534,10 +610,11 @@ int main(int argc, char **argv) {
     /* Output filename */
     snprintf(weights_file, sizeof(weights_file), "out/ppat-data-%08x.js", g2_rand());
 
-    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d\n",
+    printf("train: %s (%d positions)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d  ladder: %s\n",
            cfg_file, n_train, cfg_lr, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_filter,
-           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase);
+           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase,
+           cfg_ladder ? "true" : "false");
     printf("test: %d positions  test-playouts: %d  test-moves: %d  output: %s\n",
            n_test, cfg_test_playouts, cfg_test_moves, weights_file);
     printf("%6s  %9s  %6s  %6s  %6s  %6s  %8s  %6s\n",

@@ -50,8 +50,8 @@ const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
-const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
-const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '1'), 0.9999);  // share of moves from own search1ply when --ext is set
+const EPSILON    = parseFloat(opts.epsilon      || '0.1');
+const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
@@ -71,7 +71,11 @@ let specs = [
   { size: 3 },                      // ladder-aware (7-state)
   { size: 3, ladder: false },       // plain (3-state)
 ];
-let prepSpecs = prepareSpecs(specs);
+
+// Tactical backend for ladder-aware encoding.  ladder2 = 1-2 lib classification
+// (legacy default).  tactics3 = budgeted search up to 1-3 libs.
+let tacticsOpts = { tactics: opts.tactics || 'ladder2' };
+let prepSpecs = prepareSpecs(specs, tacticsOpts);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
@@ -194,12 +198,9 @@ function trainGame(N) {
     prev2 = prev1;
     prev1 = features;
     let move;
-    const r = Math.random();
-    if (r < EPSILON) {
+    if (Math.random() < EPSILON) {
       move = game.randomLegalMove();
-    } else if (extGetMove && r < EPSILON + ON_POLICY) {
-      move = search1ply(game, game3);
-    } else if (extGetMove) {
+    } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
     } else {
       move = search1ply(game, game3);
@@ -347,7 +348,14 @@ if (POSITIONS_FILE) {
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
-    ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    let loadedOpts;
+    ({ weights, specs, opts: loadedOpts, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    // File's tactics setting is authoritative — the weights were trained for
+    // that backend's per-cell encoding.  Flag a mismatch with the CLI flag.
+    if (opts.tactics && loadedOpts && loadedOpts.tactics !== opts.tactics) {
+      console.warn(`Warning: --tactics ${opts.tactics} ignored; loaded file uses ${loadedOpts.tactics}`);
+    }
+    tacticsOpts = loadedOpts || tacticsOpts;
     // Seed EMA shadow from the loaded weights so subsequent applyEMA continues
     // averaging on top of the persisted (already-EMA) values.
     weightsEMA = new Map(weights);
@@ -362,6 +370,7 @@ if (LOAD_PATH) {
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  eval-topk=${EVAL_TOPK}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
+console.log(`Tactics: ${tacticsOpts.tactics}`);
 console.log();
 
 // Print header.
@@ -489,7 +498,7 @@ while (true) {
     // Persist Polyak-averaged weights for eval (slight rewind on resume).
     // Falls back to live weights before the first applyEMA.
     const saveSrc = weightsEMAInit ? weightsEMA : weights;
-    saveWeights(SAVE_PATH, { weights: saveSrc, specs, preparedSpecs: prepSpecs });
+    saveWeights(SAVE_PATH, { weights: saveSrc, specs, opts: tacticsOpts, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }
 

@@ -11,6 +11,11 @@ const Util = (typeof require === 'function') ? require('./util.js') : window.Uti
 const { BLACK, EMPTY, PASS }   = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
 const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
+const {
+  searchChains,
+  DEFAULT_NODE_LIMIT:  TACTICS3_NODE_LIMIT,
+  DEFAULT_DEPTH_LIMIT: TACTICS3_DEPTH_LIMIT,
+} = Util.load('./tactics3.js', 'Tactics3');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -52,15 +57,22 @@ const PERMS_3x3 = [
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
-// Compute per-cell ladder-aware codes for `game3` (Int8Array(cap)) — turn-
+// Compute per-cell tactical codes for `game3` (Int8Array(cap)) — turn-
 // independent (the encoding does NOT depend on whose move it is).
 //   0          empty
-//  ±1          alive: group with > 2 liberties, OR 1-2 lib group that survives
-//              optimal play regardless of who moves next
-//  ±2          dead: 1-2 lib group that gets captured regardless of who moves
-//  ±3          unsettled: 1-2 lib group whose fate depends on whose turn it is
+//  ±1          alive: group whose liberty count puts it out of tactical range
+//              (>2 for ladder2, >3 for tactics3), OR an in-range group that
+//              survives optimal play regardless of who moves next
+//  ±2          dead: in-range group captured regardless of who moves
+//  ±3          unsettled: in-range group whose fate depends on whose turn it
+//              is, OR (tactics3 only) one whose search was inconclusive
 // Sign encodes color (+ BLACK, − WHITE).  |code| ∈ {0, 1, 2, 3}.
-function computeLadderCodes(game3) {
+//
+// opts:
+//   tactics: 'ladder2' (default) | 'tactics3'
+//   nodeLimit, depthLimit: optional bounds for tactics3 (forwarded to
+//     searchChains; ignored by ladder2).
+function computeLadderCodes(game3, opts) {
   const N = game3.N;
   const cap = N * N;
   const codes = new Int8Array(cap);
@@ -68,11 +80,15 @@ function computeLadderCodes(game3) {
   for (let i = 0; i < cap; i++) codes[i] = game3.cells[i];
   if (game3.emptyCount === cap) return codes;
 
-  // Single ladder pass.  For each 1-2 lib group, classify alive/dead/unsettled
-  // from the {moverSucceeds, urgentLibs} pair (turn-independent because:
-  //   urgentLibs.length === 0 → mover doesn't need to act, so the same outcome
-  //   holds even if the other side moves first).
-  const infos = getAllLadderStatuses(game3);
+  const tactics = (opts && opts.tactics) || 'ladder2';
+  // Single tactical pass.  Both backends return arrays of
+  //   { gid, color, status: { libs, moverSucceeds, urgentLibs } }.
+  // For tactics3, moverSucceeds may be null (inconclusive within budget) and
+  // groups with 1-3 libs are included; for ladder2 the range is 1-2 libs and
+  // moverSucceeds is always boolean.
+  const infos = tactics === 'tactics3'
+    ? searchChains(game3, opts?.nodeLimit, opts?.depthLimit)
+    : getAllLadderStatuses(game3);
   if (infos.length === 0) return codes;
   const cur = game3.current;
   const codeByGid = new Map();
@@ -83,8 +99,9 @@ function computeLadderCodes(game3) {
     const defending  = groupColor === cur;
     const sign       = groupColor > 0 ? 1 : -1;
     let mag;
-    if (urgentLibs.length > 0) {
-      // Either side can flip the outcome by playing an urgent lib first.
+    if (urgentLibs.length > 0 || moverSucceeds === null) {
+      // Either side can flip the outcome by playing an urgent lib first, or
+      // tactics3 ran out of budget — both go in the "contested/unknown" bin.
       mag = 3;  // unsettled
     } else if (moverSucceeds) {
       // Mover's preferred outcome is already locked in (no action needed).
@@ -107,10 +124,10 @@ function computeLadderCodes(game3) {
 // Single-cell convenience wrapper (slow: rebuilds game3 + ladder analysis each
 // call).  Kept for tests / external callers.  Internally extractFeatures uses
 // computeLadderCodes once per position.
-function rawState(game, idx) {
+function rawState(game, idx, opts) {
   if (game.cells[idx] === 0) return 0;
   const game3 = game3FromGame2(game);
-  const codes = computeLadderCodes(game3);
+  const codes = computeLadderCodes(game3, opts);
   return codes[idx];
 }
 
@@ -174,10 +191,21 @@ function _makeSparseLUT(cellCount, perms, ml, mix) {
 }
 
 // Spec = { size: 1|2|3, ladder?: boolean }.  ladder defaults to true.
-//   ladder:true  → 7-state ladder-aware encoding (alive/dead/unsettled/+sign)
+//   ladder:true  → 7-state tactics-aware encoding (alive/dead/unsettled/+sign)
 //   ladder:false → 3-state presence-only encoding (empty/black/white)
 // Different mixer constants ensure no key collisions across variants.
-function prepareSpecs(specs) {
+//
+// opts (optional): tactical backend selection.
+//   tactics: 'ladder2' (default, 1-2 lib classification) | 'tactics3' (1-3 lib,
+//            budgeted/depth-limited search).  Travels with the prepared result
+//            and is consumed by extractFeatures → computeLadderCodes.
+//   nodeLimit, depthLimit: forwarded to tactics3 (ignored for ladder2).
+function prepareSpecs(specs, opts) {
+  const tactics    = opts?.tactics || 'ladder2';
+  // nodeLimit / depthLimit pass through as-is (possibly undefined); tactics3's
+  // param defaults handle the missing-value case downstream.
+  const nodeLimit  = opts?.nodeLimit;
+  const depthLimit = opts?.depthLimit;
   const need = { s1L:false, s2L:false, s3L:false,
                  s1NL:false, s2NL:false, s3NL:false };
   for (const spec of specs) {
@@ -205,7 +233,8 @@ function prepareSpecs(specs) {
   let totalSizes = 0;
   for (const k of Object.keys(need)) if (need[k]) totalSizes++;
 
-  return { need, lut2L, lut3L, lut2NL, lut3NL, totalSizes };
+  return { need, lut2L, lut3L, lut2NL, lut3NL, totalSizes,
+           tactics, nodeLimit, depthLimit };
 }
 
 // Sparse-LUT-driven size-2 extraction.  raw is a per-cell code array (Int8/Uint8);
@@ -297,8 +326,11 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3) {
 
   const { need, lut2L, lut3L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3 } = prepSpecs;
 
-  // Compute ladder codes only if any ladder spec is requested.
-  const rawL  = (need.s1L || need.s2L || need.s3L)    ? computeLadderCodes(game3) : null;
+  // Compute tactical codes only if any ladder spec is requested.  The tactics
+  // backend (ladder2 vs tactics3) is pinned in prepSpecs.
+  const rawL  = (need.s1L || need.s2L || need.s3L)
+    ? computeLadderCodes(game3, prepSpecs)
+    : null;
   // No-ladder codes = sign-only cell values (-1, 0, +1) — i.e. game3.cells.
   const rawNL = (need.s1NL || need.s2NL || need.s3NL) ? game3.cells : null;
 
@@ -364,23 +396,37 @@ function evaluate(game, model) {
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
-// Loads a model JS file and returns { weights: Map<number,float>, specs: [...] }.
-// Always returns a fresh copy so multiple callers don't share the same Map.
+// Loads a model JS file and returns { weights, specs, opts, preparedSpecs }.
+// The file's `tactics` / `nodeLimit` / `depthLimit` fields (if present) are
+// authoritative — they pin the backend the weights were trained with so
+// inference uses the same encoding.  Absent ⇒ legacy ⇒ defaults to ladder2.
 function loadWeights(filePath) {
   const raw = require(require('path').resolve(filePath));
   const specs = raw.specs;
-  return { specs, preparedSpecs: prepareSpecs(specs), weights: new Map(raw.weights) };
+  const opts = {
+    tactics:    raw.tactics || 'ladder2',
+    nodeLimit:  raw.nodeLimit,   // undefined ⇒ tactics3 default
+    depthLimit: raw.depthLimit,  // undefined ⇒ tactics3 default
+  };
+  return { specs, opts, preparedSpecs: prepareSpecs(specs, opts), weights: new Map(raw.weights) };
 }
 
-// Writes a model { weights, specs } to a JS file (browser-includable).
+// Writes a model { weights, specs, opts? } to a JS file (browser-includable).
+// Tactics-related fields are written only when non-default so legacy files
+// (ladder2 / no bounds) stay compact and identical to the pre-tactics3 format.
 function saveWeights(filePath, model) {
   const fs         = require('fs');
   const specStr    = JSON.stringify(model.specs);
   const weightsStr = '[' + [...model.weights].map(([k, v]) => `[${k},${+v.toFixed(6)}]`).join(',') + ']';
+  const opts       = model.opts || {};
+  let extras = '';
+  if (opts.tactics    && opts.tactics    !== 'ladder2')                     extras += `, tactics: '${opts.tactics}'`;
+  if (opts.nodeLimit  !== undefined && opts.nodeLimit  !== TACTICS3_NODE_LIMIT)  extras += `, nodeLimit: ${opts.nodeLimit}`;
+  if (opts.depthLimit !== undefined && opts.depthLimit !== TACTICS3_DEPTH_LIMIT) extras += `, depthLimit: ${opts.depthLimit}`;
   const src = [
     "'use strict';",
     '// Auto-generated by train-vlibpat.js — do not edit by hand.',
-    `const vlibpatModel = { specs: ${specStr}, weights: new Map(${weightsStr}) };`,
+    `const vlibpatModel = { specs: ${specStr}${extras}, weights: new Map(${weightsStr}) };`,
     "if (typeof module !== 'undefined') module.exports = vlibpatModel;",
     "else window.vlibpatModel = vlibpatModel;",
   ].join('\n') + '\n';

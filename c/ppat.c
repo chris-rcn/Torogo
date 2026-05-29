@@ -2,6 +2,8 @@
  * ppat.c — 3×3 pattern + previous-move feature library (C port of ppat-lib.js).
  */
 #include "ppat.h"
+#include "game3.h"
+#include "ladder2.h"
 #include <math.h>
 #include <string.h>
 
@@ -10,6 +12,7 @@
 int16_t ppat_canon_id[PPAT_RAW_SIZE];
 int32_t ppat_num_patterns = 0;
 int     ppat_phase_count = 1;
+int     ppat_ladder_enabled = 0;
 
 /* D4 permutations: perm[src] = dst */
 static const int D4[8][8] = {
@@ -234,7 +237,7 @@ static bool not_self_atari_cheap(int32_t idx, int b4, const Game2 *g,
 
 /* ── Extract features ──────────────────────────────────────────────────────── */
 
-void ppat_extract(const Game2 *g, PpatState *st) {
+void ppat_extract(const Game2 *g, struct Game3 *g3, PpatState *st) {
     int8_t cur = g->current;
     int8_t foe = -cur;
     int32_t prev = g->last_move;
@@ -243,7 +246,37 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
     const int phase = ppat_phase_count * (g->cap - g->empty_count) / g->cap;
     const int pat_offset = phase * ppat_num_patterns;
-    const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;  /* cell that created ko on our last turn */
+    const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
+    const int ladder_offset =
+        ppat_phase_count * (ppat_num_patterns + 7) + phase * PPAT_NUM_LADDER;
+
+    /* ── Ladder feature pre-scan ──────────────────────────────────────────────
+     * Enumerate every 1-2 lib group; for each lib classify it as
+     *   bit 0 UrgentKill, bit 1 UrgentSave, bit 2 WastedAttack, bit 3 WastedExtend
+     * into a per-cell bitmap.  All four are checked O(1) per candidate below. */
+    uint8_t ladder_bits[MAX_CAP];
+    const bool do_ladder = (ppat_ladder_enabled && g3 != NULL);
+    if (do_ladder) {
+        memset(ladder_bits, 0, sizeof(ladder_bits));
+        static Ladder2Result lresults[MAX_CAP];
+        int32_t nl = ladder2_get_all_statuses(g3, /*min_chain*/1, lresults, MAX_CAP);
+        for (int i = 0; i < nl; i++) {
+            const Ladder2Status *s = &lresults[i].status;
+            if (!s->valid) continue;
+            const bool is_friendly = (lresults[i].color == cur);
+            for (int j = 0; j < s->lib_count; j++) {
+                int32_t lib = s->libs[j];
+                bool in_urgent = false;
+                for (int k = 0; k < s->urgent_count; k++)
+                    if (s->urgent_libs[k] == lib) { in_urgent = true; break; }
+                const bool wins = in_urgent && s->mover_succeeds;
+                uint8_t bit;
+                if (wins) bit = is_friendly ? 0x02 : 0x01;            /* save | kill */
+                else      bit = is_friendly ? 0x08 : 0x04;            /* wasted_extend | wasted_attack */
+                ladder_bits[lib] |= bit;
+            }
+        }
+    }
 
     /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings.
      * KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
@@ -443,6 +476,15 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         for (int b = 0; b < 7; b++)
             if (mask & (1 << b)) st->feat[nf++] = prev_offset + b;
 
+        /* Emit ladder feature keys (when enabled) */
+        if (do_ladder) {
+            uint8_t lb = ladder_bits[idx];
+            if (lb & 0x01) st->feat[nf++] = ladder_offset + 0;  /* UrgentKill */
+            if (lb & 0x02) st->feat[nf++] = ladder_offset + 1;  /* UrgentSave */
+            if (lb & 0x04) st->feat[nf++] = ladder_offset + 2;  /* WastedAttack */
+            if (lb & 0x08) st->feat[nf++] = ladder_offset + 3;  /* WastedExtend */
+        }
+
         count++;
     }
 
@@ -474,8 +516,8 @@ static inline float fast_expf(float x) {
     return v.f;
 }
 
-int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights) {
-    ppat_extract(g, st);
+int32_t ppat_policy_move(const Game2 *g, struct Game3 *g3, PpatState *st, const float *weights) {
+    ppat_extract(g, g3, st);
     int n = st->count;
     if (n == 0) return PASS;
 
@@ -522,7 +564,9 @@ void ppat_save_weights(const char *path, const float *weights, int total,
         if (i > 0) fputc(',', f);
         fprintf(f, "%.9g", weights[i]);
     }
-    fprintf(f, "]), phases: %d, numPatterns: %d };\n", ppat_phase_count, ppat_num_patterns);
+    fprintf(f, "]), phases: %d, numPatterns: %d, ladder: %s };\n",
+            ppat_phase_count, ppat_num_patterns,
+            ppat_ladder_enabled ? "true" : "false");
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -554,6 +598,17 @@ float *ppat_load_weights(const char *path) {
         free(buf); return NULL;
     }
     ppat_phase_count = file_phases;
+
+    /* Optional `ladder` field — controls layout size.  Absent ⇒ legacy file ⇒ false. */
+    const char *lp = strstr(buf, "ladder:");
+    if (lp) {
+        const char *v = lp + 7;
+        while (*v == ' ' || *v == '\t') v++;
+        ppat_ladder_enabled = (strncmp(v, "true", 4) == 0) ? 1 : 0;
+    } else {
+        ppat_ladder_enabled = 0;
+    }
+
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
 
@@ -570,7 +625,8 @@ float *ppat_load_weights(const char *path) {
         if (*start == ',') start++;
     }
     free(buf);
-    fprintf(stderr, "loaded %d weights from %s (phases=%d)\n", idx, path, file_phases);
+    fprintf(stderr, "loaded %d weights from %s (phases=%d, ladder=%s)\n",
+            idx, path, file_phases, ppat_ladder_enabled ? "true" : "false");
     return weights;
 }
 

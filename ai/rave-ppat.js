@@ -21,16 +21,48 @@ const performance = (typeof window !== 'undefined') ? window.performance
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
-const { createState, ppatMove, loadWeights } = _isNode ? require('../ppat-lib.js') : window.PPatterns;
+const _ppat = _isNode ? require('../ppat-lib.js') : window.PPatterns;
+const { createState, ppatMove, loadWeights } = _ppat;
+const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
 
 const _weightsArr = _isNode
   ? loadWeights(Util.envStr('PPAT_WEIGHTS', ''))
   : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
+// Captured AFTER loadWeights so it reflects whether the loaded model has
+// ladder features.  When false, the Game3 mirror is unused and never built.
+const _LADDER_ENABLED = !!(_weightsArr && _ppat.LADDER_ENABLED);
+
 let _ppatState = null;
 function _ensurePpatState(N) {
   if (_ppatState === null || _ppatState.moves.length < N * N)
     _ppatState = createState(N);
+}
+
+// Persistent Game3 mirror.  Resynced once per getMove() to the root position,
+// then maintained in lockstep with the simulation Game2 via mirrored play/undo
+// during each playout.  This eliminates the per-extractFeatures
+// game3FromGame2() rebuild that the profile showed as the dominant cost.
+let _simG3   = null;
+let _g3Depth = 0;     // moves mirrored into _simG3 since the last rewind
+
+function _syncSimG3(game2) {
+  if (!_LADDER_ENABLED) return;
+  _simG3   = game3FromGame2(game2);
+  _g3Depth = 0;
+}
+
+// Mirror a play into _simG3.  No-op when ladder analysis isn't needed.
+function _g3Play(idx) {
+  if (!_simG3) return;
+  _simG3.play(idx);
+  _g3Depth++;
+}
+
+// Roll _simG3 back to its state at the last _syncSimG3() call.
+function _g3Rewind() {
+  if (!_simG3) return;
+  while (_g3Depth > 0) { _simG3.undo(); _g3Depth--; }
 }
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
@@ -75,11 +107,17 @@ function playTracked(game2, node, played) {
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
     const usePolicy = _weightsArr && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
-    const idx = usePolicy ? ppatMove(game2, _ppatState, _weightsArr) : game2.randomLegalMove();
+    const idx = usePolicy ? ppatMove(game2, _ppatState, _weightsArr, _simG3) : game2.randomLegalMove();
 
-    if (idx === PASS) { game2.play(PASS); moves++; continue; }
+    if (idx === PASS) {
+      game2.play(PASS);
+      if (usePolicy) _g3Play(PASS);     // mirror only while ppat is still in use
+      moves++;
+      continue;
+    }
     if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
+    if (usePolicy) _g3Play(idx);
     moves++;
     weight -= weightStep;
   }
@@ -211,6 +249,9 @@ function selectAndExpand(root, rootGame2, N, rng) {
     }
 
     game2.play(node.legalMoves[best]);
+    // Mirror tree-descent plays — the rollout that follows from here may call
+    // ppat immediately, which needs _simG3 in sync with the descended game2.
+    _g3Play(node.legalMoves[best]);
 
     // Promote child to a full node once it has accumulated enough visits.
     // Fall through to the descent check so the loop continues into the new node;
@@ -226,6 +267,7 @@ function selectAndExpand(root, rootGame2, N, rng) {
     // the pass move's apparent win rate.
     if (!game2.gameOver && game2.consecutivePasses > 0) {
       game2.play(PASS);
+      _g3Play(PASS);
       node.selectedChild = best;
       break;
     }
@@ -317,6 +359,11 @@ function getMove(game, timeBudgetMs, options = {}) {
     return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
   }
 
+  // Sync the persistent Game3 mirror to this root position once.  Per playout
+  // we mirror plays into it and undo on exit, so extractFeatures' Game3 stays
+  // in lockstep without ever calling game3FromGame2 inside the playout loop.
+  _syncSimG3(game2);
+
   const root = makeNode(null, null, -1, game2, N);
 
   // Pre-allocate played buffer — reused across all playouts.
@@ -331,6 +378,7 @@ function getMove(game, timeBudgetMs, options = {}) {
     const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
     const { winner, played: p } = playTracked(simGame2, node, played);
     backpropagate(node, winner, p, rootPlayer);
+    _g3Rewind();   // restore _simG3 to the root-sync state for the next playout
   } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 
   // Best child: most playout visits; ties broken by RAVE-blended score.

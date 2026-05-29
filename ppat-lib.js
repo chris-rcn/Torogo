@@ -6,6 +6,9 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const { PASS } = _isNode ? require('./game2.js') : window.Game2;
+const Util = _isNode ? require('./util.js') : window.Util;
+const { Game3, game3FromGame2 } = Util.load('./game3.js', 'Game3');
+const Ladder2 = Util.load('./ladder2.js', 'Ladder2');
 
 // ── D4 position permutations ──────────────────────────────────────────────────
 // Positions 0–7: N=0, E=1, S=2, W=3, NE=4, SE=5, SW=6, NW=7
@@ -34,7 +37,19 @@ const _D4 = [
 // CANON_ID maps raw → dense canonical ID (0-based).
 
 const _CANON_ID = new Int16Array(50625);
-let PHASE_COUNT = 1;  // set via setPhaseCount() before use
+let PHASE_COUNT = 1;     // set via setPhaseCount() before use
+
+// ── Ladder features ──────────────────────────────────────────────────────────
+// When LADDER_ENABLED, totalWeights() grows by NUM_LADDER per phase and
+// extractFeatures emits 4 additional feature keys per candidate (bits 0..3):
+//   0: UrgentKill   — move kills an adjacent enemy 1-2 lib group
+//   1: UrgentSave   — move saves an adjacent friendly 1-2 lib group
+//   2: WastedAttack — move is a lib of an enemy 1-2 lib group but doesn't kill
+//   3: WastedExtend — move is a lib of a friendly 1-2 lib group but doesn't save
+// Loaded from the weight file's `ladder` field via loadWeights, or set
+// explicitly via setLadderEnabled().
+const NUM_LADDER = 4;
+let LADDER_ENABLED = false;
 
 const NUM_PATTERNS = (function _buildTables() {
   const v  = new Int32Array(8);
@@ -206,6 +221,7 @@ let _semCells       = new Int32Array(64);   // semeai candidate cell indices (gr
 let _semEgids       = new Int32Array(64);   // semeai candidate enemy gids (grown to cap)
 const _koSolveLibs  = new Int32Array(4);
 const _seenBuf      = new Int32Array(16);   // dedup scratch
+let _ladderBits     = new Uint8Array(64);   // per-cell ladder feature bitmap (grown to cap)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -214,7 +230,7 @@ function createState(N) {
   const cap = N * N;
   return {
     moves:          new Int32Array(cap),
-    feat:           new Int32Array(cap * 8),  // flat feature keys (max 8 per candidate)
+    feat:           new Int32Array(cap * 12), // flat feature keys (1 pat + 7 prev + 4 ladder)
     featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
     prevNeighborSet: new Uint8Array(cap),
     count:          0,
@@ -222,7 +238,10 @@ function createState(N) {
 }
 
 function setPhaseCount(n) { PHASE_COUNT = n; }
-function totalWeights() { return PHASE_COUNT * (NUM_PATTERNS + 7); }
+function setLadderEnabled(enabled) { LADDER_ENABLED = !!enabled; }
+function totalWeights() {
+  return PHASE_COUNT * (NUM_PATTERNS + 7 + (LADDER_ENABLED ? NUM_LADDER : 0));
+}
 
 // Extract features for all legal non-true-eye moves from game into state.
 //
@@ -236,7 +255,7 @@ function totalWeights() { return PHASE_COUNT * (NUM_PATTERNS + 7); }
 //   bit 4 — Feature 5: save string in new atari by extension (is self-atari)
 //   bit 5 — Feature 6: solve a new ko by capturing
 //   bit 6 — Feature 7: 2-point semeai (give atari to adjacent enemy)
-function extractFeatures(game, state) {
+function extractFeatures(game, state, game3 = null) {
   const N      = game.N;
   const cap    = N * N;
   if (_sbcCells.length < cap) {
@@ -244,6 +263,7 @@ function extractFeatures(game, state) {
     _semCells = new Int32Array(cap);
     _semEgids = new Int32Array(cap);
   }
+  if (LADDER_ENABLED && _ladderBits.length < cap) _ladderBits = new Uint8Array(cap);
   const cells  = game.cells;
   const gidArr = game._gid;
   const lsArr  = game._ls;
@@ -254,6 +274,7 @@ function extractFeatures(game, state) {
   const phase = PHASE_COUNT * (cap - game.emptyCount) / cap | 0;
   const patOffset = phase * NUM_PATTERNS;
   const prevOffset = PHASE_COUNT * NUM_PATTERNS + phase * 7;
+  const ladderOffset = PHASE_COUNT * (NUM_PATTERNS + 7) + phase * NUM_LADDER;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -379,6 +400,37 @@ function extractFeatures(game, state) {
     }
   }
 
+  // ── Ladder feature pre-scan ────────────────────────────────────────────────
+  // Enumerate every 1-2 lib group; for each lib classify as
+  //   bit 0 UrgentKill, bit 1 UrgentSave, bit 2 WastedAttack, bit 3 WastedExtend
+  // into a per-cell bitmap.  Per-candidate lookup below is O(1).
+  let ladderBits = null;
+  if (LADDER_ENABLED) {
+    if (!game3) game3 = game3FromGame2(game);
+    _ladderBits.fill(0, 0, cap);
+    ladderBits = _ladderBits;
+    const results = Ladder2.getAllLadderStatuses(game3, 1);
+    for (let ri = 0; ri < results.length; ri++) {
+      const s = results[ri].status;
+      if (!s) continue;
+      const isFriendly = (results[ri].color === cur);
+      const slibs = s.libs;
+      const surgent = s.urgentLibs;
+      const moverWins = s.moverSucceeds;
+      for (let li = 0; li < slibs.length; li++) {
+        const lib = slibs[li];
+        let inUrgent = false;
+        for (let ui = 0; ui < surgent.length; ui++)
+          if (surgent[ui] === lib) { inUrgent = true; break; }
+        const wins = inUrgent && moverWins;
+        let bit;
+        if (wins) bit = isFriendly ? 0x02 : 0x01;   // UrgentSave : UrgentKill
+        else      bit = isFriendly ? 0x08 : 0x04;   // WastedExtend : WastedAttack
+        ladderBits[lib] |= bit;
+      }
+    }
+  }
+
   const ko = game.ko;
   let count = 0;
   let nf = 0;
@@ -494,6 +546,15 @@ function extractFeatures(game, state) {
     for (let b = 0; b < 7; b++)
       if (mask & (1 << b)) state.feat[nf++] = prevOffset + b;
 
+    // Emit ladder feature keys (when enabled)
+    if (ladderBits) {
+      const lb = ladderBits[idx];
+      if (lb & 0x01) state.feat[nf++] = ladderOffset + 0;  // UrgentKill
+      if (lb & 0x02) state.feat[nf++] = ladderOffset + 1;  // UrgentSave
+      if (lb & 0x04) state.feat[nf++] = ladderOffset + 2;  // WastedAttack
+      if (lb & 0x08) state.feat[nf++] = ladderOffset + 3;  // WastedExtend
+    }
+
     count++;
   }
 
@@ -510,8 +571,8 @@ function extractFeatures(game, state) {
 }
 
 // Score all moves with a flat weight array and return sorted by score descending.
-function evaluate(game, state, weights) {
-  extractFeatures(game, state);
+function evaluate(game, state, weights, game3 = null) {
+  extractFeatures(game, state, game3);
   const out = [];
   for (let i = 0; i < state.count; i++) {
     let score = 0;
@@ -543,8 +604,8 @@ function _fastExp(x) {
   return _expBuf[0];
 }
 
-function ppatMove(game, state, weights) {
-  extractFeatures(game, state);
+function ppatMove(game, state, weights, game3 = null) {
+  extractFeatures(game, state, game3);
   const n = state.count;
   if (n === 0) return PASS;
 
@@ -589,13 +650,17 @@ function loadWeights(pathOrObj) {
     return null;
   }
   if (raw.phases) PHASE_COUNT = raw.phases;
+  // Authoritative: file's `ladder` field sets LADDER_ENABLED (absent ⇒ false).
+  LADDER_ENABLED = (raw.ladder === true);
   return raw.weights;
 }
 
 const PPatterns = {
   createState, extractFeatures, evaluate, ppatMove,
-  setPhaseCount, totalWeights, loadWeights,
-  NUM_PATTERNS, get PHASE_COUNT() { return PHASE_COUNT; },
+  setPhaseCount, setLadderEnabled, totalWeights, loadWeights,
+  NUM_PATTERNS, NUM_LADDER,
+  get PHASE_COUNT()    { return PHASE_COUNT; },
+  get LADDER_ENABLED() { return LADDER_ENABLED; },
 };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;

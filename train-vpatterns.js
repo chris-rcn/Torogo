@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-patterns.js — learn pattern weights via logistic TD(2) self-play.
+// train-patterns.js — learn pattern weights via TD(λ) self-play.
 //
 // Value function (absolute, P(BLACK wins)):
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
 //
-// Update rule — logistic TD, 2-step lookahead (same player to move):
-//   Δw_k = (LR / n_features) · (target − V) · V·(1−V) · polarity_k
-//   target = V(s_{t+2})   for t+2 < game length  [bootstrap]
-//          = 1 / 0.5 / 0  for terminal            [BLACK wins / draw / WHITE wins]
+// Update rule — λ-return TD applied at episode end, 2-ply lookahead
+// (bootstraps from the next position where the same player moves):
+//   G_t^λ      = (1−λ)·V(s_{t+2}) + λ·G_{t+2}^λ      (recursive form)
+//   G_{M-1}^λ  = G_{M-2}^λ = outcome ∈ {1, 0.5, 0}   (terminal, M = #moves)
+//   Δw_k       = (LR / n_features) · (G_t^λ − V_t) · polarity_k
 //
 //   Targets are absolute (P(BLACK wins)), independent of current player.
-//   Both PASS states at game end share the same board and receive the same
-//   target, so they reinforce each other rather than cancelling.
+//   The two parity classes (even-t and odd-t) form independent chains.
+//   λ = 0  → pure 2-step TD (target = V(s_{t+2}))
+//   λ = 1  → pure Monte Carlo (target = outcome)
+//   0<λ<1  → exponentially-weighted bootstrap trading bias for variance
 //
 // Training: pure self-play — both colours use the pattern policy.
 //   Move selection uses absolute V = P(BLACK wins).
@@ -47,34 +50,28 @@ const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
-const EPSILON    = Math.min(parseFloat(opts.epsilon      || '0.1'), 0.9999);
-const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '0'), 0.9999);  // share of moves from own search1ply when --ext is set
+const EPSILON    = parseFloat(opts.epsilon      || '0.1');
+const ON_POLICY  = parseFloat(opts['on-policy'] || '0');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
-const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
 const BUDGET     = parseFloat(opts['budget']   || '1');
-const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 
 // ── Features ───────────────────────────
 
 let specs = [
-//  { size: 1, maxLibs: 1 },
-//  { size: 2, maxLibs: 1 },
-//  { size: 2, maxLibs: 2 },
-//  { size: 2, maxLibs: 3 },
-//  { size: 2, maxLibs: 4 },
-  { size: 2, maxLibs: 5 },
-//  { size: 3, maxLibs: 1 },
+  { size: 1, maxLibs: 6 },
+  { size: 2, maxLibs: 6 },
+  { size: 3, maxLibs: 6 },
 ];
 let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
 let weights  = new Map();  // pattern key (int32) → weight (float)
-let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
+let wAbsSum = 0, wUpdateCount = 0;  // running |weight| sum/count over every feature update this run
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -84,31 +81,20 @@ function absoluteOutcome(game) {
   return game.calcWinner() === BLACK ? 1 : 0;
 }
 
-// SGD (+ optional momentum):
-//   g_k    = (target − V) / n · polarity_k
-//   vel_k ← β · vel_k + g_k
-//   Δw_k   = lr · vel_k
-// β=0 (default) → plain SGD.  β>0 smooths gradients and accelerates in
-// consistent directions while still decaying to 0 when targets are met.
+// Plain SGD:
+//   g_k  = (target − V) / n · polarity_k
+//   Δw_k = lr · g_k
 function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
-  const perFeature = (target - features.val) / n;
+  const step = lr * (target - features.val) / n;
   const { keys, pols } = features;
-  if (MOMENTUM === 0) {
-    const step = lr * perFeature;
-    for (let i = 0; i < n; i++) {
-      const k = keys[i];
-      weights.set(k, (weights.get(k) ?? 0) + pols[i] * step);
-    }
-  } else {
-    for (let i = 0; i < n; i++) {
-      const k   = keys[i];
-      const g   = pols[i] * perFeature;
-      const vel = MOMENTUM * (velocity.get(k) ?? 0) + g;
-      velocity.set(k, vel);
-      weights.set(k, (weights.get(k) ?? 0) + lr * vel);
-    }
+  for (let i = 0; i < n; i++) {
+    const k = keys[i];
+    const w = (weights.get(k) ?? 0) + pols[i] * step;
+    weights.set(k, w);
+    wAbsSum += Math.abs(w);
+    wUpdateCount++;
   }
 }
 
@@ -146,41 +132,28 @@ function search1ply(game) {
   return bestMove;
 }
 
-// Both colours use the policy.  Apply 2-step logistic TD inline during play.
-// All targets are absolute (P(BLACK wins)).
+// Both colours use the policy.  Per-position features and values are collected
+// during play; at episode end the λ-return target is computed by a single
+// backward pass and applied to each position.
 function trainGame(N) {
   const game     = new Game2(N, false);
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
 
-  let prev2 = null, prev1 = null;  // feature sets from 2 and 1 steps ago
   let moves = 0;
+  const featsArr = [];
   const vals = [];
-  const lambdaFeats = [];
-  const lamdbaLr = LAMBDA * LR;
-  const tdLr = (1 - LAMBDA) * LR;
 
   while (!game.gameOver && moves < maxMoves) {
     const features = extractFeatures(game, prepSpecs);
     evaluateFeatures(features, weights);
+    featsArr.push(features);
     vals.push(features.val);
-    if (Math.random() < LAMBDA) {
-      lambdaFeats.push(features);
-    }
 
-    if (prev2 !== null) {
-      tdUpdate(prev2, features.val, tdLr);
-    }
-
-    prev2 = prev1;
-    prev1 = features;
     let move;
-    const r = Math.random();
-    if (r < EPSILON) {
+    if (Math.random() < EPSILON) {
       move = game.randomLegalMove();
-    } else if (extGetMove && r < EPSILON + ON_POLICY) {
-      move = search1ply(game);
-    } else if (extGetMove) {
+    } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
     } else {
       move = search1ply(game);
@@ -192,13 +165,19 @@ function trainGame(N) {
   const elapsedMs = Date.now() - tStartMs;
   const outcome   = absoluteOutcome(game);
 
-  for (const features of [prev2, prev1]) {
-    if (features === null) continue;
-    tdUpdate(features, outcome, tdLr);
-  }
-
-  for (const features of lambdaFeats) {
-    tdUpdate(features, outcome, lamdbaLr);
+  // TD(0) backward pass with 2-ply lookahead.  Each parity class (even-t and
+  // odd-t) is its own chain — same-player moves are 2 apart.  The target for
+  // step t is the value of the next same-parity step (V_{t+2}); base cases
+  // G_{M-1} = G_{M-2} = outcome.
+  let G0 = outcome, G1 = outcome;
+  for (let t = featsArr.length - 1; t >= 0; t--) {
+    if ((t & 1) === 0) {
+      tdUpdate(featsArr[t], G0, LR);
+      G0 = vals[t];
+    } else {
+      tdUpdate(featsArr[t], G1, LR);
+      G1 = vals[t];
+    }
   }
 
   let correct = 0;
@@ -275,27 +254,26 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
 
 // Print header.
 console.log([
-  'game'   .padStart(7),
-  'elapsedS'.padStart(8),
-  'tGameMs'.padStart(7),
-  'weights'.padStart(8),
-  ...(evalGetMove ? ['win%'.padStart(6) + '(' + 'n'.padStart(3) + ')',
-                     'winAvg%'.padStart(7)] : []),
-  'avglen' .padStart(6),
-  'acc%'   .padStart(5),
-  ...(ACCURACY_FILE    ? ['vacc%' .padStart(6)] : []),
-  ...(evalPositionsPool ? ['rmsErr'.padStart(7), 'rmsAvg'.padStart(7)] : []),
-  'avg|w|' .padStart(8),
-  'tTrain' .padStart(7),
-  ...(evalGetMove ? ['tTest'.padStart(6)] : []),
-  'turnMs' .padStart(6),
+  'game'.padStart(4),
+  'tElp'.padStart(5),
+  'tGm '.padStart(5),
+  'nWts'.padStart(4),
+  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
+  'avgL'.padStart(4),
+  ' acc'.padStart(4),
+  ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
+  ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
+  'avgW'.padStart(6),
+  'tTrn'.padStart(5),
+  ...(evalGetMove ? ['tTst'.padStart(5)] : []),
+  'turn'.padStart(5),
 ].join('  '));
 
 const t0 = Date.now();
@@ -331,7 +309,7 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    let latestPct = null, avgPct = null, resultsBatchLen = 0;
+    let latestWR = null, avgWR = null, resultsBatchLen = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
@@ -343,27 +321,22 @@ while (true) {
       }
       for (const r of resultsBatch) evalHistory.push(r);
 
-      // Latest interval win rate.
-      const latestWR  = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
-      latestPct = (100 * latestWR).toFixed(1);
-
-      // Rolling average over the most recent half of all recorded games.
-      const half    = Math.max(1, Math.floor(evalHistory.length / 2));
-      const avgWR   = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
-      avgPct  = (100 * avgWR).toFixed(1);
+      latestWR = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
+      const half = Math.max(1, Math.floor(evalHistory.length / 2));
+      avgWR = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
       resultsBatchLen = resultsBatch.length;
     }
 
-    const avgLen   = (intervalMoves / intervalGames).toFixed(1);
-    const tGameMs  = (intervalTrainMs / intervalGames).toFixed(1);
-    const avgAcc   = (100 * totalCorrect / totalNVals).toFixed(1);
+    const avgLen  = intervalMoves / intervalGames;
+    const tGameMs = intervalTrainMs / intervalGames;
+    const avgAcc  = totalNVals > 0 ? totalCorrect / totalNVals : 0;
     intervalGames = 0;
     intervalMoves = 0;
     intervalCorrect = 0; intervalNVals = 0;
     let vaccCol = null;
     if (ACCURACY_FILE) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
-      vaccCol = (100 * accuracy).toFixed(1).padStart(5) + '%';
+      vaccCol = Util.fmtRatio4(accuracy);
     }
     let rmsCol = null, rmsAvgCol = null;
     if (evalPositionsPool) {
@@ -371,35 +344,30 @@ while (true) {
       rmsHistory.push(rmsErr);
       const rmsHalf = Math.max(1, Math.floor(rmsHistory.length / 2));
       const rmsAvg  = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
-      rmsCol    = rmsErr.toFixed(4).padStart(7);
-      rmsAvgCol = rmsAvg.toFixed(4).padStart(7);
+      rmsCol    = Util.fmt4(rmsErr);
+      rmsAvgCol = Util.fmt4(rmsAvg);
     }
-    let wAbsSum = 0;
-    for (const w of weights.values()) {
-      wAbsSum += Math.abs(w);
-    }
-    const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
+    const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
 
     const tTestMs   = Date.now() - tTestStart;
-    const tTrainStr = (intervalTrainMs / 1000).toFixed(1) + 's';
+    const elapsedMs = Date.now() - t0;
+    const trainMs   = intervalTrainMs;
     intervalTrainMs = 0;
-    const nextMs    = Date.now() - t0;
-    const elapsedS = ((Date.now() - t0) / 1000).toFixed(0);
+    const nextMs    = elapsedMs;
     console.log([
-      String(g)                          .padStart(7),
-      elapsedS                           .padStart(8),
-      tGameMs                            .padStart(7),
-      String(weights.size)               .padStart(8),
-      ...(evalGetMove ? [(latestPct + '%').padStart(6) + '(' + String(resultsBatchLen).padStart(3) + ')',
-                         (avgPct    + '%').padStart(7)] : []),
-      avgLen                             .padStart(6),
-      (avgAcc + '%')                     .padStart(5),
-      ...(vaccCol    ? [vaccCol]                    : []),
-      ...(rmsCol     ? [rmsCol, rmsAvgCol]          : []),
-      wAvg.toFixed(4)                    .padStart(8),
-      tTrainStr                            .padStart(7),
-      ...(evalGetMove ? [((tTestMs / 1000).toFixed(1) + 's').padStart(6)] : []),
-      timePerMoveMs.toFixed(1)           .padStart(6),
+      Util.fmt4(g),
+      Util.fmtMs(elapsedMs),
+      Util.fmtMs(tGameMs),
+      Util.fmt4(weights.size),
+      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
+      Util.fmt4(avgLen),
+      Util.fmtRatio4(avgAcc),
+      ...(vaccCol ? [vaccCol]               : []),
+      ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
+      wAvg.toFixed(4).padStart(6),
+      Util.fmtMs(trainMs),
+      ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),
+      Util.fmtMs(timePerMoveMs),
     ].join('  '));
     saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);

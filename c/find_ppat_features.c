@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         Game2 g;
         g2_new(&g, 9);
         for (int m = 0; m < moves && !g.game_over; m++) {
-            ppat_extract(&g, &st);
+            ppat_extract(&g, NULL, &st);
             int prev_base = ppat_phase_count * ppat_num_patterns;
             for (int i = 0; i < st.count; i++) {
                 for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++) {

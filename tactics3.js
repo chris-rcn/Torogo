@@ -7,6 +7,12 @@
 
 const { PASS } = typeof require === 'function' ? require('./game3.js') : window.Game3;
 
+// Single source of truth for the search bounds.  Exported so callers can
+// (a) compare against them when deciding whether to persist non-default
+// values, and (b) re-export them as their own defaults if desired.
+const DEFAULT_NODE_LIMIT  = Infinity;
+const DEFAULT_DEPTH_LIMIT = 7;
+
 // Returns [result, remainingCredits] where result is:
 //   true  — defender can reach 4+ liberties despite best attacker play
 //   false — attacker can capture the chain
@@ -14,15 +20,21 @@ const { PASS } = typeof require === 'function' ? require('./game3.js') : window.
 //
 // Enforces both nodeLimit (via credits) and depth limit to prevent
 // excessive recursion.
-function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 7) {
-  if (depth > depthLimit) return [null, credits];  // Depth limit
-  if (credits <= 0) return [null, 0];
-  credits--;
-
+function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH_LIMIT) {
   const libs = game.groupLibs(idx);
   const lc = libs.length;
   if (lc >= 4) return [true,  credits];
   if (lc === 0) return [false, credits];
+
+  // Budget/depth limits only apply when the target chain currently has 3+
+  // liberties (the new tactics3 territory).  At 1-2 libs we're inside a
+  // classic ladder and search to completion regardless of the caller's
+  // bounds.
+  if (lc >= 3) {
+    if (depth > depthLimit) return [null, credits];
+    if (credits <= 0)       return [null, 0];
+    credits--;
+  }
 
   const defColor = game.cells[idx];
 
@@ -90,7 +102,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = 7) {
 // group (groups with 0 or 4+ liberties are skipped).
 // nodeLimit: max nodes per sub-search per liberty in searchChain (default Infinity).
 // depthLimit: maximum recursion depth for canReach4Libs (default 7).
-function searchChains(game, nodeLimit = Infinity, depthLimit = 7) {
+function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT) {
   const cap  = game.N * game.N;
   const results = [];
   const visited = new Set();
@@ -118,7 +130,7 @@ function searchChains(game, nodeLimit = Infinity, depthLimit = 7) {
 // (one per liberty). Default Infinity (unbounded).
 // depthLimit: maximum recursion depth for canReach4Libs. Default 7.
 // Logs a warning and returns null when the group has more than 3 liberties.
-function searchChain(game, stoneIdx, nodeLimit = Infinity, depthLimit = 7) {
+function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT) {
   const libs = game.groupLibs(stoneIdx);
   const lc = libs.length;
   if (lc < 1 || lc > 3) {
@@ -194,7 +206,7 @@ function searchChain(game, stoneIdx, nodeLimit = Infinity, depthLimit = 7) {
   };
 }
 
-const _exports = { searchChain, searchChains };
+const _exports = { searchChain, searchChains, DEFAULT_NODE_LIMIT, DEFAULT_DEPTH_LIMIT };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Tactics3 = _exports;
 
