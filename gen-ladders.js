@@ -16,15 +16,16 @@ const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
 const PuctStatic = require('./ai/puct-static.js');
 const Util = require('./util.js');
-const fs = require('fs');
 
-// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--out file]
+// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0]
+// Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
 const opts       = Util.parseArgs(process.argv.slice(2), ['help']);
 const SIZE       = parseInt(opts.size       || '13',   10);
 const N          = parseInt(opts.examples   || '1',    10);   // examples per (chain, type) cell
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const PLAYOUTS   = parseInt(opts.playouts   || '10000', 10);
-const OUT        = opts.out || null;   // append text-block cases here (consumed by evalladders2.js)
+const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
+const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
 
 const TYPES = [
   { name: 'kill',          wantDef: false, fail: false },
@@ -80,6 +81,11 @@ function scanPos(game, chain, type) {
     if (isDef !== type.wantDef) continue;
     const st = getLadderStatus(game3FromGame2(game), stoneIdx);
     if (!st) continue;
+    // Require a non-trivial ladder read: shallow/small reads are easy cases that
+    // don't discriminate.  readDepth = deepest recursion, readNodes = total
+    // positions read.
+    if (st.readDepth < MIN_DEPTH) continue;
+    if (st.readNodes < MIN_NODES) continue;
     if (!type.fail) {
       if (!st.moverSucceeds || st.urgentLibs.length !== 1) continue;
       // escape: reject if the saving move is a capture (escapes via capture, not a real ladder) — before puct
@@ -121,8 +127,6 @@ function findCase(chain, type) {
   }
 }
 
-const col = c => c === BLACK ? 'BLACK ●' : 'WHITE ○';
-
 // Quantized toroidal center of gravity of the chain containing stoneIdx.
 // Each axis wraps, so use the circular mean (average unit vectors, not raw coords).
 function chainCentroid(game, stoneIdx) {
@@ -138,39 +142,65 @@ function chainCentroid(game, stoneIdx) {
   return ang(sy, cy) * N + ang(sx, cx);
 }
 
-function display(res, type, chain) {
-  const { game, hit, scanned, ms } = res;
-  console.log(`to move (${type.wantDef ? 'defender' : 'attacker'}): ${col(game.current)}   chain: ${col(hit.color)} (2 libs)   [${scanned} pos, ${(ms/1000).toFixed(1)}s]`);
+// FNV-1a 32-bit string hash → 8-char hex.  Used to give each case a short,
+// stable id derived from its board position.
+function hashStr(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function emit(res, type, chain) {
+  const { game, hit } = res;
   // Physically recenter the board on the chain's centroid, then translate the
   // cited coordinates by the same shift so they match the shifted board.
   const { dx, dy } = game.recenter(chainCentroid(game, hit.stoneIdx));
   const tr = idx => (idx % SIZE + dx) % SIZE + (((idx / SIZE | 0) + dy) % SIZE) * SIZE;
   const toPlay = game.current === BLACK ? 'B' : 'W';
-  let answer;
+  let answer, marks;
   if (!type.fail) {
-    const m = tr(hit.require);
-    answer = `require=${coordStr(m, SIZE)}`;
-    console.log(`PLAY: ${coordStr(m, SIZE)}`);
-    console.log(game.toString(m, { labels: true }));
+    marks = [tr(hit.require)];
+    answer = `require=${coordStr(marks[0], SIZE)}`;
   } else {
-    const pm = hit.prohibit.map(tr);
-    answer = `prohibit=${pm.map(m => coordStr(m, SIZE)).join(',')}`;
-    console.log(`AVOID: ${pm.map(m => coordStr(m, SIZE)).join(', ')}`);
-    console.log(game.toString(pm[0], { labels: true }));
+    marks = hit.prohibit.map(tr);
+    answer = `prohibit=${marks.map(m => coordStr(m, SIZE)).join(',')}`;
   }
-  if (OUT) {
-    // Block: metadata header line, then the unmarked labeled board, blank-line separated.
-    const header = `type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=puct-static`;
-    fs.appendFileSync(OUT, `${header}\n${game.toString(PASS, { labels: true })}\n\n`);
-  }
+  // Block: metadata header line, then the labeled board with the cited
+  // required/avoid coordinates marked, blank-line separated.  id = hash of the
+  // (recentered) position, giving each case a unique, stable handle.
+  const id = hashStr(game.toString(PASS));
+  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=puct-static`;
+  process.stdout.write(`${header}\n${game.toString(marks, { labels: true })}\n\n`);
 }
 
-console.log(`grid: board=${SIZE}  N=${N}  MAX_STONES=${MAX_STONES}  playouts=${PLAYOUTS}\n`);
+// Per-type tallies for the end-of-run summary (cases, positions scanned, time).
+const stats = new Map(TYPES.map(t => [t.name, { cases: 0, scanned: 0, ms: 0 }]));
+const tStart = Date.now();
+
 for (let i = 1; i <= N; i++) {
   for (let chain = 1; chain <= MAX_STONES; chain++) {
     for (const type of TYPES) {
-      process.stdout.write(`\n========== example ${i}/${N}   chainSize=${chain}   type=${type.name}   [searching…] ==========\n`);
-      display(findCase(chain, type), type, chain);
+      const res = findCase(chain, type);
+      const s = stats.get(type.name);
+      s.cases++; s.scanned += res.scanned; s.ms += res.ms;
+      emit(res, type, chain);
     }
   }
 }
+
+// Summary (stderr, so it doesn't pollute the case data on stdout).
+const wall = (Date.now() - tStart) / 1000;
+let totCases = 0, totScanned = 0;
+process.stderr.write('\n=== gen-ladders summary ===\n');
+process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} playouts=${PLAYOUTS} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES}\n`);
+for (const t of TYPES) {
+  const s = stats.get(t.name);
+  totCases += s.cases; totScanned += s.scanned;
+  const perCase = s.cases ? (s.scanned / s.cases).toFixed(0) : '-';
+  const secs = (s.ms / 1000).toFixed(1);
+  process.stderr.write(`  ${t.name.padEnd(14)} cases=${String(s.cases).padStart(4)}  scanned=${String(s.scanned).padStart(9)}  (${perCase}/case)  ${secs}s\n`);
+}
+process.stderr.write(`  ${'TOTAL'.padEnd(14)} cases=${String(totCases).padStart(4)}  scanned=${String(totScanned).padStart(9)}  wall=${wall.toFixed(1)}s  (${(wall / Math.max(1, totCases)).toFixed(2)}s/case)\n`);

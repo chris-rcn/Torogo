@@ -24,8 +24,9 @@ const path = require('path');
 const fs   = require('fs');
 
 const { Game2, BLACK, PASS } = require('./game2.js');
-const { Game3 } = require('./game3.js');
+const { Game3, game3FromGame2 } = require('./game3.js');
 const NPat = require('./npat-lib.js');
+const { loadCases, evalCases } = require('./evalladders2.js');
 const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ const USE_33C    = !!opts['use-3x3c'];                        // enable centered
 const USE_P12    = !!opts['use-p12'];                          // enable 12-cell diamond shape window
 const USE_TACT   = !opts['no-tactical'];                       // tactical features (default ON)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
+const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite to score each status print
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
@@ -203,6 +205,12 @@ function evalVsReference(N, refGetMove, nGames) {
     const policyIsBlack = (g % 2 === 0);
     const game  = new Game2(N, false);
     const game3 = new Game3(N);  // lockstep copy for ladder analysis
+    // Random opening: 4 random legal moves to diversify positions.
+    for (let r = 0; r < 4 && !game.gameOver; r++) {
+      const mv = game.randomLegalMove();
+      game.play(mv);
+      game3.play(mv);
+    }
     const maxMoves = N * N * 4;
     let m = 0;
     while (!game.gameOver && m++ < maxMoves) {
@@ -261,6 +269,17 @@ console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  temperature=${TEMPERATURE}`);
 console.log(`features: tactical=${USE_TACT ? 'ON' : 'off'}  3x3c=${USE_33C ? 'ON' : 'off'}  p12=${USE_P12 ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
+
+// Ladder test: when --ladder-file is given, score the trainee's greedy npat
+// policy against the evalladders2 suite at each status print (the `ladr` column).
+const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
+const _ladderStates = new Map();
+function npatLadderMove(game) {
+  let st = _ladderStates.get(game.N);
+  if (!st) { st = NPat.createState(game.N); _ladderStates.set(game.N, st); }
+  return { move: NPat.greedyMove(game, st, weights, game3FromGame2(game)) };
+}
+if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 console.log();
 
 console.log([
@@ -274,6 +293,7 @@ console.log([
   'gRef'.padStart(4),
   'wrRf'.padStart(4),
   'wrAv'.padStart(4),
+  ...(ladderCases ? ['ladr'.padStart(5)] : []),
 ].join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -334,6 +354,13 @@ while (true) {
       : 0;
     const wrRefStr = evalGames > 0 ? (evalWins / evalGames).toFixed(3) : '-';
 
+    // Ladder suite score (trainee greedy npat policy vs the evalladders2 file).
+    let ladrStr = null;
+    if (ladderCases) {
+      const { passed, total } = evalCases(ladderCases, npatLadderMove, { budgetMs: 1, trials: 1 });
+      ladrStr = Util.fmtRatio4(total ? passed / total : 0);
+    }
+
     const elapsedMs      = Date.now() - t0;
     const cycleN         = g - lastPrintG;
     const cycleAvgGameMs = cycleN > 0 ? elapsedMsAcc / cycleN : 0;
@@ -349,6 +376,7 @@ while (true) {
       Util.fmt4(evalGames),
       evalGames > 0 ? Util.fmtRatio4(evalWins / evalGames) : '   -',
       evalHistory.length > 0 ? Util.fmtRatio4(avgWR) : '   -',
+      ...(ladrStr !== null ? [ladrStr] : []),
     ].join('  '));
     maxProbSumWindow = 0; maxProbNWindow = 0;
     elapsedMsAcc = 0;

@@ -87,13 +87,13 @@ const npatStateByN = new Map();
 
 // ── vlibpat static evaluator ──────────────────────────────────────────────────
 
-const vpatPath = './ref/vlibpat-9emvzsad.js';
-const vpatRaw = Util.load(vpatPath, 'vlibpatModel');
+const VLIBPAT_DATA = Util.envStr  ('VLIBPAT_DATA', './ref/vlibpat-9emvzsad.js');
+const vpatRaw = Util.load('./' + VLIBPAT_DATA, 'vlibpatModel');
 if (!vpatRaw) {
   throw new Error('puct-static: vlibpat model not loaded — set window.vlibpatModel before requiring');
 }
 const vpatModel = VLib.prepareModel(vpatRaw);
-console.log(`puct-static: loaded ${vpatModel.weights.size} vlibpat weights from ${vpatPath}`);
+console.error(`puct-static: loaded ${vpatModel.weights.size} vlibpat weights from ${VLIBPAT_DATA}`);
 
 // vlibpat value at `game2` — P(BLACK wins).  `game3` is the lockstep mirror
 // of the same position; `ladderStatuses` is the position's shared ladder pass

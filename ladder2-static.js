@@ -485,7 +485,7 @@ function _staticCanReach3Libs(game2, stoneIdx, current) {
 // here — Game3 is detected via the presence of `.undo` and used directly.
 function _fallbackCanReach3Libs(game, idx) {
   const game3 = typeof game.undo === 'function' ? game : game3FromGame2(game);
-  return Ladder2._canReach3Libs(game3, idx);
+  return Ladder2._canReach3Libs(game3, idx).ok;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

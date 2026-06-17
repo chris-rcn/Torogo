@@ -35,7 +35,7 @@ const { Game3, game3FromGame2 } = require('./game3.js');
 const { search } = require('./ai/vlibpat.js');
 const { search: abSearch } = require('./ab-search3.js');
 const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
-const Ladders = require('./evalladders.js');
+const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
@@ -61,6 +61,7 @@ const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
 const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.95');  // per-call decay (period=50, ≈hpatterns per-game 0.999)
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
+const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite for the ladr column
 const EVAL_DITHER = 0.002;
 
 // ── Features ───────────────────────────
@@ -82,7 +83,7 @@ if (opts.specs) {
   specs = [
     { size: 2 },                      // ladder-aware (7-state)
     { size: 3 },                      // ladder-aware (7-state)
-    { size: 3, ladder: false },       // plain (3-state)
+//    { size: 3, ladder: false },       // plain (3-state)
   ];
 }
 
@@ -269,6 +270,8 @@ function evalVsReference(N, refGetMove, nGames, budget) {
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
     const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+    // Random opening: 4 random legal moves to diversify positions.
+    for (let r = 0; r < 4 && !game.gameOver; r++) game.play(game.randomLegalMove());
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
@@ -342,6 +345,12 @@ console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log(`Tactics: ${tacticsOpts.tactics}`);
 console.log();
 
+// Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
+// against --ladder-file at each status print (the `ladr` column).
+const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
+const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, game3FromGame2(gm)) });
+if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
+
 // Print header.
 console.log([
   'game'.padStart(4),
@@ -351,7 +360,7 @@ console.log([
   ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
   'avgL'.padStart(4),
   ' acc'.padStart(4),
-  'ladr'.padStart(4),
+  ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   'avgW'.padStart(6),
@@ -439,12 +448,14 @@ while (true) {
       rmsCell    = Util.fmt4(rmsErr);
       rmsAvgCell = Util.fmt4(rmsAvg);
     }
-    // Ladder gate: the live weights' own full-width 1-ply argmax (the same
-    // selection self-play uses) on the ladder suite — measures whether the
-    // value function can RANK moves at tactical points, not just score
-    // positions (the two dissociate; see 2026-06-12 uniform-prior findings).
-    const ladders = Ladders.evalLadders(
-      gm => ({ move: search1ply(gm, game3FromGame2(gm)) }), { trials: 1 });
+    // Ladder suite (evalladders2): the live weights' own 1-ply argmax on the
+    // --ladder-file cases — whether the value can RANK moves at tactical points,
+    // not just score positions (the two dissociate).
+    let ladrRatio = null;
+    if (ladderCases) {
+      const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, trials: 1 });
+      ladrRatio = total ? passed / total : 0;
+    }
 
     let wAbsSum = 0;
     for (const w of weights.values()) {
@@ -465,7 +476,7 @@ while (true) {
       ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       Util.fmt4(avgLen),
       Util.fmtRatio4(avgAcc),
-      Util.fmtRatio4(ladders.passed / ladders.total),
+      ...(ladrRatio !== null ? [Util.fmtRatio4(ladrRatio)] : []),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),
       wAvg.toFixed(4).padStart(6),

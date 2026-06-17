@@ -1,32 +1,76 @@
 'use strict';
 
-// ladder2.js — Ladder detection using Game3-Precise with play/undo (no clone)
-
 (function() {
 
 const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
 const { PASS } = Util.load('./game3.js', 'Game3');
 
-// Returns true when the group at stoneIdx can reach 3+ liberties despite best
-// attacker play. Uses play/undo instead of clone.
-function _canReach3Libs(game, idx) {
+// Moves the defender can play to capture an adjacent enemy chain in atari:
+// the single remaining liberty of each opponent group touching the chased
+// group at `idx`.  Capturing frees liberties for the chased group.  Iterates
+// the chased group's own stones via its bitset (O(chain size), not O(board)).
+function _defenderCaptureMoves(game, idx) {
+  const enemy = -game.cells[idx], gid = game._gid[idx];
+  const W = game._W, sw = game._sw, nbr = game._nbr, cells = game.cells, gidArr = game._gid, ls = game._ls;
+  const moves = new Set();
+  const base = gid * W;
+  for (let w = 0; w < W; w++) {
+    let bits = sw[base + w];
+    while (bits !== 0) {
+      const b = bits & -bits;                       // lowest set bit
+      const stone = (w << 5) + (31 - Math.clz32(b));  // a stone of the chased group
+      bits ^= b;
+      const nb = stone * 4;
+      for (let d = 0; d < 4; d++) {
+        const ni = nbr[nb + d];
+        if (cells[ni] !== enemy) continue;          // adjacent enemy stone
+        // O(1) atari check via the stored per-chain liberty count; only fetch
+        // the actual liberty (the capture move) when the enemy is in atari.
+        if (ls[gidArr[ni]] === 1) moves.add(game.groupLibs2(ni).lib0);
+      }
+    }
+  }
+  return moves;
+}
+
+// Reads whether the group at stoneIdx can reach 3+ liberties despite best
+// attacker play. Uses play/undo instead of clone.  Returns the search effort
+// alongside the verdict:
+//   { ok: boolean, nodes: number, maxDepth: number }
+// where `nodes` is the total number of positions read in this subtree and
+// `maxDepth` is the deepest recursion level reached (the root counts as 1).
+// `depth` is the current node's depth (callers start at 1).
+function _canReach3Libs(game, idx, depth = 1) {
+  let nodes = 1;
+  let maxDepth = depth;
+  // Fold a child's effort into this node's running totals.
+  const acc = r => { nodes += r.nodes; if (r.maxDepth > maxDepth) maxDepth = r.maxDepth; };
+
   const { count: lc, lib0, lib1 } = game.groupLibs2(idx);
-  if (lc >= 3) return true;
-  if (lc === 0) return false;
+  if (lc >= 3) return { ok: true,  nodes, maxDepth };
+  if (lc === 0) return { ok: false, nodes, maxDepth };
 
   const defColor = game.cells[idx];
 
   if (game.current === defColor) {
-    // Defender's turn: play one of the liberties; succeed if any leads to safety.
+    // Defender's turn: extend onto a liberty, or capture an adjacent enemy
+    // chain in atari; succeed if any leads to safety.
     const libs = lc === 1 ? [lib0] : [lib0, lib1];
-    for (const libIdx of libs) {
-      if (!game.play(libIdx)) continue;      // suicide — skip
+    const moves = new Set(libs);
+    for (const m of _defenderCaptureMoves(game, idx)) moves.add(m);
+    for (const moveIdx of moves) {
+      if (!game.play(moveIdx)) continue;     // suicide/illegal — skip
       const captured = game.cells[idx] === 0;
-      const result = !captured && _canReach3Libs(game, idx);
+      let ok = false;
+      if (!captured) {
+        const r = _canReach3Libs(game, idx, depth + 1);
+        acc(r);
+        ok = r.ok;
+      }
       game.undo();
-      if (result) return true;
+      if (ok) return { ok: true, nodes, maxDepth };
     }
-    return false;
+    return { ok: false, nodes, maxDepth };
   }
 
   // Attacker's turn (1 or 2 libs): tries each liberty; succeeds if any leads to capture.
@@ -36,23 +80,24 @@ function _canReach3Libs(game, idx) {
     const captured = game.cells[idx] === 0;
     if (captured) {
       game.undo();
-      return false;
+      return { ok: false, nodes, maxDepth };
     }
     const afterLc = game.groupLibs2(idx).count;
     if (afterLc === 0) {
       game.undo();
-      return false;
+      return { ok: false, nodes, maxDepth };
     }
     if (afterLc === 1) {
-      const result = !_canReach3Libs(game, idx);
+      const r = _canReach3Libs(game, idx, depth + 1);
+      acc(r);
       game.undo();
-      if (result) return false;
+      if (!r.ok) return { ok: false, nodes, maxDepth };
     } else {
       game.undo();
     }
   }
 
-  return true;
+  return { ok: true, nodes, maxDepth };
 }
 
 // getAllLadderStatuses(game, minChainSize) — run getLadderStatus on every
@@ -96,39 +141,51 @@ function getLadderStatus(game, stoneIdx) {
   const mover = game.current;   // BLACK or WHITE
   const defending = gColor === mover;
 
+  // Total reading effort spent across every _canReach3Libs probe below: summed
+  // node count, and the deepest recursion reached by any probe.
+  let readNodes = 0, readDepth = 0;
+  const probe = () => {
+    const r = _canReach3Libs(game, stoneIdx, 1);
+    readNodes += r.nodes;
+    if (r.maxDepth > readDepth) readDepth = r.maxDepth;
+    return r.ok;
+  };
+
   let escape;
   // Try opponent playing first.
   if (defending && atari) {
     escape = false;
   } else {
     game.play(PASS);
-    escape = _canReach3Libs(game, stoneIdx);
+    escape = probe();
     game.undo();
   }
   if (defending === escape) {
     // group is not urgent
-    return { libs, moverSucceeds: true, urgentLibs: [] };
+    return { libs, moverSucceeds: true, urgentLibs: [], readNodes, readDepth };
   }
 
-  // Try mover playing first.
+  // Try mover playing first.  When defending, the saving moves also include
+  // captures of adjacent atari'd enemy chains (not just the group's liberties).
   let moverSucceeds = false;
   let urgentLibs = [];
-  for (const libIdx of libs) {
+  const moverMoves = defending ? [...new Set([...libs, ..._defenderCaptureMoves(game, stoneIdx)])] : libs;
+  for (const moveIdx of moverMoves) {
     if (!defending && atari) {
       escape = false;
     } else {
-      if (!game.play(libIdx)) {
+      if (!game.play(moveIdx)) {
         continue;
       }
-      escape = _canReach3Libs(game, stoneIdx);
+      escape = probe();
       game.undo();
     }
     if (defending === escape) {
       moverSucceeds = true;
-      urgentLibs.push(libIdx);
+      urgentLibs.push(moveIdx);
     }
   }
-  return { libs, moverSucceeds, urgentLibs };
+  return { libs, moverSucceeds, urgentLibs, readNodes, readDepth };
 }
 
 const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs };

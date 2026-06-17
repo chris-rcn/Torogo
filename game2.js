@@ -812,21 +812,22 @@ class Game2 {
 
   // Render the board as a ● ○ · string.  Optional 'markIdx' marks that
   // cell with bracket separators: · ·(●)· · — row width is unchanged.
-  toString(markIdx = this.lastMove, { centerAt = null, labels = false } = {}) {
+  // mark may be a single board index or an array of them; each marked cell is
+  // wrapped in brackets, and a contiguous run of marks renders as one group:
+  // an isolated mark is "(●)", two adjacent marks "(● ●)".  PASS/negative ignored.
+  toString(mark = this.lastMove, { centerAt = null, labels = false } = {}) {
     const N = this.N;
     const cells = this.cells;
-    const markX = (markIdx !== PASS) ? markIdx % N : -1;
-    const markY = (markIdx !== PASS) ? (markIdx / N | 0) : -1;
+    const markSet = new Set();
+    for (const m of (Array.isArray(mark) ? mark : [mark])) {
+      if (m !== PASS && m >= 0) markSet.add(m);
+    }
 
     const half = (N / 2) | 0;
     const x0 = (centerAt !== null && centerAt !== PASS)
       ? ((centerAt % N) - half + N) % N : 0;
     const y0 = (centerAt !== null && centerAt !== PASS)
       ? (((centerAt / N) | 0) - half + N) % N : 0;
-
-    // Convert board-space mark to display-space coordinates.
-    const dmx = markX >= 0 ? (markX - x0 + N) % N : -1;
-    const dmy = markY >= 0 ? (markY - y0 + N) % N : -1;
 
     const labelW = labels ? String(N).length : 0;
     const rows = [];
@@ -840,17 +841,18 @@ class Game2 {
     }
     for (let dy = N - 1; dy >= 0; dy--) {
       const by = (y0 + dy) % N;
-      const mx = (dy === dmy) ? dmx : -1;
       let row = labels ? String(by + 1).padStart(labelW) : '';
-      row += (mx === 0) ? '(' : ' ';
+      let prevMarked = false;   // was the cell left of the current gap marked?
       for (let dx = 0; dx < N; dx++) {
         const bx = (x0 + dx) % N;
+        const cur = markSet.has(by * N + bx);
+        // Gap before this cell: open a run, close a run, or plain space.
+        row += (cur && !prevMarked) ? '(' : (prevMarked && !cur) ? ')' : ' ';
         const c = cells[by * N + bx];
-        const ch = c === BLACK ? '●' : c === WHITE ? '○' : '·';
-        if (dx > 0) row += (dx === mx) ? '(' : (dx - 1 === mx) ? ')' : ' ';
-        row += ch;
+        row += c === BLACK ? '●' : c === WHITE ? '○' : '·';
+        prevMarked = cur;
       }
-      row += (mx === N - 1) ? ')' : ' ';
+      row += prevMarked ? ')' : ' ';   // trailing gap closes a run at the edge
       rows.push(row);
     }
     return rows.join('\n');
