@@ -3,7 +3,6 @@
 // Fixed-config reference agent: vlibpat 3-component spec (size-2 ladder +
 // size-3 ladder + size-3 NL), trained at LR=0.3, EMA α=0.9, 70% on-policy +
 // 5% random + 25% softmax-npat external, through 655k games total.  Weights
-// file ref/vlibpat-9-2L3L3NL-onpol70-9.js, ~207k weights.
 // Verified ~78% / 1000 games vs vlibpat-ref-2x2.
 //
 // All parameters are hardcoded.  This script reads no environment variables

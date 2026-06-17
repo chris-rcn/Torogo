@@ -43,45 +43,8 @@ const RAVE_NPAT_K      = 40;
 // Fixed playout count per decision.  When non-zero, overrides the time budget.
 const PLAYOUTS = Util.envInt('PROD_PLAYOUTS', 0);
 
-let npatWeights = null;
+const npatWeights = NPat.loadModel({ name: 'prod' }).weights;
 const npatStateByN = new Map();
-
-{
-  let raw, modelName;
-  if (typeof window !== 'undefined') {
-    if (!window.npatModel) {
-      throw new Error('ref-rave-npat-prune: window.npatModel is not set — load the npat weights script first');
-    }
-    raw = window.npatModel;
-    modelName = 'window.npatModel';
-  } else {
-    const path = require('path');
-    const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
-    raw = require(path.resolve(NPAT_PATH));
-    modelName = path.basename(NPAT_PATH);
-  }
-  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
-    throw new Error(
-      `ref-rave-npat-prune: TACT_STONE_LIMIT mismatch — file ${modelName} ` +
-      `was trained at ${raw.tactStoneLimit}, runtime is ${NPat.TACT_STONE_LIMIT}. ` +
-      `Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
-    );
-  }
-  let has33c = false, hasP12 = false;
-  for (const [k] of raw.weights) {
-    if (typeof k === 'string') continue;
-    if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
-    else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
-  }
-  npatWeights = NPat.createWeights({
-    initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: has33c, useP12: hasP12,
-  });
-  for (const [k, v] of raw.weights) {
-    const idx = NPat.internWeight(npatWeights, k);
-    npatWeights.vals[idx] = v;
-  }
-}
 
 // Run npat extraction + softmax for `game2`.  Returns the shared state (with
 // state.moves and state.probs populated) or null if not applicable.
@@ -129,7 +92,7 @@ function _pruneToTopK(allMoves, state, K, N) {
 
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
-function playTracked(game2, node, played) {
+function playTracked(game2, node, played, rng) {
   const wasAlreadyOver = game2.gameOver;
   const N   = game2.N;
   const cap = N * N;
@@ -143,7 +106,7 @@ function playTracked(game2, node, played) {
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
-    const idx = game2.randomLegalMove();
+    const idx = game2.randomLegalMove(rng);
     if (idx === PASS) { game2.play(PASS); moves++; continue; }
     if (weight > 0 && played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
@@ -362,7 +325,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   do {
     playouts++;
     const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
-    const { winner, played: p } = playTracked(simGame2, node, played);
+    const { winner, played: p } = playTracked(simGame2, node, played, rng);
     backpropagate(node, winner, p, rootPlayer);
   } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 
@@ -378,10 +341,10 @@ function getMove(game, timeBudgetMs, options = {}) {
   }
 
   const children = [];
+  // Root statistics for consumers (recorder, analysis): flat move indices.
   for (let i = 0; i < M; i++) {
-    const m = root.legalMoves[i];
     children.push({
-      move: m === PASS ? { type: 'pass' } : { type: 'place', x: m % N, y: (m / N) | 0 },
+      move:   root.legalMoves[i],
       visits: root.visits[i],
       wins:   root.wins[i],
     });

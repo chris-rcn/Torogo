@@ -28,23 +28,9 @@ const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
 
 const vModel = vLoadWeights(VPAT_PATH);
 
-const npatRaw = require(path.resolve(NPAT_PATH));
-let has33c = false, hasP12 = false;
-for (const [k] of npatRaw.weights) {
-  if (typeof k === 'string') continue;
-  if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
-  else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
-}
-const npatWeights = NPat.createWeights({
-  initialCapacity: Math.max(1024, npatRaw.weights.size | 0),
-  use33c: has33c, useP12: hasP12,
-});
-for (const [k, v] of npatRaw.weights) {
-  const idx = NPat.internWeight(npatWeights, k);
-  npatWeights.vals[idx] = v;
-}
+const { weights: npatWeights } = NPat.loadModel({ name: 'vlibpat-npat-topk', path: NPAT_PATH });
 
-console.error(`vlibpat-npat-topk: vlibpat=${vModel.weights.size}w npat=${npatWeights.size}w  top-K=${TOP_K}  (3x3c=${has33c} p12=${hasP12})`);
+console.error(`vlibpat-npat-topk: vlibpat=${vModel.weights.size}w npat=${npatWeights.size}w  top-K=${TOP_K}  (3x3c=${npatWeights.cfg.use33c} p12=${npatWeights.cfg.useP12})`);
 
 // ── Move selection ───────────────────────────────────────────────────────────
 //

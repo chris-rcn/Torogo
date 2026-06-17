@@ -7,7 +7,7 @@
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
 //
 // Update rule — logistic TD, 2-step lookahead (same player to move):
-//   Δw_k = (LR / n_features) · (target − V) · V·(1−V) · polarity_k
+//   Δw_k = (LR / n_features) · (target − V) · polarity_k   [logistic / CE]
 //   target = V(s_{t+2})   for t+2 < game length  [bootstrap]
 //          = 1 / 0.5 / 0  for terminal            [BLACK wins / draw / WHITE wins]
 //
@@ -34,8 +34,8 @@ const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeight
 const { Game3, game3FromGame2 } = require('./game3.js');
 const { search } = require('./ai/vlibpat.js');
 const { search: abSearch } = require('./ab-search3.js');
-const NPat = require('./npat-lib.js');
 const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
+const Ladders = require('./evalladders.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
@@ -61,16 +61,30 @@ const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
 const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.95');  // per-call decay (period=50, ≈hpatterns per-game 0.999)
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
-const EVAL_TOPK  = Math.max(1, parseInt(opts['eval-topk'] || '20', 10));
 const EVAL_DITHER = 0.002;
 
 // ── Features ───────────────────────────
 
-let specs = [
-  { size: 2 },                      // ladder-aware (7-state)
-  { size: 3 },                      // ladder-aware (7-state)
-  { size: 3, ladder: false },       // plain (3-state)
-];
+// --specs selects the component list: comma tokens, "1"/"2"/"3" = ladder-aware
+// of that size, "1p"/"3p" = plain (no ladder).  Default: full 3-component spec.
+let specs;
+if (opts.specs) {
+  specs = opts.specs.split(',').map(tok => {
+    if (tok === '1')  return { size: 1 };
+    if (tok === '2')  return { size: 2 };
+    if (tok === '3')  return { size: 3 };
+    if (tok === '1p') return { size: 1, ladder: false };
+    if (tok === '3p') return { size: 3, ladder: false };
+    console.error(`--specs: unknown token '${tok}' (use 1, 2, 3, 1p, 3p)`);
+    process.exit(1);
+  });
+} else {
+  specs = [
+    { size: 2 },                      // ladder-aware (7-state)
+    { size: 3 },                      // ladder-aware (7-state)
+    { size: 3, ladder: false },       // plain (3-state)
+  ];
+}
 
 // Tactical backend for ladder-aware encoding.  ladder2 = 1-2 lib classification
 // (legacy default).  tactics3 = budgeted search up to 1-3 libs.
@@ -171,8 +185,8 @@ function search1ply(game, game3) {
 // Both colours use the policy.  Apply 2-step logistic TD inline during play.
 // All targets are absolute (P(BLACK wins)).
 function trainGame(N) {
-  const game     = new Game2(N, false);
-  const game3    = new Game3(N);   // lockstep mirror so extractFeatures skips per-move rebuild
+  const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+  const game3    = game3FromGame2(game);   // lockstep mirror incl. the opening stone
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
 
@@ -232,64 +246,19 @@ function trainGame(N) {
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
 
-// Reference npat for top-K candidate filtering during eval.  Loaded lazily so
-// any failure surfaces only when eval actually runs.  Shares the canonical
-// npat-data.js weights file with ai/npat.js etc.
-let _npatRefWeights = null;
-const _evalNpatStateByN = new Map();
-function _loadNpatRef() {
-  const raw = require(path.resolve(path.join(__dirname, 'npat-data.js')));
-  let has33c = false, hasP12 = false;
-  for (const [k] of raw.weights) {
-    if (typeof k === 'string') continue;
-    if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
-    else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
-  }
-  const w = NPat.createWeights({
-    initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: has33c, useP12: hasP12,
-  });
-  for (const [k, v] of raw.weights) {
-    const idx = NPat.internWeight(w, k);
-    w.vals[idx] = v;
-  }
-  return w;
-}
-
-// Trainee-side eval move selection: take the top-EVAL_TOPK candidates from
-// the npat reference policy and pick the best by the trainee's value head.
+// Trainee value of a position (leaf evaluator for the eval search).
 function _evalEvaluate(g3) {
   const f = extractFeatures(g3, prepSpecs);
   evaluateFeatures(f, weights);
   return f.val;
 }
 
-function _evalTopKCandidates(game, game3) {
-  const N = game.N;
-  let state = _evalNpatStateByN.get(N);
-  if (!state) { state = NPat.createState(N); _evalNpatStateByN.set(N, state); }
-  NPat.policyMove(game, state, _npatRefWeights, Math, game3);
-  const n = state.count;
-  if (n === 0) return [];
-  const k = Math.min(EVAL_TOPK, n);
-  const probs = state.probs;
-  const order = new Array(n);
-  for (let i = 0; i < n; i++) order[i] = i;
-  if (k < n) order.sort((a, b) => probs[b] - probs[a]);
-  const candidates = new Array(k);
-  for (let j = 0; j < k; j++) candidates[j] = state.moves[order[j]];
-  return candidates;
-}
-
-function evalSearch(game) {
+// Eval-game / rms move selection: the trainee's value head over the FULL move
+// set, so the eval measures the value function itself.
+function evalMove(game) {
   if (game.gameOver) return PASS;
-  if (_npatRefWeights === null) _npatRefWeights = _loadNpatRef();
   const game3 = game3FromGame2(game);
-  const candidates = _evalTopKCandidates(game, game3);
-  if (candidates.length === 0) return PASS;
-  return abSearch(game3, 1, _evalEvaluate, EVAL_DITHER, {
-    getCandidates: () => candidates,
-  });
+  return abSearch(game3, 1, _evalEvaluate, EVAL_DITHER);
 }
 
 // Play nGames of policy vs agent, alternating colours.
@@ -299,14 +268,14 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game     = new Game2(N, false);
+    const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
     while (!game.gameOver && moves++ < maxMoves) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
-        idx = evalSearch(game);
+        idx = evalMove(game);
       } else {
         const mv = refGetMove(game, budget);
         idx = mv.move !== undefined ? mv.move : PASS;
@@ -367,7 +336,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  eval-topk=${EVAL_TOPK}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log(`Tactics: ${tacticsOpts.tactics}`);
@@ -382,6 +351,7 @@ console.log([
   ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
   'avgL'.padStart(4),
   ' acc'.padStart(4),
+  'ladr'.padStart(4),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   'avgW'.padStart(6),
@@ -462,13 +432,20 @@ while (true) {
     }
     let rmsCell = null, rmsAvgCell = null;
     if (evalPositionsPool) {
-      const { rmsErr } = evalPositionsSample(game => ({ move: evalSearch(game) }), evalPositionsPool, POSITIONS_N || evalPositionsPool.length, 0);
+      const { rmsErr } = evalPositionsSample(game => ({ move: evalMove(game) }), evalPositionsPool, POSITIONS_N || evalPositionsPool.length, 0);
       rmsHistory.push(rmsErr);
       const rmsHalf = Math.max(1, Math.floor(rmsHistory.length / 2));
       const rmsAvg  = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
       rmsCell    = Util.fmt4(rmsErr);
       rmsAvgCell = Util.fmt4(rmsAvg);
     }
+    // Ladder gate: the live weights' own full-width 1-ply argmax (the same
+    // selection self-play uses) on the ladder suite — measures whether the
+    // value function can RANK moves at tactical points, not just score
+    // positions (the two dissociate; see 2026-06-12 uniform-prior findings).
+    const ladders = Ladders.evalLadders(
+      gm => ({ move: search1ply(gm, game3FromGame2(gm)) }), { trials: 1 });
+
     let wAbsSum = 0;
     for (const w of weights.values()) {
       wAbsSum += Math.abs(w);
@@ -488,6 +465,7 @@ while (true) {
       ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       Util.fmt4(avgLen),
       Util.fmtRatio4(avgAcc),
+      Util.fmtRatio4(ladders.passed / ladders.total),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),
       wAvg.toFixed(4).padStart(6),

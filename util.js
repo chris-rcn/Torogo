@@ -76,21 +76,30 @@ const Util = (() => {
     return t;
   }
 
-  // Compact 4-character formatter — like printf "%4.Nf" with K/M/B suffix scaling.
+  // Compact 4-character formatter — like printf "%4.Nf" with K/M/B/T suffix scaling.
   // Tries progressively shorter representations (fewer decimals, then thousands /
-  // millions / billions) and returns the first whose final length is ≤ 4 chars,
-  // with trailing zeros and bare trailing dots stripped, right-padded with spaces
-  // to exactly 4 chars.  Falls back to the unpadded String(units) if even billions
-  // overflow (the only case the result can exceed 4 chars).
+  // millions / billions / trillions) and returns the first whose final length is
+  // ≤ 4 chars, right-padded with spaces to exactly 4 chars.  Fractional values
+  // keep the highest precision that fits, trailing zeros included (3.8 →
+  // "3.80"); integral values render without a fraction.  Falls back to the
+  // unpadded String(units) if even trillions overflow (the only case the
+  // result can exceed 4 chars).
   //
   // Examples:
   //   1.234   → "1.23"      12345   → " 12K"
-  //   9999    → "9999"      1.5e9   → "1.5B"
+  //   3.8     → "3.80"      1.5e9   → "1.5B"
+  //   9999    → "9999"      4e6     → "4.0M"
   //   0       → "   0"      NaN     → " NaN"
   function fmt4(units) {
+    if (!Number.isFinite(units)) {
+      if (units === Infinity)  return ' inf';
+      if (units === -Infinity) return '-inf';
+      return String(units).padStart(4);
+    }
     const kilos = units / 1e3;
     const megas = kilos / 1e3;
     const gigas = megas / 1e3;
+    const teras = gigas / 1e3;
     const attempts = [
       [3, units, ''],
       [2, units, ''],
@@ -105,17 +114,19 @@ const Util = (() => {
       [2, gigas, 'B'],
       [1, gigas, 'B'],
       [0, gigas, 'B'],
+      [2, teras, 'T'],
+      [1, teras, 'T'],
+      [0, teras, 'T'],
     ];
     for (let i = 0; i < attempts.length; i++) {
       const prec = attempts[i][0], v = attempts[i][1], suf = attempts[i][2];
       let s = v.toFixed(prec);
-      if (s.indexOf('.') !== -1) {
-        s = s.replace(/0+$/, '');
-        if (s.charAt(s.length - 1) === '.') {
-          // Suffix forms (K/M/B) keep a single trailing zero so e.g. 4e6 shows
-          // as "4.0M" instead of "4M".  No-suffix forms strip the bare dot.
-          s = suf ? s + '0' : s.slice(0, -1);
-        }
+      const dot = s.indexOf('.');
+      if (dot !== -1 && /^0*$/.test(s.slice(dot + 1))) {
+        // Fully-zero fraction: integral values render plain; suffix forms
+        // (K/M/B/T) keep a single trailing zero so e.g. 4e6 shows as "4.0M"
+        // instead of "4M".  Partial trailing zeros are kept (3.8 → "3.80").
+        s = suf ? s.slice(0, dot) + '.0' : s.slice(0, dot);
       }
       s += suf;
       if (s.length <= 4) return s.padStart(4);
@@ -134,7 +145,11 @@ const Util = (() => {
   //   0       → "  0ns"    1       → "  1ms"   1000    → " 1.0s"   60000  → "60.0s"
   //   119500  → " 120s"    120000  → " 2.0m"   86400000 → "24.0h"  1e10   → " 116d"
   function fmtMs(ms) {
-    if (!Number.isFinite(ms)) return String(ms);
+    if (!Number.isFinite(ms)) {
+      if (ms === Infinity)  return '  inf';
+      if (ms === -Infinity) return ' -inf';
+      return String(ms).padStart(5);
+    }
     const nanos  = ms * 1e6;
     const micros = ms * 1e3;
     const millis = ms;
@@ -158,20 +173,22 @@ const Util = (() => {
   }
 
   // Format a ratio in [0, 1] as a 4-character zero-padded integer in [0000, 9999],
-  // representing the value × 10000.  Out-of-range values clamp; non-finite values
-  // pass through as right-padded strings.
+  // representing the value × 10000.  Out-of-range values clamp; non-finite
+  // values render width-safe.
   //
   // Examples:
   //   0       → "0000"     0.474  → "4740"
   //   0.5     → "5000"     1.0    → "9999"  (clamped)
   //   -0.5    → "0000"     NaN    → " NaN"
   function fmtRatio4(value) {
-    if (Number.isFinite(value)) {
-      if (value < 0) value = 0;
-      const n = Math.min(Math.round(10000 * value), 9999);
-      return String(n).padStart(4, '0');
+    if (!Number.isFinite(value)) {
+      if (value === Infinity)  return ' inf';
+      if (value === -Infinity) return '-inf';
+      return String(value).padStart(4);
     }
-    return String(value).padStart(4);
+    if (value < 0) value = 0;
+    const n = Math.min(Math.round(10000 * value), 9999);
+    return String(n).padStart(4, '0');
   }
 
   return { shuffle, envStr, envFloat, envInt, parseArgs, makeZobrist, fmt4, fmtRatio4, fmtMs, load };

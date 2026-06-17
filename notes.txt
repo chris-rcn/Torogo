@@ -8,7 +8,7 @@ Then remove the type,x,y from the agent result objects.
 Ladder priors in tree: failed.
 Pattern priors in tree: failed.
 Pattern priors in playouts: failed.
-Rave-influenced playouts: failed.  Didn't try 
+Rave-influenced playouts: failed.  Didn't try
 
 Opening book
 
@@ -184,3 +184,4 @@ size: 13  lr: 0.003  maxAdjLibs: 3  maxLadderStones: 8  ref: ai/ref-fast.js  out
 
 To try:
 Now that we have tuned RAVE_NPAT_VISITS, we need to re-tune RAVE_K.
+

@@ -4,7 +4,7 @@
 // minepatterns2.js — mine 3×3 pattern statistics from recorded games.
 //
 // Usage: node minepatterns2.js --file <path>
-//   --file    path to game records produced by recordgames.js (required)
+//   --file    path to game records, one per line: "<size>,<col><row>,...,.." with '..' for pass (required)
 //
 // Output: one line per observed pattern hash:
 //   <hash>,<seen>,<selected>,<selectedWeightSum>

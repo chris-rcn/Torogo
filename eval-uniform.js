@@ -4,7 +4,7 @@
 // eval-uniform.js — Measure |ΔV| = |V*(s) − V| under the uniform random policy.
 //
 // For each position in the file, V is estimated by averaging z ∈ {−1,+1} over
-// N rollouts using randomLegalMove.  V*(s) is the best candidate's kwr/1000.
+// N rollouts using randomLegalMove.  V*(s) is the best candidate's win ratio.
 // Reports mean and stddev of |ΔV| across all positions.
 //
 // Usage:
@@ -24,7 +24,9 @@ const dataFile      = opts.file;
 const N             = opts.N             !== undefined ? parseInt(opts.N, 10)            : 50;
 const positionLimit = opts['position-limit'] !== undefined ? parseInt(opts['position-limit'], 10) : Infinity;
 
-const lines = fs.readFileSync(dataFile, 'utf8').split('\n').filter(l => l.trim()).slice(0, positionLimit);
+const lines = fs.readFileSync(dataFile, 'utf8').split('\n')
+  .filter(l => l.trim() && !l.startsWith('#'))   // '#' lines hold generation parameters
+  .slice(0, positionLimit);
 
 function rollout(game, player) {
   const sim = game.clone();

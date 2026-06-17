@@ -119,7 +119,8 @@ class Game2 {
 
   // ── Reset (reuse instance across games) ───────────────────────────────────
 
-  reset() {
+  // Clear to a fully empty board (no opening stone).
+  _clear() {
     const cap = this.N * this.N;
     this.cells.fill(0);
     this._gid.fill(-1);
@@ -138,10 +139,57 @@ class Game2 {
     this.moveCount = 0;
     this.emptyCount = this.N * this.N;
     for (let i = 0; i < cap; i++) { this._emptyCells[i] = i; this._emptySlot[i] = i; }
+  }
+
+  reset() {
+    this._clear();
     const center = (this.N >> 1) * this.N + (this.N >> 1);
     this._place(center, BLACK);
     this.current   = WHITE;
     this.moveCount = 1;
+  }
+
+  // Toroidally translate every stone so that `targetIdx` lands on the board
+  // centre.  Truly shifts the whole position — rebuilds groups/liberties and
+  // carries over all game state, translating the positional fields (ko,
+  // koStone, lastMove, last-capture record) by the same shift.  Returns the
+  // applied shift { dx, dy } so callers can translate coordinates they cite:
+  //   translated index = ((x+dx)%N) + ((y+dy)%N)*N   (PASS stays PASS).
+  recenter(targetIdx) {
+    const N = this.N, half = N >> 1;
+    const dx = (half - (targetIdx % N) + N) % N;
+    const dy = (half - ((targetIdx / N) | 0) + N) % N;
+    const tr = idx => idx === PASS ? PASS : (idx % N + dx) % N + (((idx / N | 0) + dy) % N) * N;
+
+    // snapshot stones + all carry-over state before clearing
+    const old = Int8Array.from(this.cells);
+    const s = {
+      current: this.current, ko: this.ko, koStone: this.koStone.slice(),
+      consecutivePasses: this.consecutivePasses, gameOver: this.gameOver,
+      moveCount: this.moveCount, lastMove: this.lastMove,
+      lcc: this._lastCaptureCount, lch: this._lastCaptureChains,
+      lcaps: Array.from(this._lastCaptures.subarray(0, this._lastCaptureCount)),
+    };
+
+    this._clear();
+    for (let i = 0; i < N * N; i++) {
+      if (old[i] === EMPTY) continue;
+      this._place(tr(i), old[i]);   // emptyCount is maintained by _place
+    }
+
+    // restore state: scalars as-is, positional fields translated
+    this.current = s.current;
+    this.ko = tr(s.ko);
+    this.koStone = s.koStone.map(tr);
+    this.consecutivePasses = s.consecutivePasses;
+    this.gameOver = s.gameOver;
+    this.moveCount = s.moveCount;
+    this.lastMove = tr(s.lastMove);
+    this._lastCaptureCount = s.lcc;
+    this._lastCaptureChains = s.lch;
+    for (let i = 0; i < s.lcc; i++) this._lastCaptures[i] = tr(s.lcaps[i]);
+
+    return { dx, dy };
   }
 
   // ── Group tracking ─────────────────────────────────────────────────────────
@@ -933,12 +981,12 @@ class Game2 {
 
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
   // Fisher-Yates over the empty-cell list in-place; _emptySlot kept consistent.
-  randomLegalMove() {
+  randomLegalMove(rng = Math) {
     const ec     = this.emptyCount;
     const eCells = this._emptyCells;
     const eSlot  = this._emptySlot;
     for (let end = ec - 1; end >= 0; end--) {
-      const ri  = (Math.random() * (end + 1)) | 0;
+      const ri  = (rng.random() * (end + 1)) | 0;
       const idx = eCells[ri];
       if (!this.isTrueEye(idx) && this.isLegal(idx)) return idx;
       const t     = eCells[end];

@@ -19,7 +19,7 @@ const { Game3, game3FromGame2 } = require('../game3.js');
 // reproduces the previous greedy behavior.
 const NPAT_TEMP = Util.envFloat('NPAT_TEMP', 0);
 
-const { weights, modelName } = NPat.loadModel({ name: 'npat', path: process.env.NPAT_WEIGHTS });
+const { weights, modelName } = NPat.loadModel({ name: 'ref-npat', path: process.env.NPAT_WEIGHTS });
 
 // One state per board size we encounter, lazily built.
 const stateByN = new Map();
@@ -35,7 +35,7 @@ function getMove(game) {
   return { move };
 }
 
-console.error(`npat: loaded ${weights.size} weights from ${modelName} ` +
+console.error(`ref-npat: loaded ${weights.size} weights from ${modelName} ` +
   `(3x3c=${weights.cfg.use33c} p12=${weights.cfg.useP12})`);
 
 module.exports = { getMove };

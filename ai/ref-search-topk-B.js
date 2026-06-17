@@ -18,14 +18,14 @@ const NPat = require('../npat-lib.js');
 const TOP_K  = 4;
 const DITHER = 0.002;
 
-const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-9-2L3L3NL-onpol70-9.js');
+const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-9emvzsad.js');
 const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
 
 const vModel = vLoadWeights(VPAT_PATH);
 
-const { weights: npatWeights } = NPat.loadModel({ name: 'ref-search-topk', path: NPAT_PATH });
+const { weights: npatWeights } = NPat.loadModel({ name: 'ref-search-topk-B', path: NPAT_PATH });
 
 console.error(`ref-search-top-5: vlibpat=${vModel.weights.size}w npat=${npatWeights.size}w  top-K=${TOP_K}  (3x3c=${npatWeights.cfg.use33c} p12=${npatWeights.cfg.useP12})`);
 

@@ -1,10 +1,15 @@
 'use strict';
 
-// int-map.js — open-addressing hash map from int32 → int32.
+// int-map.js — open-addressing hash maps from int32 keys.
 //
 // Key 0 is reserved as the empty-slot sentinel and must not be inserted.
 // Collisions are resolved by triangular probing (skip++ each step), which
 // visits every slot exactly once when capacity is a power of two.
+//
+// Two variants share the implementation and differ only in value storage:
+//   makeIntMap(minCap)      — int32 values,   get() miss → -1
+//   makeIntFloatMap(minCap) — float64 values, get() miss → undefined
+//                             (Map-compatible: `m.get(k) ?? fallback`)
 //
 // Inspired by IntIntMap.java (fant.common).
 
@@ -12,21 +17,22 @@
 
 const MAX_FULLNESS = 0.5;
 
-// Returns a new IntMap with at least minCap initial capacity.
-function makeIntMap(minCap) {
+// Returns a new map with at least minCap initial capacity, ValsArray value
+// storage, and missValue returned by get() for absent keys.
+function makeMap(minCap, ValsArray, missValue) {
   minCap = minCap || 64;
   let cap = 1;
   while (cap < minCap) cap <<= 1;
 
   let keys;     // Int32Array — 0 means empty
-  let vals;     // Int32Array
+  let vals;     // ValsArray
   let mask;
   let count;
   let resizeAt;
 
   function alloc() {
     keys     = new Int32Array(cap);
-    vals     = new Int32Array(cap);
+    vals     = new ValsArray(cap);
     mask     = cap - 1;
     count    = 0;
     resizeAt = (cap * MAX_FULLNESS) | 0;
@@ -67,11 +73,11 @@ function makeIntMap(minCap) {
   return {
     suppressZeroWarning() { warnOnZero = false; },
 
-    // Returns stored value, or -1 if not found.
+    // Returns stored value, or missValue if not found.
     get(key) {
-      if (key === 0) { if (warnOnZero) console.error('int-map: key 0 is reserved (get)'); return -1; }
+      if (key === 0) { if (warnOnZero) console.error('int-map: key 0 is reserved (get)'); return missValue; }
       const i = probe(key);
-      return i < 0 ? -1 : vals[i];
+      return i < 0 ? missValue : vals[i];
     },
 
     // Inserts or updates key → val.
@@ -97,7 +103,7 @@ function makeIntMap(minCap) {
     },
 
     clone() {
-      const c = makeIntMap(cap);
+      const c = makeMap(cap, ValsArray, missValue);
       for (let i = 0; i < cap; i++) {
         if (keys[i] !== 0) c.set(keys[i], vals[i]);
       }
@@ -106,7 +112,17 @@ function makeIntMap(minCap) {
   };
 }
 
-const IntMap = { makeIntMap };
+// int32 → int32; get() returns -1 for absent keys.
+function makeIntMap(minCap) {
+  return makeMap(minCap, Int32Array, -1);
+}
+
+// int32 → float64; get() returns undefined for absent keys, like Map.
+function makeIntFloatMap(minCap) {
+  return makeMap(minCap, Float64Array, undefined);
+}
+
+const IntMap = { makeIntMap, makeIntFloatMap };
 if (typeof module !== 'undefined') {
   module.exports = IntMap;
   require('./int-map.test.js').runTests(IntMap);

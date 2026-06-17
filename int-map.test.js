@@ -4,7 +4,7 @@
 // Called by int-map.js at module load time (Node only) via runTests().
 // Silent on success; logs failures to stderr.
 
-function runTests({ makeIntMap }) {
+function runTests({ makeIntMap, makeIntFloatMap }) {
   let failures = 0;
 
   function check(cond, msg) {
@@ -162,6 +162,42 @@ function runTests({ makeIntMap }) {
     for (let i = 1; i <= 400; i++) m.set(i, i);
     check(m.size === 400,    'minCap: size correct');
     check(m.get(200) === 200,'minCap: value correct');
+  }
+
+  // ── makeIntFloatMap: float values, Map-compatible misses ──────────────────
+  {
+    const m = makeIntFloatMap();
+    check(m.get(1) === undefined,     'float: miss returns undefined');
+    check((m.get(1) ?? 0) === 0,      'float: miss with ?? 0 fallback');
+
+    m.set(1, 0.001544);
+    m.set(2, -0.151171);
+    m.set(3, 0);
+    check(m.get(1) === 0.001544,      'float: positive value roundtrips exactly');
+    check(m.get(2) === -0.151171,     'float: negative value roundtrips exactly');
+    check(m.get(3) === 0,             'float: stored 0 is 0, not undefined');
+    check(m.size === 3,               'float: size correct');
+
+    m.suppressZeroWarning();
+    m.set(0, 7);
+    check(m.get(0) === undefined,     'float: key 0 not insertable');
+
+    const c = m.clone();
+    check(c.get(2) === -0.151171,     'float: clone copies values');
+    check(c.get(9) === undefined,     'float: clone miss returns undefined');
+  }
+
+  // ── makeIntFloatMap: resize preserves float values ─────────────────────────
+  {
+    const m = makeIntFloatMap(4);
+    const N = 200;
+    for (let i = 1; i <= N; i++) m.set(i, i / 7);
+    check(m.size === N, 'float post-resize: size correct');
+    let ok = true;
+    for (let i = 1; i <= N; i++) {
+      if (m.get(i) !== i / 7) { ok = false; break; }
+    }
+    check(ok, 'float post-resize: all values retrievable exactly');
   }
 
   // ── Report ─────────────────────────────────────────────────────────────────

@@ -44,44 +44,13 @@ let npatWeights = null;
 const npatStateByN = new Map();
 
 if (RAVE_NPAT_VISITS > 0) {
-  let raw, modelName;
-  if (typeof window !== 'undefined') {
-    // Browser: caller must pre-load window.npatModel.
-    if (!window.npatModel) {
-      throw new Error('rave-npat: window.npatModel is not set — load the npat weights script first');
-    }
-    raw = window.npatModel;
-    modelName = 'window.npatModel';
-  } else {
-    const path = require('path');
-    const weightsPath = process.env.NPAT_WEIGHTS
-      || path.join(__dirname, '..', 'npat-data.js');
-    raw = require(path.resolve(weightsPath));
-    modelName = path.basename(weightsPath);
-  }
-  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
-    throw new Error(
-      `rave-npat: TACT_STONE_LIMIT mismatch — file ${modelName} ` +
-      `was trained at ${raw.tactStoneLimit}, runtime is ${NPat.TACT_STONE_LIMIT}. ` +
-      `Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
-    );
-  }
-  let has33c = false, hasP12 = false;
-  for (const [k] of raw.weights) {
-    if (typeof k === 'string') continue;
-    if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
-    else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
-  }
-  npatWeights = NPat.createWeights({
-    initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: has33c, useP12: hasP12,
+  const { weights, modelName } = NPat.loadModel({
+    name: 'rave-npat',
+    path: (typeof process !== 'undefined' && process.env.NPAT_WEIGHTS) || undefined,
   });
-  for (const [k, v] of raw.weights) {
-    const idx = NPat.internWeight(npatWeights, k);
-    npatWeights.vals[idx] = v;
-  }
+  npatWeights = weights;
   console.error(`rave-npat: loaded ${npatWeights.size} npat weights from ${modelName} ` +
-    `(visits=${RAVE_NPAT_VISITS} 3x3c=${has33c} p12=${hasP12})`);
+    `(visits=${RAVE_NPAT_VISITS} 3x3c=${weights.cfg.use33c} p12=${weights.cfg.useP12})`);
 }
 
 function applyNpatPrior(node, game2) {

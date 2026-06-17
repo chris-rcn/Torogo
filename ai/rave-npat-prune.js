@@ -30,7 +30,7 @@ const performance = (typeof window !== 'undefined' && window.performance)
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 const RAVE_K        = Util.envFloat('RAVE_K', 1200);
 const PLAYOUTS      = Util.envInt('PLAYOUTS', 0);
-const N_EXPAND      = Util.envInt('N_EXPAND', 3);
+const N_EXPAND      = Util.envInt('N_EXPAND', 1);
 const RAVE_INHERIT  = Util.envFloat('RAVE_INHERIT', 0.2);
 
 const PRIOR_WINS   = 0.001;
@@ -47,43 +47,13 @@ let npatWeights = null;
 const npatStateByN = new Map();
 
 if (RAVE_NPAT_VISITS > 0 || RAVE_NPAT_K > 0) {
-  let raw, modelName;
-  if (typeof window !== 'undefined') {
-    if (!window.npatModel) {
-      throw new Error('rave-npat: window.npatModel is not set — load the npat weights script first');
-    }
-    raw = window.npatModel;
-    modelName = 'window.npatModel';
-  } else {
-    const path = require('path');
-    const weightsPath = process.env.NPAT_WEIGHTS
-      || path.join(__dirname, '..', 'npat-data.js');
-    raw = require(path.resolve(weightsPath));
-    modelName = path.basename(weightsPath);
-  }
-  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== NPat.TACT_STONE_LIMIT) {
-    throw new Error(
-      `rave-npat: TACT_STONE_LIMIT mismatch — file ${modelName} ` +
-      `was trained at ${raw.tactStoneLimit}, runtime is ${NPat.TACT_STONE_LIMIT}. ` +
-      `Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
-    );
-  }
-  let has33c = false, hasP12 = false;
-  for (const [k] of raw.weights) {
-    if (typeof k === 'string') continue;
-    if      (k >= NPat.SHAPE33C_RAW_BASE && k < NPat.P12_RAW_BASE) has33c = true;
-    else if (k >= NPat.P12_RAW_BASE)                                hasP12 = true;
-  }
-  npatWeights = NPat.createWeights({
-    initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: has33c, useP12: hasP12,
+  const { weights, modelName } = NPat.loadModel({
+    name: 'rave-npat-prune',
+    path: (typeof process !== 'undefined' && process.env.NPAT_WEIGHTS) || undefined,
   });
-  for (const [k, v] of raw.weights) {
-    const idx = NPat.internWeight(npatWeights, k);
-    npatWeights.vals[idx] = v;
-  }
+  npatWeights = weights;
   console.error(`rave-npat-prune: loaded ${npatWeights.size} npat weights from ${modelName} ` +
-    `(visits=${RAVE_NPAT_VISITS} k=${RAVE_NPAT_K} 3x3c=${has33c} p12=${hasP12})`);
+    `(visits=${RAVE_NPAT_VISITS} k=${RAVE_NPAT_K} 3x3c=${weights.cfg.use33c} p12=${weights.cfg.useP12})`);
 }
 
 // Run npat extraction + softmax for `game2`.  Returns the shared state (with

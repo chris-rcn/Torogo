@@ -1,0 +1,176 @@
+'use strict';
+
+// gen-ladder-grid.js — sweep the ladder-test-case grid.
+//   for example 1..N:
+//     for chain size 1..MAX_STONES:
+//       for each of the 4 types (kill, escape, futile-attack, futile-extend):
+//         find a matching position (random legal play + ladder2 + puct confirm)
+//         and display it, centered on and marking the critical move(s).
+//
+// Usage:  node gen-ladder-grid.js [boardSize=13] [N=1] [MAX_STONES=10]
+
+process.env.DITHER = '0';   // deterministic puct-static confirmation
+
+const { Game2, BLACK, PASS, coordStr } = require('./game2.js');
+const { game3FromGame2 } = require('./game3.js');
+const { getLadderStatus } = require('./ladder2.js');
+const PuctStatic = require('./ai/puct-static.js');
+const Util = require('./util.js');
+const fs = require('fs');
+
+// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--out file]
+const opts       = Util.parseArgs(process.argv.slice(2), ['help']);
+const SIZE       = parseInt(opts.size       || '13',   10);
+const N          = parseInt(opts.examples   || '1',    10);   // examples per (chain, type) cell
+const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
+const PLAYOUTS   = parseInt(opts.playouts   || '10000', 10);
+const OUT        = opts.out || null;   // append text-block cases here (consumed by evalladders2.js)
+
+const TYPES = [
+  { name: 'kill',          wantDef: false, fail: false },
+  { name: 'escape',        wantDef: true,  fail: false },
+  { name: 'futile-attack', wantDef: false, fail: true  },
+  { name: 'futile-extend', wantDef: true,  fail: true  },
+];
+
+// representative stones of every size-`chain`, 2-liberty group
+function chainGroups(game, chain) {
+  const cap = SIZE * SIZE, seen = new Set(), out = [];
+  for (let i = 0; i < cap; i++) {
+    if (game.cells[i] === 0) continue;
+    const gid = game._gid[i];
+    if (seen.has(gid)) continue;
+    seen.add(gid);
+    if (game.groupSize(gid) !== chain) continue;
+    if (game.groupLibertyCount(gid) !== 2) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+// Would the defender extending the chain (playing one of `libs`) leave the
+// group in atari (self-atari)?  Such futile-extend cases are trivial blunders,
+// not real ladder tests, so we reject them.
+function extendSelfAtari(game, stoneIdx, libs) {
+  const g3 = game3FromGame2(game);
+  for (const lib of libs) {
+    if (!g3.play(lib)) continue;
+    const atari = g3.groupLibs2(stoneIdx).count === 1;
+    g3.undo();
+    if (atari) return true;
+  }
+  return false;
+}
+
+// Does playing `move` capture any opponent stones?  (A plain fill lowers
+// emptyCount by exactly 1; a capture frees the taken cells, so it drops less.)
+function moveCaptures(game, move) {
+  const g3 = game3FromGame2(game);
+  const before = g3.emptyCount;
+  if (!g3.play(move)) return false;
+  const captured = g3.emptyCount >= before;
+  g3.undo();
+  return captured;
+}
+
+// scan ONE position for a puct-confirmed case of (chain, type); return hit or null
+function scanPos(game, chain, type) {
+  for (const stoneIdx of chainGroups(game, chain)) {
+    const isDef = game.cells[stoneIdx] === game.current;
+    if (isDef !== type.wantDef) continue;
+    const st = getLadderStatus(game3FromGame2(game), stoneIdx);
+    if (!st) continue;
+    if (!type.fail) {
+      if (!st.moverSucceeds || st.urgentLibs.length !== 1) continue;
+      // escape: reject if the saving move is a capture (escapes via capture, not a real ladder) — before puct
+      if (type.wantDef && moveCaptures(game, st.urgentLibs[0])) continue;
+      // reject if a random legal non-eye move hits the answer (too easy to guess) — before puct
+      if (game.randomLegalMove() === st.urgentLibs[0]) continue;
+      const r = PuctStatic.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      if (r.move === st.urgentLibs[0]) return { stoneIdx, color: game.cells[stoneIdx], require: st.urgentLibs[0] };
+    } else {
+      if (st.moverSucceeds) continue;   // mover can't succeed → futile
+      // moves-to-avoid: keep only legal non-eye liberties; the set must be non-empty
+      const prohibit = st.libs.filter(m => game.isLegal(m) && !game.isTrueEye(m));
+      if (prohibit.length === 0) continue;
+      // futile-extend: reject self-atari extends (trivial, not a ladder) — before the puct search
+      if (type.wantDef && extendSelfAtari(game, stoneIdx, prohibit)) continue;
+      const r = PuctStatic.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      if (!prohibit.includes(r.move)) return { stoneIdx, color: game.cells[stoneIdx], prohibit };
+    }
+  }
+  return null;
+}
+
+// search random legal play until a case is found (or budget exhausted)
+function findCase(chain, type) {
+  const t0 = Date.now();
+  let scanned = 0;
+  while (true) {   // search until found (no time limit)
+    const game = new Game2(SIZE);
+    const maxMoves = SIZE * SIZE * 2;
+    let moves = 0;
+    while (!game.gameOver && moves < maxMoves) {
+      scanned++;
+      const hit = scanPos(game, chain, type);
+      if (hit) return { game, hit, scanned, ms: Date.now() - t0 };
+      const mv = game.randomLegalMove();
+      if (mv === PASS) game.play(PASS); else if (!game.play(mv)) break;
+      moves++;
+    }
+  }
+}
+
+const col = c => c === BLACK ? 'BLACK ●' : 'WHITE ○';
+
+// Quantized toroidal center of gravity of the chain containing stoneIdx.
+// Each axis wraps, so use the circular mean (average unit vectors, not raw coords).
+function chainCentroid(game, stoneIdx) {
+  const N = game.N, gid = game._gid[stoneIdx];
+  let sx = 0, cx = 0, sy = 0, cy = 0;
+  for (let i = 0; i < N * N; i++) {
+    if (game._gid[i] !== gid) continue;
+    const ax = 2 * Math.PI * (i % N) / N, ay = 2 * Math.PI * ((i / N | 0)) / N;
+    cx += Math.cos(ax); sx += Math.sin(ax);
+    cy += Math.cos(ay); sy += Math.sin(ay);
+  }
+  const ang = (s, c) => { let a = Math.atan2(s, c); if (a < 0) a += 2 * Math.PI; return Math.round(a / (2 * Math.PI) * N) % N; };
+  return ang(sy, cy) * N + ang(sx, cx);
+}
+
+function display(res, type, chain) {
+  const { game, hit, scanned, ms } = res;
+  console.log(`to move (${type.wantDef ? 'defender' : 'attacker'}): ${col(game.current)}   chain: ${col(hit.color)} (2 libs)   [${scanned} pos, ${(ms/1000).toFixed(1)}s]`);
+  // Physically recenter the board on the chain's centroid, then translate the
+  // cited coordinates by the same shift so they match the shifted board.
+  const { dx, dy } = game.recenter(chainCentroid(game, hit.stoneIdx));
+  const tr = idx => (idx % SIZE + dx) % SIZE + (((idx / SIZE | 0) + dy) % SIZE) * SIZE;
+  const toPlay = game.current === BLACK ? 'B' : 'W';
+  let answer;
+  if (!type.fail) {
+    const m = tr(hit.require);
+    answer = `require=${coordStr(m, SIZE)}`;
+    console.log(`PLAY: ${coordStr(m, SIZE)}`);
+    console.log(game.toString(m, { labels: true }));
+  } else {
+    const pm = hit.prohibit.map(tr);
+    answer = `prohibit=${pm.map(m => coordStr(m, SIZE)).join(',')}`;
+    console.log(`AVOID: ${pm.map(m => coordStr(m, SIZE)).join(', ')}`);
+    console.log(game.toString(pm[0], { labels: true }));
+  }
+  if (OUT) {
+    // Block: metadata header line, then the unmarked labeled board, blank-line separated.
+    const header = `type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=puct-static`;
+    fs.appendFileSync(OUT, `${header}\n${game.toString(PASS, { labels: true })}\n\n`);
+  }
+}
+
+console.log(`grid: board=${SIZE}  N=${N}  MAX_STONES=${MAX_STONES}  playouts=${PLAYOUTS}\n`);
+for (let i = 1; i <= N; i++) {
+  for (let chain = 1; chain <= MAX_STONES; chain++) {
+    for (const type of TYPES) {
+      process.stdout.write(`\n========== example ${i}/${N}   chainSize=${chain}   type=${type.name}   [searching…] ==========\n`);
+      display(findCase(chain, type), type, chain);
+    }
+  }
+}

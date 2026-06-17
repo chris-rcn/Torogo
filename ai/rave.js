@@ -24,12 +24,12 @@ const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 
-const RAVE_K = Util.envFloat('RAVE_K', 800);
+const RAVE_K = Util.envFloat('RAVE_K', 1200);
 
 const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND', 2);
+const N_EXPAND = Util.envInt('N_EXPAND', 4);
 
 // Fraction of parent RAVE stats inherited by a newly created child node.
 // Must be < 1 to prevent unbounded growth down the tree.

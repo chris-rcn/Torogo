@@ -36,30 +36,30 @@ const VLib                   = Util.load('./vlibpat.js', 'VlibPat');
 const performance = (typeof window !== 'undefined' && window.performance)
   ? window.performance : require('perf_hooks').performance;
 
-const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
-const RAVE_K        = Util.envFloat('RAVE_K', 1200);
+const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.3);
+const RAVE_K        = Util.envFloat('RAVE_K', 700);
 const PLAYOUTS      = Util.envInt('PLAYOUTS', 0);
-const N_EXPAND      = Util.envInt('N_EXPAND', 1);
+const N_EXPAND      = Util.envInt('N_EXPAND', 4);
 const RAVE_INHERIT  = Util.envFloat('RAVE_INHERIT', 0.2);
 
 const RESIGN_MIN_PLAYOUTS = 20000;
 
-const RAVE_NPAT_VISITS = Util.envFloat('RAVE_NPAT_VISITS', 50);
-const RAVE_NPAT_K      = Util.envInt  ('RAVE_NPAT_K', 40);
+const RAVE_NPAT_VISITS = Util.envFloat('RAVE_NPAT_VISITS', 60);
+const RAVE_NPAT_K      = Util.envInt  ('RAVE_NPAT_K', 40);  // kept move count
 
-const VPAT_VISIT_THRESH = Util.envInt('VPAT_VISIT_THRESH', 0);
-const RAVE_VPAT_VISITS = Util.envFloat('RAVE_VPAT_VISITS', 0);
+const VPAT_VISIT_THRESH = Util.envInt('VPAT_VISIT_THRESH', 2);
+const RAVE_VPAT_VISITS = Util.envFloat('RAVE_VPAT_VISITS', 500);
 
 let npatWeights = null;
 const npatStateByN = new Map();
 
 if (RAVE_NPAT_VISITS > 0 || RAVE_NPAT_K > 0) {
   const { weights, modelName } = NPat.loadModel({
-    name: 'rave-npat-prune-vpat',
+    name: 'rave-npat-prune-vpat-B',
     path: (typeof process !== 'undefined' && process.env.NPAT_WEIGHTS) || undefined,
   });
   npatWeights = weights;
-  console.log(`rave-npat-prune-vpat: loaded ${npatWeights.size} npat weights from ${modelName} ` +
+  console.log(`rave-npat-prune-vpat-B: loaded ${npatWeights.size} npat weights from ${modelName} ` +
     `(visits=${RAVE_NPAT_VISITS} k=${RAVE_NPAT_K} 3x3c=${weights.cfg.use33c} p12=${weights.cfg.useP12})`);
 }
 
@@ -68,7 +68,7 @@ if (RAVE_NPAT_VISITS > 0 || RAVE_NPAT_K > 0) {
 // Resolve concrete weights source.
 const vpatPath = (typeof process !== 'undefined' && process.env.VPAT_WEIGHTS)
   ? require('path').resolve(process.env.VPAT_WEIGHTS)
-  : './ref/vlibpat-9-2L3L3NL-onpol70-9.js';
+  : './ref/vlibpat-9emvzsad.js';
 
 // Load it.
 const vpatRaw = Util.load(vpatPath, 'vlibpatModel');

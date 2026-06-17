@@ -1,0 +1,11 @@
+agent=prod  size=13  budget=2000ms  limit=none
+Out: out/games-iln23ylb.js
+
+games  elapsed  blkWR  avgLen  maxLen    tMv
+    1     6.8m   0000     206     206   2.0s
+    2    13.2m   0000     200     206   2.0s
+    3    19.3m   0000     195     206   2.0s
+    4    25.9m   0000     196     206   2.0s
+    5    32.2m   2000     195     206   2.0s
+    6    38.2m   1667     193     206   2.0s
+    7    44.2m   2857     191     206   2.0s

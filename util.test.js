@@ -20,9 +20,10 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   eq(fmt4(1000),      '1000',   'fmt4(1000)');
   eq(fmt4(9999),      '9999',   'fmt4(9999)');
 
-  // ── fmt4: fractions, trailing-zero stripping ────────────────────────────────
-  eq(fmt4(0.5),       ' 0.5',   'fmt4(0.5) — strip trailing zeros');
-  eq(fmt4(1.5),       ' 1.5',   'fmt4(1.5)');
+  // ── fmt4: fractions keep the highest precision that fits ───────────────────
+  eq(fmt4(0.5),       '0.50',   'fmt4(0.5) — trailing zero kept');
+  eq(fmt4(1.5),       '1.50',   'fmt4(1.5)');
+  eq(fmt4(3.8),       '3.80',   'fmt4(3.8)');
   eq(fmt4(1.23),      '1.23',   'fmt4(1.23)');
   eq(fmt4(1.234),     '1.23',   'fmt4(1.234) — fits at .2f');
   eq(fmt4(12.3),      '12.3',   'fmt4(12.3)');
@@ -48,10 +49,18 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   eq(fmt4(12.3e9),    ' 12B',   'fmt4(12.3e9)');
   eq(fmt4(123.4e9),   '123B',   'fmt4(123.4e9)');
 
+  // ── fmt4: T suffix ──────────────────────────────────────────────────────────
+  eq(fmt4(1.5e12),    '1.5T',   'fmt4(1.5e12)');
+  eq(fmt4(12.3e12),   ' 12T',   'fmt4(12.3e12)');
+  eq(fmt4(123.4e12),  '123T',   'fmt4(123.4e12)');
+
   // ── fmt4: overflow falls back to plain (unpadded) String(units) ─────────────
-  eq(fmt4(1.5e12),    String(1.5e12),  'fmt4(1.5e12) — beyond B, fallback');
-  eq(fmt4(Infinity),  'Infinity',      'fmt4(Infinity) — fallback');
-  eq(fmt4(NaN),       ' NaN',          'fmt4(NaN) — "NaN" fits, padded');
+  eq(fmt4(1e15),      String(1e15),  'fmt4(1e15) — beyond T, fallback');
+
+  // ── fmt4: non-finite, width-safe ─────────────────────────────────────────────
+  eq(fmt4(NaN),       ' NaN',   'fmt4(NaN)');
+  eq(fmt4(Infinity),  ' inf',   'fmt4(Infinity)');
+  eq(fmt4(-Infinity), '-inf',   'fmt4(-Infinity)');
 
   // ── fmt4: negatives still try to fit ────────────────────────────────────────
   eq(fmt4(-1),        '  -1',   'fmt4(-1)');
@@ -81,10 +90,10 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   eq(fmtRatio4(2),       '9999', 'fmtRatio4(2) — clamped down');
   eq(fmtRatio4(-0.5),    '0000', 'fmtRatio4(-0.5) — clamped up to 0');
 
-  // ── fmtRatio4: non-finite passthrough ───────────────────────────────────────
-  eq(fmtRatio4(NaN),       ' NaN',      'fmtRatio4(NaN)');
-  eq(fmtRatio4(Infinity),  'Infinity',  'fmtRatio4(Infinity)');
-  eq(fmtRatio4(-Infinity), '-Infinity', 'fmtRatio4(-Infinity)');
+  // ── fmtRatio4: non-finite, width-safe ───────────────────────────────────────
+  eq(fmtRatio4(NaN),       ' NaN', 'fmtRatio4(NaN)');
+  eq(fmtRatio4(Infinity),  ' inf', 'fmtRatio4(Infinity)');
+  eq(fmtRatio4(-Infinity), '-inf', 'fmtRatio4(-Infinity)');
 
   // ── fmtRatio4: invariant — finite inputs always produce exactly 4 digits ────
   for (const x of [0, 0.0001, 0.5, 0.9999, 1, 2, -0.5]) {
@@ -123,9 +132,10 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   // 100 days × 86_400_000 ms/day = 8.64e9 ms → "%4.0fd" → " 100d"
   eq(fmtMs(8640000000), ' 100d', 'fmtMs(100 days)');
 
-  // ── fmtMs: non-finite ──────────────────────────────────────────────────
-  eq(fmtMs(NaN),       'NaN',       'fmtMs(NaN)');
-  eq(fmtMs(Infinity),  'Infinity',  'fmtMs(Infinity)');
+  // ── fmtMs: non-finite, width-safe ──────────────────────────────────────
+  eq(fmtMs(NaN),       '  NaN', 'fmtMs(NaN)');
+  eq(fmtMs(Infinity),  '  inf', 'fmtMs(Infinity)');
+  eq(fmtMs(-Infinity), ' -inf', 'fmtMs(-Infinity)');
 
   // ── fmtMs: invariant — finite inputs ≤ ~10k days fit in 5 chars ────────
   for (const x of [0, 1, 1e3, 1e6, 1e9, 1e11]) {

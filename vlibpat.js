@@ -16,6 +16,7 @@ const {
   DEFAULT_NODE_LIMIT:  TACTICS3_NODE_LIMIT,
   DEFAULT_DEPTH_LIMIT: TACTICS3_DEPTH_LIMIT,
 } = Util.load('./tactics3.js', 'Tactics3');
+const { makeIntFloatMap }      = Util.load('./int-map.js', 'IntMap');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -72,7 +73,11 @@ const PERMS_3x3 = [
 //   tactics: 'ladder2' (default) | 'tactics3'
 //   nodeLimit, depthLimit: optional bounds for tactics3 (forwarded to
 //     searchChains; ignored by ladder2).
-function computeLadderCodes(game3, opts) {
+// ladderStatuses: optional precomputed getAllLadderStatuses result for this
+//   exact position (same player to move), shared with other extractors.
+//   Honoured only by the ladder2 backend; tactics3 always runs its own
+//   search (different liberty range and status semantics).
+function computeLadderCodes(game3, opts, ladderStatuses) {
   const N = game3.N;
   const cap = N * N;
   const codes = new Int8Array(cap);
@@ -88,7 +93,7 @@ function computeLadderCodes(game3, opts) {
   // moverSucceeds is always boolean.
   const infos = tactics === 'tactics3'
     ? searchChains(game3, opts?.nodeLimit, opts?.depthLimit)
-    : getAllLadderStatuses(game3);
+    : (ladderStatuses || getAllLadderStatuses(game3));
   if (infos.length === 0) return codes;
   const cur = game3.current;
   const codeByGid = new Map();
@@ -303,7 +308,10 @@ function _extractSize3(raw, cap, N, lut, outKeys, outPols, count, buf) {
 //     avoid the per-call rebuild.
 // When `doSetNext` is true the move is played+undone on whichever game3 we
 // end up using (caller-provided or built).
-function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3) {
+// Optional `ladderStatuses` is a precomputed getAllLadderStatuses result for
+// the *unmodified* position (same player to move), shared with other
+// extractors; it is ignored whenever a nextMove is actually played.
+function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3, ladderStatuses) {
   const cap   = game.N * game.N;
   const N     = game.N;
 
@@ -329,7 +337,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3) {
   // Compute tactical codes only if any ladder spec is requested.  The tactics
   // backend (ladder2 vs tactics3) is pinned in prepSpecs.
   const rawL  = (need.s1L || need.s2L || need.s3L)
-    ? computeLadderCodes(game3, prepSpecs)
+    ? computeLadderCodes(game3, prepSpecs, movePlayed ? null : ladderStatuses)
     : null;
   // No-ladder codes = sign-only cell values (-1, 0, +1) — i.e. game3.cells.
   const rawNL = (need.s1NL || need.s2NL || need.s3NL) ? game3.cells : null;
@@ -376,7 +384,8 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3) {
 
 // V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
 // features: { keys: Int32Array, pols: Int8Array, count, val }  (from extractFeatures)
-// weights: Map<key, float>  (missing keys treated as 0)
+// weights:  anything Map-shaped — Map<key, float> or int-map makeIntFloatMap
+//           (missing keys treated as 0)
 function evaluateFeatures(features, weights) {
   let z = 0;
   const { keys, pols, count } = features;
@@ -396,10 +405,29 @@ function evaluate(game, model) {
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
-// Loads a model JS file and returns { weights, specs, opts, preparedSpecs }.
-// The file's `tactics` / `nodeLimit` / `depthLimit` fields (if present) are
-// authoritative — they pin the backend the weights were trained with so
-// inference uses the same encoding.  Absent ⇒ legacy ⇒ defaults to ladder2.
+// Builds a ready-to-evaluate inference model from a raw data-file object
+// ({ specs, weights, tactics?, ... } — e.g. a required model file or
+// window.vlibpatModel).  Weights go into a typed int→float map, which probes
+// much faster than a Map but is not suited to training (no iteration).
+// Returns { specs, opts, preparedSpecs, weights }.
+function prepareModel(raw) {
+  const specs = raw.specs;
+  const opts = {
+    tactics:    raw.tactics || 'ladder2',
+    nodeLimit:  raw.nodeLimit,   // undefined ⇒ tactics3 default
+    depthLimit: raw.depthLimit,  // undefined ⇒ tactics3 default
+  };
+  const weights = makeIntFloatMap(2 * raw.weights.size);
+  for (const [k, v] of raw.weights) weights.set(k, v);
+  return { specs, opts, preparedSpecs: prepareSpecs(specs, opts), weights };
+}
+
+// Loads a model JS file and returns { weights, specs, opts, preparedSpecs }
+// with the weights in a mutable Map — use for training/resume; inference
+// should prefer prepareModel.  The file's `tactics` / `nodeLimit` /
+// `depthLimit` fields (if present) are authoritative — they pin the backend
+// the weights were trained with so inference uses the same encoding.
+// Absent ⇒ legacy ⇒ defaults to ladder2.
 function loadWeights(filePath) {
   const raw = require(require('path').resolve(filePath));
   const specs = raw.specs;
@@ -442,6 +470,7 @@ const Patterns = {
   extractFeatures,
   evaluateFeatures,
   evaluate,
+  prepareModel,
   loadWeights,
   saveWeights,
   PERMS_2x2,

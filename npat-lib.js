@@ -137,7 +137,10 @@ const P12_RAW_BASE = SHAPE33C_RAW_BASE + 9 * CELLS_BASE
 // apply at cell cellIdx.  Counts stay tiny (≤ number of distinct 1-2-lib
 // chains sharing that liberty; in practice 1-2).
 
-function annotateLadders(game, out, game3) {
+// Optional `infos` is a precomputed getAllLadderStatuses result for this
+// exact position (same player to move); when given, the ladder pass is
+// skipped and `infos` is consumed instead.
+function annotateLadders(game, out, game3, infos) {
   const N   = game.N;
   const cap = N * N;
 
@@ -147,7 +150,7 @@ function annotateLadders(game, out, game3) {
   if (game.emptyCount === cap) return out;
 
   const g3 = game3 || game3FromGame2(game);
-  const infos = getAllLadderStatuses(g3);
+  if (!infos) infos = getAllLadderStatuses(g3);
   const tc = out.tactCount;
   const cur = game.current;
 
@@ -413,8 +416,10 @@ function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 // game3FromGame2 rebuild.  Optional weights is a WeightsStore; when supplied,
 // each canonical key is interned and patIds[] holds dense indices (used by
 // the scoring/softmax/REINFORCE hot paths).  When omitted, patIds[] holds
-// raw canonKey ints.
-function extractFeatures(game, state, ladderInfo, game3, weights) {
+// raw canonKey ints.  Optional ladderStatuses is a precomputed
+// getAllLadderStatuses result for this exact position, shared with other
+// extractors (see annotateLadders).
+function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses) {
   const N      = game.N;
   const cells  = game.cells;
   const cur    = game.current;
@@ -435,7 +440,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights) {
   const doUseTact   = !cfg || cfg.useTactical !== false;
   // Skip ladder annotation entirely when tactical features are off — that's
   // the dominant per-position cost when no shape extracts depend on it.
-  const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3)) : null;
+  const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3, ladderStatuses)) : null;
   const tactCount = li ? li.tactCount : null;
   const doUse33c = !cfg || cfg.use33c;
   const doUseP12 = !cfg || cfg.useP12;
@@ -697,12 +702,66 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   return tc + (cfg.useTactical !== false ? N_TACT_SLOTS : 0);
 }
 
+// ── Model loading ─────────────────────────────────────────────────────────────
+
+// Build runtime weights from a raw model object ({ weights, tactStoneLimit? }
+// — a required npat data file or window.npatModel).  Validates the tactical
+// stone limit, infers the optional 3×3c / p12 shape families from the raw key
+// ranges, and interns every weight.  `name` prefixes error messages.
+// The inferred flags are readable from the result via weights.cfg.
+function prepareWeights(raw, name = 'npat') {
+  if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== TACT_STONE_LIMIT) {
+    throw new Error(
+      `${name}: TACT_STONE_LIMIT mismatch — model was trained at ${raw.tactStoneLimit}, ` +
+      `runtime is ${TACT_STONE_LIMIT}. Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
+    );
+  }
+  let has33c = false, hasP12 = false;
+  for (const [k] of raw.weights) {
+    if (typeof k === 'string') continue; // ignore any orphan string keys
+    if      (k >= SHAPE33C_RAW_BASE && k < P12_RAW_BASE) has33c = true;
+    else if (k >= P12_RAW_BASE)                          hasP12 = true;
+  }
+  const weights = createWeights({
+    initialCapacity: Math.max(1024, raw.weights.size | 0),
+    use33c: has33c, useP12: hasP12,
+  });
+  for (const [k, v] of raw.weights) {
+    weights.vals[_internWeight(weights, k)] = v;
+  }
+  return weights;
+}
+
+// Resolve the npat model source and build runtime weights from it.
+//   name — message prefix (typically the agent name)      (default 'npat')
+//   path — model file path, Node only                     (default ../npat-data.js)
+// In the browser the source is always window.npatModel.
+// Returns { weights, modelName }.
+function loadModel({ name = 'npat', path: pathOverride } = {}) {
+  let raw, modelName;
+  if (typeof window !== 'undefined') {
+    if (!window.npatModel) {
+      throw new Error(`${name}: window.npatModel is not set — load the npat weights script first`);
+    }
+    raw = window.npatModel;
+    modelName = 'window.npatModel';
+  } else {
+    const path = require('path');
+    const file = pathOverride || path.join(__dirname, 'npat-data.js');
+    raw = require(path.resolve(file));
+    modelName = path.basename(file);
+  }
+  return { weights: prepareWeights(raw, name), modelName };
+}
+
 // ── Module exports ────────────────────────────────────────────────────────────
 
 const NPatterns = {
   createState,
   createWeights,
   internWeight: _internWeight,
+  prepareWeights,
+  loadModel,
   extractFeatures,
   evaluate,
   policyMove,

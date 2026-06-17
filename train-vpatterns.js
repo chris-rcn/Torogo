@@ -27,7 +27,8 @@
 //
 // Features: pattern1 + pattern2 + pattern3 (maxLibs = 1), all cells.
 //
-// Status is printed at an exponentially increasing interval (× 1.5 each time).
+// Status is printed at an exponentially increasing interval (× 1.4 each time),
+// capped so the gap between prints never exceeds 6 hours.
 //
 // Runs indefinitely (Ctrl-C to stop).  Weights are saved at every print.
 
@@ -277,6 +278,7 @@ console.log([
 ].join('  '));
 
 const t0 = Date.now();
+const MAX_PRINT_INTERVAL_MS = 6 * 60 * 60 * 1000;  // cap status-print gap at 6 hours
 let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalMoves = 0;
@@ -370,7 +372,7 @@ while (true) {
       Util.fmtMs(timePerMoveMs),
     ].join('  '));
     saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
-    nextPrintAt = t0 + Math.round(nextMs * 1.4);
+    nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);
   }
 
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
