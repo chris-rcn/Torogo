@@ -3,7 +3,7 @@
 // npat-lib.js — pattern-based policy features with stone-indexed tactical bits.
 //
 // For each candidate move we extract zero or more shape windows (centered 3×3
-// via cfg.use33c, 12-cell diamond P12 via cfg.useP12) plus four tactical
+// via cfg.useP8, 12-cell diamond P12 via cfg.useP12) plus four tactical
 // feature types expanded into per-stone-index sub-features.  The move's logit
 // is the sum of the active shape weights and the tactical contributions;
 // moves are sampled by softmax over logits.
@@ -41,7 +41,7 @@
 // Canonical key: min over 8 D4 symmetries of the transformed raw.  Under σ,
 // new_cells[σ(i)] = cells[i] and new_relPos = σ(relPos).  Tactical features
 // have no spatial position and are not canonicalised.  Sparse weights live in
-// a dense Float64Array indexed by the intern map's dense slot.
+// a dense Float32Array indexed by the intern map's dense slot.
 //
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
@@ -108,7 +108,7 @@ const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
 // Centered 3×3 shape window (9 cells, candidate always at relPos=4).  Uses
 // canonKey(4, cells) for canonicalisation — raw id lives just above the
 // tactical block.
-const SHAPE33C_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
+const P8_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
 
 // Type P12 shape: the 12 closest cells (Manhattan distance 1 and 2) around the
 // candidate, in a diamond pattern.  The candidate cell itself is excluded (it
@@ -126,8 +126,24 @@ const SHAPE33C_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
 // TYPE_E_RAW_BASE offset: 9*CELLS_BASE + 59049 + 177147 + 531441 + 81.
 const P12_CELLS    = 12;
 const P12_BASE     = 531441; // 3^12
-const P12_RAW_BASE = SHAPE33C_RAW_BASE + 9 * CELLS_BASE
+const P12_RAW_BASE = P8_RAW_BASE + 9 * CELLS_BASE
                    + 59049 + 177147 + 531441 + 81;
+
+// Type P9: the centered 3×3 shape (the p8 cells) conjoined with the
+// candidate's tactical-type mask — a 4-bit code over {urgent-kill,
+// urgent-save, wasted-extend, wasted-attack} presence.  This buckets each 3×3
+// shape by its tactical context (16 buckets), so the model can learn
+// shape weights that depend on the tactical situation rather than treating
+// shape and tactics as independent additive features.  Raw range
+// 16 · 9·CELLS_BASE; placed just above the P12 block.
+const P9_TACT_MASKS = 16;
+const P9_RAW_BASE   = P12_RAW_BASE + P12_BASE;
+
+// Type P13: the P12 diamond shape conjoined with the same 4-bit tactical-type
+// mask used by P9 — i.e. the P12 shape bucketed by tactical context (16
+// buckets), the P12 analogue of how P9 conjoins the 3×3 shape.  Raw range
+// 16 · P12_BASE; placed just above the P9 block.
+const P13_RAW_BASE  = P9_RAW_BASE + P9_TACT_MASKS * 9 * CELLS_BASE;
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
@@ -183,7 +199,7 @@ function annotateLadders(game, out, game3, infos) {
 // ── State ─────────────────────────────────────────────────────────────────────
 //
 // moves     [count]                       flat board index of move i
-// patIds33c [count]                       canonical 3×3c key per move
+// patIdsP8 [count]                       canonical 3×3c key per move
 // patIdsP12 [count]                       canonical P12 key per move
 // tact      [count * N_TACT_SLOTS]        tactical feature counts per move (uint8)
 // logits    [count]                        scratch buffer for softmax
@@ -217,16 +233,18 @@ function createState(N) {
   return {
     N,
     moves:     new Int32Array(cap),
-    patIds33c: new Int32Array(cap),
+    patIdsP8:  new Int32Array(cap),
     patIdsP12: new Int32Array(cap),
+    patIdsP9:  new Int32Array(cap),
+    patIdsP13: new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
     ladder:    { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
-    // Reusable touched-index scratch for reinforceUpdate.  Up to two shape
-    // types (3×3c + P12), one dense idx per (chosen + each move).
-    touched:   new Int32Array(2 * (cap + 1)),
+    // Reusable touched-index scratch for reinforceUpdate.  Up to four shape
+    // types (P8 + P12 + P9 + P13), one dense idx per (chosen + each move).
+    touched:   new Int32Array(4 * (cap + 1)),
     count:     0,
   };
 }
@@ -236,7 +254,7 @@ function createState(N) {
 // Canonical pattern keys (the raw ints from canonKey) can range up to ~90M,
 // so we can't index a flat array by them directly.  Instead we intern each
 // raw key to a dense 0-based index the first time it is seen.  Weights and
-// the reusable reinforce-delta buffer are plain Float64Arrays indexed by the
+// the reusable reinforce-delta buffer are plain Float32Arrays indexed by the
 // dense index; the raw → dense map is a Map<number, number>.
 //
 // `extractFeatures` performs the intern during extraction, so `state.patIds`
@@ -248,28 +266,31 @@ function createState(N) {
 
 function createWeights(opts) {
   // opts may be a number (initialCapacity, legacy) or an options object
-  //   { initialCapacity, useTactical, use33c, useP12 }.
-  // Feature-gating flags default to false — tactical features are always on.
+  //   { initialCapacity, useP1, useP8, useP12, useP9 }.
+  // useP1 is the single-cell ladder/tactical feature; it defaults ON, the
+  // shape windows (P8/P9/P12) default OFF.
   let initialCapacity = 1024;
-  let useTactical = true;
-  let use33c = false, useP12 = false;
+  let useP1 = true;
+  let useP8 = false, useP12 = false, useP9 = false, useP13 = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
     if (opts.initialCapacity) initialCapacity = opts.initialCapacity;
-    if (opts.useTactical === false) useTactical = false;
-    if (opts.use33c) use33c = true;
+    if (opts.useP1 === false) useP1 = false;
+    if (opts.useP8) useP8 = true;
     if (opts.useP12) useP12 = true;
+    if (opts.useP9) useP9 = true;
+    if (opts.useP13) useP13 = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
-    vals:  new Float64Array(initialCapacity),      // weights[dense idx]
-    delta: new Float64Array(initialCapacity),      // reusable reinforce buffer
+    vals:  new Float32Array(initialCapacity),      // weights[dense idx]
+    delta: new Float32Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { useTactical, use33c, useP12 },
+    cfg:   { useP1, useP8, useP12, useP9, useP13 },
   };
-  if (useTactical) {
+  if (useP1) {
     for (let k = 0; k < N_TACT_SLOTS; k++) {
       w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
     }
@@ -284,8 +305,8 @@ function _internWeight(w, rawPid) {
   const idx = w.size;
   if (idx >= w.vals.length) {
     const cap = w.vals.length * 2;
-    const nv = new Float64Array(cap); nv.set(w.vals); w.vals = nv;
-    const nd = new Float64Array(cap); nd.set(w.delta); w.delta = nd;
+    const nv = new Float32Array(cap); nv.set(w.vals); w.vals = nv;
+    const nd = new Float32Array(cap); nd.set(w.delta); w.delta = nd;
   }
   map.set(rawPid, idx);
   w.size = idx + 1;
@@ -437,15 +458,21 @@ function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses
   // shape types that are disabled.  Without weights (tests extracting raw keys
   // only), extract everything for backward compatibility.
   const cfg         = weights ? weights.cfg : null;
-  const doUseTact   = !cfg || cfg.useTactical !== false;
-  // Skip ladder annotation entirely when tactical features are off — that's
-  // the dominant per-position cost when no shape extracts depend on it.
-  const li = doUseTact ? (ladderInfo || annotateLadders(game, state.ladder, game3, ladderStatuses)) : null;
-  const tactCount = li ? li.tactCount : null;
-  const doUse33c = !cfg || cfg.use33c;
+  const doUseP1   = !cfg || cfg.useP1 !== false;
+  const doUseP8 = !cfg || cfg.useP8;
   const doUseP12 = !cfg || cfg.useP12;
-  const patIds33c = state.patIds33c;
+  const doUseP9 = !cfg || cfg.useP9;
+  const doUseP13 = !cfg || cfg.useP13;
+  // Skip ladder annotation entirely when nothing depends on it — that's the
+  // dominant per-position cost.  P9/P13 conjoin a shape with the tactical mask,
+  // so they need the ladder pass even when the plain P1 features are off.
+  const li = (doUseP1 || doUseP9 || doUseP13)
+    ? (ladderInfo || annotateLadders(game, state.ladder, game3, ladderStatuses)) : null;
+  const tactCount = li ? li.tactCount : null;
+  const patIdsP8 = state.patIdsP8;
   const patIdsP12 = state.patIdsP12;
+  const patIdsP9 = state.patIdsP9;
+  const patIdsP13 = state.patIdsP13;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -465,28 +492,55 @@ function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses
       patch[p] = v;
     }
 
+    // 4-bit tactical-type presence mask at this candidate (slot 0 of each type
+    // is set whenever that type applies — see annotateLadders).  Shared by the
+    // P9 (3×3) and P13 (P12) shape×tactics conjunctions.
+    let tactMask = 0;
+    if (doUseP9 || doUseP13) {
+      const tcOff = idx * N_TACT_SLOTS;
+      if (tactCount[tcOff + TACT_URGENT_KILL   * TACT_STONE_LIMIT]) tactMask |= 1;
+      if (tactCount[tcOff + TACT_URGENT_SAVE   * TACT_STONE_LIMIT]) tactMask |= 2;
+      if (tactCount[tcOff + TACT_WASTED_EXTEND * TACT_STONE_LIMIT]) tactMask |= 4;
+      if (tactCount[tcOff + TACT_WASTED_ATTACK * TACT_STONE_LIMIT]) tactMask |= 8;
+    }
+
     // Centered 3×3 window — candidate at relPos 4, reads the central 3×3 of
-    // the patch.  Canonicalised via canonKey with its SHAPE33C raw-base
-    // offset so keys sit in a disjoint range.
-    if (doUse33c) {
+    // the patch.  Canonicalised via canonKey; the same canonical key feeds both
+    // the plain P8 shape and the tactical-conjoined P9 shape (disjoint bases).
+    if (doUseP8 || doUseP9) {
       for (let i = 0; i < 9; i++) {
         const dr = (i / 3) | 0;
         const dc = i - dr * 3;
         wc9[i] = patch[(dr - 1 + 2) * 5 + (dc - 1 + 2)];
       }
-      const raw33c = SHAPE33C_RAW_BASE + canonKey(4, wc9);
-      patIds33c[count] = wMap ? _internWeight(weights, raw33c) : raw33c;
+      const canon3 = canonKey(4, wc9);
+      if (doUseP8) {
+        const rawP8 = P8_RAW_BASE + canon3;
+        patIdsP8[count] = wMap ? _internWeight(weights, rawP8) : rawP8;
+      }
+      if (doUseP9) {
+        const rawP9 = P9_RAW_BASE + tactMask * (9 * CELLS_BASE) + canon3;
+        patIdsP9[count] = wMap ? _internWeight(weights, rawP9) : rawP9;
+      }
     }
 
-    // P12 diamond — 12 closest non-centre cells, D4-canonicalised.
-    if (doUseP12) {
-      const rawP12 = P12_RAW_BASE + canonKeyP12(patch);
-      patIdsP12[count] = wMap ? _internWeight(weights, rawP12) : rawP12;
+    // P12 diamond — 12 closest non-centre cells, D4-canonicalised; the same
+    // canonical key feeds the plain P12 shape and the tactical-conjoined P13.
+    if (doUseP12 || doUseP13) {
+      const canonP12 = canonKeyP12(patch);
+      if (doUseP12) {
+        const rawP12 = P12_RAW_BASE + canonP12;
+        patIdsP12[count] = wMap ? _internWeight(weights, rawP12) : rawP12;
+      }
+      if (doUseP13) {
+        const rawP13 = P13_RAW_BASE + tactMask * P12_BASE + canonP12;
+        patIdsP13[count] = wMap ? _internWeight(weights, rawP13) : rawP13;
+      }
     }
 
     // Copy tactical counts for this candidate (N_TACT_SLOTS bytes = 4 types
-    // × TACT_STONE_LIMIT stone-indices).  Skipped when useTactical is off.
-    if (doUseTact) {
+    // × TACT_STONE_LIMIT stone-indices).  Skipped when P1 is off.
+    if (doUseP1) {
       const tSrc = idx * N_TACT_SLOTS;
       const tDst = count * N_TACT_SLOTS;
       for (let k = 0; k < N_TACT_SLOTS; k++) tact[tDst + k] = tactCount[tSrc + k];
@@ -510,12 +564,14 @@ function _score(state, i, weights) {
   const tIds = weights.tactIds;
   const cfg  = weights.cfg;
   let s = 0;
-  if (cfg.useTactical !== false) {
+  if (cfg.useP1 !== false) {
     const tOff = i * N_TACT_SLOTS;
     for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * vals[tIds[k]];
   }
-  if (cfg.use33c) s += vals[state.patIds33c[i]];
+  if (cfg.useP8) s += vals[state.patIdsP8[i]];
   if (cfg.useP12) s += vals[state.patIdsP12[i]];
+  if (cfg.useP9) s += vals[state.patIdsP9[i]];
+  if (cfg.useP13) s += vals[state.patIdsP13[i]];
   return s;
 }
 
@@ -542,13 +598,15 @@ function _computeSoftmax(state, weights, temperature = 1) {
   const vals  = weights.vals;
   const tIds  = weights.tactIds;
   const cfg   = weights.cfg;
-  const useTact = cfg.useTactical !== false;
+  const useTact = cfg.useP1 !== false;
   const tW    = new Float64Array(N_TACT_SLOTS);
   if (useTact) {
     for (let k = 0; k < N_TACT_SLOTS; k++) tW[k] = vals[tIds[k]];
   }
-  const pid33c = cfg.use33c ? state.patIds33c : null;
+  const pidP8 = cfg.useP8 ? state.patIdsP8 : null;
   const pidP12 = cfg.useP12 ? state.patIdsP12 : null;
+  const pidP9 = cfg.useP9 ? state.patIdsP9 : null;
+  const pidP13 = cfg.useP13 ? state.patIdsP13 : null;
 
   let maxL = -Infinity, maxI = 0;
   for (let i = 0; i < n; i++) {
@@ -557,8 +615,10 @@ function _computeSoftmax(state, weights, temperature = 1) {
       const tOff = i * N_TACT_SLOTS;
       for (let k = 0; k < N_TACT_SLOTS; k++) s += tact[tOff + k] * tW[k];
     }
-    if (pid33c) s += vals[pid33c[i]];
+    if (pidP8) s += vals[pidP8[i]];
     if (pidP12) s += vals[pidP12[i]];
+    if (pidP9) s += vals[pidP9[i]];
+    if (pidP13) s += vals[pidP13[i]];
     lg[i] = s;
     if (s > maxL) { maxL = s; maxI = i; }
   }
@@ -638,14 +698,16 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   const tIds     = weights.tactIds;
   const touched  = state.touched;
   const cfg      = weights.cfg;
-  const patIds33c = cfg.use33c ? state.patIds33c : null;
+  const patIdsP8 = cfg.useP8 ? state.patIdsP8 : null;
   const patIdsP12 = cfg.useP12 ? state.patIdsP12 : null;
+  const patIdsP9 = cfg.useP9 ? state.patIdsP9 : null;
+  const patIdsP13 = cfg.useP13 ? state.patIdsP13 : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
   // Chosen move contributes +step to each of its active shape pids.
-  if (patIds33c) {
-    const idx = patIds33c[chosenIndex];
+  if (patIdsP8) {
+    const idx = patIdsP8[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -654,18 +716,38 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     touched[tc++] = idx;
     delta[idx] += step;
   }
+  if (patIdsP9) {
+    const idx = patIdsP9[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIdsP13) {
+    const idx = patIdsP13[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
   // Every legal move i contributes -step * π_i to each of its active shape pids.
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
     const sub = step * pi;
-    if (patIds33c) {
-      const idx = patIds33c[i];
+    if (patIdsP8) {
+      const idx = patIdsP8[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
     if (patIdsP12) {
       const idx = patIdsP12[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsP9) {
+      const idx = patIdsP9[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsP13) {
+      const idx = patIdsP13[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -681,8 +763,8 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     }
   }
 
-  // ── Tactical features (N_TACT_SLOTS, always touched; no delta buffer) ──
-  if (cfg.useTactical !== false) {
+  // ── P1 tactical features (N_TACT_SLOTS, always touched; no delta buffer) ──
+  if (cfg.useP1 !== false) {
     const cOff = chosenIndex * N_TACT_SLOTS;
     const neg  = _tactScratch;  // Float64 scratch buffer sized N_TACT_SLOTS
     for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] = 0;
@@ -699,16 +781,40 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
   }
   // Return total shape-feature touches (including duplicates across moves) —
   // train-npat.js accumulates these to report mean updates-per-pattern.
-  return tc + (cfg.useTactical !== false ? N_TACT_SLOTS : 0);
+  return tc + (cfg.useP1 !== false ? N_TACT_SLOTS : 0);
 }
 
 // ── Model loading ─────────────────────────────────────────────────────────────
 
-// Build runtime weights from a raw model object ({ weights, tactStoneLimit? }
-// — a required npat data file or window.npatModel).  Validates the tactical
-// stone limit, infers the optional 3×3c / p12 shape families from the raw key
-// ranges, and interns every weight.  `name` prefixes error messages.
-// The inferred flags are readable from the result via weights.cfg.
+// Normalise a raw npat data file's weight table to { count, forEach(cb) },
+// where cb(key, val) is called once per entry.  Supports three forms:
+//   - int16-quantised  ({ keys: Int32Array, qvals: Int16Array, scale, count })
+//     — produced by train-npat.js; weight = qvals[i] / scale.
+//   - float32 typed arrays ({ keys: Int32Array, vals: Float32Array, count })
+//   - legacy literal Map   ({ weights: Map })
+function modelWeights(raw) {
+  if (raw.keys && raw.qvals) {
+    const keys = raw.keys, qvals = raw.qvals;
+    const count = raw.count != null ? raw.count : keys.length;
+    const inv = 1 / raw.scale;
+    return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], qvals[i] * inv); } };
+  }
+  if (raw.keys && raw.vals) {
+    const keys = raw.keys, vals = raw.vals;
+    const count = raw.count != null ? raw.count : keys.length;
+    return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], vals[i]); } };
+  }
+  const m = raw.weights;
+  return { count: m.size, forEach(cb) { for (const [k, v] of m) cb(k, v); } };
+}
+
+// Build runtime weights from a raw model object (a required npat data file or
+// window.npatModel; new base64 or legacy Map form — see modelWeights).
+// Validates the tactical stone limit and interns every weight.  The active
+// feature families come from the file's explicit `cfg` when present; for legacy
+// files that lack it, they're inferred from the raw key ranges (P1 always on).
+// `name` prefixes error messages.  The active families are readable from the
+// result via weights.cfg.
 function prepareWeights(raw, name = 'npat') {
   if (raw.tactStoneLimit !== undefined && raw.tactStoneLimit !== TACT_STONE_LIMIT) {
     throw new Error(
@@ -716,19 +822,27 @@ function prepareWeights(raw, name = 'npat') {
       `runtime is ${TACT_STONE_LIMIT}. Set NPAT_STONE_LIMIT=${raw.tactStoneLimit} before launching.`
     );
   }
-  let has33c = false, hasP12 = false;
-  for (const [k] of raw.weights) {
-    if (typeof k === 'string') continue; // ignore any orphan string keys
-    if      (k >= SHAPE33C_RAW_BASE && k < P12_RAW_BASE) has33c = true;
-    else if (k >= P12_RAW_BASE)                          hasP12 = true;
+  const mw = modelWeights(raw);
+
+  // Active families: prefer the file's explicit set; fall back to inferring them
+  // from key magnitudes for legacy files written before `cfg` was stored.
+  let cfg = raw.cfg;
+  if (!cfg) {
+    let hasP8 = false, hasP12 = false, hasP9 = false, hasP13 = false;
+    mw.forEach(k => {
+      if (typeof k === 'string') return; // ignore any orphan string keys
+      if      (k >= P13_RAW_BASE)                    hasP13 = true;
+      else if (k >= P9_RAW_BASE)                     hasP9 = true;
+      else if (k >= P12_RAW_BASE)                    hasP12 = true;
+      else if (k >= P8_RAW_BASE)                     hasP8 = true;
+    });
+    cfg = { useP8: hasP8, useP12: hasP12, useP9: hasP9, useP13: hasP13 }; // P1 defaults on
   }
-  const weights = createWeights({
-    initialCapacity: Math.max(1024, raw.weights.size | 0),
-    use33c: has33c, useP12: hasP12,
-  });
-  for (const [k, v] of raw.weights) {
+
+  const weights = createWeights({ initialCapacity: Math.max(1024, mw.count | 0), ...cfg });
+  mw.forEach((k, v) => {
     weights.vals[_internWeight(weights, k)] = v;
-  }
+  });
   return weights;
 }
 
@@ -761,6 +875,7 @@ const NPatterns = {
   createWeights,
   internWeight: _internWeight,
   prepareWeights,
+  modelWeights,
   loadModel,
   extractFeatures,
   evaluate,
@@ -779,8 +894,10 @@ const NPatterns = {
   TACT_URGENT_KILL, TACT_URGENT_SAVE,
   TACT_WASTED_EXTEND, TACT_WASTED_ATTACK,
   TACT_RAW_BASE,
-  SHAPE33C_RAW_BASE,
+  P8_RAW_BASE,
   P12_CELLS, P12_BASE, P12_RAW_BASE,
+  P9_RAW_BASE, P9_TACT_MASKS,
+  P13_RAW_BASE,
   // Exposed for tests.
   _D4,
 };

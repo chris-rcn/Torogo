@@ -57,7 +57,7 @@ const performance = (typeof window !== 'undefined' && window.performance)
 // relative to Q.  Equivalent of EXPLORATION_C from UCB1; tuned higher here
 // because PUCT exploration scales with √N (not √log N) and is multiplied by
 // per-move priors that sum to ≈ 1.
-const C_PUCT        = Util.envFloat('C_PUCT', 0.1);
+const C_PUCT        = Util.envFloat('C_PUCT', 0.5);
 
 // RAVE.  When RAVE_K > 0, every node keeps AMAF stats fed from the full
 // simulation from that node onward: the in-tree segment is depth-aligned (a
@@ -70,13 +70,31 @@ const RAVE_K        = Util.envFloat('RAVE_K', 400);
 
 const NPAT_K = Util.envInt('NPAT_K', 40);  // kept move count
 
+// ROOT_NPAT=0 gives the root uniform priors instead of the npat softmax (the
+// root is unpruned regardless), so a near-deterministic npat prior can't pin
+// the decision to one move.  Interior nodes are unaffected.  1 = default.
+const ROOT_NPAT = Util.envInt('ROOT_NPAT', 0);
+
 // Per-edge evaluation schedule (see header): N_FULL full playouts, then
 // N_TRUNC truncated playouts, then expansion.  PLAYOUT_LEN is the truncation
 // length (random moves before the static bootstrap); it matters only when
 // N_TRUNC > 0.
-const N_FULL      = Util.envInt('N_FULL', 4);
-const N_TRUNC     = Util.envInt('N_TRUNC', 0);
-const PLAYOUT_LEN = Util.envInt('PLAYOUT_LEN', 20);
+const N_FULL      = Util.envInt('N_FULL', 0);
+const N_TRUNC     = Util.envInt('N_TRUNC', 2);
+const PLAYOUT_LEN = Util.envInt('PLAYOUT_LEN', 4);
+
+// Truncated playouts use the vlibpat static eval, which is unreliable deep in
+// the game (late, out-of-distribution positions).  Phase is board fullness,
+// 1 - emptyCount/area in [0,1].  When a leaf's phase exceeds TRUNC_MAX_PHASE,
+// its truncated visits fall back to full random playouts.  Default 1 (board
+// never more than full, so truncations are always allowed).
+const TRUNC_MAX_PHASE = Util.envFloat('TRUNC_MAX_PHASE', 0.2);
+
+// Playout move policy.  PLAYOUT_NPAT=1 draws playout moves from the npat
+// softmax (temperature PLAYOUT_TEMP) instead of uniform random — stronger,
+// more realistic rollouts at much higher per-move cost.  0 = random (default).
+const PLAYOUT_NPAT = Util.envInt('PLAYOUT_NPAT', 0);
+const PLAYOUT_TEMP = Util.envFloat('PLAYOUT_TEMP', 1);
 
 const PRIOR_WINS   = 0.001;
 const PRIOR_VISITS = 2 * PRIOR_WINS;
@@ -121,6 +139,18 @@ function _runNpat(game2, game3) {
   if (state.count === 0) return null;
   NPat.computeSoftmax(state, npatWeights);
   return state;
+}
+
+// One npat-policy playout move for `game2` (sampled at PLAYOUT_TEMP).  `game3`
+// is the lockstep mirror, kept in sync by the caller so extraction stays
+// incremental.  Reuses the per-N npat state (no interleaving with node
+// creation within a simulation).
+function _npatPlayoutMove(game2, game3, rng) {
+  if (game2.gameOver) return PASS;
+  const N = game2.N;
+  let state = npatStateByN.get(N);
+  if (!state) { state = NPat.createState(N); npatStateByN.set(N, state); }
+  return NPat.policyMove(game2, state, npatWeights, rng, game3, PLAYOUT_TEMP).move;
 }
 
 // When K > 0, keep only the K placements with the highest npat probability.
@@ -168,15 +198,19 @@ function playout(game2, game3, played, rng, truncated) {
   const weightStep = 1 / cap;
   let moves = 0;
   let weight = 1.0;
+  // game3 must follow the playout when npat picks moves (incremental feature
+  // extraction) or in truncated mode (static eval of the reached position).
+  const needG3 = truncated || PLAYOUT_NPAT;
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
-    const idx = game2.randomLegalMove(rng);
+    const idx = PLAYOUT_NPAT ? _npatPlayoutMove(game2, game3, rng)
+                             : game2.randomLegalMove(rng);
     if (idx !== PASS && weight > 0 && played[idx] === 0) {
       played[idx] = current === BLACK ? weight : -weight;
     }
     game2.play(idx);
-    if (truncated) game3.play(idx);
+    if (needG3) game3.play(idx);
     moves++;
     weight -= weightStep;
   }
@@ -186,6 +220,7 @@ function playout(game2, game3, played, rng, truncated) {
     for (let i = 0; i < moves; i++) game3.undo();
     return value;
   }
+  if (needG3) for (let i = 0; i < moves; i++) game3.undo();   // unwind npat full-playout moves
   return game2.estimateWinner() === BLACK ? 1 : 0;
 }
 
@@ -209,7 +244,10 @@ function getLegalMoves(game2) {
 
 function makeNode(move, parent, ci, game2, N, game3) {
   // Compute npat softmax once — reused for top-K pruning and the PUCT priors.
-  const npatState = _runNpat(game2, game3);
+  // ROOT_NPAT=0 disables npat at the root only: the root keeps uniform priors
+  // (and its already-unpruned full move width), so an overconfident npat prior
+  // can't starve the actual decision; interior nodes still use npat.
+  const npatState = (parent === null && !ROOT_NPAT) ? null : _runNpat(game2, game3);
   let movesArr = getLegalMoves(game2);
   // Top-K pruning at interior nodes only: at the root it would constrain the
   // actual decision, and the root gets enough visits to search full width.
@@ -247,8 +285,15 @@ function makeNode(move, parent, ci, game2, N, game3) {
       for (let i = 0; i < M; i++) priors[i] *= inv;
     }
   } else {
-    const u = 1 / M;
-    for (let i = 0; i < M; i++) priors[i] = u;
+    // Uniform priors over placements, but PASS keeps only the 1/area floor:
+    // passing is almost never correct mid-game and its terminal-scoring value
+    // is unreliable, so it must not get a full uniform share (which would let
+    // it dominate visits and pass prematurely under uniform root priors).
+    const floor = 1 / area;
+    let sum = 0;
+    for (let i = 0; i < M; i++) { priors[i] = (legalMoves[i] === PASS) ? floor : 1; sum += priors[i]; }
+    const inv = 1 / sum;
+    for (let i = 0; i < M; i++) priors[i] *= inv;
   }
 
   const mover = -game2.current;
@@ -343,7 +388,10 @@ function selectAndExpand(root, rootGame2, N, rng, game3) {
       if (v < N_FULL + N_TRUNC) {
         node.selectedChild = best;
         doPlayout = true;
-        doTrunc   = v >= N_FULL;
+        // Past TRUNC_MAX_PHASE (board fullness) the truncated (vlibpat) eval is
+        // unreliable, so this visit runs a full playout instead.
+        const phase = 1 - game2.emptyCount / (N * N);
+        doTrunc   = v >= N_FULL && phase <= TRUNC_MAX_PHASE;
         break;
       }
       node.children[best] = makeNode(move, node, best, game2, N, game3);

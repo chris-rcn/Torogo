@@ -48,7 +48,7 @@ const performance = (typeof window !== 'undefined' && window.performance)
 // relative to Q.  Equivalent of EXPLORATION_C from UCB1; tuned higher here
 // because PUCT exploration scales with √N (not √log N) and is multiplied by
 // per-move priors that sum to ≈ 1.
-const C_PUCT        = Util.envFloat('C_PUCT', 0.1);
+const C_PUCT        = Util.envFloat('C_PUCT', 0.5);
 
 // Optional tree-RAVE.  When RAVE_K > 0, every node keeps AMAF stats fed from
 // the in-tree simulation path — unlike playout RAVE, the update differs per
@@ -70,6 +70,11 @@ const NPAT_K = Util.envInt('NPAT_K', 35);  // kept move count
 // (visit allocation and the visited set otherwise inherit npat's blind
 // spots).  Costs a lot of strength-per-playout; measure before recording.
 const UNIFORM_PRIOR = Util.envInt('UNIFORM_PRIOR', 0);
+
+// ROOT_NPAT=0 gives the root uniform priors instead of the npat softmax (the
+// root is unpruned regardless), so a near-deterministic npat prior can't pin
+// the decision to one move.  Interior nodes are unaffected.  1 = default.
+const ROOT_NPAT = Util.envInt('ROOT_NPAT', 0);
 
 // Selection dither — random tie-break noise added to every node score.
 // DITHER=0 makes the whole search a deterministic function of the position
@@ -166,7 +171,10 @@ function getLegalMoves(game2) {
 
 function makeNode(move, parent, ci, game2, N, game3, ladderStatuses) {
   // Compute npat softmax once — reused for top-K pruning and the PUCT priors.
-  const npatState = _runNpat(game2, game3, ladderStatuses);
+  // ROOT_NPAT=0 disables npat at the root only: the root keeps uniform priors
+  // (and its already-unpruned full move width), so an overconfident npat prior
+  // can't starve the actual decision; interior nodes still use npat.
+  const npatState = (parent === null && !ROOT_NPAT) ? null : _runNpat(game2, game3, ladderStatuses);
   let movesArr = getLegalMoves(game2);
   // Top-K pruning at interior nodes only: at the root it would constrain the
   // actual decision, and the root gets enough visits to search full width.
@@ -204,8 +212,15 @@ function makeNode(move, parent, ci, game2, N, game3, ladderStatuses) {
       for (let i = 0; i < M; i++) priors[i] *= inv;
     }
   } else {
-    const u = 1 / M;
-    for (let i = 0; i < M; i++) priors[i] = u;
+    // Uniform priors over placements, but PASS keeps only the 1/area floor:
+    // passing is almost never correct mid-game and its terminal-scoring value
+    // is unreliable, so it must not get a full uniform share (which would let
+    // it dominate visits and pass prematurely under uniform priors).
+    const floor = 1 / area;
+    let sum = 0;
+    for (let i = 0; i < M; i++) { priors[i] = (legalMoves[i] === PASS) ? floor : 1; sum += priors[i]; }
+    const inv = 1 / sum;
+    for (let i = 0; i < M; i++) priors[i] *= inv;
   }
 
   const mover = -game2.current;

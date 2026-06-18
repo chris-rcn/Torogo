@@ -12,12 +12,15 @@
 //
 // Usage:
 //   node evalmovedetails.js --agent <name> --file <path> [--budget <ms>]
-//                           [--limit <n>] [--oversample <n>] [--verbose]
+//                           [--limit <n>] [--index <n>] [--oversample <n>] [--verbose]
 //
 //   --agent       ai agent name under ai/                   (required)
 //   --file        positions file from createmovedetails.js  (required)
 //   --budget      ms per move                               (default: 2000)
 //   --limit       evaluate only the first n positions       (default: all)
+//   --index       evaluate only the position at 0-based index n, with the
+//                 seed it had in a full sweep
+//   --seed        starting agent rng seed (overrides default/per-index seed)
 //   --oversample  evaluate each position this many times    (default: 1)
 //   --verbose     print a per-position comparison table
 
@@ -91,23 +94,41 @@ if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
-    console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--oversample <n>] [--verbose]');
+    console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--index <n>] [--seed <n>] [--oversample <n>] [--verbose]');
     process.exit(opts.help ? 0 : 1);
   }
 
   const agentName  = opts.agent;
-  const budgetMs   = parseInt(opts.budget     || '2000', 10);
+  const budgetMs   = parseInt(opts.budget     || '1000', 10);
   const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+  const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
+  const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
   const verbose    = !!opts.verbose;
 
   if (isNaN(budgetMs) || budgetMs < 1)     { console.error('--budget must be a positive integer'); process.exit(1); }
   if (isNaN(limit) || limit < 1)           { console.error('--limit must be a positive integer'); process.exit(1); }
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
+  if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
 
   const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
   const pool      = loadPositions(opts.file);
-  const positions = pool.slice(0, limit);
+  // --index N evaluates only the position at 0-based index N, restoring the
+  // agent rng seed it would have had in a full sweep so the result reproduces
+  // that position exactly.
+  let positions;
+  if (index !== null) {
+    if (isNaN(index) || index < 0 || index >= pool.length) {
+      console.error(`--index must be in 0..${pool.length - 1}`); process.exit(1);
+    }
+    positions = [pool[index]];
+    agentSeed = index + 1;   // position i (0-based) uses seed i+1 in a full sweep
+  } else {
+    positions = pool.slice(0, limit);
+  }
+  // --seed sets the starting agent rng seed explicitly, overriding the default
+  // (1) and the per-index seed restored above.
+  if (seed !== null) agentSeed = seed;
 
   console.log(`agent=${agentName}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}`);
   console.log();
@@ -134,28 +155,41 @@ if (require.main === module) {
   }
 
   // Column widths for the verbose table.
+  const wIdx  = Math.max(3, String(pool.length - 1).length);   // 0-based file index
   const wMove = 5;
   const wWR   = 5;
+  // 0-based file index of positions[i]: --index pins a single position, else
+  // the slice starts at the file head so the array index is the file index.
+  const indexBase = index !== null ? index : 0;
 
   if (verbose) {
     console.log(
+      `${'idx'.padStart(wIdx)}  ` +
       `${'hist'.padStart(4)}  ` +
       `${'top'.padEnd(wMove)} ${'WR'.padStart(wWR)}  ` +
       `${'agent'.padEnd(wMove)} ${'WR'.padStart(wWR)}  gap`
     );
-    console.log('-'.repeat(4 + wMove + wWR + wMove + wWR + 20));
+    console.log('-'.repeat(wIdx + 2 + 4 + wMove + wWR + wMove + wWR + 20));
   }
 
   // Oversample is the outer loop: each pass sweeps all positions, so stats
   // at any point cover the whole position set rather than a prefix of it.
   let evals = 0;
+  let worst = null;   // highest-gap sample seen, reported at the end
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
       const { agentMove, agentStr, topCand, agentCand, gap } = evalPosition(agent, positions[i], budgetMs);
       gapSqSum += gap * gap;
       evals++;
 
+      if (worst === null || gap > worst.gap) {
+        worst = { index: indexBase + i, gap, hist: positions[i].history.length,
+                  top: topCand.m, topKwr: topCand.kwr,
+                  agent: agentStr, agentKwr: agentCand.kwr, info: agentMove.info };
+      }
+
       if (verbose) console.log(
+        `${String(indexBase + i).padStart(wIdx)}  ` +
         `${String(positions[i].history.length).padStart(4)}  ` +
         `${topCand.m.padEnd(wMove)} ${(topCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
         `${agentStr.padEnd(wMove)} ${(agentCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
@@ -172,6 +206,14 @@ if (require.main === module) {
   }
 
   printStats(evals);
+
+  if (worst) {
+    console.log(
+      `\nworst sample: idx=${worst.index} gap=${worst.gap.toFixed(3)} hist=${worst.hist}  ` +
+      `top=${worst.top} (${(worst.topKwr / 1000).toFixed(3)})  ` +
+      `agent=${worst.agent} (${(worst.agentKwr / 1000).toFixed(3)})  ${worst.info}`
+    );
+  }
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };

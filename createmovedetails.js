@@ -37,9 +37,10 @@ if (opts.help) {
 }
 
 const agentName = opts.agent || 'prod';
-const budget    = parseInt(opts.budget || '2000', 10);
+const budget    = parseInt(opts.budget || '1', 10);
 const boardSize = parseInt(opts.size   || '13',   10);
 const SAVE_PATH = opts.save || `out/movedetails-${Math.random().toString(36).slice(2, 10)}.ndjson`;
+const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, if set (overrides budget)
 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
@@ -61,7 +62,7 @@ function legalMoves(game2) {
   return moves;
 }
 
-fs.writeFileSync(SAVE_PATH, `# createmovedetails.js  agent=${agentName}  budget=${budget}ms  size=${boardSize}  wr-dev=${WR_DEV}\n`);
+fs.writeFileSync(SAVE_PATH, `# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}\n`);
 
 console.log(`agent=${agentName}  size=${boardSize}  budget=${budget}ms`);
 console.log(`Out: ${SAVE_PATH}`);

@@ -82,8 +82,8 @@ if (opts.specs) {
 } else {
   specs = [
     { size: 2 },                      // ladder-aware (7-state)
+    { size: 3, ladder: false },       // plain (3-state)
     { size: 3 },                      // ladder-aware (7-state)
-//    { size: 3, ladder: false },       // plain (3-state)
   ];
 }
 
