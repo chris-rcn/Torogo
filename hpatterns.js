@@ -218,9 +218,13 @@
 
     // 2D prefix sum of stone presence over the N×N board (non-toroidal part).
     // P[(r+1)*(N+1)+(c+1)] = number of non-empty cells in rows [0..r], cols [0..c].
-    // Used for O(1) stone counting in non-wrapping windows.
+    // Used for O(1) stone counting in non-wrapping windows.  The fill below only
+    // writes interior cells and relies on the top-row / left-column borders
+    // being zero, so the buffer must be reallocated (fresh zeros) whenever the
+    // board size changes — a grow-only reuse would leave a smaller board reading
+    // stale borders from a larger previous board, corrupting stone counts.
     const Np1 = N + 1;
-    if (!model._prefixBuf || model._prefixBuf.length < Np1 * Np1) {
+    if (!model._prefixBuf || model._prefixBuf.length !== Np1 * Np1) {
       model._prefixBuf = new Int32Array(Np1 * Np1);
     }
     const P = model._prefixBuf;
@@ -350,9 +354,40 @@
     }
   }
 
+  // ── Persistence helpers ──────────────────────────────────────────────────────
+
+  // Normalise a raw hpatterns data file's weight table to { count, forEach(cb) },
+  // where cb(key, val) is called once per entry.  Supports three forms:
+  //   - int16-quantised  ({ keys: Int32Array, qvals: Int16Array, scale, count })
+  //     — produced by train-hpatterns.js saveModel; weight = qvals[i] / scale.
+  //   - float32 typed arrays ({ keys: Int32Array, vals: Float32Array, count })
+  //   - legacy literal Map   ({ weights: Map })
+  function modelWeights(raw) {
+    if (raw.keys && raw.qvals) {
+      const keys = raw.keys, qvals = raw.qvals;
+      const count = raw.count != null ? raw.count : keys.length;
+      const inv = 1 / raw.scale;
+      return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], qvals[i] * inv); } };
+    }
+    if (raw.keys && raw.vals) {
+      const keys = raw.keys, vals = raw.vals;
+      const count = raw.count != null ? raw.count : keys.length;
+      return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], vals[i]); } };
+    }
+    const m = raw.weights;
+    return { count: m.size, forEach(cb) { for (const [k, v] of m) cb(k, v); } };
+  }
+
+  // Build a Map<key, float> from a raw model in any supported form.
+  function weightsMap(raw) {
+    const w = new Map();
+    modelWeights(raw).forEach((k, v) => w.set(k, v));
+    return w;
+  }
+
   // ── Exports ────────────────────────────────────────────────────────────────
 
-  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA };
+  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA, modelWeights, weightsMap };
   if (typeof module !== 'undefined') module.exports = HPatterns;
   else window.HPatterns = HPatterns;
 })();

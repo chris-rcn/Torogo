@@ -24,7 +24,7 @@ const path = require('path');
 const fs   = require('fs');
 
 const { Game2, BLACK, PASS } = require('./game2.js');
-const { Game3, game3FromGame2 } = require('./game3.js');
+const { game3FromGame2 } = require('./game3.js');
 const NPat = require('./npat-lib.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const Util = require('./util.js');
@@ -137,8 +137,8 @@ function loadWeights(filePath) {
 // Play one self-play game and apply REINFORCE updates after it ends.
 // Returns game-level stats for logging.
 function trainGame(N) {
-  const game  = new Game2(N, false);
-  const game3 = new Game3(N);  // kept in lockstep for ladder analysis
+  const game  = new Game2(N);          // free initial stone (applyFirstMove=true)
+  const game3 = game3FromGame2(game);  // lockstep mirror for ladder analysis
   const maxMoves = N * N * 4;
   const tStart   = Date.now();
 
@@ -230,8 +230,8 @@ function evalVsReference(N, refGetMove, nGames) {
   const results = [];
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game  = new Game2(N, false);
-    const game3 = new Game3(N);  // lockstep copy for ladder analysis
+    const game  = new Game2(N);          // free initial stone (applyFirstMove=true)
+    const game3 = game3FromGame2(game);  // lockstep mirror for ladder analysis
     // Random opening: 4 random legal moves to diversify positions.
     for (let r = 0; r < 4 && !game.gameOver; r++) {
       const mv = game.randomLegalMove();
@@ -386,7 +386,7 @@ while (true) {
     // Ladder suite score (trainee greedy npat policy vs the evalladders2 file).
     let ladrStr = null;
     if (ladderCases) {
-      const { passed, total } = evalCases(ladderCases, npatLadderMove, { budgetMs: 1, trials: 1 });
+      const { passed, total } = evalCases(ladderCases, npatLadderMove, { budgetMs: 1, oversample: 1 });
       ladrStr = Util.fmtRatio4(total ? passed / total : 0);
     }
 

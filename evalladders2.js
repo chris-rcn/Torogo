@@ -10,7 +10,7 @@
 //      1 ...
 //   require=<coord>  → agent must play it;  prohibit=<c1,c2,...> → must avoid all.
 //
-// Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--trials 1]
+// Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1]
 
 const fs = require('fs');
 const path = require('path');
@@ -42,13 +42,13 @@ function loadCases(file) {
   return cases;
 }
 
-function evalCases(cases, agent, { budgetMs, trials, verbose = false }) {
+function evalCases(cases, agent, { budgetMs, oversample, verbose = false }) {
   let passed = 0, total = 0;
   const byType = new Map();   // type -> { passed, total }
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];
     let p = 0, lastGame = null, lastMove = PASS;
-    for (let t = 0; t < trials; t++) {
+    for (let t = 0; t < oversample; t++) {
       const game = parseBoard(c.board, c.toPlay);
       const mv = agent(game, budgetMs);
       lastGame = game; lastMove = mv.move;
@@ -59,13 +59,13 @@ function evalCases(cases, agent, { budgetMs, trials, verbose = false }) {
     }
     if (verbose) {
       const ans = c.require ? `require=${c.require.join(',')}` : `prohibit=${c.prohibit.join(',')}`;
-      const res = p === trials ? 'PASS' : p === 0 ? 'FAIL' : `${p}/${trials}`;
+      const res = p === oversample ? 'PASS' : p === 0 ? 'FAIL' : `${p}/${oversample}`;
       console.log(`\n#${i + 1} [${c.type} size${c.chainSize}] toPlay=${c.toPlay === BLACK ? 'B' : 'W'}  ${ans}  played=${coordStr(lastMove, lastGame.N)}  -> ${res}`);
       console.log(lastGame.toString(lastMove, { labels: true }));   // board with the agent's move marked
     }
-    passed += p; total += trials;
+    passed += p; total += oversample;
     const agg = byType.get(c.type) || { passed: 0, total: 0 };
-    agg.passed += p; agg.total += trials; byType.set(c.type, agg);
+    agg.passed += p; agg.total += oversample; byType.set(c.type, agg);
   }
   return { passed, total, byType };
 }
@@ -76,19 +76,19 @@ module.exports = { loadCases, evalCases };
 if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
   if (opts.help || !opts.file) {
-    console.log('Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--trials 1] [--verbose]');
+    console.log('Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1] [--verbose]');
     process.exit(opts.help ? 0 : 1);
   }
-  const agentName = opts.agent || 'random';
-  const budgetMs  = parseInt(opts.budget || '1', 10);
-  const trials    = parseInt(opts.trials || '1', 10);
-  const verbose   = opts.verbose !== undefined;
+  const agentName  = opts.agent || 'random';
+  const budgetMs   = parseInt(opts.budget || '1', 10);
+  const oversample = parseInt(opts.oversample || '1', 10);
+  const verbose    = opts.verbose !== undefined;
   const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
   const cases = loadCases(opts.file);
-  console.log(`file: ${opts.file}  cases: ${cases.length}  agent: ${agentName}  budget: ${budgetMs}ms  trials: ${trials}\n`);
+  console.log(`file: ${opts.file}  cases: ${cases.length}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
   const t0 = performance.now();
-  const { passed, total, byType } = evalCases(cases, agent, { budgetMs, trials, verbose });
+  const { passed, total, byType } = evalCases(cases, agent, { budgetMs, oversample, verbose });
   for (const [type, a] of byType) {
     console.log(`  ${type.padEnd(14)} ${String(a.passed).padStart(5)}/${String(a.total).padEnd(5)}  ${(100 * a.passed / a.total).toFixed(1)}%`);
   }

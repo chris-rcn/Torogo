@@ -18,7 +18,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { createModel, extractFeatures, evaluateFeatures } = _isNode ? require('../hpatterns.js') : window.HPatterns;
+const { createModel, extractFeatures, evaluateFeatures, weightsMap } = _isNode ? require('../hpatterns.js') : window.HPatterns;
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const Util = _isNode ? require('../util.js') : window.Util;
 
@@ -46,7 +46,7 @@ function getMove(game) {
 function loadModel(filePath) {
   const raw = _isNode ? require(require('path').resolve(filePath)) : window[filePath];
   const m = createModel(raw.maxStones, raw.maxSize === Infinity ? Infinity : raw.maxSize);
-  m.weights = new Map(raw.weights);
+  m.weights = weightsMap(raw);
   return m;
 }
 

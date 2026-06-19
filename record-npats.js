@@ -168,7 +168,7 @@ function evalRound() {
 // argmax (deterministic, so one trial per position; near-instant).
 let lastLadders = NaN;
 function ladderRound() {
-  const { passed, total } = Ladders.evalLadders(npatsArgmax, { trials: 1 });
+  const { passed, total } = Ladders.evalLadders(npatsArgmax, { oversample: 1 });
   lastLadders = passed / total;
 }
 

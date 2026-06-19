@@ -13,11 +13,11 @@ const Util = require('./util.js');
  * Options:
  *   --agent   <name>   AI policy to evaluate (default: random)
  *   --budget  <ms>     Time budget per move in ms (default: 1)
- *   --trials  <n>      Trials per position (default: 10)
+ *   --oversample <n>   Evaluations per position (default: 10)
  *   --help             Show this help message
  *
  * Also used as a library (record-npats.js runs it as a per-checkpoint gate):
- *   evalLadders(agent, { budgetMs, trials }) → { passed, total, rows }
+ *   evalLadders(agent, { budgetMs, oversample }) → { passed, total, rows }
  */
 
 // ── Coordinate helpers ─────────────────────────────────────────────────────
@@ -394,14 +394,14 @@ const POSITIONS = [
 
 // ── Evaluation ─────────────────────────────────────────────────────────────
 
-// Run every position `trials` times against `agent` (getMove-style function).
-// Returns { passed, total, rows: [{ comment, passed, trials }] }.
-function evalLadders(agent, { budgetMs = 1, trials = 10 } = {}) {
+// Run every position `oversample` times against `agent` (getMove-style function).
+// Returns { passed, total, rows: [{ comment, passed, oversample }] }.
+function evalLadders(agent, { budgetMs = 1, oversample = 10 } = {}) {
   const rows = [];
   let passed = 0, total = 0;
   for (const pos of POSITIONS) {
     let posPassed = 0;
-    for (let t = 0; t < trials; t++) {
+    for (let t = 0; t < oversample; t++) {
       const game = buildPosition(pos);
       const move = agent(game, budgetMs);
 
@@ -414,9 +414,9 @@ function evalLadders(agent, { budgetMs = 1, trials = 10 } = {}) {
       }
       if (ok) posPassed++;
     }
-    rows.push({ comment: pos.comment, passed: posPassed, trials });
+    rows.push({ comment: pos.comment, passed: posPassed, oversample });
     passed += posPassed;
-    total += trials;
+    total += oversample;
   }
   return { passed, total, rows };
 }
@@ -430,32 +430,32 @@ if (require.main === module) {
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 
 if (opts.help) {
-  console.log('Usage: node evalladders.js [--agent <name>] [--budget <ms>] [--trials <n>]');
+  console.log('Usage: node evalladders.js [--agent <name>] [--budget <ms>] [--oversample <n>]');
   process.exit(0);
 }
 
-const agentName = opts.agent  || 'random';
-const budgetMs  = parseInt(opts.budget || '1', 10);
-const trials    = parseInt(opts.trials || '10',  10);
+const agentName  = opts.agent  || 'random';
+const budgetMs   = parseInt(opts.budget || '1', 10);
+const oversample = parseInt(opts.oversample || '10',  10);
 
-if (isNaN(budgetMs) || budgetMs < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
-if (isNaN(trials)   || trials   < 1) { console.error('--trials must be a positive integer'); process.exit(1); }
+if (isNaN(budgetMs)   || budgetMs   < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
+if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
 
 const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 const NW = Math.max('position'.length, ...POSITIONS.map(p => p.comment.length));
-const TW = 2 * String(trials).length + 1;   // e.g. "10/10"
+const TW = 2 * String(oversample).length + 1;   // e.g. "10/10"
 const RW = '100.0%'.length;
 
 const startTime = performance.now();
-console.log(`Agent: ${agentName}  budget: ${budgetMs}ms  trials: ${trials}\n`);
+console.log(`Agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
 console.log(` ${'position'.padEnd(NW)}  ${'pass'.padStart(TW)}  ${'ratio'.padStart(RW)}`);
 console.log(` ${'-'.repeat(NW)}  ${'-'.repeat(TW)}  ------`);
 
-const { passed, total, rows } = evalLadders(agent, { budgetMs, trials });
+const { passed, total, rows } = evalLadders(agent, { budgetMs, oversample });
 for (const row of rows) {
-  const pct = (100 * row.passed / row.trials).toFixed(1) + '%';
-  const frac = `${row.passed}/${row.trials}`;
+  const pct = (100 * row.passed / row.oversample).toFixed(1) + '%';
+  const frac = `${row.passed}/${row.oversample}`;
   console.log(` ${row.comment.padEnd(NW)}  ${frac.padStart(TW)}  ${pct.padStart(RW)}`);
 }
 

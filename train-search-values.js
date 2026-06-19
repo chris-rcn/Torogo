@@ -283,7 +283,7 @@ const EMA_PERIOD = 1000;
 let sinceEMA = 0;
 
 function printStats() {
-  const { passed, total } = Ladders.evalLadders(ladderArgmax, { trials: 1 });
+  const { passed, total } = Ladders.evalLadders(ladderArgmax, { oversample: 1 });
   let wAbs = 0, wMax = 0;
   for (const w of weights.values()) { const a = Math.abs(w); wAbs += a; if (a > wMax) wMax = a; }
   const el = performance.now() - t0;

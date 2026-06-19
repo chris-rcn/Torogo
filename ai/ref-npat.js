@@ -17,9 +17,9 @@ const { Game3, game3FromGame2 } = require('../game3.js');
 // Softmax temperature for move selection — 0 = argmax, 1 = standard softmax,
 // in-between values give sharper (< 1) or flatter (> 1) sampling.  Default 0
 // reproduces the previous greedy behavior.
-const NPAT_TEMP = Util.envFloat('NPAT_TEMP', 0);
+const NPAT_TEMP = 0;
 
-const { weights, modelName } = NPat.loadModel({ name: 'ref-npat', path: process.env.NPAT_WEIGHTS });
+const { weights, modelName } = NPat.loadModel({ name: 'ref-npat' });
 
 // One state per board size we encounter, lazily built.
 const stateByN = new Map();

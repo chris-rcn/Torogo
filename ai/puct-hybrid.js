@@ -79,8 +79,8 @@ const ROOT_NPAT = Util.envInt('ROOT_NPAT', 0);
 // N_TRUNC truncated playouts, then expansion.  PLAYOUT_LEN is the truncation
 // length (random moves before the static bootstrap); it matters only when
 // N_TRUNC > 0.
-const N_FULL      = Util.envInt('N_FULL', 0);
-const N_TRUNC     = Util.envInt('N_TRUNC', 2);
+const N_FULL      = Util.envInt('N_FULL', 1);
+const N_TRUNC     = Util.envInt('N_TRUNC', 1);
 const PLAYOUT_LEN = Util.envInt('PLAYOUT_LEN', 4);
 
 // Truncated playouts use the vlibpat static eval, which is unreliable deep in
@@ -88,7 +88,7 @@ const PLAYOUT_LEN = Util.envInt('PLAYOUT_LEN', 4);
 // 1 - emptyCount/area in [0,1].  When a leaf's phase exceeds TRUNC_MAX_PHASE,
 // its truncated visits fall back to full random playouts.  Default 1 (board
 // never more than full, so truncations are always allowed).
-const TRUNC_MAX_PHASE = Util.envFloat('TRUNC_MAX_PHASE', 0.2);
+const TRUNC_MAX_PHASE = Util.envFloat('TRUNC_MAX_PHASE', 0.3);
 
 // Playout move policy.  PLAYOUT_NPAT=1 draws playout moves from the npat
 // softmax (temperature PLAYOUT_TEMP) instead of uniform random — stronger,

@@ -36,7 +36,7 @@ const path = require('path');
 const { Game2, BLACK, PASS } = require('./game2.js');
 const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
-const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
+const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
@@ -54,6 +54,7 @@ const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '0');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
+const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
@@ -62,11 +63,28 @@ const BUDGET     = parseFloat(opts['budget']   || '1');
 
 // ── Features ───────────────────────────
 
-let specs = [
-  { size: 1, maxLibs: 6 },
-  { size: 2, maxLibs: 6 },
-  { size: 3, maxLibs: 6 },
-];
+// --specs: comma list of "size:maxLibs" tokens (e.g. "1:6,2:6,3:6").  size is
+// 1-3; maxLibs caps the per-cell liberty count (1 = presence only).  Default:
+// sizes 1/2/3 at maxLibs 6.  Overridden by --load (the checkpoint's specs win).
+let specs;
+if (opts.specs) {
+  specs = opts.specs.split(',').map(tok => {
+    const [s, m] = tok.split(':');
+    const size = parseInt(s, 10);
+    const maxLibs = parseInt(m, 10);
+    if (!(size >= 1 && size <= 3) || !(maxLibs >= 1)) {
+      console.error(`--specs: bad token '${tok}' (expected size:maxLibs, size 1-3, maxLibs >= 1)`);
+      process.exit(1);
+    }
+    return { size, maxLibs };
+  });
+} else {
+  specs = [
+    { size: 1, maxLibs: 6 },
+    { size: 2, maxLibs: 6 },
+    { size: 3, maxLibs: 6 },
+  ];
+}
 let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
@@ -137,7 +155,7 @@ function search1ply(game) {
 // during play; at episode end the λ-return target is computed by a single
 // backward pass and applied to each position.
 function trainGame(N) {
-  const game     = new Game2(N, false);
+  const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
 
@@ -198,7 +216,9 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game     = new Game2(N, false);
+    const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+    // Random opening: 4 random legal moves to diversify positions.
+    for (let r = 0; r < 4 && !game.gameOver; r++) game.play(game.randomLegalMove());
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
@@ -245,8 +265,15 @@ if (POSITIONS_FILE) {
   console.log(`Loaded ${evalPositionsPool.length} positions from ${POSITIONS_FILE}  batch=${POSITIONS_N || 'all'}`);
 }
 
+// Move-quality suite (evalmovedetails): a single full pass scoring the trainee
+// against --md-file at each status print (the `mdRms` column — RMS win-ratio
+// gap to the top move).
+const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
+if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
+
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
+    if (opts.specs) console.warn('Warning: --specs ignored — using the specs from the --load checkpoint.');
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
@@ -271,9 +298,10 @@ console.log([
   ' acc'.padStart(4),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
+  ...(mdPositions ? ['mdRms'.padStart(5)] : []),
   'avgW'.padStart(6),
-  'tTrn'.padStart(5),
-  ...(evalGetMove ? ['tTst'.padStart(5)] : []),
+  'tTran'.padStart(5),
+  ...(evalGetMove ? ['tTest'.padStart(5)] : []),
   'turn'.padStart(5),
 ].join('  '));
 
@@ -349,6 +377,11 @@ while (true) {
       rmsCol    = Util.fmt4(rmsErr);
       rmsAvgCol = Util.fmt4(rmsAvg);
     }
+    let mdRmsCol = null;
+    if (mdPositions) {
+      const { rmsErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
+      mdRmsCol = Util.fmtRatio4(rmsErr).padStart(5);
+    }
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
 
     const tTestMs   = Date.now() - tTestStart;
@@ -366,6 +399,7 @@ while (true) {
       Util.fmtRatio4(avgAcc),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
+      ...(mdRmsCol ? [mdRmsCol]             : []),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),

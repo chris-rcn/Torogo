@@ -34,7 +34,7 @@ const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeight
 const { Game3, game3FromGame2 } = require('./game3.js');
 const { search } = require('./ai/vlibpat.js');
 const { search: abSearch } = require('./ab-search3.js');
-const { loadPositions, evalPositionsSample } = require('./evalmovedetails.js');
+const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
@@ -54,6 +54,7 @@ const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
+const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
@@ -71,11 +72,12 @@ const EVAL_DITHER = 0.002;
 let specs;
 if (opts.specs) {
   specs = opts.specs.split(',').map(tok => {
+    if (tok === '1p') return { size: 1, ladder: false };
+    if (tok === '2p') return { size: 2, ladder: false };
+    if (tok === '3p') return { size: 3, ladder: false };
     if (tok === '1')  return { size: 1 };
     if (tok === '2')  return { size: 2 };
     if (tok === '3')  return { size: 3 };
-    if (tok === '1p') return { size: 1, ladder: false };
-    if (tok === '3p') return { size: 3, ladder: false };
     console.error(`--specs: unknown token '${tok}' (use 1, 2, 3, 1p, 3p)`);
     process.exit(1);
   });
@@ -98,6 +100,7 @@ let weights    = new Map();  // pattern key (int32) → weight (float)
 let weightsEMA = new Map();  // Polyak-averaged shadow (saved on disk for eval)
 let weightsEMAInit = false;  // first applyEMA seeds EMA = weights
 let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
+let wAbsSum = 0, wUpdateCount = 0;  // running |weight| sum/count over every weight update this run (avgW)
 
 // Polyak / SWA averaging.  Updates weightsEMA in-place to track a smoothed
 // version of weights:
@@ -139,7 +142,9 @@ function tdUpdate(features, target, lr) {
     const step = lr * perFeature;
     for (let i = 0; i < n; i++) {
       const k = keys[i];
-      weights.set(k, (weights.get(k) ?? 0) + pols[i] * step);
+      const w = (weights.get(k) ?? 0) + pols[i] * step;
+      weights.set(k, w);
+      wAbsSum += Math.abs(w); wUpdateCount++;
     }
   } else {
     for (let i = 0; i < n; i++) {
@@ -147,7 +152,9 @@ function tdUpdate(features, target, lr) {
       const g   = pols[i] * perFeature;
       const vel = MOMENTUM * (velocity.get(k) ?? 0) + g;
       velocity.set(k, vel);
-      weights.set(k, (weights.get(k) ?? 0) + lr * vel);
+      const w = (weights.get(k) ?? 0) + lr * vel;
+      weights.set(k, w);
+      wAbsSum += Math.abs(w); wUpdateCount++;
     }
   }
 }
@@ -318,6 +325,11 @@ if (POSITIONS_FILE) {
   console.log(`Loaded ${evalPositionsPool.length} positions from ${POSITIONS_FILE}  batch=${POSITIONS_N || 'all'}`);
 }
 
+// Move-quality suite (evalmovedetails): a single full pass scoring the trainee's
+// value head against --md-file at each status print (the `mdRms` column).
+const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
+if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
+
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     let loadedOpts;
@@ -363,9 +375,10 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
+  ...(mdPositions ? ['mdRms'.padStart(5)] : []),
   'avgW'.padStart(6),
-  'tTrn'.padStart(5),
-  ...(evalGetMove ? ['tTst'.padStart(5)] : []),
+  'tTran'.padStart(5),
+  ...(evalGetMove ? ['tTest'.padStart(5)] : []),
   'turn'.padStart(5),
 ].join('  '));
 
@@ -453,15 +466,20 @@ while (true) {
     // not just score positions (the two dissociate).
     let ladrRatio = null;
     if (ladderCases) {
-      const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, trials: 1 });
+      const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
       ladrRatio = total ? passed / total : 0;
     }
 
-    let wAbsSum = 0;
-    for (const w of weights.values()) {
-      wAbsSum += Math.abs(w);
+    // Move-quality RMS: one full pass of evalmovedetails over --md-file.
+    let mdRmsCell = null;
+    if (mdPositions) {
+      const { rmsErr } = evalPositions(game => ({ move: evalMove(game) }), mdPositions, 0);
+      mdRmsCell = Util.fmtRatio4(rmsErr).padStart(5);
     }
-    const wAvg = weights.size > 0 ? wAbsSum / weights.size : 0;
+
+    // avgW: mean |weight| encountered across weight updates (frequency-weighted
+    // active weights), not the mean over all stored weights.
+    const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
 
     const tTestMs   = Date.now() - tTestStart;
     const elapsedMs = Date.now() - t0;
@@ -479,6 +497,7 @@ while (true) {
       ...(ladrRatio !== null ? [Util.fmtRatio4(ladrRatio)] : []),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),
+      ...(mdRmsCell ? [mdRmsCell]               : []),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),

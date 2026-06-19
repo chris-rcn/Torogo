@@ -94,56 +94,67 @@ const CELL_FOE     = 2;
 // (longer chains activate more weights, so the logit scales with chain size
 // in a per-type weighted fashion).
 const N_TACT             = 4;
-// TACT_STONE_LIMIT controls per-stone-index expansion; env-configurable so
-// A/B tests can sweep without recompiling (default 8).
-const TACT_STONE_LIMIT   = (typeof process !== 'undefined' && process.env && process.env.NPAT_STONE_LIMIT)
-  ? parseInt(process.env.NPAT_STONE_LIMIT, 10) : 8;
+// TACT_STONE_LIMIT controls per-stone-index expansion.
+const TACT_STONE_LIMIT   = 8;
 const N_TACT_SLOTS       = N_TACT * TACT_STONE_LIMIT;  // 32 at default
 const TACT_URGENT_KILL   = 0;
 const TACT_URGENT_SAVE   = 1;
 const TACT_WASTED_EXTEND = 2;
 const TACT_WASTED_ATTACK = 3;
-const TACT_RAW_BASE      = 9 * CELLS_BASE; // 177147; above the shape-key range
-
-// Centered 3×3 shape window (9 cells, candidate always at relPos=4).  Uses
-// canonKey(4, cells) for canonicalisation — raw id lives just above the
-// tactical block.
-const P8_RAW_BASE  = TACT_RAW_BASE + N_TACT_SLOTS;
-
-// Type P12 shape: the 12 closest cells (Manhattan distance 1 and 2) around the
-// candidate, in a diamond pattern.  The candidate cell itself is excluded (it
-// is always empty by construction).  D4-canonicalised; raw range 3^12.
+// Feature families (raw-key base offsets are assigned below from one ordered
+// layout table — see ── Raw-key layout ──):
+//   P1  — tactical slots: 4 types (TACT_URGENT_* above) × TACT_STONE_LIMIT
+//         per-stone-index sub-features.
+//   P8  — centered 3×3 shape window (9 cells, candidate at relPos 4);
+//         D4-canonicalised via canonKey(4, cells), range 9·CELLS_BASE.
+//   P12 — the 12 closest cells (Manhattan distance 1–2) in a diamond; the
+//         candidate is excluded (always empty).  D4-canonicalised, range 3^12.
 //
-//          (-2, 0)
-//   (-1,-1)(-1, 0)(-1, 1)
-//   ( 0,-2)( 0,-1)  *   ( 0, 1)( 0, 2)
-//   ( 1,-1)( 1, 0)( 1, 1)
-//          ( 2, 0)
+//             (-2, 0)
+//      (-1,-1)(-1, 0)(-1, 1)
+//      ( 0,-2)( 0,-1)  *   ( 0, 1)( 0, 2)
+//      ( 1,-1)( 1, 0)( 1, 1)
+//             ( 2, 0)
 //
-// P12_RAW_BASE is placed past the legacy A/B/D/T offset region (occupied by
-// removed-but-still-present weights in older checkpoints) so new P12 raw keys
-// can't collide with stale legacy entries.  The chain matches the old
-// TYPE_E_RAW_BASE offset: 9*CELLS_BASE + 59049 + 177147 + 531441 + 81.
-const P12_CELLS    = 12;
-const P12_BASE     = 531441; // 3^12
-const P12_RAW_BASE = P8_RAW_BASE + 9 * CELLS_BASE
-                   + 59049 + 177147 + 531441 + 81;
+//   P9  — P8 shape conjoined with a 4-bit tactical-type presence mask
+//         (16 buckets): shape weights specialised by tactical context.
+//   P13 — P12 shape conjoined with the same mask (the P12 analogue of P9).
+const P12_CELLS     = 12;
+const P12_BASE      = 531441; // 3^12
+const P9_TACT_MASKS = 16;     // 4-bit tactical-type presence mask (P9/P13)
 
-// Type P9: the centered 3×3 shape (the p8 cells) conjoined with the
-// candidate's tactical-type mask — a 4-bit code over {urgent-kill,
-// urgent-save, wasted-extend, wasted-attack} presence.  This buckets each 3×3
-// shape by its tactical context (16 buckets), so the model can learn
-// shape weights that depend on the tactical situation rather than treating
-// shape and tactics as independent additive features.  Raw range
-// 16 · 9·CELLS_BASE; placed just above the P12 block.
-const P9_TACT_MASKS = 16;
-const P9_RAW_BASE   = P12_RAW_BASE + P12_BASE;
-
-// Type P13: the P12 diamond shape conjoined with the same 4-bit tactical-type
-// mask used by P9 — i.e. the P12 shape bucketed by tactical context (16
-// buckets), the P12 analogue of how P9 conjoins the 3×3 shape.  Raw range
-// 16 · P12_BASE; placed just above the P9 block.
-const P13_RAW_BASE  = P9_RAW_BASE + P9_TACT_MASKS * 9 * CELLS_BASE;
+// ── Raw-key layout ───────────────────────────────────────────────────────────
+//
+// The raw-key line is partitioned into contiguous, non-overlapping blocks — one
+// per family, plus reserved regions for legacy keys.  Each family's base offset
+// is the running sum of all preceding block spans, so the offsets are DERIVED
+// from this single ordered table: adding a family is one entry, with no
+// hand-computed offset to keep non-overlapping.  Do NOT reorder or resize
+// existing blocks — the offsets are baked into every trained model's keys, and
+// the reserved blocks ('shape9', 'legacy') preserve the exact historical layout
+// so old checkpoints stay valid.
+const SHAPE9_SPAN = 9 * CELLS_BASE;                 // bare canonKey output range
+const LEGACY_SPAN = 59049 + 177147 + 531441 + 81;   // removed A/B/D/T region
+const _KEY_LAYOUT = [
+  ['shape9', SHAPE9_SPAN],                  // reserved: legacy 9-window family
+  ['tact',   N_TACT_SLOTS],                 // P1
+  ['p8',     SHAPE9_SPAN],                  // P8  (centered 3×3)
+  ['legacy', LEGACY_SPAN],                  // reserved: removed A/B/D/T
+  ['p12',    P12_BASE],                     // P12 (diamond)
+  ['p9',     P9_TACT_MASKS * SHAPE9_SPAN],  // P9  (16 × 3×3)
+  ['p13',    P9_TACT_MASKS * P12_BASE],     // P13 (16 × diamond)
+];
+const _KEY_BASE = (() => {
+  const base = {};
+  let off = 0;
+  for (const [name, span] of _KEY_LAYOUT) { base[name] = off; off += span; }
+  return base;
+})();
+const TACT_RAW_BASE = _KEY_BASE.tact;
+const P8_RAW_BASE   = _KEY_BASE.p8;
+const P12_RAW_BASE  = _KEY_BASE.p12;
+const P9_RAW_BASE   = _KEY_BASE.p9;
+const P13_RAW_BASE  = _KEY_BASE.p13;
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //

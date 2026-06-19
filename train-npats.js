@@ -390,7 +390,7 @@ function maybePrint(epoch, force) {
     hTop1 = top1 / count;
   }
 
-  const { passed, total } = Ladders.evalLadders(ladderArgmax, { trials: 1 });
+  const { passed, total } = Ladders.evalLadders(ladderArgmax, { oversample: 1 });
 
   const elapsedMs = performance.now() - startTime;
   console.log([
