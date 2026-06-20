@@ -244,52 +244,65 @@
       const limit = maxStones[M] ?? 0;
       let anyEligible = false;
 
-      for (let idx = 0; idx < cap; idx++) {
-        // Standard hash: always stored in hBufs so higher levels can use it.
-        const stdKey = M === 2
-          ? hash4(cells[idx], cells[(idx + 1) % cap], cells[(idx + N) % cap], cells[(idx + N + 1) % cap])
-          : hash4(hPrev[idx], hPrev[(idx + 1) % cap], hPrev[(idx + N) % cap], hPrev[(idx + N + 1) % cap]);
-        hM[idx] = stdKey;
-        if (limit === 0) continue;
+      // Toroidal windows: wrap row and column independently.  Flat (idx+1)%cap
+      // arithmetic would spill the right column into the next row.
+      for (let row = 0; row < N; row++) {
+        const rowStart  = row * N;
+        const downStart = (row + 1 < N ? row + 1 : 0) * N;   // row below, wrapped
+        for (let col = 0; col < N; col++) {
+          const idx = rowStart + col;
+          const col1 = col + 1 < N ? col + 1 : 0;            // column right, wrapped
+          const tr = rowStart + col1;                         // right neighbor (same row)
+          const bl = downStart + col;                         // down neighbor
+          const br = downStart + col1;                         // down-right neighbor
+          // Standard hash: always stored in hBufs so higher levels can use it.
+          const stdKey = M === 2
+            ? hash4(cells[idx], cells[tr], cells[bl], cells[br])
+            : hash4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
+          hM[idx] = stdKey;
+          if (limit === 0) continue;
 
-        const rawKey = stdKey;
+          const rawKey = stdKey;
 
-        // Stone count over the full M×M window.  O(1) via prefix sum for
-        // non-wrapping windows, O(M²) fallback for toroidal wrap.
-        const row = (idx / N) | 0;
-        const col = idx % N;
-        let stones;
-        if (col + M <= N && row + M <= N) {
-          stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
-                 - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
-        } else {
-          stones = 0;
-          for (let dr = 0; dr < M; dr++)
-            for (let dc = 0; dc < M; dc++) {
-              if (cells[(idx + dr * N + dc) % cap]) stones++;
+          // Stone count over the full M×M window.  O(1) via prefix sum for
+          // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
+          let stones;
+          if (col + M <= N && row + M <= N) {
+            stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
+                   - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
+          } else {
+            stones = 0;
+            for (let dr = 0; dr < M; dr++) {
+              const rr = (row + dr) % N;
+              for (let dc = 0; dc < M; dc++) {
+                if (cells[rr * N + (col + dc) % N]) stones++;
+              }
             }
+          }
+          if (stones === 0 || stones > limit) continue;
+          anyEligible = true;
+
+          // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
+          let enc = canonMap.get(rawKey);
+          if (enc !== undefined) {
+            if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
+            continue;
+          }
+
+          // First encounter: compute and store canonical form for all 16 variants.
+          for (let dr = 0; dr < M; dr++) {
+            const rr = (row + dr) % N;
+            for (let dc = 0; dc < M; dc++)
+              winCells[dr * M + dc] = cells[rr * N + (col + dc) % N];
+          }
+          enc = computeAndStoreCanon(winCells, M, canonMap);
+          if (enc === 0) continue;
+
+          outKeys[count] = (enc > 0 ? enc : -enc) - 1;
+          outPols[count] = enc > 0 ? 1 : -1;
+          outSizes[count] = M;
+          count++;
         }
-        if (stones === 0 || stones > limit) continue;
-        anyEligible = true;
-
-        // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
-        let enc = canonMap.get(rawKey);
-        if (enc !== undefined) {
-          if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
-          continue;
-        }
-
-        // First encounter: compute and store canonical form for all 16 variants.
-        for (let dr = 0; dr < M; dr++)
-          for (let dc = 0; dc < M; dc++)
-            winCells[dr * M + dc] = cells[(idx + dr * N + dc) % cap];
-        enc = computeAndStoreCanon(winCells, M, canonMap);
-        if (enc === 0) continue;
-
-        outKeys[count] = (enc > 0 ? enc : -enc) - 1;
-        outPols[count] = enc > 0 ? 1 : -1;
-        outSizes[count] = M;
-        count++;
       }
 
       if (anyEligible) topActive = M;

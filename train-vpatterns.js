@@ -37,6 +37,7 @@ const { Game2, BLACK, PASS } = require('./game2.js');
 const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
+const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
 const fs = require('fs');
@@ -55,6 +56,7 @@ const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '0');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
+const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
@@ -63,17 +65,17 @@ const BUDGET     = parseFloat(opts['budget']   || '1');
 
 // ── Features ───────────────────────────
 
-// --specs: comma list of "size:maxLibs" tokens (e.g. "1:6,2:6,3:6").  size is
+// --spec: comma list of "size:maxLibs" tokens (e.g. "1:6,2:6,3:6").  size is
 // 1-3; maxLibs caps the per-cell liberty count (1 = presence only).  Default:
 // sizes 1/2/3 at maxLibs 6.  Overridden by --load (the checkpoint's specs win).
 let specs;
-if (opts.specs) {
-  specs = opts.specs.split(',').map(tok => {
+if (opts.spec) {
+  specs = opts.spec.split(',').map(tok => {
     const [s, m] = tok.split(':');
     const size = parseInt(s, 10);
     const maxLibs = parseInt(m, 10);
     if (!(size >= 1 && size <= 3) || !(maxLibs >= 1)) {
-      console.error(`--specs: bad token '${tok}' (expected size:maxLibs, size 1-3, maxLibs >= 1)`);
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs, size 1-3, maxLibs >= 1)`);
       process.exit(1);
     }
     return { size, maxLibs };
@@ -271,9 +273,15 @@ if (POSITIONS_FILE) {
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 
+// Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
+// against --ladder-file at each status print (the `ladr` column).
+const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
+const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
+
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
-    if (opts.specs) console.warn('Warning: --specs ignored — using the specs from the --load checkpoint.');
+    if (opts.spec) console.warn('Warning: --spec ignored — using the specs from the --load checkpoint.');
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
@@ -289,20 +297,23 @@ console.log();
 
 // Print header.
 console.log([
+  // Training columns (left).
   'game'.padStart(4),
   'tElp'.padStart(5),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
-  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
   'avgL'.padStart(4),
   ' acc'.padStart(4),
+  'avgW'.padStart(6),
+  'tTran'.padStart(5),
+  'turn'.padStart(5),
+  // Test / eval columns (right).
+  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
+  ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   ...(mdPositions ? ['mdRms'.padStart(5)] : []),
-  'avgW'.padStart(6),
-  'tTran'.padStart(5),
   ...(evalGetMove ? ['tTest'.padStart(5)] : []),
-  'turn'.padStart(5),
 ].join('  '));
 
 const t0 = Date.now();
@@ -363,6 +374,11 @@ while (true) {
     intervalGames = 0;
     intervalMoves = 0;
     intervalCorrect = 0; intervalNVals = 0;
+    let ladrCol = null;
+    if (ladderCases) {
+      const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
+      ladrCol = Util.fmtRatio4(total ? passed / total : 0);
+    }
     let vaccCol = null;
     if (ACCURACY_FILE) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
@@ -390,20 +406,23 @@ while (true) {
     intervalTrainMs = 0;
     const nextMs    = elapsedMs;
     console.log([
+      // Training columns (left).
       Util.fmt4(g),
       Util.fmtMs(elapsedMs),
       Util.fmtMs(tGameMs),
       Util.fmt4(weights.size),
-      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       Util.fmt4(avgLen),
       Util.fmtRatio4(avgAcc),
+      wAvg.toFixed(4).padStart(6),
+      Util.fmtMs(trainMs),
+      Util.fmtMs(timePerMoveMs),
+      // Test / eval columns (right).
+      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
+      ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
       ...(mdRmsCol ? [mdRmsCol]             : []),
-      wAvg.toFixed(4).padStart(6),
-      Util.fmtMs(trainMs),
       ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),
-      Util.fmtMs(timePerMoveMs),
     ].join('  '));
     saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);

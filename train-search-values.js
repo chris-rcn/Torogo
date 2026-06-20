@@ -20,7 +20,7 @@
 //
 // Usage:
 //   node train-search-values.js --file a.ndjson[,b.ndjson,...] [--save model.js]
-//        [--load model.js] [--specs 2,3] [--lr 0.05] [--epochs 0] [--seed 1]
+//        [--load model.js] [--spec 2,3] [--lr 0.05] [--epochs 0] [--seed 1]
 //        [--ema-alpha 0.95] [--eval-size 13]
 
 const fs = require('fs');
@@ -34,7 +34,7 @@ const Util = require('./util.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 if (opts.help || !opts.file) {
   console.log('Usage: node train-search-values.js --file <a.ndjson[,b,...]> [--save model.js] ' +
-              '[--load model.js] [--specs 2,3] [--lr 0.05] [--epochs 0] [--seed 1] [--ema-alpha 0.95]');
+              '[--load model.js] [--spec 2,3] [--lr 0.05] [--epochs 0] [--seed 1] [--ema-alpha 0.95]');
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -60,14 +60,14 @@ const OPENING_SKIP = parseInt(opts['opening-skip'] !== undefined ? opts['opening
 
 // ── Spec list (same tokens as train-vlibpat) ──────────────────────────────────
 let specs;
-if (opts.specs) {
-  specs = opts.specs.split(',').map(tok => {
+if (opts.spec) {
+  specs = opts.spec.split(',').map(tok => {
     if (tok === '1')  return { size: 1 };
     if (tok === '2')  return { size: 2 };
     if (tok === '3')  return { size: 3 };
     if (tok === '1p') return { size: 1, ladder: false };
     if (tok === '3p') return { size: 3, ladder: false };
-    console.error(`--specs: unknown token '${tok}' (use 1, 2, 3, 1p, 3p)`);
+    console.error(`--spec: unknown token '${tok}' (use 1, 2, 3, 1p, 3p)`);
     process.exit(1);
   });
 } else {
@@ -180,9 +180,10 @@ console.log(`files=${FILES.length}  lr=${LR}  alpha=${ALPHA}` +
   `  specs=${JSON.stringify(specs)}  (streaming per epoch)`);
 console.log(`Out: ${SAVE_PATH}`);
 console.log();
+// Training columns (left), then test/eval columns (right): ladr.
 console.log(['epoch'.padStart(5), 'pos'.padStart(7), 'elapsed'.padStart(7), 'tPos'.padStart(5),
-             'acc'.padStart(5), 'ladr'.padStart(5), 'avgW'.padStart(6), 'maxW'.padStart(6),
-             ...(HINGE ? ['hViol'.padStart(5)] : [])].join('  '));
+             'acc'.padStart(5), 'avgW'.padStart(6), 'maxW'.padStart(6),
+             ...(HINGE ? ['hViol'.padStart(5)] : []), 'ladr'.padStart(5)].join('  '));
 
 // Two-step logistic TD (same player to move) on the recorded trajectories,
 // anchored by the actual game OUTCOME — exactly train-vlibpat's update, but
@@ -293,10 +294,10 @@ function printStats() {
     Util.fmtMs(el)                         .padStart(7),
     Util.fmtMs(el / Math.max(1, totalTrained)).padStart(5),
     Util.fmtRatio4(intervalN ? intervalCorrect / intervalN : 0).padStart(5),
-    Util.fmtRatio4(passed / total)         .padStart(5),
     (weights.size ? (wAbs / weights.size) : 0).toFixed(4).padStart(6),
     wMax.toFixed(3)                        .padStart(6),
     ...(HINGE ? [Util.fmtRatio4(hingeChecks ? hingeViol / hingeChecks : 0).padStart(5)] : []),
+    Util.fmtRatio4(passed / total)         .padStart(5),
   ].join('  '));
   intervalCorrect = 0; intervalN = 0;
   hingeViol = 0; hingeChecks = 0;

@@ -67,18 +67,18 @@ const EVAL_DITHER = 0.002;
 
 // ── Features ───────────────────────────
 
-// --specs selects the component list: comma tokens, "1"/"2"/"3" = ladder-aware
+// --spec selects the component list: comma tokens, "1"/"2"/"3" = ladder-aware
 // of that size, "1p"/"3p" = plain (no ladder).  Default: full 3-component spec.
 let specs;
-if (opts.specs) {
-  specs = opts.specs.split(',').map(tok => {
+if (opts.spec) {
+  specs = opts.spec.split(',').map(tok => {
     if (tok === '1p') return { size: 1, ladder: false };
     if (tok === '2p') return { size: 2, ladder: false };
     if (tok === '3p') return { size: 3, ladder: false };
     if (tok === '1')  return { size: 1 };
     if (tok === '2')  return { size: 2 };
     if (tok === '3')  return { size: 3 };
-    console.error(`--specs: unknown token '${tok}' (use 1, 2, 3, 1p, 3p)`);
+    console.error(`--spec: unknown token '${tok}' (use: 1p/2p/3p/1/2/3)`);
     process.exit(1);
   });
 } else {
@@ -365,21 +365,23 @@ if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length
 
 // Print header.
 console.log([
+  // Training columns (left).
   'game'.padStart(4),
   'tElp'.padStart(5),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
-  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
   'avgL'.padStart(4),
   ' acc'.padStart(4),
+  'avgW'.padStart(6),
+  'tTran'.padStart(5),
+  'turn'.padStart(5),
+  // Test / eval columns (right).
+  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   ...(mdPositions ? ['mdRms'.padStart(5)] : []),
-  'avgW'.padStart(6),
-  'tTran'.padStart(5),
   ...(evalGetMove ? ['tTest'.padStart(5)] : []),
-  'turn'.padStart(5),
 ].join('  '));
 
 const t0 = Date.now();
@@ -487,21 +489,23 @@ while (true) {
     intervalTrainMs = 0;
     const nextMs    = elapsedMs;
     console.log([
+      // Training columns (left).
       Util.fmt4(g),
       Util.fmtMs(elapsedMs),
       Util.fmtMs(tGameMs),
       Util.fmt4(weights.size),
-      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       Util.fmt4(avgLen),
       Util.fmtRatio4(avgAcc),
+      wAvg.toFixed(4).padStart(6),
+      Util.fmtMs(trainMs),
+      Util.fmtMs(timePerMoveMs),
+      // Test / eval columns (right).
+      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       ...(ladrRatio !== null ? [Util.fmtRatio4(ladrRatio)] : []),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),
       ...(mdRmsCell ? [mdRmsCell]               : []),
-      wAvg.toFixed(4).padStart(6),
-      Util.fmtMs(trainMs),
       ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),
-      Util.fmtMs(timePerMoveMs),
     ].join('  '));
     // Persist Polyak-averaged weights for eval (slight rewind on resume).
     // Falls back to live weights before the first applyEMA.

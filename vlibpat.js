@@ -247,21 +247,28 @@ function prepareSpecs(specs, opts) {
 // b1=base, b2=base^2, b3=base^3).
 function _extractSize2(raw, cap, N, lut, outKeys, outPols, count, buf) {
   const { cacheKey, cachePol, perms, mix, base, b2, b3, ml } = lut;
-  for (let idx = 0; idx < cap; idx++) {
-    buf[0] = raw[idx];
-    buf[1] = raw[(idx+1)  %cap];
-    buf[2] = raw[(idx+N)  %cap];
-    buf[3] = raw[(idx+N+1)%cap];
-    const li = (buf[0]+ml) + base*(buf[1]+ml) + b2*(buf[2]+ml) + b3*(buf[3]+ml);
-    let pol = cachePol.get(li);
-    if (pol === undefined) {
-      const r = canonicalize(buf, perms, mix);
-      if (r === null) { cachePol.set(li, 0); continue; }
-      cacheKey.set(li, r.key);
-      cachePol.set(li, r.polarity);
-      outKeys[count] = r.key; outPols[count] = r.polarity; count++;
-    } else if (pol !== 0) {
-      outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+  // Toroidal 2×2 window: wrap row and column independently.  A flat (idx+1)%cap
+  // would conflate "next column" with "next row" at the right edge.
+  for (let y = 0; y < N; y++) {
+    const r0 = y * N;
+    const r1 = (y + 1 < N ? y + 1 : 0) * N;   // row below, wrapped
+    for (let x = 0; x < N; x++) {
+      const x1 = x + 1 < N ? x + 1 : 0;        // column right, wrapped
+      buf[0] = raw[r0 + x];
+      buf[1] = raw[r0 + x1];
+      buf[2] = raw[r1 + x];
+      buf[3] = raw[r1 + x1];
+      const li = (buf[0]+ml) + base*(buf[1]+ml) + b2*(buf[2]+ml) + b3*(buf[3]+ml);
+      let pol = cachePol.get(li);
+      if (pol === undefined) {
+        const r = canonicalize(buf, perms, mix);
+        if (r === null) { cachePol.set(li, 0); continue; }
+        cacheKey.set(li, r.key);
+        cachePol.set(li, r.polarity);
+        outKeys[count] = r.key; outPols[count] = r.polarity; count++;
+      } else if (pol !== 0) {
+        outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+      }
     }
   }
   return count;
@@ -270,24 +277,31 @@ function _extractSize2(raw, cap, N, lut, outKeys, outPols, count, buf) {
 // Sparse-LUT-driven size-3 extraction.  Mirrors _extractSize2 with a 3×3 window.
 function _extractSize3(raw, cap, N, lut, outKeys, outPols, count, buf) {
   const { cacheKey, cachePol, perms, mix, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
-  for (let idx = 0; idx < cap; idx++) {
-    buf[0] = raw[idx];
-    buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
-    buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
-    buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
-    const li =
-      (buf[0]+ml)    + base*(buf[1]+ml) + b2*(buf[2]+ml) +
-      b3*(buf[3]+ml) + b4  *(buf[4]+ml) + b5*(buf[5]+ml) +
-      b6*(buf[6]+ml) + b7  *(buf[7]+ml) + b8*(buf[8]+ml);
-    let pol = cachePol.get(li);
-    if (pol === undefined) {
-      const r = canonicalize(buf, perms, mix);
-      if (r === null) { cachePol.set(li, 0); continue; }
-      cacheKey.set(li, r.key);
-      cachePol.set(li, r.polarity);
-      outKeys[count] = r.key; outPols[count] = r.polarity; count++;
-    } else if (pol !== 0) {
-      outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+  // Toroidal 3×3 window: wrap each of the 3 rows and 3 columns independently.
+  for (let y = 0; y < N; y++) {
+    const r0 = y * N;
+    const r1 = (y + 1 < N ? y + 1 : y + 1 - N) * N;
+    const r2 = (y + 2 < N ? y + 2 : y + 2 - N) * N;
+    for (let x = 0; x < N; x++) {
+      const x1 = x + 1 < N ? x + 1 : x + 1 - N;
+      const x2 = x + 2 < N ? x + 2 : x + 2 - N;
+      buf[0] = raw[r0 + x]; buf[1] = raw[r0 + x1]; buf[2] = raw[r0 + x2];
+      buf[3] = raw[r1 + x]; buf[4] = raw[r1 + x1]; buf[5] = raw[r1 + x2];
+      buf[6] = raw[r2 + x]; buf[7] = raw[r2 + x1]; buf[8] = raw[r2 + x2];
+      const li =
+        (buf[0]+ml)    + base*(buf[1]+ml) + b2*(buf[2]+ml) +
+        b3*(buf[3]+ml) + b4  *(buf[4]+ml) + b5*(buf[5]+ml) +
+        b6*(buf[6]+ml) + b7  *(buf[7]+ml) + b8*(buf[8]+ml);
+      let pol = cachePol.get(li);
+      if (pol === undefined) {
+        const r = canonicalize(buf, perms, mix);
+        if (r === null) { cachePol.set(li, 0); continue; }
+        cacheKey.set(li, r.key);
+        cachePol.set(li, r.polarity);
+        outKeys[count] = r.key; outPols[count] = r.polarity; count++;
+      } else if (pol !== 0) {
+        outKeys[count] = cacheKey.get(li); outPols[count] = pol; count++;
+      }
     }
   }
   return count;
@@ -531,6 +545,7 @@ function saveWeights(filePath, model) {
 const Patterns = {
   rawState,
   canonicalize,
+  computeLadderCodes,
   prepareSpecs,
   extractFeatures,
   evaluateFeatures,

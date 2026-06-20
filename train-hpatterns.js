@@ -362,18 +362,23 @@ const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log();
 
+// Training columns (left).
 const headerCols = [
   'game'.padStart(4),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
-  'cKs '.padStart(4),
+  'lut '.padStart(4),
+  'avgL'.padStart(4),
+  ' acc'.padStart(4),
+  'avgW'.padStart(6),
+  'tTran'.padStart(5),
+  'turn'.padStart(5),
 ];
+// Test / eval columns (right).
 if (evalGetMove) headerCols.push('gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4));
-headerCols.push('avgL'.padStart(4), ' acc'.padStart(4));
 if (ladderCases) headerCols.push('ladr'.padStart(4));
 if (mdPositions) headerCols.push('mdRms'.padStart(5));
-headerCols.push('avgW'.padStart(6), 'tTran'.padStart(5), 'tTest'.padStart(5));
-headerCols.push('turn'.padStart(5));
+headerCols.push('tTest'.padStart(5));
 console.log(headerCols.join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -437,7 +442,6 @@ while (true) {
     // active weights), not the mean over all stored weights.
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
 
-    const nextMs    = Date.now() - t0;
     const trainMs   = intervalTrainMs;
     intervalTrainMs = 0;
 
@@ -457,22 +461,35 @@ while (true) {
     // Total eval time this print: reference matches + ladder suite + moveDetails.
     const tTestMs = Date.now() - tTestStart;
 
+    // Training columns (left).
     const cols = [
       Util.fmt4(g),
       Util.fmtMs(tGameMs),
       Util.fmt4(ws),
       Util.fmt4(model.canonMap.size),
+      Util.fmt4(avgLen),
+      Util.fmtRatio4(accRatio),
+      wAvg.toFixed(4).padStart(6),
+      Util.fmtMs(trainMs),
+      Util.fmtMs(tpMove),
     ];
+    // Test / eval columns (right).
     if (evalGetMove) cols.push(Util.fmt4(batch.length), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR));
-    cols.push(Util.fmt4(avgLen), Util.fmtRatio4(accRatio));
     if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
     if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms).padStart(5));
-    cols.push(wAvg.toFixed(4).padStart(6), Util.fmtMs(trainMs), Util.fmtMs(tTestMs));
-    cols.push(Util.fmtMs(tpMove));
+    cols.push(Util.fmtMs(tTestMs));
     console.log(cols.join('  '));
 
     saveModel(SAVE_PATH, model);
-    nextPrintAt = t0 + Math.round(nextMs * 1.4);
+    // Schedule the next print.  Keep the geometric growth on total elapsed
+    // time, but also require the next interval to spend at least as long
+    // TRAINING as this test cycle took — otherwise a slow test (e.g. a large
+    // --md-file pass) outruns the geometric target and forces one training
+    // game per print.  tTestMs is measured after the full test, so it captures
+    // the ref/ladder/md eval cost the premature schedule used to miss.
+    const nowMs = Date.now();
+    const geometricAt = t0 + Math.round((nowMs - t0) * 1.4);
+    nextPrintAt = Math.max(geometricAt, nowMs + tTestMs);
   }
 
   if (limitReached) {

@@ -16,7 +16,7 @@
 //   terminal:   trailing two positions ← outcome z   (gated)
 //
 // Usage:
-//   node train-laddergate.js [--size 11] [--lr 0.3] [--specs 2,3] [--ext ref-npat-softmax]
+//   node train-laddergate.js [--size 11] [--lr 0.3] [--spec 2,3] [--ext ref-npat-softmax]
 //        [--games N] [--load model.js] [--save out.js]
 
 const path = require('path');
@@ -29,7 +29,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-gate']);
 if (opts.help) {
-  console.log('Usage: node train-laddergate.js [--size 11] [--lr 0.3] [--specs 2,3] ' +
+  console.log('Usage: node train-laddergate.js [--size 11] [--lr 0.3] [--spec 2,3] ' +
               '[--ext ref-npat-softmax] [--games N] [--load model.js] [--save out.js]');
   process.exit(0);
 }
@@ -45,8 +45,8 @@ const SAVE_PATH = opts.save || `out/laddergate-${Math.random().toString(36).slic
 const LADDER_FILE = opts['ladder-file'] || 'out/ladders.txt';   // gate suite (evalladders2 format)
 const SUBSAMPLE   = parseInt(opts.subsample || '0', 10);        // random cases per type×size cell per gate check
 
-let specs = opts.specs
-  ? opts.specs.split(',').map(t => t === '1' ? { size: 1 } : t === '2' ? { size: 2 } : t === '3' ? { size: 3 }
+let specs = opts.spec
+  ? opts.spec.split(',').map(t => t === '1' ? { size: 1 } : t === '2' ? { size: 2 } : t === '3' ? { size: 3 }
       : t === '1p' ? { size: 1, ladder: false } : t === '3p' ? { size: 3, ladder: false }
       : (console.error(`bad spec ${t}`), process.exit(1)))
   : [{ size: 2 }, { size: 3 }];
@@ -152,8 +152,9 @@ baseLadder = ladderScore();
 console.log(`size=${SIZE}  lr=${LR}  ext=${EXT_NAME}  eps=${EPSILON}  gate=${GATE ? 'on' : 'OFF'}  specs=${JSON.stringify(specs)}`);
 console.log(`Out: ${SAVE_PATH}   gate suite: ${LADDER_FILE} (${LADDER_TOTAL} cases, subsample ${SUBSAMPLE}/cell)   initial ladder ${baseLadder}/${LADDER_TOTAL}`);
 console.log();
+// Training columns (left), then test/eval columns (right): ladr.
 console.log(['games'.padStart(5), 'pos'.padStart(8), 'elapsed'.padStart(7), 'acc%'.padStart(5),
-             'ladr'.padStart(5), 'avgW'.padStart(6), 'maxW'.padStart(6)].join('  '));
+             'avgW'.padStart(6), 'maxW'.padStart(6), 'ladr'.padStart(5)].join('  '));
 
 const t0 = performance.now();
 let gamesDone = 0, posCount = 0;
@@ -168,9 +169,9 @@ function printStats() {
     Util.fmt4(posCount).padStart(8),
     Util.fmtMs(performance.now() - t0).padStart(7),
     Util.fmtRatio4(nUpdates ? nAccepted / nUpdates : 0).padStart(5),
-    Util.fmtRatio4(baseLadder / LADDER_TOTAL).padStart(5),
     (weights.size ? wAbs / weights.size : 0).toFixed(4).padStart(6),
     wMax.toFixed(3).padStart(6),
+    Util.fmtRatio4(baseLadder / LADDER_TOTAL).padStart(5),
   ].join('  '));
   saveWeights(SAVE_PATH, { weights, specs, opts: tacticsOpts, preparedSpecs: prepSpecs });
 }

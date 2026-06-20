@@ -224,18 +224,27 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       const lut = lut2.get(maxLibs);
       if (lut) {
         const { keys, pols, base, b2, b3, ml } = lut;
-        for (let idx = 0; idx < cap; idx++) {
-          const li = (raw[idx]+ml) + base*(raw[(idx+1)%cap]+ml) + b2*(raw[(idx+N)%cap]+ml) + b3*(raw[(idx+N+1)%cap]+ml);
-          const pol = pols[li];
-          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+        // Toroidal 2×2 window: wrap row and column independently.
+        for (let y = 0; y < N; y++) {
+          const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
+          for (let x = 0; x < N; x++) {
+            const x1 = x + 1 < N ? x + 1 : 0;
+            const li = (raw[r0+x]+ml) + base*(raw[r0+x1]+ml) + b2*(raw[r1+x]+ml) + b3*(raw[r1+x1]+ml);
+            const pol = pols[li];
+            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+          }
         }
       } else {
         const mix2 = 131 * maxLibs;
-        for (let idx = 0; idx < cap; idx++) {
-          buf[0] = raw[idx]; buf[1] = raw[(idx+1)%cap];
-          buf[2] = raw[(idx+N)%cap]; buf[3] = raw[(idx+N+1)%cap];
-          const r = canonicalize(buf, PERMS_2x2, mix2);
-          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+        for (let y = 0; y < N; y++) {
+          const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
+          for (let x = 0; x < N; x++) {
+            const x1 = x + 1 < N ? x + 1 : 0;
+            buf[0] = raw[r0+x]; buf[1] = raw[r0+x1];
+            buf[2] = raw[r1+x]; buf[3] = raw[r1+x1];
+            const r = canonicalize(buf, PERMS_2x2, mix2);
+            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+          }
         }
       }
     }
@@ -244,30 +253,38 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       const lut = lut3.get(maxLibs);
       if (false && lut) {
         const { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
-        for (let idx = 0; idx < cap; idx++) {
-          const li =
-            (raw[idx]           +ml)       +
-            base*(raw[(idx+1)  %cap]+ml)   +
-            b2  *(raw[(idx+2)  %cap]+ml)   +
-            b3  *(raw[(idx+N)  %cap]+ml)   +
-            b4  *(raw[(idx+N+1)%cap]+ml)   +
-            b5  *(raw[(idx+N+2)%cap]+ml)   +
-            b6  *(raw[(idx+2*N)  %cap]+ml) +
-            b7  *(raw[(idx+2*N+1)%cap]+ml) +
-            b8  *(raw[(idx+2*N+2)%cap]+ml);
-          const pol = pols[li];
-          if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+        // Toroidal 3×3 window: wrap each of the 3 rows and 3 columns independently.
+        for (let y = 0; y < N; y++) {
+          const r0 = y*N, r1 = (y+1<N?y+1:y+1-N)*N, r2 = (y+2<N?y+2:y+2-N)*N;
+          for (let x = 0; x < N; x++) {
+            const x1 = x+1<N?x+1:x+1-N, x2 = x+2<N?x+2:x+2-N;
+            const li =
+              (raw[r0+x]       +ml) +
+              base*(raw[r0+x1] +ml) +
+              b2  *(raw[r0+x2] +ml) +
+              b3  *(raw[r1+x]  +ml) +
+              b4  *(raw[r1+x1] +ml) +
+              b5  *(raw[r1+x2] +ml) +
+              b6  *(raw[r2+x]  +ml) +
+              b7  *(raw[r2+x1] +ml) +
+              b8  *(raw[r2+x2] +ml);
+            const pol = pols[li];
+            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+          }
         }
       } else {
         const mix3 = 537 * maxLibs;
-        for (let idx = 0; idx < cap; idx++) {
-          buf[0] = raw[idx];
-          buf[1] = raw[(idx+1)    %cap]; buf[2] = raw[(idx+2)    %cap];
-          buf[3] = raw[(idx+N)    %cap]; buf[4] = raw[(idx+N+1)  %cap]; buf[5] = raw[(idx+N+2)  %cap];
-          buf[6] = raw[(idx+2*N)  %cap]; buf[7] = raw[(idx+2*N+1)%cap]; buf[8] = raw[(idx+2*N+2)%cap];
-
-          const r = canonicalize(buf, PERMS_3x3, mix3);
-          if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+        for (let y = 0; y < N; y++) {
+          const r0 = y*N, r1 = (y+1<N?y+1:y+1-N)*N, r2 = (y+2<N?y+2:y+2-N)*N;
+          for (let x = 0; x < N; x++) {
+            const x1 = x+1<N?x+1:x+1-N, x2 = x+2<N?x+2:x+2-N;
+            buf[0] = raw[r0+x];
+            buf[1] = raw[r0+x1]; buf[2] = raw[r0+x2];
+            buf[3] = raw[r1+x]; buf[4] = raw[r1+x1]; buf[5] = raw[r1+x2];
+            buf[6] = raw[r2+x]; buf[7] = raw[r2+x1]; buf[8] = raw[r2+x2];
+            const r = canonicalize(buf, PERMS_3x3, mix3);
+            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+          }
         }
       }
     }

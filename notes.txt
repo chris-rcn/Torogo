@@ -185,3 +185,46 @@ size: 13  lr: 0.003  maxAdjLibs: 3  maxLadderStones: 8  ref: ai/ref-fast.js  out
 To try:
 Now that we have tuned RAVE_NPAT_VISITS, we need to re-tune RAVE_K.
 
+
+chris@ryzen:~/code/Torogo$ cp ladder2-d4c0a93.js ladder2.js; node train-vlibpat.js --size 8 --specs 2
+LR=0.3  momentum=0  epsilon=0.1  on-policy=1  ema-alpha=0.95  train-size=8  eval-size=8  ref=(none)  ext=(none)  lambda=0
+Out: out/vlibpat-99lyw2u0.js
+Specs: [{"size":2}]
+Tactics: ladder2
+
+game   tElp   tGm   nWts  avgL   acc    avgW  tTran   turn
+  25   1.0s   41ms   100  80.8  6289  0.0671   1.0s  510us
+  35   1.5s   42ms   106  85.2  6759  0.0774  423ms  506us
+  51   2.0s   36ms   110  80.3  6554  0.0859  583ms  490us
+  80   2.9s   28ms   112  79.8  6324  0.0943  820ms  441us
+ 115   4.1s   34ms   116  83.3  6726  0.1088   1.2s  430us
+ 172   5.7s   28ms   118  80.9  6532  0.1218   1.6s  404us
+ 302   8.0s   17ms   125  85.8  6781  0.1509   2.3s  315us
+ 433  11.2s   24ms   127  82.6  6890  0.1636   3.2s  308us
+ 659  15.6s   20ms   131  80.2  6822  0.1825   4.4s  287us
+ 974  21.9s   20ms   134  83.8  6906  0.2005   6.2s  270us
+1345  30.6s   23ms   135  84.9  7025  0.2109   8.7s  272us
+1856  42.9s   24ms   135  85.5  7112  0.2208  12.2s  274us
+
+chris@ryzen:~/code/Torogo$ cp ladder2_latest.js ladder2.js; node train-vlibpat.js --size 8 --specs 2
+LR=0.3  momentum=0  epsilon=0.1  on-policy=1  ema-alpha=0.95  train-size=8  eval-size=8  ref=(none)  ext=(none)  lambda=0
+Out: out/vlibpat-qyyj9ydj.js
+Specs: [{"size":2}]
+Tactics: ladder2
+
+game   tElp   tGm   nWts  avgL   acc    avgW  tTran   turn
+  21   1.0s   49ms    69  87.8  6578  0.0760   1.0s  553us
+  31   1.4s   41ms    73  80.7  6571  0.0844  409ms  539us
+  51   2.0s   29ms    85  90.3  6840  0.0912  580ms  451us
+  66   3.0s   64ms    92  78.5  6730  0.0932  967ms  528us
+ 108   4.2s   29ms   102  78.5  6853  0.1173   1.2s  472us
+ 127   6.0s   92ms   102  90.3  6902  0.1253   1.8s  560us
+ 164   8.4s   65ms   106  89.6  7016  0.1358   2.4s  600us
+ 222  11.9s   60ms   110  83.3  6931  0.1449   3.5s  631us
+ 303  16.7s   59ms   112  82.5  6956  0.1544   4.8s  653us
+ 470  23.4s   40ms   116  82.6  6949  0.1833   6.7s  594us
+ 696  32.8s   42ms   118  81.6  7010  0.1990   9.4s  567us
+ 927  46.0s   57ms   122  86.8  7089  0.2112  13.2s  590us
+1354  64.4s   43ms   124  85.5  7120  0.2184  18.3s  562us
+1776  90.3s   61ms   124  85.5  7180  0.2265  25.8s  599us
+2668   2.1m   40ms   126  81.8  7157  0.2400  36.0s  564us

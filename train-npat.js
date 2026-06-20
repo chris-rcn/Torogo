@@ -27,6 +27,7 @@ const { Game2, BLACK, PASS } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const NPat = require('./npat-lib.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
+const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '13', 10);
 const LR         = parseFloat(opts.lr || '0.02');
 const REWARD_EMA = parseFloat(opts['reward-ema'] || '0.99');   // EMA decay for the reward baseline (variance reduction); 0 disables
+const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');  // decoupled L2 shrink per update (0 = no decay); bounds logit growth
 const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
 const USE_P1     = !!opts['use-p1'];                           // enable 1-cell ladder/tactical feature
 const USE_P8     = !!opts['use-p8'];                           // enable 8-cell 3×3 window
@@ -45,6 +47,7 @@ const USE_P12    = !!opts['use-p12'];                          // enable 12-cell
 const USE_P13    = !!opts['use-p13'];                          // enable p1 × p12
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite to score each status print
+const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions for the single-pass mdRms column
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
@@ -189,7 +192,7 @@ function trainGame(N) {
   for (const s of steps) {
     const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
     const adv = REWARD_EMA > 0 ? (R - ema) : R;
-    weightUpdates += NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR) || 0;
+    weightUpdates += NPat.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY) || 0;
     stepsApplied++;
   }
 
@@ -265,6 +268,8 @@ if (opts.help) {
   --lr F           learning rate (default 0.02)
   --reward-ema F   EMA decay for the reward baseline (variance reduction).
                    Default 0.99; 0 disables.
+  --weight-decay F decoupled L2 shrink applied to each touched weight per
+                   update (w -= lr*F*w); bounds logit growth.  Default 0 (off).
   --temperature F  softmax sampling temperature for training moves;
                    0 = argmax, 1 = standard softmax (default 1)
   --use-p1         enable the 1-cell ladder/tactical feature (default off)
@@ -273,6 +278,9 @@ if (opts.help) {
   --use-p12        enable the 12-cell diamond shape window (default off)
   --use-p13        enable the p1 × p12 (diamond × tactical-mask) window (default off)
   --eval-agent S   reference agent in ai/ (default random)
+  --ladder-file P  evalladders2 suite scored each status print (ladr column)
+  --md-file P      evalmovedetails positions scored each status print; RMS gap
+                   of the greedy npat policy to best (mdRms column)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
 `);
@@ -294,7 +302,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  temperature=${TEMPERATURE}`);
+console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`features: p1=${USE_P1 ? 'ON' : 'off'}  p8=${USE_P8 ? 'ON' : 'off'}  p9=${USE_P9 ? 'ON' : 'off'}  p12=${USE_P12 ? 'ON' : 'off'}  p13=${USE_P13 ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
@@ -309,6 +317,11 @@ function npatLadderMove(game) {
   return { move: NPat.greedyMove(game, st, weights, game3FromGame2(game)) };
 }
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
+
+// Move-quality suite (evalmovedetails): a single full pass scoring the trainee's
+// greedy npat policy against --md-file at each status print (the `mdRms` column).
+const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
+if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log();
 
 console.log([
@@ -323,6 +336,7 @@ console.log([
   'wrRf'.padStart(4),
   'wrAv'.padStart(4),
   ...(ladderCases ? ['ladr'.padStart(5)] : []),
+  ...(mdPositions ? ['mdRms'.padStart(5)] : []),
 ].join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -390,6 +404,14 @@ while (true) {
       ladrStr = Util.fmtRatio4(total ? passed / total : 0);
     }
 
+    // Move-quality RMS: one full pass of evalmovedetails over --md-file, scoring
+    // the trainee's greedy npat policy (gap-to-best in win-ratio units).
+    let mdRmsStr = null;
+    if (mdPositions) {
+      const { rmsErr } = evalPositions(npatLadderMove, mdPositions, 0);
+      mdRmsStr = Util.fmtRatio4(rmsErr).padStart(5);
+    }
+
     const elapsedMs      = Date.now() - t0;
     const cycleN         = g - lastPrintG;
     const cycleAvgGameMs = cycleN > 0 ? elapsedMsAcc / cycleN : 0;
@@ -406,6 +428,7 @@ while (true) {
       evalGames > 0 ? Util.fmtRatio4(evalWins / evalGames) : '   -',
       evalHistory.length > 0 ? Util.fmtRatio4(avgWR) : '   -',
       ...(ladrStr !== null ? [ladrStr] : []),
+      ...(mdRmsStr !== null ? [mdRmsStr] : []),
     ].join('  '));
     maxProbSumWindow = 0; maxProbNWindow = 0;
     elapsedMsAcc = 0;

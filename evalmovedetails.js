@@ -22,6 +22,8 @@
 //                 seed it had in a full sweep
 //   --seed        starting agent rng seed (overrides default/per-index seed)
 //   --oversample  evaluate each position this many times    (default: 1)
+//   --show-phases P  at the end, print a P-row table of phase-band → RMS,
+//                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
 const fs   = require('fs');
@@ -55,6 +57,11 @@ function evalPosition(agent, position, budgetMs) {
   const game = new Game2(boardSize);
   for (const h of history) game.play(parseMove(h, boardSize));
 
+  // Game phase ∈ [0,1]: board fullness = 1 − emptyCount/area (the codebase's
+  // canonical phase, e.g. puct-hybrid / compare-moves).  Not move count —
+  // captures make the two diverge.
+  const phase = 1 - game.emptyCount / (boardSize * boardSize);
+
   const agentMove = agent(game, budgetMs, { rng: makeRng(agentSeed++) });
   const agentStr  = coordStr(agentMove.move, boardSize);
 
@@ -62,7 +69,7 @@ function evalPosition(agent, position, budgetMs) {
   const found     = candidates.find(c => c.m === agentStr);
   const agentCand = (found?.kwr != null) ? found : candidates.findLast(c => c.kwr != null);
 
-  return { agentMove, agentStr, topCand, agentCand, gap: (topCand.kwr - agentCand.kwr) / 1000 };
+  return { agentMove, agentStr, topCand, agentCand, phase, gap: (topCand.kwr - agentCand.kwr) / 1000 };
 }
 
 // Evaluate agent on positions; returns { rmsErr, count }.
@@ -94,7 +101,7 @@ if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
-    console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--index <n>] [--seed <n>] [--oversample <n>] [--verbose]');
+    console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--index <n>] [--seed <n>] [--oversample <n>] [--show-phases <P>] [--verbose]');
     process.exit(opts.help ? 0 : 1);
   }
 
@@ -104,12 +111,14 @@ if (require.main === module) {
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
+  const showPhases = opts['show-phases'] !== undefined ? parseInt(opts['show-phases'], 10) : null;
   const verbose    = !!opts.verbose;
 
   if (isNaN(budgetMs) || budgetMs < 1)     { console.error('--budget must be a positive integer'); process.exit(1); }
   if (isNaN(limit) || limit < 1)           { console.error('--limit must be a positive integer'); process.exit(1); }
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
   if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
+  if (showPhases !== null && (isNaN(showPhases) || showPhases < 1)) { console.error('--show-phases must be a positive integer'); process.exit(1); }
 
   const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
   const pool      = loadPositions(opts.file);
@@ -138,6 +147,21 @@ if (require.main === module) {
     'tMv'    .padStart(5),
     'rms'    .padStart(5),
   ].join('  '));
+
+  // Phase bands: partition phase ∈ [0,1] (board fullness) into P equal-width
+  // bands and accumulate squared gap per band, so the end-of-run table shows
+  // where in the game the agent loses the most.
+  let phaseBandSq = null, phaseBandN = null;
+  if (showPhases !== null) {
+    phaseBandSq = new Float64Array(showPhases);
+    phaseBandN  = new Int32Array(showPhases);
+  }
+  function phaseBandOf(phase) {
+    let b = Math.floor(phase * showPhases);
+    if (b >= showPhases) b = showPhases - 1;   // phase === 1 lands in the last band
+    if (b < 0) b = 0;
+    return b;
+  }
 
   const startTime = performance.now();
   let printPeriodMs = 1000;
@@ -178,9 +202,15 @@ if (require.main === module) {
   let worst = null;   // highest-gap sample seen, reported at the end
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
-      const { agentMove, agentStr, topCand, agentCand, gap } = evalPosition(agent, positions[i], budgetMs);
+      const { agentMove, agentStr, topCand, agentCand, phase, gap } = evalPosition(agent, positions[i], budgetMs);
       gapSqSum += gap * gap;
       evals++;
+
+      if (showPhases !== null) {
+        const b = phaseBandOf(phase);
+        phaseBandSq[b] += gap * gap;
+        phaseBandN[b]++;
+      }
 
       if (worst === null || gap > worst.gap) {
         worst = { index: indexBase + i, gap, hist: positions[i].history.length,
@@ -213,6 +243,26 @@ if (require.main === module) {
       `top=${worst.top} (${(worst.topKwr / 1000).toFixed(3)})  ` +
       `agent=${worst.agent} (${(worst.agentKwr / 1000).toFixed(3)})  ${worst.info}`
     );
+  }
+
+  if (showPhases !== null) {
+    console.log(`\nphase bands (phase = board fullness 1−empty/area, in [0,1]):`);
+    console.log([
+      'phase'.padStart(9),
+      'n'    .padStart(5),
+      'rms'  .padStart(5),
+    ].join('  '));
+    for (let b = 0; b < showPhases; b++) {
+      const lo = b / showPhases;
+      const hi = (b + 1) / showPhases;
+      const n  = phaseBandN[b];
+      const rms = n > 0 ? Util.fmtRatio4(Math.sqrt(phaseBandSq[b] / n)) : '-';
+      console.log([
+        `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(9),
+        Util.fmt4(n) .padStart(5),
+        rms          .padStart(5),
+      ].join('  '));
+    }
   }
 }
 

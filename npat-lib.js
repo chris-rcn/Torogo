@@ -695,12 +695,16 @@ function greedyMove(game, state, weights, game3) {
 
 const _tactScratch = new Float64Array(N_TACT_SLOTS);
 
-function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
+// weightDecay (default 0) applies decoupled L2 shrink to every touched weight
+// as it is updated: w ← w + Δw − lr·weightDecay·w.  With weightDecay = 0 the
+// arithmetic and the write pattern are byte-identical to the undecayed update.
+function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay = 0) {
   const n = state.count;
   if (n === 0 || chosenIndex < 0) return;
 
   const step = lr * advantage;
   if (step === 0) return;
+  const decayStep = lr * weightDecay;
 
   const probs    = state.probs;
   const tact     = state.tact;
@@ -769,7 +773,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
     const idx = touched[i];
     const d = delta[idx];
     if (d !== 0) {
-      vals[idx] += d;
+      vals[idx] += d - decayStep * vals[idx];
       delta[idx] = 0;
     }
   }
@@ -786,8 +790,9 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr) {
       for (let k = 0; k < N_TACT_SLOTS; k++) neg[k] += pi * tact[off + k];
     }
     for (let k = 0; k < N_TACT_SLOTS; k++) {
+      const idx = tIds[k];
       const d = step * (tact[cOff + k] - neg[k]);
-      if (d !== 0) vals[tIds[k]] += d;
+      if (d !== 0 || decayStep !== 0) vals[idx] += d - decayStep * vals[idx];
     }
   }
   // Return total shape-feature touches (including duplicates across moves) —
