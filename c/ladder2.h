@@ -18,6 +18,12 @@
 #include "game3.h"
 
 #define LADDER2_MAX_LIBS 2
+/* A defender's saving moves include captures of adjacent atari'd enemy chains,
+ * not just the group's own liberties, so the urgent set can exceed 2.  This
+ * bounds the distinct adjacent-enemy captures considered (far above any real
+ * count for a 1–2 liberty group). */
+#define LADDER2_MAX_CAPTURES 16
+#define LADDER2_MAX_URGENT   (LADDER2_MAX_LIBS + LADDER2_MAX_CAPTURES)
 
 /* Result for one group with 1–2 liberties.
  *   libs            — the group's liberties (lib_count entries, 1 or 2)
@@ -25,8 +31,9 @@
  *                       defender ⇒ a play that reaches 3+ liberties
  *                       attacker ⇒ a play that prevents 3+ liberties
  *                     Also true for not-urgent groups (passing keeps it safe).
- *   urgent_libs     — for an urgent group, the subset of `libs` that are
- *                     winning plays for the mover.  Empty when not urgent.
+ *   urgent_libs     — for an urgent group, the mover's winning plays: the
+ *                     group's liberties and, when defending, captures of
+ *                     adjacent atari'd enemy chains.  Empty when not urgent.
  *   valid           — false if the input group had 0 or >2 liberties (matches
  *                     ladder2.js returning null in that case).
  */
@@ -34,7 +41,7 @@ typedef struct {
     int32_t libs[LADDER2_MAX_LIBS];
     int32_t lib_count;
     bool    mover_succeeds;
-    int32_t urgent_libs[LADDER2_MAX_LIBS];
+    int32_t urgent_libs[LADDER2_MAX_URGENT];
     int32_t urgent_count;
     bool    valid;
 } Ladder2Status;
