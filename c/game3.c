@@ -274,6 +274,7 @@ bool g3_play(Game3 *g, int32_t move) {
         op->type = G3_OP_PASS;
         op->pass.previous_current             = g->current;
         op->pass.previous_consecutive_passes  = g->consecutive_passes;
+        op->pass.previous_ko                  = g->ko;
         g->consecutive_passes++;
         if (g->consecutive_passes >= 2) g->game_over = true;
         g->ko        = G3_PASS;
@@ -485,6 +486,7 @@ bool g3_undo(Game3 *g) {
         if (op.type == G3_OP_PASS) {
             g->current             = op.pass.previous_current;
             g->consecutive_passes  = op.pass.previous_consecutive_passes;
+            g->ko                  = op.pass.previous_ko;
             if (g->consecutive_passes < 2) g->game_over = false;
             g->move_count--;
             return true;

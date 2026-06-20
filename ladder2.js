@@ -87,6 +87,10 @@ function _canReach3Libs(game, idx, depth = 1) {
       game.undo();
       return { ok: false, nodes, maxDepth };
     }
+    // Only pursue the chase when the attacker's move reduced the group to a
+    // single liberty.  This is also the termination guard: a snapback that
+    // bounces the group back to 2+ liberties does NOT recurse, so the mutual
+    // attacker/defender recursion can't cycle forever.
     if (afterLc === 1) {
       const r = _canReach3Libs(game, idx, depth + 1);
       acc(r);

@@ -70,6 +70,7 @@ typedef struct {
         struct {
             int8_t  previous_current;
             int32_t previous_consecutive_passes;
+            int32_t previous_ko;
         } pass;
     };
 } G3Op;

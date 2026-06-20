@@ -388,6 +388,7 @@ class Game3 {
         type: OP_PASS,
         previousCurrent: this.current,
         previousConsecutivePasses: previousConsecutivePasses,
+        previousKo: this.ko,
       });
       this.consecutivePasses++;
       if (this.consecutivePasses >= 2) {
@@ -560,6 +561,7 @@ class Game3 {
       if (op.type === OP_PASS) {
         this.current = op.previousCurrent;
         this.consecutivePasses = op.previousConsecutivePasses;
+        this.ko = op.previousKo;
         if (this.consecutivePasses < 2) {
           this.gameOver = false;
         }
