@@ -573,13 +573,15 @@ class Game2 {
     return result;
   }
 
-  // Returns true iff playing at empty cell idx (for this.current) would leave
-  // the resulting group with EXACTLY ONE liberty (self-atari).  Fully static —
-  // no play/undo.  The resulting group's liberty set is the union of: idx's
-  // empty neighbours, the liberties of each merged friendly chain (minus idx),
-  // and any captured enemy cells adjacent to the group.  Assumes idx is empty.
-  isSelfAtari(idx) {
-    if (idx === PASS) return false;
+  // Returns the stone count of the group that would result from playing at empty
+  // cell idx (for this.current) IF that move self-ataris (leaves the group with
+  // EXACTLY ONE liberty), else 0.  The size is 1 (the played stone) plus the
+  // sizes of the merged friendly chains.  Fully static — no play/undo.  The
+  // resulting liberty set is the union of: idx's empty neighbours, each merged
+  // friendly chain's liberties (minus idx), and captured enemy cells adjacent to
+  // the group.  Assumes idx is empty.
+  selfAtariSize(idx) {
+    if (idx === PASS) return 0;
     const color  = this.current;
     const cells  = this.cells;
     const gidArr = this._gid;
@@ -587,6 +589,7 @@ class Game2 {
     const ls     = this._ls;
     const lw     = this._lw;
     const sw     = this._sw;
+    const ss     = this._ss;
     const W      = this._W;
     const L      = this._libScratch;
     for (let w = 0; w < W; w++) L[w] = 0;
@@ -595,6 +598,7 @@ class Game2 {
     // Merged friendly group ids (≤4) and captured enemy group ids (≤4), deduped.
     let f0 = -1, f1 = -1, f2 = -1, f3 = -1;
     let e0 = -1, e1 = -1, e2 = -1, e3 = -1;
+    let friendStones = 0;
     for (let d = 0; d < 4; d++) {
       const ni = nbr[base + d];
       const c  = cells[ni];
@@ -606,6 +610,7 @@ class Game2 {
         else if (f1 === -1) f1 = gid;
         else if (f2 === -1) f2 = gid;
         else                f3 = gid;
+        friendStones += ss[gid];
         const gb = gid * W;
         for (let w = 0; w < W; w++) L[w] |= lw[gb + w];   // union friendly liberties
       } else {
@@ -654,9 +659,41 @@ class Game2 {
     let count = 0;
     for (let w = 0; w < W; w++) {
       let bits = L[w];
-      while (bits) { if (++count > 1) return false; bits &= bits - 1; }
+      while (bits) { if (++count > 1) return 0; bits &= bits - 1; }
     }
-    return count === 1;
+    return count === 1 ? friendStones + 1 : 0;
+  }
+
+  // Returns true iff playing at empty cell idx (for this.current) self-ataris
+  // (resulting group has exactly one liberty).  Thin wrapper over selfAtariSize.
+  isSelfAtari(idx) { return this.selfAtariSize(idx) !== 0; }
+
+  // Returns true iff playing at empty cell idx (for this.current) creates a ko:
+  // it captures exactly one lone enemy stone, and the played stone is itself a
+  // lone stone whose only liberty is that captured point — so the opponent's
+  // immediate recapture would be ko-banned.  Static — mirrors play()'s ko set.
+  createsKo(idx) {
+    if (idx === PASS) return false;
+    const foe = -this.current;
+    const cells = this.cells, gidArr = this._gid, nbr = this._nbr, ls = this._ls, ss = this._ss;
+    const base = idx * 4;
+    let captures = 0;
+    let s0 = -1, s1 = -1, s2 = -1, s3 = -1;
+    for (let d = 0; d < 4; d++) {
+      const ni = nbr[base + d];
+      if (cells[ni] !== foe) return false;   // empty or friendly neighbour → not a ko
+      const g = gidArr[ni];
+      if (g === s0 || g === s1 || g === s2 || g === s3) continue;
+      if      (s0 === -1) s0 = g;
+      else if (s1 === -1) s1 = g;
+      else if (s2 === -1) s2 = g;
+      else                s3 = g;
+      if (ls[g] === 1) {                     // captured: its sole liberty is idx
+        if (ss[g] !== 1) return false;       // capturing a multi-stone group → not a ko
+        captures++;
+      }
+    }
+    return captures === 1;
   }
 
 
