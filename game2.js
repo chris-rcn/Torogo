@@ -85,6 +85,7 @@ class Game2 {
     this._ss = new Int16Array(MAX_G);       // stones size
     this._lw = new Int32Array(MAX_G * W);   // liberty bitset words (must stay 32-bit)
     this._ls = new Int16Array(MAX_G);       // liberty size
+    this._libScratch = new Int32Array(W);   // reusable liberty bitset for isSelfAtari
 
     const tables = getTopology(N);
     this._nbr     = tables.nbr;
@@ -570,6 +571,92 @@ class Game2 {
       }
     }
     return result;
+  }
+
+  // Returns true iff playing at empty cell idx (for this.current) would leave
+  // the resulting group with EXACTLY ONE liberty (self-atari).  Fully static —
+  // no play/undo.  The resulting group's liberty set is the union of: idx's
+  // empty neighbours, the liberties of each merged friendly chain (minus idx),
+  // and any captured enemy cells adjacent to the group.  Assumes idx is empty.
+  isSelfAtari(idx) {
+    if (idx === PASS) return false;
+    const color  = this.current;
+    const cells  = this.cells;
+    const gidArr = this._gid;
+    const nbr    = this._nbr;
+    const ls     = this._ls;
+    const lw     = this._lw;
+    const sw     = this._sw;
+    const W      = this._W;
+    const L      = this._libScratch;
+    for (let w = 0; w < W; w++) L[w] = 0;
+
+    const base = idx * 4;
+    // Merged friendly group ids (≤4) and captured enemy group ids (≤4), deduped.
+    let f0 = -1, f1 = -1, f2 = -1, f3 = -1;
+    let e0 = -1, e1 = -1, e2 = -1, e3 = -1;
+    for (let d = 0; d < 4; d++) {
+      const ni = nbr[base + d];
+      const c  = cells[ni];
+      if (c === EMPTY) { L[ni >> 5] |= (1 << (ni & 31)); continue; }
+      const gid = gidArr[ni];
+      if (c === color) {
+        if (gid === f0 || gid === f1 || gid === f2 || gid === f3) continue;
+        if      (f0 === -1) f0 = gid;
+        else if (f1 === -1) f1 = gid;
+        else if (f2 === -1) f2 = gid;
+        else                f3 = gid;
+        const gb = gid * W;
+        for (let w = 0; w < W; w++) L[w] |= lw[gb + w];   // union friendly liberties
+      } else {
+        // Enemy: captured iff its single remaining liberty is idx.
+        if (ls[gid] !== 1) continue;
+        if (((lw[gid * W + (idx >> 5)] >>> (idx & 31)) & 1) === 0) continue;
+        if (gid === e0 || gid === e1 || gid === e2 || gid === e3) continue;
+        if      (e0 === -1) e0 = gid;
+        else if (e1 === -1) e1 = gid;
+        else if (e2 === -1) e2 = gid;
+        else                e3 = gid;
+      }
+    }
+    // idx itself is now a stone, not a liberty.
+    L[idx >> 5] &= ~(1 << (idx & 31));
+
+    // Captured enemy cells become liberties of the group when adjacent to it
+    // (to idx or to a merged friendly stone).
+    if (e0 !== -1) {
+      const eg = [e0, e1, e2, e3];
+      for (let k = 0; k < 4; k++) {
+        const g = eg[k];
+        if (g === -1) continue;
+        const gb = g * W;
+        for (let wi = 0; wi < W; wi++) {
+          let bits = sw[gb + wi];
+          while (bits) {
+            const lsb = bits & -bits;
+            const s = wi * 32 + (31 - Math.clz32(lsb));
+            bits ^= lsb;
+            const sb = s * 4;
+            for (let d = 0; d < 4; d++) {
+              const t = nbr[sb + d];
+              if (t === idx) { L[s >> 5] |= (1 << (s & 31)); break; }
+              if (cells[t] === color) {
+                const tg = gidArr[t];
+                if (tg === f0 || tg === f1 || tg === f2 || tg === f3) { L[s >> 5] |= (1 << (s & 31)); break; }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Liberty count: early-exit as soon as a second bit is seen.
+    let count = 0;
+    for (let w = 0; w < W; w++) {
+      let bits = L[w];
+      while (bits) { if (++count > 1) return false; bits &= bits - 1; }
+    }
+    return count === 1;
   }
 
 

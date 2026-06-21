@@ -109,7 +109,7 @@ const npatStateByN = new Map();
 
 // ── vlibpat static evaluator ──────────────────────────────────────────────────
 
-const vpatPath = './ref/vlibpat-9emvzsad.js';
+const vpatPath = './ref/vlibpat-4074.js';
 const vpatRaw = Util.load(vpatPath, 'vlibpatModel');
 if (!vpatRaw) {
   throw new Error('puct-hybrid: vlibpat model not loaded — set window.vlibpatModel before requiring');

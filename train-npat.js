@@ -33,18 +33,20 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-p1', 'use-p8', 'use-p9', 'use-p12', 'use-p13']);
+  ['help', 'use-p1', 'use-p5', 'use-p8', 'use-p9', 'use-p12', 'use-p13', 'captures']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
-const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || opts['train-size'] || '13', 10);
+const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || '13', 10);
 const LR         = parseFloat(opts.lr || '0.02');
 const REWARD_EMA = parseFloat(opts['reward-ema'] || '0.99');   // EMA decay for the reward baseline (variance reduction); 0 disables
 const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');  // decoupled L2 shrink per update (0 = no decay); bounds logit growth
 const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
 const USE_P1     = !!opts['use-p1'];                           // enable 1-cell ladder/tactical feature
+const USE_P5     = !!opts['use-p5'];                               // P5 conjunction: 4-nbr shape × tact × capBucket × atari × selfAtari
 const USE_P8     = !!opts['use-p8'];                           // enable 8-cell 3×3 window
 const USE_P9     = !!opts['use-p9'];                           // enable p1 × p8
 const USE_P12    = !!opts['use-p12'];                          // enable 12-cell diamond shape window
 const USE_P13    = !!opts['use-p13'];                          // enable p1 × p12
+const USE_CAPTURES = !!opts['captures'];                       // size-graded capture buckets (10 weights, sizes 1..10)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite to score each status print
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions for the single-pass mdRms column
@@ -53,7 +55,7 @@ const LOAD_PATH  = opts.load || null;
 
 // ── Weights ───────────────────────────────────────────────────────────────────
 
-let weights = NPat.createWeights({ useP1: USE_P1, useP8: USE_P8, useP12: USE_P12, useP9: USE_P9, useP13: USE_P13 });
+let weights = NPat.createWeights({ useP1: USE_P1, useP8: USE_P8, useP12: USE_P12, useP9: USE_P9, useP13: USE_P13, useCaptures: USE_CAPTURES, useP5: USE_P5 });
 let ema     = 0;                     // EMA of terminal outcome from mover's perspective
 let totalUpdates = 0;                // cumulative weight-update count across resumed runs
 
@@ -125,7 +127,7 @@ function loadWeights(filePath) {
   const mw = NPat.modelWeights(raw);
   const w = NPat.createWeights({
     initialCapacity: Math.max(1024, mw.count | 0),
-    useP1: USE_P1, useP8: USE_P8, useP12: USE_P12, useP9: USE_P9, useP13: USE_P13,
+    useP1: USE_P1, useP8: USE_P8, useP12: USE_P12, useP9: USE_P9, useP13: USE_P13, useCaptures: USE_CAPTURES, useP5: USE_P5,
   });
   mw.forEach((rawId, val) => {
     w.vals[NPat.internWeight(w, rawId)] = val;
@@ -173,7 +175,11 @@ function trainGame(N) {
       tact.set(state.tact.subarray(0, n * NPat.N_TACT_SLOTS));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, patIdsP8, patIdsP12, patIdsP9, patIdsP13, tact, probs, touched: state.touched });
+      const captures = new Uint8Array(n);
+      captures.set(state.captures.subarray(0, n));
+      const patIdsP5 = new Int32Array(n);
+      patIdsP5.set(state.patIdsP5.subarray(0, n));
+      steps.push({ player, chosenIndex: choice.index, count: n, patIdsP8, patIdsP12, patIdsP9, patIdsP13, patIdsP5, tact, probs, captures, touched: state.touched });
     }
 
     game.play(choice.move);
@@ -273,10 +279,15 @@ if (opts.help) {
   --temperature F  softmax sampling temperature for training moves;
                    0 = argmax, 1 = standard softmax (default 1)
   --use-p1         enable the 1-cell ladder/tactical feature (default off)
+  --use-p5         enable the P5 conjunction feature: one weight per
+                   (canonical 4-neighbour shape × tactical-mask × capture-size
+                   bucket 0..10 × puts-enemy-in-atari × self-atari) (default off)
   --use-p8         enable the centered 3×3 shape window (default off)
   --use-p9         enable the p1 × p8 (3×3-shape × tactical-mask) window (default off)
   --use-p12        enable the 12-cell diamond shape window (default off)
   --use-p13        enable the p1 × p12 (diamond × tactical-mask) window (default off)
+  --captures       enable size-graded capture buckets (10 weights, one per
+                   capture size 1..10; size >=10 fires the 10th bucket) (default off)
   --eval-agent S   reference agent in ai/ (default random)
   --ladder-file P  evalladders2 suite scored each status print (ladr column)
   --md-file P      evalmovedetails positions scored each status print; RMS gap
@@ -303,7 +314,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
-console.log(`features: p1=${USE_P1 ? 'ON' : 'off'}  p8=${USE_P8 ? 'ON' : 'off'}  p9=${USE_P9 ? 'ON' : 'off'}  p12=${USE_P12 ? 'ON' : 'off'}  p13=${USE_P13 ? 'ON' : 'off'}`);
+console.log(`features: p1=${USE_P1 ? 'ON' : 'off'}  p5=${USE_P5 ? 'ON' : 'off'}  p8=${USE_P8 ? 'ON' : 'off'}  p9=${USE_P9 ? 'ON' : 'off'}  p12=${USE_P12 ? 'ON' : 'off'}  p13=${USE_P13 ? 'ON' : 'off'}  captures=${USE_CAPTURES ? 'ON' : 'off'}`);
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 

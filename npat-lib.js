@@ -135,6 +135,16 @@ const P9_TACT_MASKS = 16;     // 4-bit tactical-type presence mask (P9/P13)
 // so old checkpoints stay valid.
 const SHAPE9_SPAN = 9 * CELLS_BASE;                 // bare canonKey output range
 const LEGACY_SPAN = 59049 + 177147 + 531441 + 81;   // removed A/B/D/T region
+const CAPTURES_SLOTS = 10;                          // size-graded capture buckets (1..10, 10 = "≥10")
+// P5 — a single conjunction feature over the move's immediate context:
+//   canonical 4-neighbour shape (3^4) × tactical-mask (16) × capture-size
+//   bucket (0..10, 11 values) × puts-enemy-in-atari (2) × self-atari (2).
+// One weight per distinct combination lets the model value shape/capture/
+// tactics jointly (e.g. a dense clump is GOOD when it captures).
+const P5_CELLS     = 4;
+const P5_SHAPE     = 81;                            // 3^4 — canonical 4-neighbour range
+const P5_CAP_RANGE = CAPTURES_SLOTS + 1;            // capture buckets 0..10 (0 = no capture)
+const P5_SPAN      = P5_SHAPE * P9_TACT_MASKS * P5_CAP_RANGE * 2 * 2;  // 81·16·11·2·2 = 57024
 const _KEY_LAYOUT = [
   ['shape9', SHAPE9_SPAN],                  // reserved: legacy 9-window family
   ['tact',   N_TACT_SLOTS],                 // P1
@@ -143,6 +153,11 @@ const _KEY_LAYOUT = [
   ['p12',    P12_BASE],                     // P12 (diamond)
   ['p9',     P9_TACT_MASKS * SHAPE9_SPAN],  // P9  (16 × 3×3)
   ['p13',    P9_TACT_MASKS * P12_BASE],     // P13 (16 × diamond)
+  ['reserved_cap', 1],                      // reserved: removed --capture indicator (offset kept stable for captures)
+  ['reserved_capmulti', 1],                 // reserved: removed --capture-multi indicator (offset kept stable for captures)
+  ['reserved_atari', 1],                    // reserved: removed --atari indicator (offset kept stable for captures)
+  ['captures', CAPTURES_SLOTS],             // one indicator per capture size 1..10 (10 = "≥10")
+  ['p5',     P5_SPAN],                       // P5 conjunction: 4-nbr shape × tact × capBucket × atari × selfAtari
 ];
 const _KEY_BASE = (() => {
   const base = {};
@@ -155,6 +170,8 @@ const P8_RAW_BASE   = _KEY_BASE.p8;
 const P12_RAW_BASE  = _KEY_BASE.p12;
 const P9_RAW_BASE   = _KEY_BASE.p9;
 const P13_RAW_BASE  = _KEY_BASE.p13;
+const CAPTURES_RAW_BASE = _KEY_BASE.captures; // size-graded capture buckets (10 features, sizes 1..10)
+const P5_RAW_BASE   = _KEY_BASE.p5;        // P5 conjunction feature (span P5_SPAN)
 
 // ── Ladder-status annotation ─────────────────────────────────────────────────
 //
@@ -207,6 +224,41 @@ function annotateLadders(game, out, game3, infos) {
   return out;
 }
 
+// Total number of enemy stones the mover captures by playing the empty cell
+// `idx`: sum of the sizes of the distinct adjacent enemy chains in atari (whose
+// last liberty is `idx`).  Distinct gids are deduped (a chain can touch idx on
+// two sides).  Returns 0 when the move captures nothing.
+function _captureCount(game, idx) {
+  const foe = -game.current;
+  const nbr = game._nbr, cells = game.cells, gidArr = game._gid, ls = game._ls, ss = game._ss;
+  const b = idx * 4;
+  let total = 0, seen0 = -1, seen1 = -1, seen2 = -1;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b + d];
+    if (cells[ni] !== foe) continue;
+    const gid = gidArr[ni];
+    if (ls[gid] !== 1) continue;
+    if (gid === seen0 || gid === seen1 || gid === seen2) continue;   // dedupe (≤4 neighbours)
+    if (seen0 < 0) seen0 = gid; else if (seen1 < 0) seen1 = gid; else seen2 = gid;
+    total += ss[gid];
+  }
+  return total;
+}
+
+// True when the mover playing the empty cell `idx` puts an enemy chain in
+// atari: an adjacent enemy chain has exactly two liberties, so filling `idx`
+// (one of them) leaves it with one.  O(1).
+function _moveAtaris(game, idx) {
+  const foe = -game.current;
+  const nbr = game._nbr, cells = game.cells, gidArr = game._gid, ls = game._ls;
+  const b = idx * 4;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b + d];
+    if (cells[ni] === foe && ls[gidArr[ni]] === 2) return true;
+  }
+  return false;
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 //
 // moves     [count]                       flat board index of move i
@@ -248,14 +300,16 @@ function createState(N) {
     patIdsP12: new Int32Array(cap),
     patIdsP9:  new Int32Array(cap),
     patIdsP13: new Int32Array(cap),
+    patIdsP5:  new Int32Array(cap),
     tact:      new Uint8Array(cap * N_TACT_SLOTS),
+    captures:  new Uint8Array(cap),           // per-move captured-stone count (0 = none); useCaptures
     logits:    new Float64Array(cap),
     probs:     new Float64Array(cap),
     ladder:    { tactCount: new Uint8Array(cap * N_TACT_SLOTS) },
     patchNbr,
-    // Reusable touched-index scratch for reinforceUpdate.  Up to four shape
-    // types (P8 + P12 + P9 + P13), one dense idx per (chosen + each move).
-    touched:   new Int32Array(4 * (cap + 1)),
+    // Reusable touched-index scratch for reinforceUpdate.  Up to five shape
+    // types (P8 + P12 + P9 + P13 + P5), one dense idx per (chosen + each move).
+    touched:   new Int32Array(5 * (cap + 1)),
     count:     0,
   };
 }
@@ -282,7 +336,7 @@ function createWeights(opts) {
   // shape windows (P8/P9/P12) default OFF.
   let initialCapacity = 1024;
   let useP1 = true;
-  let useP8 = false, useP12 = false, useP9 = false, useP13 = false;
+  let useP8 = false, useP12 = false, useP9 = false, useP13 = false, useCaptures = false, useP5 = false;
   if (typeof opts === 'number') {
     initialCapacity = opts;
   } else if (opts && typeof opts === 'object') {
@@ -292,6 +346,8 @@ function createWeights(opts) {
     if (opts.useP12) useP12 = true;
     if (opts.useP9) useP9 = true;
     if (opts.useP13) useP13 = true;
+    if (opts.useCaptures) useCaptures = true;
+    if (opts.useP5) useP5 = true;
   }
   const w = {
     map:   new Map(),                              // raw canonKey → dense idx
@@ -299,12 +355,16 @@ function createWeights(opts) {
     delta: new Float32Array(initialCapacity),      // reusable reinforce buffer
     size:  0,                                      // next dense idx to assign
     tactIds: new Int32Array(N_TACT_SLOTS),
-    cfg:   { useP1, useP8, useP12, useP9, useP13 },
+    capturesIds: new Int32Array(CAPTURES_SLOTS),   // dense idx per capture-size bucket (useCaptures)
+    cfg:   { useP1, useP8, useP12, useP9, useP13, useCaptures, useP5 },
   };
   if (useP1) {
     for (let k = 0; k < N_TACT_SLOTS; k++) {
       w.tactIds[k] = _internWeight(w, TACT_RAW_BASE + k);
     }
+  }
+  if (useCaptures) {
+    for (let k = 0; k < CAPTURES_SLOTS; k++) w.capturesIds[k] = _internWeight(w, CAPTURES_RAW_BASE + k);
   }
   return w;
 }
@@ -435,6 +495,45 @@ function canonKeyP12(patch) {
   return best;
 }
 
+// P5 shape: the 4 nearest cells (N, E, S, W) of the candidate, D4-canonicalised
+// just like P12 (min over 8 symmetries of Σ patch[shape[σ(i)]] · 3^i).  Range 3^4.
+const _P5Shape = [ [-1, 0], [0, 1], [1, 0], [0, -1] ];   // N, E, S, W
+const _P5PatchIdx    = new Int32Array(8 * P5_CELLS);
+const _P5CellWeights = new Int32Array(P5_CELLS);
+(function () {
+  const d4 = [
+    (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
+    (r, c) => [ r, -c], (r, c) => [-r,  c], (r, c) => [ c,  r], (r, c) => [-c, -r],
+  ];
+  for (let s = 0; s < 8; s++) {
+    for (let i = 0; i < P5_CELLS; i++) {
+      const [r, c] = d4[s](_P5Shape[i][0], _P5Shape[i][1]);
+      _P5PatchIdx[s * P5_CELLS + i] = (r + 2) * 5 + (c + 2);
+    }
+  }
+  let w = 1;
+  for (let i = 0; i < P5_CELLS; i++) { _P5CellWeights[i] = w; w *= CELL_BASE; }
+})();
+
+const _canonKeyP5Cache = new Int32Array(P5_SHAPE).fill(-1);
+
+function canonKeyP5(patch) {
+  const idx = _P5PatchIdx, cw = _P5CellWeights;
+  let cacheKey = 0;
+  for (let i = 0; i < P5_CELLS; i++) cacheKey += patch[idx[i]] * cw[i];
+  const cached = _canonKeyP5Cache[cacheKey];
+  if (cached !== -1) return cached;
+  let best = cacheKey;
+  for (let s = 1; s < 8; s++) {
+    const o = s * P5_CELLS;
+    let raw = 0;
+    for (let i = 0; i < P5_CELLS; i++) raw += patch[idx[o + i]] * cw[i];
+    if (raw < best) best = raw;
+  }
+  _canonKeyP5Cache[cacheKey] = best;
+  return best;
+}
+
 // ── Core feature extraction ───────────────────────────────────────────────────
 //
 // Toroidal wrap — game2's _nbr only covers ±1 offsets, but we need ±2.
@@ -474,16 +573,19 @@ function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses
   const doUseP12 = !cfg || cfg.useP12;
   const doUseP9 = !cfg || cfg.useP9;
   const doUseP13 = !cfg || cfg.useP13;
+  const doUseCaptures = !cfg || cfg.useCaptures;
+  const doUseP5 = !cfg || cfg.useP5;
   // Skip ladder annotation entirely when nothing depends on it — that's the
-  // dominant per-position cost.  P9/P13 conjoin a shape with the tactical mask,
+  // dominant per-position cost.  P9/P13/P5 conjoin a shape with the tactical mask,
   // so they need the ladder pass even when the plain P1 features are off.
-  const li = (doUseP1 || doUseP9 || doUseP13)
+  const li = (doUseP1 || doUseP9 || doUseP13 || doUseP5)
     ? (ladderInfo || annotateLadders(game, state.ladder, game3, ladderStatuses)) : null;
   const tactCount = li ? li.tactCount : null;
   const patIdsP8 = state.patIdsP8;
   const patIdsP12 = state.patIdsP12;
   const patIdsP9 = state.patIdsP9;
   const patIdsP13 = state.patIdsP13;
+  const patIdsP5 = state.patIdsP5;
 
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
@@ -507,7 +609,7 @@ function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses
     // is set whenever that type applies — see annotateLadders).  Shared by the
     // P9 (3×3) and P13 (P12) shape×tactics conjunctions.
     let tactMask = 0;
-    if (doUseP9 || doUseP13) {
+    if (doUseP9 || doUseP13 || doUseP5) {
       const tcOff = idx * N_TACT_SLOTS;
       if (tactCount[tcOff + TACT_URGENT_KILL   * TACT_STONE_LIMIT]) tactMask |= 1;
       if (tactCount[tcOff + TACT_URGENT_SAVE   * TACT_STONE_LIMIT]) tactMask |= 2;
@@ -557,6 +659,23 @@ function extractFeatures(game, state, ladderInfo, game3, weights, ladderStatuses
       for (let k = 0; k < N_TACT_SLOTS; k++) tact[tDst + k] = tactCount[tSrc + k];
     }
 
+    // Capture count (shared by the captures family and P5); computed once.
+    let capCount = -1;
+    if (doUseCaptures || doUseP5) capCount = _captureCount(game, idx);
+    if (doUseCaptures) state.captures[count] = capCount;
+
+    // P5 conjunction: canonical 4-neighbour shape × tactical-mask × capture
+    // bucket (0..10) × puts-enemy-in-atari × self-atari.
+    if (doUseP5) {
+      const canon4 = canonKeyP5(patch);
+      const capB   = capCount < CAPTURES_SLOTS ? capCount : CAPTURES_SLOTS;   // 0..10
+      const atari  = _moveAtaris(game, idx) ? 1 : 0;
+      const selfA  = game.isSelfAtari(idx) ? 1 : 0;
+      const p5idx  = (((canon4 * P9_TACT_MASKS + tactMask) * P5_CAP_RANGE + capB) * 2 + atari) * 2 + selfA;
+      const rawP5  = P5_RAW_BASE + p5idx;
+      patIdsP5[count] = wMap ? _internWeight(weights, rawP5) : rawP5;
+    }
+
     moves[count] = idx;
     count++;
   }
@@ -583,6 +702,11 @@ function _score(state, i, weights) {
   if (cfg.useP12) s += vals[state.patIdsP12[i]];
   if (cfg.useP9) s += vals[state.patIdsP9[i]];
   if (cfg.useP13) s += vals[state.patIdsP13[i]];
+  if (cfg.useP5) s += vals[state.patIdsP5[i]];
+  if (cfg.useCaptures) {
+    const c = state.captures[i];
+    if (c >= 1) s += vals[weights.capturesIds[(c < CAPTURES_SLOTS ? c : CAPTURES_SLOTS) - 1]];
+  }
   return s;
 }
 
@@ -618,6 +742,10 @@ function _computeSoftmax(state, weights, temperature = 1) {
   const pidP12 = cfg.useP12 ? state.patIdsP12 : null;
   const pidP9 = cfg.useP9 ? state.patIdsP9 : null;
   const pidP13 = cfg.useP13 ? state.patIdsP13 : null;
+  const pidP5 = cfg.useP5 ? state.patIdsP5 : null;
+  const captures = cfg.useCaptures ? state.captures : null;
+  const useCaptures = cfg.useCaptures;
+  const capturesIds = useCaptures ? weights.capturesIds : null;
 
   let maxL = -Infinity, maxI = 0;
   for (let i = 0; i < n; i++) {
@@ -630,6 +758,11 @@ function _computeSoftmax(state, weights, temperature = 1) {
     if (pidP12) s += vals[pidP12[i]];
     if (pidP9) s += vals[pidP9[i]];
     if (pidP13) s += vals[pidP13[i]];
+    if (pidP5) s += vals[pidP5[i]];
+    if (useCaptures) {
+      const c = captures[i];
+      if (c >= 1) s += vals[capturesIds[(c < CAPTURES_SLOTS ? c : CAPTURES_SLOTS) - 1]];
+    }
     lg[i] = s;
     if (s > maxL) { maxL = s; maxI = i; }
   }
@@ -694,6 +827,7 @@ function greedyMove(game, state, weights, game3) {
 // call.
 
 const _tactScratch = new Float64Array(N_TACT_SLOTS);
+const _capturesScratch = new Float64Array(CAPTURES_SLOTS);
 
 // weightDecay (default 0) applies decoupled L2 shrink to every touched weight
 // as it is updated: w ← w + Δw − lr·weightDecay·w.  With weightDecay = 0 the
@@ -717,6 +851,7 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay
   const patIdsP12 = cfg.useP12 ? state.patIdsP12 : null;
   const patIdsP9 = cfg.useP9 ? state.patIdsP9 : null;
   const patIdsP13 = cfg.useP13 ? state.patIdsP13 : null;
+  const patIdsP5 = cfg.useP5 ? state.patIdsP5 : null;
   let tc = 0;
 
   // ── Shape features (use delta buffer to dedupe repeats across moves) ──
@@ -738,6 +873,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay
   }
   if (patIdsP13) {
     const idx = patIdsP13[chosenIndex];
+    touched[tc++] = idx;
+    delta[idx] += step;
+  }
+  if (patIdsP5) {
+    const idx = patIdsP5[chosenIndex];
     touched[tc++] = idx;
     delta[idx] += step;
   }
@@ -763,6 +903,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay
     }
     if (patIdsP13) {
       const idx = patIdsP13[i];
+      touched[tc++] = idx;
+      delta[idx] -= sub;
+    }
+    if (patIdsP5) {
+      const idx = patIdsP5[i];
       touched[tc++] = idx;
       delta[idx] -= sub;
     }
@@ -795,9 +940,31 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay
       if (d !== 0 || decayStep !== 0) vals[idx] += d - decayStep * vals[idx];
     }
   }
+
+  // ── Size-graded capture buckets (one-hot per capture size 1..10): useCaptures ──
+  if (cfg.useCaptures) {
+    const captures = state.captures;
+    const neg = _capturesScratch;
+    for (let s = 0; s < CAPTURES_SLOTS; s++) neg[s] = 0;
+    for (let i = 0; i < n; i++) {
+      const pi = probs[i];
+      if (pi === 0) continue;
+      const c = captures[i];
+      if (c >= 1) neg[(c < CAPTURES_SLOTS ? c : CAPTURES_SLOTS) - 1] += pi;
+    }
+    const cc = captures[chosenIndex];
+    const chosenSlot = cc >= 1 ? (cc < CAPTURES_SLOTS ? cc : CAPTURES_SLOTS) - 1 : -1;
+    for (let s = 0; s < CAPTURES_SLOTS; s++) {
+      const idx = weights.capturesIds[s];
+      const d = step * ((chosenSlot === s ? 1 : 0) - neg[s]);
+      if (d !== 0 || decayStep !== 0) vals[idx] += d - decayStep * vals[idx];
+    }
+  }
+
   // Return total shape-feature touches (including duplicates across moves) —
   // train-npat.js accumulates these to report mean updates-per-pattern.
-  return tc + (cfg.useP1 !== false ? N_TACT_SLOTS : 0);
+  return tc + (cfg.useP1 !== false ? N_TACT_SLOTS : 0)
+            + (cfg.useCaptures ? CAPTURES_SLOTS : 0);
 }
 
 // ── Model loading ─────────────────────────────────────────────────────────────
@@ -844,15 +1011,18 @@ function prepareWeights(raw, name = 'npat') {
   // from key magnitudes for legacy files written before `cfg` was stored.
   let cfg = raw.cfg;
   if (!cfg) {
-    let hasP8 = false, hasP12 = false, hasP9 = false, hasP13 = false;
+    let hasP8 = false, hasP12 = false, hasP9 = false, hasP13 = false, hasCaptures = false, hasP5 = false;
     mw.forEach(k => {
       if (typeof k === 'string') return; // ignore any orphan string keys
-      if      (k >= P13_RAW_BASE)                    hasP13 = true;
+      if      (k >= P5_RAW_BASE)                     hasP5 = true;
+      else if (k >= CAPTURES_RAW_BASE)               hasCaptures = true;
+      // The cap / capmulti / atari ranges are reserved (removed features); no model emits keys there.
+      else if (k >= P13_RAW_BASE)                    hasP13 = true;
       else if (k >= P9_RAW_BASE)                     hasP9 = true;
       else if (k >= P12_RAW_BASE)                    hasP12 = true;
       else if (k >= P8_RAW_BASE)                     hasP8 = true;
     });
-    cfg = { useP8: hasP8, useP12: hasP12, useP9: hasP9, useP13: hasP13 }; // P1 defaults on
+    cfg = { useP8: hasP8, useP12: hasP12, useP9: hasP9, useP13: hasP13, useCaptures: hasCaptures, useP5: hasP5 }; // P1 defaults on
   }
 
   const weights = createWeights({ initialCapacity: Math.max(1024, mw.count | 0), ...cfg });
@@ -902,6 +1072,7 @@ const NPatterns = {
   annotateLadders,
   canonKey,
   canonKeyP12,
+  canonKeyP5,
   // Constants.
   CELL_BASE,
   CELLS_BASE,
@@ -914,6 +1085,7 @@ const NPatterns = {
   P12_CELLS, P12_BASE, P12_RAW_BASE,
   P9_RAW_BASE, P9_TACT_MASKS,
   P13_RAW_BASE,
+  P5_RAW_BASE,
   // Exposed for tests.
   _D4,
 };

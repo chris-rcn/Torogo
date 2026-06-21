@@ -19,7 +19,7 @@ const { Game3, game3FromGame2 } = require('../game3.js');
 // reproduces the previous greedy behavior.
 const NPAT_TEMP = 0;
 
-const { weights, modelName } = NPat.loadModel({ name: 'ref-npat', path: 'ref/npat-data.js' });
+const { weights, modelName } = NPat.loadModel({ name: 'ref-npat', path: 'ref/npat-p8.js' });
 
 // One state per board size we encounter, lazily built.
 const stateByN = new Map();

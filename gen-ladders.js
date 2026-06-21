@@ -14,7 +14,7 @@ process.env.DITHER = '0';   // deterministic puct-static confirmation
 const { Game2, BLACK, PASS, coordStr } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
-const PuctStatic = require('./ai/puct-static.js');
+const PuctStatic = require('./ai/puct-hybrid.js');
 const Util = require('./util.js');
 
 // Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0]

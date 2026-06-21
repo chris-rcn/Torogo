@@ -832,30 +832,32 @@ section('getLadderStatus2 – 2-liberty group: attacker fails (ladder has escape
 
 section('getLadderStatus2 – 2-liberty group: defender escapes via one lib only');
 {
-  // White {(1,1),(1,2)} has two libs: (0,1) and (1,3).
-  // Playing (0,1) creates a dead-end group — black immediately captures.
-  // Playing (1,3) opens to the board; black cannot stop the escape.
+  // White {(4,4),(5,4)} has two liberties: (3,4) and (6,4).  The board is a
+  // TORUS, so an edge is never a wall — the trap must be built explicitly.  The
+  // west liberty (3,4) is boxed by black on every other side, INCLUDING (2,4)
+  // which blocks the wrap-around, so playing it self-ataris and dies.  The east
+  // liberty (6,4) opens into empty board and escapes.  (The earlier version put
+  // the group against the "a" edge as the trap — invalid here, since column a
+  // wraps to column i.)
   //
-  //   0 1 2
-  // 0 ● ● ●
-  // 1 · ○ ●   lib (0,1) = trap
-  // 2 ● ○ ●
-  // 3 · · ●   lib (1,3) = escape (opens south to empty board)
+  //     x: 2 3 4 5 6
+  //  y=5:    ● ● ●          (3,5)(4,5)(5,5)
+  //  y=4:  ● · ○ ○ ·        (2,4)  [trap (3,4)]  ○○=(4,4)(5,4)  [escape (6,4)]
+  //  y=3:    ● ● ●          (3,3)(4,3)(5,3)
   const N = 9;
   const g2 = _syntheticGame2(N, [
-    { x: 0, y: 0, color: 'black' }, { x: 1, y: 0, color: 'black' }, { x: 2, y: 0, color: 'black' },
-    { x: 1, y: 1, color: 'white' }, { x: 2, y: 1, color: 'black' },
-    { x: 0, y: 2, color: 'black' }, { x: 1, y: 2, color: 'white' }, { x: 2, y: 2, color: 'black' },
-    { x: 2, y: 3, color: 'black' },
+    { x: 3, y: 3, color: 'black' }, { x: 4, y: 3, color: 'black' }, { x: 5, y: 3, color: 'black' },
+    { x: 2, y: 4, color: 'black' }, { x: 4, y: 4, color: 'white' }, { x: 5, y: 4, color: 'white' },
+    { x: 3, y: 5, color: 'black' }, { x: 4, y: 5, color: 'black' }, { x: 5, y: 5, color: 'black' },
   ], 'white');
-  const whiteStone = 1 * N + 1;   // (1,1)
-  const urgentLib  = 3 * N + 1;   // (1,3) — extends south to open board
+  const whiteStone = 4 * N + 4;   // (4,4)
+  const escapeLib  = 4 * N + 6;   // (6,4) — extends east into open board
   const r = getLadderStatus2(g2, whiteStone);
   assert(r !== null,                      'defender escape: non-null result');
   assert(r.libs.length === 2,             'defender escape: group has 2 libs');
   assert(r.moverSucceeds === true,        'defender escape: white can escape → moverSucceeds true');
   assert(r.urgentLibs.length === 1,       'defender escape: exactly one urgent lib');
-  assert(r.urgentLibs[0] === urgentLib,   'defender escape: urgent lib is (1,3)');
+  assert(r.urgentLibs[0] === escapeLib,   'defender escape: urgent lib is (6,4)');
 }
 
 section('getLadderStatus2 – real-game ladder pos1: white 11-stone doomed group');

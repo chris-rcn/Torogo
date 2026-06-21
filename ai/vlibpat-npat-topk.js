@@ -18,10 +18,10 @@ const NPat = require('../npat-lib.js');
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-const TOP_K  = Math.max(1, parseInt(process.env.NPAT_FILTER_TOPK || '2', 10));
+const TOP_K  = Math.max(1, parseInt(process.env.NPAT_FILTER_TOPK || '6', 10));
 const DITHER = 0.002;
 
-const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-9-2L3L3NL-onpol70-9.js');
+const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-4074.js');
 const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
@@ -68,13 +68,17 @@ function _topKCandidates(game, game3) {
   return candidates;
 }
 
-function getMove(game) {
+// opts.rng (when supplied, e.g. by evalmovedetails) seeds the αβ leaf dither so
+// move selection is reproducible; without it the dither falls back to the
+// global Math (stochastic), preserving selfplay diversity.
+function getMove(game, _budgetMs, opts) {
   if (game.gameOver) return { move: PASS };
   const game3 = game3FromGame2(game);
   const candidates = _topKCandidates(game, game3);
   if (candidates.length === 0) return { move: PASS };
   const move = abSearch(game3, 1, _vEvaluate, DITHER, {
     getCandidates: () => candidates,
+    rng: opts && opts.rng,
   });
   return { move };
 }

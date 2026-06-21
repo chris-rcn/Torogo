@@ -15,10 +15,10 @@ const NPat = require('../npat-lib.js');
 
 // ── Hardcoded configuration ──────────────────────────────────────────────────
 
-const TOP_K  = 4;
-const DITHER = 0.002;
+const TOP_K  = 6;
+const DITHER = 0.001;
 
-const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-9-2L3L3NL-onpol70-9.js');
+const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-4074.js');
 const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
