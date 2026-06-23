@@ -1054,6 +1054,17 @@ function loadModel({ name = 'npat', path: pathOverride } = {}) {
   return { weights: prepareWeights(raw, name), modelName };
 }
 
+// Format a model cfg's family flags for logging, in a fixed family order with the
+// `use` prefix stripped and the first letter lowercased (useP8 -> p8,
+// useCaptures -> captures).  Any flag not in the order list is appended, so
+// nothing is hidden.
+const _CFG_FLAG_ORDER = ['useP1', 'useP5', 'useP8', 'useP9', 'useP12', 'useP13', 'useCaptures'];
+function cfgFlags(cfg) {
+  const keys = [...(_CFG_FLAG_ORDER.filter(k => k in cfg)),
+                ...Object.keys(cfg).filter(k => !_CFG_FLAG_ORDER.includes(k))];
+  return keys.map(k => { const n = k.replace(/^use/, ''); return `${n.charAt(0).toLowerCase()}${n.slice(1)}=${cfg[k]}`; }).join(' ');
+}
+
 // ── Module exports ────────────────────────────────────────────────────────────
 
 const NPatterns = {
@@ -1063,6 +1074,7 @@ const NPatterns = {
   prepareWeights,
   modelWeights,
   loadModel,
+  cfgFlags,
   extractFeatures,
   evaluate,
   policyMove,

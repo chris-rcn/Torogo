@@ -266,3 +266,6 @@ agent=ref-search-topk
 0.60-0.70    360   0572 *
 0.70-0.80    100   2608 *
 0.80-0.90     50   2326 X
+
+
+Write a script to find the least useful spec term. It accepts a featurepol data file, and plays softmax games. For each position and spec term, track the contribution of that spec term.  Periodically display the list of specs and contribution (sorted by contribution).

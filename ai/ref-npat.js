@@ -35,8 +35,7 @@ function getMove(game) {
   return { move };
 }
 
-console.error(`ref-npat: loaded ${weights.size} weights from ${modelName} ` +
-  `(p8=${weights.cfg.useP8} p12=${weights.cfg.useP12})`);
+console.error(`ref-npat: loaded ${weights.size} weights from ${modelName} (${NPat.cfgFlags(weights.cfg)})`);
 
 module.exports = { getMove };
 

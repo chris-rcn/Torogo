@@ -343,9 +343,9 @@ console.log([
   'avgW'.padStart(6),
   'u/pa'.padStart(4),
   'maxP'.padStart(4),
-  'gRef'.padStart(4),
-  'wrRf'.padStart(4),
-  'wrAv'.padStart(4),
+  // winRatio: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game counts
+  // (this interval's, and the rolling-half window).  Fixed 21 chars wide.
+  'winRatio'.padStart(21),
   ...(ladderCases ? ['ladr'.padStart(5)] : []),
   ...(mdPositions ? ['mdRms'.padStart(5)] : []),
 ].join('  '));
@@ -406,7 +406,6 @@ while (true) {
     const avgWR   = evalHistory.length > 0
       ? evalHistory.slice(-avgHalf).reduce((s, r) => s + r, 0) / avgHalf
       : 0;
-    const wrRefStr = evalGames > 0 ? (evalWins / evalGames).toFixed(3) : '-';
 
     // Ladder suite score (trainee greedy npat policy vs the evalladders2 file).
     let ladrStr = null;
@@ -435,9 +434,8 @@ while (true) {
       wAvg.toFixed(4).padStart(6),
       Util.fmt4(updPerPat),
       Util.fmtRatio4(maxPAvg),
-      Util.fmt4(evalGames),
-      evalGames > 0 ? Util.fmtRatio4(evalWins / evalGames) : '   -',
-      evalHistory.length > 0 ? Util.fmtRatio4(avgWR) : '   -',
+      (`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4(evalGames)})` +
+       `/${Util.fmtRatio4(avgWR)}(${Util.fmt4(avgHalf)})`).padStart(21),
       ...(ladrStr !== null ? [ladrStr] : []),
       ...(mdRmsStr !== null ? [mdRmsStr] : []),
     ].join('  '));

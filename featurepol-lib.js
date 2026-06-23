@@ -26,6 +26,12 @@
 //               stones8/stones12 are adaptive: if the inner ring holds <2 stones
 //               it expands to the next ring (8→12, 12→20), hash-perturbed so it
 //               stays distinct, for more context.
+//   adjLib<n>   D4-canonical 4 orthogonal neighbours, each a stone encoded with its
+//               chain's liberty count capped at n (radix 2n+1).  A descriptor.
+//   stone8AdjLib<n>  JOINT liberty-aware 3×3 pattern: the 8 nearest cells canonicalised
+//               as ONE unit (orthogonals liberty-aware cap n, diagonals shape-only), so
+//               shape+liberties stay in register — what stones8+adjLib4 cannot do (it
+//               canonicalises each half separately).  n=2 ≈ ppat's pattern.  Descriptor.
 //
 // The size<n> terms below are CUMULATIVE (thermometer): each expands at parse
 // time into n additive "≥k present" indicator spaces, so a size-s feature lights
@@ -37,6 +43,21 @@
 //               liberty); 0 if the move does not self-atari
 //   ko          binary: 1 iff the move creates a ko (captures one lone stone
 //               into a ko shape), else 0
+//   anyKo       binary BOARD-CONTEXT flag: 1 iff a ko is currently active on the
+//               board (some point is ko-banned).  Same value for every candidate
+//               move, so only meaningful in conjunction (e.g. stones8+anyKo).
+//   flags       6-bit descriptor combining tactical event flags for the move:
+//               self-atari(1) | capture(2) | atari(4) | ko(8) | join≥2(16) | local(32).
+//               Always emits one key (mask 0 = none, its own category).
+//   local       binary LOCALITY flag: 1 iff the move is in the 8-neighbourhood
+//               (Moore) of the previous move; 0 (incl. no previous move) emits
+//               nothing.  The one feature that conditions on the opponent's move.
+//   koSolve     binary (ppat Feature 6): 1 iff the move captures an atari'd enemy
+//               group adjacent to my own ko-stone (game.koStone[cur+1]) — resolving
+//               a ko I just made by capturing the threat rather than fighting it.
+//   dist<n>     cumulative blended-toroidal distance to the previous move, as
+//               levels floor(Game2.distance*2-1) capped at n (orthogonal-adjacent
+//               = 1, rising with distance); no previous move emits nothing.
 //   ladderStatus 4-bit ladder presence mask at the move from ladder2
 //               (urgent-kill/urgent-save/wasted-extend/wasted-attack)
 //   urgentKill<n> / urgentSave<n> / wastedExtend<n> / wastedAttack<n>
@@ -108,6 +129,24 @@ function _atariStones(game, idx) {
   return total;
 }
 
+// Number of DISTINCT friendly chains adjacent to empty cell idx (0..4) — i.e. how
+// many of the mover's own groups this move would connect together.
+function _adjFriendlyChains(game, idx) {
+  const me = game.current;
+  const nbr = game._nbr, cells = game.cells, gid = game._gid;
+  const b = idx * 4;
+  let n = 0, s0 = -1, s1 = -1, s2 = -1;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b + d];
+    if (cells[ni] !== me) continue;
+    const g = gid[ni];
+    if (g === s0 || g === s1 || g === s2) continue;
+    if (s0 < 0) s0 = g; else if (s1 < 0) s1 = g; else s2 = g;
+    n++;
+  }
+  return n;
+}
+
 // Per-cell ladder sizes.  For each cell, out[cell*4 + flag] is the summed stone
 // count of the chains for which that cell is a flagged liberty, where flag is:
 //   0 urgent-kill, 1 urgent-save, 2 wasted-extend, 3 wasted-attack.
@@ -157,18 +196,42 @@ const _NEAR_PERM = new Int32Array(8 * NEAR_MAX);
 const _STONES_N = new Set([4, 8, 12, 20]);   // D4-closed nearest-cell prefixes
 const _cvScratch = new Int8Array(NEAR_MAX);
 
-// Canonical encoding of the first n cell values in cv: min base-3 value over the
-// 8 D4 symmetries (so the result is D4-invariant).  n must be a closed prefix.
-function _canonStones(cv, n) {
+// Unrolled fast path for the n=4 case (stones4, adjLib): the 4 orthogonal cells
+// under the 8 D4 symmetries.  Loads cv[0..3] once into locals and evaluates the 8
+// base-radix encodings as straight-line arithmetic — no _NEAR_PERM gather, no inner
+// loop, and the 8 independent encodings expose instruction-level parallelism.  The
+// 8 index permutations are exactly the first-4 columns of _NEAR_PERM (4 rotations +
+// 4 reflections), so the result is identical to _canonRadix(cv, 4, radix); the
+// self-check below verifies this exhaustively at load.
+function _canonRadix4(cv, radix) {
+  const c0 = cv[0], c1 = cv[1], c2 = cv[2], c3 = cv[3], R = radix;
+  let best = ((c0 * R + c1) * R + c2) * R + c3, v;       // [0,1,2,3]
+  v = ((c1 * R + c2) * R + c3) * R + c0; if (v < best) best = v;   // [1,2,3,0]
+  v = ((c2 * R + c3) * R + c0) * R + c1; if (v < best) best = v;   // [2,3,0,1]
+  v = ((c3 * R + c0) * R + c1) * R + c2; if (v < best) best = v;   // [3,0,1,2]
+  v = ((c0 * R + c3) * R + c2) * R + c1; if (v < best) best = v;   // [0,3,2,1]
+  v = ((c2 * R + c1) * R + c0) * R + c3; if (v < best) best = v;   // [2,1,0,3]
+  v = ((c3 * R + c2) * R + c1) * R + c0; if (v < best) best = v;   // [3,2,1,0]
+  v = ((c1 * R + c0) * R + c3) * R + c2; if (v < best) best = v;   // [1,0,3,2]
+  return best;
+}
+
+// Canonical encoding of the first n cell values in cv at the given radix: min
+// value over the 8 D4 symmetries (so the result is D4-invariant).  n must be a
+// closed prefix; every cv[i] must be in [0, radix).
+function _canonRadix(cv, n, radix) {
+  if (n === 4) return _canonRadix4(cv, radix);
   let best = Infinity;
   for (let s = 0; s < 8; s++) {
     const po = s * NEAR_MAX;
     let raw = 0;
-    for (let i = 0; i < n; i++) raw = raw * 3 + cv[_NEAR_PERM[po + i]];
+    for (let i = 0; i < n; i++) raw = raw * radix + cv[_NEAR_PERM[po + i]];
     if (raw < best) best = raw;
   }
   return best;
 }
+// stones<n>: ternary cell values (0 empty / 1 own / 2 enemy).
+function _canonStones(cv, n) { return _canonRadix(cv, n, 3); }
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
@@ -187,10 +250,35 @@ function _canonStones(cv, n) {
   }
 })();
 
+// Self-check: the unrolled n=4 fast path must agree with the generic table-driven
+// canonicalisation exactly — any divergence would shift canonical keys and silently
+// invalidate every trained model.  Exhaustive over radix 5: the canonical selection
+// depends only on the relative order of the 4 cell values, and radix 5 (≥4 distinct
+// symbols) exercises every weak ordering of 4 cells, so agreement here holds for all
+// radices.  625 patterns — trivial cost.
+(function () {
+  const cv = new Int8Array(NEAR_MAX);
+  const radix = 5;
+  for (let a = 0; a < radix; a++) for (let b = 0; b < radix; b++)
+    for (let c = 0; c < radix; c++) for (let d = 0; d < radix; d++) {
+      cv[0] = a; cv[1] = b; cv[2] = c; cv[3] = d;
+      let ref = Infinity;                                    // generic, straight from _NEAR_PERM
+      for (let s = 0; s < 8; s++) {
+        const po = s * NEAR_MAX;
+        let raw = 0;
+        for (let i = 0; i < 4; i++) raw = raw * radix + cv[_NEAR_PERM[po + i]];
+        if (raw < ref) ref = raw;
+      }
+      if (_canonRadix4(cv, radix) !== ref) throw new Error('featurepol: _canonRadix4 disagrees with generic canonicalisation');
+    }
+})();
+
 // Build one feature term { str, kind, param, salt, evalFn, needsLadder } from a
 // token like "capture6" / "stones4" / "ladderStatus".
 function _makeTerm(str) {
-  const m = /^([a-zA-Z]+)(\d*)$/.exec(str);
+  // kind = leading word (may contain interior digits, e.g. stone8AdjLib); param =
+  // the OPTIONAL trailing run of digits.  Lazy kind + greedy trailing \d* split them.
+  const m = /^([a-zA-Z][a-zA-Z0-9]*?)(\d*)$/.exec(str);
   if (!m) throw new Error(`featurepol: bad feature term "${str}"`);
   const kind = m[1];
   const param = m[2] ? parseInt(m[2], 10) : null;
@@ -199,11 +287,15 @@ function _makeTerm(str) {
   // by parseSpec into n additive "≥k present" indicator spaces (thermometer
   // encoding) so the logit sums over size, like npat's tactical slots.  Other
   // terms set evalFn directly (one value → one key).
-  let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false;
+  // maxNear: how many of the nearest cells this term reads from the nearNbr table
+  // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
+  let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
   switch (kind) {
     case 'stones': {
       if (!_STONES_N.has(param)) throw new Error(`featurepol: stones<n> needs n in {4,8,12,20} (D4-closed), got "${str}"`);
       const n = param;
+      maxNear = n === 8 ? 12 : n === 12 ? 20 : n;   // adaptive: stones8→12, stones12→20
+
       if (n === 8 || n === 12) {
         // Adaptive: if the inner n cells hold fewer than 2 stones (little nearby
         // info), expand to the next ring (8→12, 12→20).  The expanded encoding is
@@ -212,7 +304,7 @@ function _makeTerm(str) {
         // carved-out value ranges, just entropy.
         const expandN = n === 8 ? 12 : 20;
         evalFn = (ctx, idx) => {
-          const nn = ctx.nearNbr, base = idx * NEAR_MAX, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
+          const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
           let nStones = 0;
           for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; if (cv[i]) nStones++; }
           if (nStones >= 2) return _canonStones(cv, n);
@@ -221,11 +313,73 @@ function _makeTerm(str) {
         };
       } else {
         evalFn = (ctx, idx) => {
-          const nn = ctx.nearNbr, base = idx * NEAR_MAX, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
+          const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
           for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; }
           return _canonStones(cv, n);
         };
       }
+      break;
+    }
+    case 'adjLib': {
+      // Like stones4 (the 4 orthogonal neighbours) but each neighbouring stone is
+      // encoded with its chain's CURRENT liberty count capped at n.  Per-cell
+      // symbol (radix 2n+1): 0 = empty, 1..n = own stone with that many libs,
+      // n+1..2n = enemy stone with that many libs.  The move-point itself is a
+      // liberty of those chains, so an adjacent enemy at 1 lib = capturable here,
+      // at 2 libs = atari-able, etc.  Canonicalised over D4.  A descriptor.
+      if (!param) throw new Error(`featurepol: adjLib<n> needs a liberty cap, got "${str}"`);
+      const n = param, radix = 2 * n + 1;
+      maxNear = 4;
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, game = ctx.game;
+        const cells = game.cells, cur = ctx.cur, ls = game._ls, gid = game._gid, cv = _cvScratch;
+        for (let i = 0; i < 4; i++) {
+          const ni = nn[base + i], c = cells[ni];
+          if (c === 0) { cv[i] = 0; continue; }
+          let lib = ls[gid[ni]]; if (lib > n) lib = n;
+          cv[i] = (c === cur) ? lib : n + lib;
+        }
+        return _canonRadix(cv, 4, radix);
+      };
+      break;
+    }
+    case 'stone8AdjLib': {
+      // JOINT liberty-aware 3x3 pattern (ppat-style), canonicalised as ONE unit so
+      // shape and liberties stay IN REGISTER — unlike the stones8+adjLib4 conjunction,
+      // which D4-canonicalises each half independently and so loses their relative
+      // orientation.  The 8 nearest cells: the 4 ORTHOGONAL neighbours carry liberty
+      // counts capped at n (like adjLib: radix 2n+1 — 0 empty, 1..n own-with-libs,
+      // n+1..2n enemy-with-libs); the 4 DIAGONALS carry shape only (radix 3 — 0 empty,
+      // 1 own, 2 enemy).  Key = min over the 8 D4 symmetries of the mixed-radix
+      // encoding (D4 preserves the orthogonal/diagonal split, so the radices line up).
+      // A descriptor.  n=2 reproduces ppat's pattern; larger n adds liberty resolution
+      // (and keys) — cardinality grows ~ (2n+1)^4, so prefer small n.
+      if (!param) throw new Error(`featurepol: stone8AdjLib<n> needs a liberty cap, got "${str}"`);
+      const n = param, R = 2 * n + 1;
+      maxNear = 8;
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, game = ctx.game;
+        const cells = game.cells, cur = ctx.cur, ls = game._ls, gid = game._gid, cv = _cvScratch;
+        for (let i = 0; i < 4; i++) {                 // orthogonal: liberty-aware
+          const ni = nn[base + i], c = cells[ni];
+          if (c === 0) { cv[i] = 0; continue; }
+          let lib = ls[gid[ni]]; if (lib > n) lib = n;
+          cv[i] = (c === cur) ? lib : n + lib;
+        }
+        for (let i = 4; i < 8; i++) {                 // diagonal: shape only
+          const c = cells[nn[base + i]];
+          cv[i] = c === 0 ? 0 : (c === cur ? 1 : 2);
+        }
+        let best = Infinity;
+        for (let s = 0; s < 8; s++) {
+          const po = s * NEAR_MAX;
+          let raw = 0;
+          for (let i = 0; i < 4; i++) raw = raw * R + cv[_NEAR_PERM[po + i]];
+          for (let i = 4; i < 8; i++) raw = raw * 3 + cv[_NEAR_PERM[po + i]];
+          if (raw < best) best = raw;
+        }
+        return best;
+      };
       break;
     }
     case 'capture': {
@@ -243,9 +397,116 @@ function _makeTerm(str) {
       cumulative = true; sizeFn = (ctx, idx) => ctx.game.selfAtariSize(idx);
       break;
     }
+    case 'lib': {
+      // Liberty count of the group that would RESULT from playing the move
+      // (static: joined-chain liberties ∪ idx's empty neighbours, minus idx, plus
+      // cells freed by captures).  Cumulative: levels 1..min(libs, n).  lib=0
+      // (suicide-without-capture) is the reference state and emits nothing.
+      if (!param) throw new Error(`featurepol: lib<n> needs a size, got "${str}"`);
+      cumulative = true; sizeFn = (ctx, idx) => ctx.game.resultingLibertyCount(idx);
+      break;
+    }
+    case 'joins': {
+      // DESCRIPTOR (takes no parameter): the count of distinct friendly chains
+      // adjacent to the move, 0..4.  Always emits exactly one key encoding that
+      // count — including 0 (connects nothing), which is its own category, not a
+      // suppressed reference state.  So it spans the full set {0,1,2,3,4}.
+      if (param !== null) throw new Error(`featurepol: joins takes no parameter, got "${str}"`);
+      evalFn = (ctx, idx) => _adjFriendlyChains(ctx.game, idx);
+      break;
+    }
+    case 'flags': {
+      // DESCRIPTOR (no parameter): a 6-bit mask combining tactical event flags for
+      // the move, always emitted as one key (mask 0 = no flags, its own category):
+      //   bit 0 (1)  self-atari : the resulting own group has exactly 1 liberty
+      //   bit 1 (2)  capture    : the move captures >= 1 enemy stone
+      //   bit 2 (4)  atari      : the move puts >= 1 enemy chain in atari
+      //   bit 3 (8)  ko         : the move creates a ko
+      //   bit 4 (16) join       : the move connects >= 2 distinct friendly chains
+      //   bit 5 (32) local      : the move is in the 8-neighbourhood of the prev move
+      if (param !== null) throw new Error(`featurepol: flags takes no parameter, got "${str}"`);
+      maxNear = 8;   // the local bit reads the 8-neighbourhood from nearNbr
+      evalFn = (ctx, idx) => {
+        const g = ctx.game;
+        let m = 0;
+        if (g.selfAtariSize(idx) > 0)        m |= 1;
+        if (_captureCount(g, idx) > 0)       m |= 2;
+        if (_atariStones(g, idx) > 0)        m |= 4;
+        if (g.createsKo(idx))                m |= 8;
+        if (_adjFriendlyChains(g, idx) >= 2) m |= 16;
+        const prev = g.lastMove;
+        if (prev >= 0) { const nn = ctx.nearNbr, base = idx * ctx.nearStride; for (let i = 0; i < 8; i++) if (nn[base + i] === prev) { m |= 32; break; } }
+        return m;
+      };
+      break;
+    }
     case 'ko': {
       // Binary: 1 iff the move creates a ko (captures one lone stone into a ko shape).
+      binary = true;
       evalFn = (ctx, idx) => (ctx.game.createsKo(idx) ? 1 : 0);
+      break;
+    }
+    case 'anyKo': {
+      // Binary board-context flag: 1 iff a ko is currently active on the board
+      // (some point is ko-banned).  The same value for every candidate move, so
+      // it is meaningful only in conjunction (e.g. stones8+anyKo) — it modulates
+      // other terms by whether a ko fight is on, not by which move is played.
+      binary = true;
+      evalFn = (ctx) => (ctx.game.ko !== PASS ? 1 : 0);
+      break;
+    }
+    case 'local': {
+      // Binary LOCALITY flag: 1 iff the move lies in the 8-neighbourhood (Moore)
+      // of the previous move.  The reference state 0 (not adjacent, or no previous
+      // move / previous was a pass) emits nothing.  Membership is symmetric, so we
+      // test whether the previous move is one of idx's 8 nearest cells.
+      binary = true;
+      maxNear = 8;   // reads the 8-neighbourhood from nearNbr
+      evalFn = (ctx, idx) => {
+        const prev = ctx.game.lastMove;
+        if (prev < 0) return 0;
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride;
+        for (let i = 0; i < 8; i++) if (nn[base + i] === prev) return 1;
+        return 0;
+      };
+      break;
+    }
+    case 'koSolve': {
+      // ppat Feature 6, faithful: binary.  1 iff the move resolves a ko I just made
+      // by capturing the threatening enemy — i.e. I have a live ko-stone
+      // (game.koStone[cur+1], the lone stone I played that created the ko), an enemy
+      // group adjacent to it is in atari, and this move is that group's single
+      // liberty (the capturing move).  0 (no live ko-stone, or not such a capture)
+      // emits nothing.
+      binary = true;
+      evalFn = (ctx, idx) => {
+        const g = ctx.game, ks = g.koStone[ctx.cur + 1];
+        if (ks === PASS) return 0;
+        const foe = -ctx.cur, nbr = g._nbr, cells = g.cells, gid = g._gid, ls = g._ls, b = ks * 4;
+        for (let d = 0; d < 4; d++) {
+          const ni = nbr[b + d];
+          if (cells[ni] !== foe) continue;
+          const eg = gid[ni];
+          if (ls[eg] !== 1) continue;                 // adjacent enemy must be in atari
+          if (g.groupLibs2(ni).lib0 === idx) return 1; // idx is its capturing move
+        }
+        return 0;
+      };
+      break;
+    }
+    case 'dist': {
+      // Cumulative thermometer of the (blended toroidal) distance from the move to
+      // the previous move, mapped to integer levels via floor(Game2.distance*2-1):
+      // an orthogonal-adjacent move is level 1 and the level rises with distance,
+      // up to the cap n.  No previous move (or a pass) yields level 0 — the
+      // reference state, which emits nothing.  Graded sibling of `local`.
+      if (!param) throw new Error(`featurepol: dist<n> needs a cap, got "${str}"`);
+      cumulative = true;
+      sizeFn = (ctx, idx) => {
+        const g = ctx.game, prev = g.lastMove;
+        if (prev < 0) return 0;
+        return Math.floor(g.distance(idx, prev) * 2 - 1);
+      };
       break;
     }
     case 'ladderStatus': {
@@ -271,7 +532,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, maxNear };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -298,6 +559,7 @@ function parseSpec(specStr) {
   if (!str) throw new Error('featurepol: empty --spec');
   const spaces = [];
   let needsLadder = false;
+  let nearMax = 0;            // widest nearNbr reach across all terms (sizes the table)
   const slotOf = new Map();   // term salt → memo slot
   const computers = [];       // computers[slot] = value fn (sizeFn for cumulative, else evalFn)
   function slotFor(t) {
@@ -313,9 +575,10 @@ function parseSpec(specStr) {
     const cumTerms = [];    // cumulative size terms (thermometer cross-product)
     for (const t of terms) {
       if (t.needsLadder) needsLadder = true;
+      if (t.maxNear > nearMax) nearMax = t.maxNear;
       const slot = slotFor(t);
       if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel }); }
-      else if (t.kind === 'ko') { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
+      else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
     }
     let maxKeys = 1;
@@ -325,7 +588,7 @@ function parseSpec(specStr) {
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
   for (const sp of spaces) maxKeysPerMove += sp.maxKeys;
-  return { str, spaces, computers, numSlots: computers.length, maxKeysPerMove, needsLadder };
+  return { str, spaces, computers, numSlots: computers.length, maxKeysPerMove, needsLadder, nearMax };
 }
 
 // ── Weights store (hash → dense idx → Float32 weight) ─────────────────────────
@@ -366,12 +629,16 @@ function createState(N, spec) {
   spec = parseSpec(spec);
   const cap = N * N;
   const maxK = spec.maxKeysPerMove;   // upper bound on keys emitted per move
-  // Toroidal nearest-cell table: nearNbr[idx*NEAR_MAX + k] = flat index of the
-  // k-th nearest cell to idx.
-  const nearNbr = new Int32Array(cap * NEAR_MAX);
+  // Toroidal nearest-cell table: nearNbr[idx*stride + k] = flat index of the k-th
+  // nearest cell to idx.  The stride is sized to the spec's actual reach (the max
+  // nearest-cells any term in this spec reads), not the global NEAR_MAX — a spec that
+  // only needs the 4 orthogonals (adjLib, stones4) gets a 4-wide table, not 20-wide.
+  // Measurably faster: the smaller table keeps the per-move neighbour reads in cache.
+  const stride = spec.nearMax;
+  const nearNbr = new Int32Array(cap * stride);
   for (let idx = 0; idx < cap; idx++) {
-    const r = (idx / N) | 0, c = idx - r * N, base = idx * NEAR_MAX;
-    for (let k = 0; k < NEAR_MAX; k++) {
+    const r = (idx / N) | 0, c = idx - r * N, base = idx * stride;
+    for (let k = 0; k < stride; k++) {
       const dy = _NEAR_OFFSETS[k][0], dx = _NEAR_OFFSETS[k][1];
       nearNbr[base + k] = _wrap(r + dy, N) * N + _wrap(c + dx, N);
     }
@@ -379,6 +646,7 @@ function createState(N, spec) {
   return {
     N,
     nearNbr,
+    nearStride: stride,
     moves:    new Int32Array(cap),
     keys:     new Int32Array(cap * maxK),       // variable: move i's keys are keys[keyOff[i]..keyOff[i+1])
     keyOff:   new Int32Array(cap + 1),
@@ -400,7 +668,7 @@ function extractFeatures(game, state, weights, game3) {
   const spec = weights.spec;
   const spaces = spec.spaces, nSpaces = spaces.length;
   const memo = state.memo;
-  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, ladderSizes: null, memo };
+  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, memo };
   if (spec.needsLadder) {
     const g3 = game3 || game3FromGame2(game);
     ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);

@@ -85,7 +85,7 @@ class Game2 {
     this._ss = new Int16Array(MAX_G);       // stones size
     this._lw = new Int32Array(MAX_G * W);   // liberty bitset words (must stay 32-bit)
     this._ls = new Int16Array(MAX_G);       // liberty size
-    this._libScratch = new Int32Array(W);   // reusable liberty bitset for isSelfAtari
+    this._libScratch = new Int32Array(W);   // reusable scratch for _buildResultLibs
 
     const tables = getTopology(N);
     this._nbr     = tables.nbr;
@@ -573,15 +573,14 @@ class Game2 {
     return result;
   }
 
-  // Returns the stone count of the group that would result from playing at empty
-  // cell idx (for this.current) IF that move self-ataris (leaves the group with
-  // EXACTLY ONE liberty), else 0.  The size is 1 (the played stone) plus the
-  // sizes of the merged friendly chains.  Fully static — no play/undo.  The
-  // resulting liberty set is the union of: idx's empty neighbours, each merged
-  // friendly chain's liberties (minus idx), and captured enemy cells adjacent to
-  // the group.  Assumes idx is empty.
-  selfAtariSize(idx) {
-    if (idx === PASS) return 0;
+  // Builds the would-be merged group's liberty bitset into _libScratch (fully
+  // static — no play/undo) and returns the merged group's stone count (1 for the
+  // played stone + the sizes of the joined friendly chains).  The liberty set is
+  // the union of: idx's empty neighbours, each joined friendly chain's liberties
+  // (minus idx itself), and the cells vacated by captured enemy chains that are
+  // adjacent to the resulting group.  Assumes idx is empty.  Backs
+  // resultingLibertyCount and selfAtariSize.
+  _buildResultLibs(idx) {
     const color  = this.current;
     const cells  = this.cells;
     const gidArr = this._gid;
@@ -612,7 +611,7 @@ class Game2 {
         else                f3 = gid;
         friendStones += ss[gid];
         const gb = gid * W;
-        for (let w = 0; w < W; w++) L[w] |= lw[gb + w];   // union friendly liberties
+        for (let w = 0; w < W; w++) L[w] |= lw[gb + w];   // union joined-chain liberties
       } else {
         // Enemy: captured iff its single remaining liberty is idx.
         if (ls[gid] !== 1) continue;
@@ -627,8 +626,8 @@ class Game2 {
     // idx itself is now a stone, not a liberty.
     L[idx >> 5] &= ~(1 << (idx & 31));
 
-    // Captured enemy cells become liberties of the group when adjacent to it
-    // (to idx or to a merged friendly stone).
+    // Captured enemy cells become liberties of the merged group when adjacent to
+    // it (to idx or to a merged friendly stone).
     if (e0 !== -1) {
       const eg = [e0, e1, e2, e3];
       for (let k = 0; k < 4; k++) {
@@ -654,14 +653,32 @@ class Game2 {
         }
       }
     }
+    return friendStones + 1;
+  }
 
-    // Liberty count: early-exit as soon as a second bit is seen.
+  // Static liberty count of the group that would result from playing at empty
+  // cell idx (for this.current) — no play/undo.  Counts the distinct liberties of
+  // the merged group (see _buildResultLibs).  Returns 0 for PASS or a 0-liberty
+  // (suicide-without-capture) move.
+  resultingLibertyCount(idx) {
+    if (idx === PASS) return 0;
+    this._buildResultLibs(idx);
+    const L = this._libScratch, W = this._W;
     let count = 0;
-    for (let w = 0; w < W; w++) {
-      let bits = L[w];
-      while (bits) { if (++count > 1) return 0; bits &= bits - 1; }
-    }
-    return count === 1 ? friendStones + 1 : 0;
+    for (let w = 0; w < W; w++) { let bits = L[w]; while (bits) { count++; bits &= bits - 1; } }
+    return count;
+  }
+
+  // Stone count of the would-be merged group IF playing idx self-ataris it (the
+  // group ends with EXACTLY ONE liberty), else 0.  Special case of
+  // resultingLibertyCount with an early exit as soon as a 2nd liberty is seen.
+  selfAtariSize(idx) {
+    if (idx === PASS) return 0;
+    const size = this._buildResultLibs(idx);
+    const L = this._libScratch, W = this._W;
+    let count = 0;
+    for (let w = 0; w < W; w++) { let bits = L[w]; while (bits) { if (++count > 1) return 0; bits &= bits - 1; } }
+    return count === 1 ? size : 0;
   }
 
   // Returns true iff playing at empty cell idx (for this.current) self-ataris
@@ -1002,6 +1019,7 @@ class Game2 {
     g._ls = new Int16Array(totalG);
     g._sw = new Int32Array(totalBits);
     g._lw = new Int32Array(totalBits);
+    g._libScratch = new Int32Array(this._W);   // reusable scratch (overwritten per _buildResultLibs call)
     g.koStone = [PASS, PASS, PASS];
     g._emptyCells = new Int16Array(this._emptyCells);
     g._emptySlot = new Int16Array(this._emptySlot);

@@ -19,10 +19,11 @@ const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
-if (opts.help || !opts.spec) {
+if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol.js --spec '<spec>' [options]
-  --spec S          feature spec; ',' = independent spaces, '+' = conjunction  (REQUIRED)
-                    term types: stones{4,8,12,20}  capture<n>  atari<n>  selfAtari<n>  ko
+  --spec S          feature spec; ',' = independent spaces, '+' = conjunction
+                    (required unless --load is given, which supplies its spec)
+                    term types: stones{4,8,12,20}  adjLib<n>  stone8AdjLib<n>  capture<n>  atari<n>  selfAtari<n>  lib<n>  joins  flags  ko  anyKo  local  koSolve  dist<n>
                                 ladderStatus  {urgentKill,urgentSave,wastedExtend,wastedAttack}<n>
   --train-size N | --size N   self-play board size (default 9)
   --eval-size N     evaluation board size (default 13)
@@ -39,7 +40,6 @@ if (opts.help || !opts.spec) {
   process.exit(opts.help ? 0 : 1);
 }
 
-const SPEC        = opts.spec;
 const TRAIN_SIZE  = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE   = parseInt(opts['eval-size'] || '13', 10);
 const LR          = parseFloat(opts.lr || '0.02');
@@ -52,18 +52,58 @@ const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions 
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH   = opts.load || null;
 
-let weights = FeaturePol.createWeights({ spec: SPEC });
+// Load the saved model up front (if present) so it can supply the spec when
+// --spec is omitted — i.e. just continue training the model as it stands.
+const loaded = (LOAD_PATH && fs.existsSync(LOAD_PATH))
+  ? FeaturePol.loadModel({ name: 'featurepol', path: LOAD_PATH })
+  : null;
+if (LOAD_PATH && !loaded) console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
+
+const SPEC = opts.spec || (loaded && loaded.spec.str);
+if (!SPEC) {
+  console.error('Error: --spec is required unless --load points to an existing model.');
+  process.exit(1);
+}
+
+// The library throws on a malformed spec (it stays browser-safe / Node-API-free);
+// at the CLI boundary turn that into a clean stderr message + non-zero exit.
+let weights;
+try {
+  weights = FeaturePol.createWeights({ spec: SPEC });
+} catch (e) {
+  console.error(`Error: ${e.message}`);
+  process.exit(1);
+}
 let ema = 0;
 let totalUpdates = 0;
 // avgW: running frequency-weighted mean |weight| over every weight update this run.
 const wStats = { absSum: 0, count: 0 };
 
-if (LOAD_PATH && fs.existsSync(LOAD_PATH)) {
-  const loaded = FeaturePol.loadModel({ name: 'featurepol', path: LOAD_PATH });
-  weights = loaded.weights; ema = loaded.ema; totalUpdates = loaded.totalUpdates;
-  console.log(`Loaded ${weights.size} weights from ${LOAD_PATH} (spec='${weights.spec.str}', ema=${ema.toFixed(3)})`);
-} else if (LOAD_PATH) {
-  console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
+if (loaded) {
+  ema = loaded.ema; totalUpdates = loaded.totalUpdates;
+  // Resume into the CLI-spec model (built above) rather than adopting the saved
+  // spec.  A feature space's hashes depend only on its own spec substring, so
+  // importing the loaded (hash → weight) table makes every space present in BOTH
+  // specs resume with its trained weights; CLI-only spaces start at 0; saved-only
+  // spaces are dropped (their imported weights are never regenerated under the new
+  // spec, so they sit unused).
+  const cliSpaces   = new Set(weights.spec.spaces.map(s => s.str));
+  const savedSpaces = new Set(loaded.weights.spec.spaces.map(s => s.str));
+  const kept    = [...cliSpaces].filter(s => savedSpaces.has(s));
+  const added   = [...cliSpaces].filter(s => !savedSpaces.has(s));
+  const removed = [...savedSpaces].filter(s => !cliSpaces.has(s));
+  let imported = 0;
+  for (const [hash, srcIdx] of loaded.weights.map) {
+    weights.vals[FeaturePol.internKey(weights, hash)] = loaded.weights.vals[srcIdx];
+    imported++;
+  }
+  console.log(`Resumed from ${LOAD_PATH}: imported ${imported} weights, ema=${ema.toFixed(3)}`);
+  console.log(`  spaces: kept ${kept.length}` +
+              `, added ${added.length}${added.length ? ` (${added.join(', ')})` : ''}` +
+              `, removed ${removed.length}${removed.length ? ` (${removed.join(', ')})` : ''}`);
+  if (kept.length === 0) {
+    console.warn('  WARNING: CLI --spec shares no feature space with the saved model — nothing carried over (effectively a fresh start).');
+  }
 }
 
 const evalGetMove = EVAL_AGENT ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove : null;

@@ -4,20 +4,19 @@
 //   for example 1..N:
 //     for chain size 1..MAX_STONES:
 //       for each of the 4 types (kill, escape, futile-attack, futile-extend):
-//         find a matching position (random legal play + ladder2 + puct confirm)
+//         find a matching position (random legal play + ladder2 + agent confirm)
 //         and display it, centered on and marking the critical move(s).
 //
 // Usage:  node gen-ladder-grid.js [boardSize=13] [N=1] [MAX_STONES=10]
 
-process.env.DITHER = '0';   // deterministic puct-static confirmation
+process.env.DITHER = '0';   // deterministic confirmation-agent moves
 
 const { Game2, BLACK, PASS, coordStr } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
-const PuctStatic = require('./ai/puct-hybrid.js');
 const Util = require('./util.js');
 
-// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0]
+// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0] [--agent prod]
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
 const opts       = Util.parseArgs(process.argv.slice(2), ['help']);
 const SIZE       = parseInt(opts.size       || '13',   10);
@@ -26,6 +25,8 @@ const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const PLAYOUTS   = parseInt(opts.playouts   || '10000', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
+const AGENT      = opts.agent || 'prod';                       // confirmation agent in ai/ that must pick the ladder move
+const confirmAgent = require(`./ai/${AGENT}.js`);
 
 const TYPES = [
   { name: 'kill',          wantDef: false, fail: false },
@@ -74,7 +75,14 @@ function moveCaptures(game, move) {
   return captured;
 }
 
-// scan ONE position for a puct-confirmed case of (chain, type); return hit or null
+// A confirmed position is "decided" — and thus rejected — when the agent reports
+// a root win ratio outside the contested band, i.e. abs(v - 0.5) >= 0.2.  Agents
+// that don't return rootWinRatio impose no such condition (the check is skipped).
+function decided(r) {
+  return r.rootWinRatio !== undefined && !(Math.abs(r.rootWinRatio - 0.5) < 0.2);
+}
+
+// scan ONE position for an agent-confirmed case of (chain, type); return hit or null
 function scanPos(game, chain, type) {
   for (const stoneIdx of chainGroups(game, chain)) {
     const isDef = game.cells[stoneIdx] === game.current;
@@ -88,20 +96,22 @@ function scanPos(game, chain, type) {
     if (st.readNodes < MIN_NODES) continue;
     if (!type.fail) {
       if (!st.moverSucceeds || st.urgentLibs.length !== 1) continue;
-      // escape: reject if the saving move is a capture (escapes via capture, not a real ladder) — before puct
+      // escape: reject if the saving move is a capture (escapes via capture, not a real ladder) — before the agent
       if (type.wantDef && moveCaptures(game, st.urgentLibs[0])) continue;
-      // reject if a random legal non-eye move hits the answer (too easy to guess) — before puct
+      // reject if a random legal non-eye move hits the answer (too easy to guess) — before the agent
       if (game.randomLegalMove() === st.urgentLibs[0]) continue;
-      const r = PuctStatic.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      const r = confirmAgent.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
       if (r.move === st.urgentLibs[0]) return { stoneIdx, color: game.cells[stoneIdx], require: st.urgentLibs[0] };
     } else {
       if (st.moverSucceeds) continue;   // mover can't succeed → futile
       // moves-to-avoid: keep only legal non-eye liberties; the set must be non-empty
       const prohibit = st.libs.filter(m => game.isLegal(m) && !game.isTrueEye(m));
       if (prohibit.length === 0) continue;
-      // futile-extend: reject self-atari extends (trivial, not a ladder) — before the puct search
+      // futile-extend: reject self-atari extends (trivial, not a ladder) — before the agent
       if (type.wantDef && extendSelfAtari(game, stoneIdx, prohibit)) continue;
-      const r = PuctStatic.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      const r = confirmAgent.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
       if (!prohibit.includes(r.move)) return { stoneIdx, color: game.cells[stoneIdx], prohibit };
     }
   }
@@ -172,7 +182,7 @@ function emit(res, type, chain) {
   // required/avoid coordinates marked, blank-line separated.  id = hash of the
   // (recentered) position, giving each case a unique, stable handle.
   const id = hashStr(game.toString(PASS));
-  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=puct-static`;
+  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=${AGENT}`;
   process.stdout.write(`${header}\n${game.toString(marks, { labels: true })}\n\n`);
 }
 

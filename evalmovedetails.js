@@ -199,7 +199,8 @@ if (require.main === module) {
   // Oversample is the outer loop: each pass sweeps all positions, so stats
   // at any point cover the whole position set rather than a prefix of it.
   let evals = 0;
-  let worst = null;   // highest-gap sample seen, reported at the end
+  const WORST_N = 3;
+  const worst = [];   // up to WORST_N highest-gap samples (sorted by gap desc), reported at the end
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
       const { agentMove, agentStr, topCand, agentCand, phase, gap } = evalPosition(agent, positions[i], budgetMs);
@@ -212,10 +213,14 @@ if (require.main === module) {
         phaseBandN[b]++;
       }
 
-      if (worst === null || gap > worst.gap) {
-        worst = { index: indexBase + i, gap, hist: positions[i].history.length,
-                  top: topCand.m, topKwr: topCand.kwr,
-                  agent: agentStr, agentKwr: agentCand.kwr, info: agentMove.info };
+      if (worst.length < WORST_N || gap > worst[worst.length - 1].gap) {
+        const rec = { index: indexBase + i, gap, hist: positions[i].history.length,
+                      top: topCand.m, topKwr: topCand.kwr,
+                      agent: agentStr, agentKwr: agentCand.kwr, info: agentMove.info };
+        let pos = worst.length;
+        while (pos > 0 && worst[pos - 1].gap < gap) pos--;
+        worst.splice(pos, 0, rec);
+        if (worst.length > WORST_N) worst.length = WORST_N;
       }
 
       if (verbose) console.log(
@@ -223,7 +228,7 @@ if (require.main === module) {
         `${String(positions[i].history.length).padStart(4)}  ` +
         `${topCand.m.padEnd(wMove)} ${(topCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
         `${agentStr.padEnd(wMove)} ${(agentCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
-        `${gap.toFixed(3)}  ` + agentMove.info
+        `${gap.toFixed(3)}` + (agentMove.info ? `  ${agentMove.info}` : '')
       );
 
       const now = performance.now();
@@ -237,12 +242,15 @@ if (require.main === module) {
 
   printStats(evals);
 
-  if (worst) {
-    console.log(
-      `\nworst sample: idx=${worst.index} gap=${worst.gap.toFixed(3)} hist=${worst.hist}  ` +
-      `top=${worst.top} (${(worst.topKwr / 1000).toFixed(3)})  ` +
-      `agent=${worst.agent} (${(worst.agentKwr / 1000).toFixed(3)})  ${worst.info}`
-    );
+  if (worst.length) {
+    console.log(`\nworst ${worst.length} samples:`);
+    for (const w of worst) {
+      console.log(
+        `  idx=${w.index} gap=${w.gap.toFixed(3)} hist=${w.hist}  ` +
+        `top=${w.top} (${(w.topKwr / 1000).toFixed(3)})  ` +
+        `agent=${w.agent} (${(w.agentKwr / 1000).toFixed(3)})` + (w.info ? `  ${w.info}` : '')
+      );
+    }
   }
 
   if (showPhases !== null) {

@@ -376,7 +376,9 @@ console.log([
   'tTran'.padStart(5),
   'turn'.padStart(5),
   // Test / eval columns (right).
-  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
+  // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
+  // interval's, and the rolling-half window).  Fixed 21 chars wide.
+  ...(evalGetMove ? ['winRatio'.padStart(21)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
@@ -425,7 +427,7 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    let latestWR = null, avgWR = null, resultsBatchLen = 0;
+    let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
@@ -438,8 +440,8 @@ while (true) {
       for (const r of resultsBatch) evalHistory.push(r);
 
       latestWR = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
-      const half = Math.max(1, Math.floor(evalHistory.length / 2));
-      avgWR = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
+      evalHalf = Math.max(1, Math.floor(evalHistory.length / 2));
+      avgWR = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
       resultsBatchLen = resultsBatch.length;
     }
 
@@ -500,7 +502,8 @@ while (true) {
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
-      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
+      ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4(resultsBatchLen)})` +
+                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4(evalHalf)})`).padStart(21)] : []),
       ...(ladrRatio !== null ? [Util.fmtRatio4(ladrRatio)] : []),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),
