@@ -13,6 +13,7 @@ int16_t ppat_canon_id[PPAT_RAW_SIZE];
 int32_t ppat_num_patterns = 0;
 int     ppat_phase_count = 1;
 int     ppat_ladder_enabled = 0;
+int     ppat_load_quiet = 0;
 
 /* D4 permutations: perm[src] = dst */
 static const int D4[8][8] = {
@@ -516,7 +517,7 @@ static inline float fast_expf(float x) {
     return v.f;
 }
 
-int32_t ppat_policy_move(const Game2 *g, struct Game3 *g3, PpatState *st, const float *weights) {
+int32_t ppat_policy_move(const Game2 *g, struct Game3 *g3, PpatState *st, const float *weights, Rng *rng) {
     ppat_extract(g, g3, st);
     int n = st->count;
     if (n == 0) return PASS;
@@ -539,7 +540,7 @@ int32_t ppat_policy_move(const Game2 *g, struct Game3 *g3, PpatState *st, const 
         sum += e;
     }
 
-    float r = g2_randf() * sum;
+    float r = rng_float(rng) * sum;
     int chosen = n - 1;
     for (int i = 0; i < n; i++) {
         r -= logits_buf[i];
@@ -594,7 +595,7 @@ float *ppat_load_weights(const char *path) {
     int file_phases = atoi(pp + 7);
     int file_np = atoi(np + 12);
     if (file_np != ppat_num_patterns) {
-        fprintf(stderr, "ppat_load_weights: numPatterns=%d in file but %d expected\n", file_np, ppat_num_patterns);
+        fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected\n", file_np, ppat_num_patterns);
         free(buf); return NULL;
     }
     ppat_phase_count = file_phases;
@@ -625,8 +626,9 @@ float *ppat_load_weights(const char *path) {
         if (*start == ',') start++;
     }
     free(buf);
-    fprintf(stderr, "loaded %d weights from %s (phases=%d, ladder=%s)\n",
-            idx, path, file_phases, ppat_ladder_enabled ? "true" : "false");
+    if (!ppat_load_quiet)
+        fprintf(stderr, "loaded %d weights from %s (phases: %d, ladder: %s)\n",
+                idx, path, file_phases, ppat_ladder_enabled ? "true" : "false");
     return weights;
 }
 

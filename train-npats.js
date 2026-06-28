@@ -296,7 +296,7 @@ module.exports = { loadGames, splitGames, createTrainer };
 
 if (require.main === module) {
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['epochs', 'file', 'holdout', 'load', 'lr', 'merge-z', 'rank-template', 'save', 'seed', 'target-temp', 'z-weight']);
 
 if (opts.help || !opts.file) {
   console.log('Usage: node train-npats.js --file <data.ndjson> [--save <model.js>] [--load <model.js>] ' +
@@ -394,8 +394,8 @@ function maybePrint(epoch, force) {
 
   const elapsedMs = performance.now() - startTime;
   console.log([
-    Util.fmt4(epoch)                  .padStart(5),
-    Util.fmt4(totalPos)               .padStart(6),
+    Util.fmt4i(epoch)                 .padStart(5),
+    Util.fmt4i(totalPos)              .padStart(6),
     Util.fmtMs(elapsedMs)             .padStart(7),
     Util.fmtMs(elapsedMs / totalPos)  .padStart(5),
     Util.fmt4(intervalCe / intervalPos).padStart(5),

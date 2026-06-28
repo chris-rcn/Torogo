@@ -28,7 +28,7 @@ const { Game2, BLACK, WHITE, coordStr } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['budget', 'p1', 'p2', 'positions', 'rand-moves', 'referee', 'sample', 'seed', 'size']);
 
 if (opts.help) {
   console.log('Usage: node compare-moves.js [--p1 <name>] [--p2 <name>] [--referee <name>] ' +
@@ -92,8 +92,8 @@ function maybePrint(force) {
   lastPrintTime = now;
   printPeriodMs = Math.round(printPeriodMs * 1.5);
   console.log([
-    Util.fmt4(records.length)              .padStart(5),
-    Util.fmt4(sampled)                     .padStart(7),
+    Util.fmt4i(records.length)             .padStart(5),
+    Util.fmt4i(sampled)                    .padStart(7),
     Util.fmtMs(performance.now() - startTime).padStart(7),
     Util.fmtRatio4(agreed / sampled)       .padStart(5),
   ].join('  '));

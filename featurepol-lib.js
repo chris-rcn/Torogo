@@ -23,9 +23,6 @@
 // FEATURE TERMS (extend by adding a case to _makeTerm):
 //   stones<n>   D4-canonical encoded states (empty/friend/foe) of the nearest n
 //               cells; n in {4,8,12,20} (the D4-closed rings).
-//               stones8/stones12 are adaptive: if the inner ring holds <2 stones
-//               it expands to the next ring (8→12, 12→20), hash-perturbed so it
-//               stays distinct, for more context.
 //   adjLib<n>   D4-canonical 4 orthogonal neighbours, each a stone encoded with its
 //               chain's liberty count capped at n (radix 2n+1).  A descriptor.
 //   stone8AdjLib<n>  JOINT liberty-aware 3×3 pattern: the 8 nearest cells canonicalised
@@ -216,11 +213,49 @@ function _canonRadix4(cv, radix) {
   return best;
 }
 
+// Unrolled fast path for stone8AdjLib (the n=8 mixed-radix join): the 4 orthogonal
+// cells (base R = 2n+1) followed by the 4 diagonals (base 3), under the 8 D4 symmetries,
+// as ONE canonical encoding.  Loads cv[0..7] once and evaluates the 8 encodings straight-
+// line — no _NEAR_PERM gather.  For each symmetry the orthogonals permute as the first-4
+// columns of _NEAR_PERM (as in _canonRadix4) and the diagonals as the next-4 columns; the
+// result is identical to the table-driven loop, verified exhaustively at load.
+function _canon8AdjLib(cv, R) {
+  const c0 = cv[0], c1 = cv[1], c2 = cv[2], c3 = cv[3], c4 = cv[4], c5 = cv[5], c6 = cv[6], c7 = cv[7];
+  // each line: orthogonals [o0,o1,o2,o3] base R, then diagonals [d0,d1,d2,d3] base 3
+  let best = ((((((c0 * R + c1) * R + c2) * R + c3) * 3 + c4) * 3 + c5) * 3 + c6) * 3 + c7, v;       // o[0,1,2,3] d[4,5,6,7]
+  v = ((((((c1 * R + c2) * R + c3) * R + c0) * 3 + c5) * 3 + c6) * 3 + c7) * 3 + c4; if (v < best) best = v;   // o[1,2,3,0] d[5,6,7,4]
+  v = ((((((c2 * R + c3) * R + c0) * R + c1) * 3 + c6) * 3 + c7) * 3 + c4) * 3 + c5; if (v < best) best = v;   // o[2,3,0,1] d[6,7,4,5]
+  v = ((((((c3 * R + c0) * R + c1) * R + c2) * 3 + c7) * 3 + c4) * 3 + c5) * 3 + c6; if (v < best) best = v;   // o[3,0,1,2] d[7,4,5,6]
+  v = ((((((c0 * R + c3) * R + c2) * R + c1) * 3 + c7) * 3 + c6) * 3 + c5) * 3 + c4; if (v < best) best = v;   // o[0,3,2,1] d[7,6,5,4]
+  v = ((((((c2 * R + c1) * R + c0) * R + c3) * 3 + c5) * 3 + c4) * 3 + c7) * 3 + c6; if (v < best) best = v;   // o[2,1,0,3] d[5,4,7,6]
+  v = ((((((c3 * R + c2) * R + c1) * R + c0) * 3 + c6) * 3 + c5) * 3 + c4) * 3 + c7; if (v < best) best = v;   // o[3,2,1,0] d[6,5,4,7]
+  v = ((((((c1 * R + c0) * R + c3) * R + c2) * 3 + c4) * 3 + c7) * 3 + c6) * 3 + c5; if (v < best) best = v;   // o[1,0,3,2] d[4,7,6,5]
+  return best;
+}
+
+// Unrolled fast path for the n=8 uniform-radix case (stones8): same 8 D4 permutations
+// as _canon8AdjLib, but every cell uses the same radix (no orthogonal/diagonal split).
+// Loads cv[0..7] once and evaluates the 8 encodings straight-line; identical to
+// _canonRadix(cv, 8, radix), verified at load.
+function _canon8(cv, R) {
+  const c0 = cv[0], c1 = cv[1], c2 = cv[2], c3 = cv[3], c4 = cv[4], c5 = cv[5], c6 = cv[6], c7 = cv[7];
+  let best = ((((((c0 * R + c1) * R + c2) * R + c3) * R + c4) * R + c5) * R + c6) * R + c7, v;       // [0,1,2,3,4,5,6,7]
+  v = ((((((c1 * R + c2) * R + c3) * R + c0) * R + c5) * R + c6) * R + c7) * R + c4; if (v < best) best = v;   // [1,2,3,0,5,6,7,4]
+  v = ((((((c2 * R + c3) * R + c0) * R + c1) * R + c6) * R + c7) * R + c4) * R + c5; if (v < best) best = v;   // [2,3,0,1,6,7,4,5]
+  v = ((((((c3 * R + c0) * R + c1) * R + c2) * R + c7) * R + c4) * R + c5) * R + c6; if (v < best) best = v;   // [3,0,1,2,7,4,5,6]
+  v = ((((((c0 * R + c3) * R + c2) * R + c1) * R + c7) * R + c6) * R + c5) * R + c4; if (v < best) best = v;   // [0,3,2,1,7,6,5,4]
+  v = ((((((c2 * R + c1) * R + c0) * R + c3) * R + c5) * R + c4) * R + c7) * R + c6; if (v < best) best = v;   // [2,1,0,3,5,4,7,6]
+  v = ((((((c3 * R + c2) * R + c1) * R + c0) * R + c6) * R + c5) * R + c4) * R + c7; if (v < best) best = v;   // [3,2,1,0,6,5,4,7]
+  v = ((((((c1 * R + c0) * R + c3) * R + c2) * R + c4) * R + c7) * R + c6) * R + c5; if (v < best) best = v;   // [1,0,3,2,4,7,6,5]
+  return best;
+}
+
 // Canonical encoding of the first n cell values in cv at the given radix: min
 // value over the 8 D4 symmetries (so the result is D4-invariant).  n must be a
 // closed prefix; every cv[i] must be in [0, radix).
 function _canonRadix(cv, n, radix) {
   if (n === 4) return _canonRadix4(cv, radix);
+  if (n === 8) return _canon8(cv, radix);
   let best = Infinity;
   for (let s = 0; s < 8; s++) {
     const po = s * NEAR_MAX;
@@ -273,6 +308,61 @@ function _canonStones(cv, n) { return _canonRadix(cv, n, 3); }
     }
 })();
 
+// Self-check for the unrolled stone8AdjLib (n=8 mixed radix), same rationale as above.
+// Exhaustive over orthogonals in [0,4) (≥4 distinct → every weak ordering of the 4
+// orthogonals, incl. ties that hand the decision to the diagonals) × diagonals in [0,3)
+// (their real range).  Validates the permutation structure for all radices.  20736 patterns.
+(function () {
+  const cv = new Int8Array(NEAR_MAX);
+  const Ro = 4;
+  const total = 4 * 4 * 4 * 4 * 3 * 3 * 3 * 3;
+  for (let code = 0; code < total; code++) {
+    let x = code;
+    cv[0] = x % 4; x = (x / 4) | 0; cv[1] = x % 4; x = (x / 4) | 0;
+    cv[2] = x % 4; x = (x / 4) | 0; cv[3] = x % 4; x = (x / 4) | 0;
+    cv[4] = x % 3; x = (x / 3) | 0; cv[5] = x % 3; x = (x / 3) | 0;
+    cv[6] = x % 3; x = (x / 3) | 0; cv[7] = x % 3;
+    let ref = Infinity;                                    // generic mixed-radix, from _NEAR_PERM
+    for (let s = 0; s < 8; s++) {
+      const po = s * NEAR_MAX;
+      let raw = 0;
+      for (let i = 0; i < 4; i++) raw = raw * Ro + cv[_NEAR_PERM[po + i]];
+      for (let i = 4; i < 8; i++) raw = raw * 3 + cv[_NEAR_PERM[po + i]];
+      if (raw < ref) ref = raw;
+    }
+    if (_canon8AdjLib(cv, Ro) !== ref) throw new Error('featurepol: _canon8AdjLib disagrees with generic canonicalisation');
+  }
+})();
+
+// Self-check for the unrolled _canon8 (n=8 uniform radix, used by stones8).  Two passes:
+// (a) EXHAUSTIVE over radix 3 — stones8's complete real pattern space (3^8 = 6561); and
+// (b) a deterministic LCG sample at radix 9, which (unlike radix 3) can give 8 distinct
+// values, so it exercises all-distinct cell orderings and would catch any permutation
+// transcription error that ties at radix 3 hide.  Both compared to the generic routine.
+(function () {
+  const cv = new Int8Array(NEAR_MAX);
+  const genRef = (radix) => {
+    let best = Infinity;
+    for (let s = 0; s < 8; s++) {
+      const po = s * NEAR_MAX;
+      let raw = 0;
+      for (let i = 0; i < 8; i++) raw = raw * radix + cv[_NEAR_PERM[po + i]];
+      if (raw < best) best = raw;
+    }
+    return best;
+  };
+  for (let code = 0; code < 6561; code++) {            // (a) exhaustive radix 3
+    let x = code;
+    for (let i = 0; i < 8; i++) { cv[i] = x % 3; x = (x / 3) | 0; }
+    if (_canon8(cv, 3) !== genRef(3)) throw new Error('featurepol: _canon8 disagrees with generic canonicalisation (radix 3)');
+  }
+  let seed = 0x9e3779b1;                                // (b) sampled radix 9
+  for (let t = 0; t < 30000; t++) {
+    for (let i = 0; i < 8; i++) { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; cv[i] = seed % 9; }
+    if (_canon8(cv, 9) !== genRef(9)) throw new Error('featurepol: _canon8 disagrees with generic canonicalisation (radix 9)');
+  }
+})();
+
 // Build one feature term { str, kind, param, salt, evalFn, needsLadder } from a
 // token like "capture6" / "stones4" / "ladderStatus".
 function _makeTerm(str) {
@@ -294,30 +384,48 @@ function _makeTerm(str) {
     case 'stones': {
       if (!_STONES_N.has(param)) throw new Error(`featurepol: stones<n> needs n in {4,8,12,20} (D4-closed), got "${str}"`);
       const n = param;
-      maxNear = n === 8 ? 12 : n === 12 ? 20 : n;   // adaptive: stones8→12, stones12→20
-
-      if (n === 8 || n === 12) {
-        // Adaptive: if the inner n cells hold fewer than 2 stones (little nearby
-        // info), expand to the next ring (8→12, 12→20).  The expanded encoding is
-        // run through the hash mixer (seeded with the term's existing integer
-        // salt) so it avalanches away from any plain stones<n> encoding — no
-        // carved-out value ranges, just entropy.
-        const expandN = n === 8 ? 12 : 20;
-        evalFn = (ctx, idx) => {
-          const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
-          let nStones = 0;
-          for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; if (cv[i]) nStones++; }
-          if (nStones >= 2) return _canonStones(cv, n);
-          for (let i = n; i < expandN; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; }
-          return _hashCombine(salt, _canonStones(cv, expandN));
-        };
-      } else {
-        evalFn = (ctx, idx) => {
-          const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
-          for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; }
-          return _canonStones(cv, n);
-        };
-      }
+      maxNear = n;
+      // D4-canonical ternary encoding (0 empty / 1 own / 2 enemy) of the nearest n cells.
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
+        for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; }
+        return _canonStones(cv, n);
+      };
+      break;
+    }
+    case 'stoneExpand': {
+      // Adaptive-radius shape.  Starts with the stones8 region (the 8 nearest cells)
+      // and keeps adding the next D4-closed distance shell until at least N of the
+      // discovered cells hold a stone (own OR enemy), capping at the 20-cell region.
+      // Under Game2's mixed distance the shells are exactly stones8 ⊂ stones12 ⊂
+      // stones20 (cumulative cell counts 8, 12, 20), so each region is D4-closed and
+      // canonicalisable.  The ternary pattern (0 empty / 1 own / 2 enemy) is
+      // D4-canonicalised over the region it reached, and the region SIZE is folded
+      // into the key so the same canonical value at a different extent is a distinct
+      // feature.  A descriptor — one key per move.  Larger N expands further (more,
+      // rarer keys); N is a stone count, not a cell count.
+      if (param === null || param < 1) throw new Error(`featurepol: stoneExpand<N> needs a stone target N >= 1, got "${str}"`);
+      const target = param;
+      const SHELLS = [8, 12, NEAR_MAX];   // floor, then the cumulative shell boundaries
+      maxNear = NEAR_MAX;                  // may expand to the full 20-cell region
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
+        let n = 0, stones = 0, si = 0;
+        for (; n < 8; n++) {                // fill the stones8 floor and count its stones
+          const c = cells[nn[base + n]];
+          cv[n] = c === 0 ? 0 : c === cur ? 1 : 2;
+          if (c !== 0) stones++;
+        }
+        while (stones < target && n < NEAR_MAX) {   // expand shell by shell (→12, →20)
+          const next = SHELLS[++si];
+          for (; n < next; n++) {
+            const c = cells[nn[base + n]];
+            cv[n] = c === 0 ? 0 : c === cur ? 1 : 2;
+            if (c !== 0) stones++;
+          }
+        }
+        return _hashCombine(_canonStones(cv, n), n) >>> 0;
+      };
       break;
     }
     case 'adjLib': {
@@ -370,15 +478,7 @@ function _makeTerm(str) {
           const c = cells[nn[base + i]];
           cv[i] = c === 0 ? 0 : (c === cur ? 1 : 2);
         }
-        let best = Infinity;
-        for (let s = 0; s < 8; s++) {
-          const po = s * NEAR_MAX;
-          let raw = 0;
-          for (let i = 0; i < 4; i++) raw = raw * R + cv[_NEAR_PERM[po + i]];
-          for (let i = 4; i < 8; i++) raw = raw * 3 + cv[_NEAR_PERM[po + i]];
-          if (raw < best) best = raw;
-        }
-        return best;
+        return _canon8AdjLib(cv, R);
       };
       break;
     }
@@ -461,6 +561,23 @@ function _makeTerm(str) {
       // move / previous was a pass) emits nothing.  Membership is symmetric, so we
       // test whether the previous move is one of idx's 8 nearest cells.
       binary = true;
+      maxNear = 8;   // reads the 8-neighbourhood from nearNbr
+      evalFn = (ctx, idx) => {
+        const prev = ctx.game.lastMove;
+        if (prev < 0) return 0;
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride;
+        for (let i = 0; i < 8; i++) if (nn[base + i] === prev) return 1;
+        return 0;
+      };
+      break;
+    }
+    case 'localAlways': {
+      // Two-valued sibling of `local` that fires in BOTH states: the non-adjacent
+      // value 0 is a real category (its own key), not a suppressed reference.  Being
+      // non-binary, the 0/1 locality value is folded into the key and the space never
+      // gates, so a conjoined space (e.g. stones8+localAlways) splits each pattern
+      // into a local AND a non-local variant — a symmetric split — rather than adding
+      // a one-sided local-only correction the way stones8+local does.
       maxNear = 8;   // reads the 8-neighbourhood from nearNbr
       evalFn = (ctx, idx) => {
         const prev = ctx.game.lastMove;
@@ -601,7 +718,8 @@ function createWeights(opts = {}) {
     nSpaces: spec.spaces.length,
     map:   new Map(),                          // 32-bit hash → dense idx
     vals:  new Float32Array(initialCapacity),  // weight[dense idx]
-    delta: new Float32Array(initialCapacity),  // reusable reinforce buffer
+    delta: new Float32Array(initialCapacity),  // reusable scatter buffer
+    count: new Int32Array(initialCapacity),    // per-key contributor count (for per-key gradient mean)
     size:  0,
   };
 }
@@ -615,6 +733,7 @@ function _intern(w, key) {
     const cap = w.vals.length * 2;
     const nv = new Float32Array(cap); nv.set(w.vals); w.vals = nv;
     const nd = new Float32Array(cap); nd.set(w.delta); w.delta = nd;
+    const nc = new Int32Array(cap); nc.set(w.count); w.count = nc;
   }
   map.set(key, idx);
   w.size = idx + 1;
@@ -763,6 +882,16 @@ function evaluate(game, state, weights) {
   return out.sort((a, b) => b.score - a.score);
 }
 
+// Fill out[i] with the raw linear score (Σ weights of move i's keys) for every candidate
+// move, in state.moves order, without softmax or sorting — the model's per-move prediction.
+// For trainers/agents that read raw per-move values (e.g. point/territory prediction).
+// Assumes extractFeatures has already populated state.  Returns the move count.
+function scoreAll(state, weights, out) {
+  const n = state.count;
+  for (let i = 0; i < n; i++) out[i] = _score(state, i, weights);
+  return n;
+}
+
 function policyMove(game, state, weights, rng, game3, temperature = 1) {
   extractFeatures(game, state, weights, game3);
   const n = state.count;
@@ -783,47 +912,97 @@ function greedyMove(game, state, weights, game3) {
   return policyMove(game, state, weights, null, game3, 0).move;
 }
 
-// ── REINFORCE ─────────────────────────────────────────────────────────────────
+// ── SGD step (generic) + REINFORCE ────────────────────────────────────────────
 //
-// Each feature space contributes exactly one key per move, so the gradient of
-// log π for each touched weight is feat_chosen − Σ_i π_i feat_i.  weightDecay
-// applies decoupled L2 shrink (w ← w + Δw − lr·decay·w).
+// The linear model is shared across trainers; only the per-move objective differs.
+// applyScoreGradient is the generic backward — scatter a per-move score-gradient onto
+// the sparse keys, dedup keys shared across moves, apply decoupled L2 decay — and each
+// trainer (REINFORCE, sim-balancing, point/territory prediction) computes its own grad.
+// reinforceUpdate is the REINFORCE specialisation, kept as a fused fast path.
 
-// Optional `stats` (an object with absSum/count) accumulates |weight| and a
-// count for every genuine weight update (frequency-weighted over the run), for
-// the trainer's avgW column.
+// Apply each TOUCHED weight's net accumulated delta exactly once, with decoupled L2
+// shrink (w ← w + Δw − lr·decay·w), then clear its delta.  The `d !== 0` guard (matching
+// npat) skips duplicate visits — delta is zeroed on the first — so a feature shared across
+// moves is updated and decayed once, not once per occurrence.  Optional `stats`
+// (absSum/count) frequency-weights |weight| over genuine updates, for the avgW column.
+//
+// Optional `counts`: a per-key contributor count.  When supplied, each key's accumulated
+// delta is divided by its count before being applied — i.e. the MEAN gradient per key, not
+// the sum.  This is diagonal (Jacobi) preconditioning: a key shared by j candidates of a
+// position would otherwise take a j× step (the branching blow-up), so the mean normalises
+// every key's effective curvature to ~1 regardless of how many candidates touched it, while
+// leaving rarely-shared keys (j≈1) at full step.  Counts are cleared alongside the deltas.
+function _applyTouchedDelta(state, tc, weights, decayStep, stats, counts) {
+  const vals = weights.vals, delta = weights.delta, touched = state.touched;
+  for (let i = 0; i < tc; i++) {
+    const idx = touched[i], d = delta[idx];
+    if (d !== 0) {
+      vals[idx] += (counts ? d / counts[idx] : d) - decayStep * vals[idx];
+      delta[idx] = 0;
+      if (stats) { stats.absSum += Math.abs(vals[idx]); stats.count++; }
+    }
+    if (counts) counts[idx] = 0;
+  }
+}
+
+// Generic SGD step for sparse per-move features.  grad[i] = ∂objective/∂score_i for each
+// candidate move (ASCENT convention: weights move +lr·grad, so for a minimisation loss
+// pass the negative gradient).  Scatters each move's gradient onto its keys (summing where
+// keys recur across moves), then applies _applyTouchedDelta.  This is the shared update
+// the REINFORCE / sim-balancing / point-prediction trainers all build on.
+//
+// Two orthogonal normalisations make lr independent of spec/position geometry:
+//   • per-MOVE, fan-in: each move's gradient is divided by its active-feature count K (keys
+//     per move).  A move's score is the SUM of its keys, so an un-normalised step moves the
+//     score by lr·grad·K; dividing by K makes the step independent of spec WIDTH.
+//   • per-KEY, fan-out: each key's accumulated gradient is divided by the number of candidates
+//     that touched it (the mean, via _applyTouchedDelta's `counts`).  A key shared by j
+//     candidates would otherwise take a j× step — the branching-driven blow-up — so the mean
+//     normalises every key's curvature to ~1 (diagonal/Jacobi preconditioning), removing the
+//     instability ceiling without throttling rarely-shared (informative, move-local) keys.
+function applyScoreGradient(state, grad, weights, lr, weightDecay = 0, stats) {
+  const n = state.count;
+  if (n === 0) return 0;
+  const keys = state.keys, keyOff = state.keyOff, delta = weights.delta, count = weights.count, touched = state.touched;
+  let tc = 0;
+  for (let i = 0; i < n; i++) {
+    const k0 = keyOff[i], e = keyOff[i + 1], K = e - k0;
+    if (K === 0 || grad[i] === 0) continue;
+    const gi = lr * grad[i] / K;
+    for (let k = k0; k < e; k++) { const idx = keys[k]; touched[tc++] = idx; delta[idx] += gi; count[idx]++; }
+  }
+  _applyTouchedDelta(state, tc, weights, lr * weightDecay, stats, count);
+  return tc;
+}
+
+// REINFORCE specialisation: per-move score-gradient is advantage·(1{i=chosen} − π_i), so
+// the chosen move's keys get +lr·advantage and every move's keys get −lr·advantage·π_i.
+// Each move's contribution is divided by its active-feature count (keys per move), matching
+// applyScoreGradient's per-example normalisation so lr is comparable across spec widths.
 function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay = 0, stats) {
   const n = state.count;
   if (n === 0 || chosenIndex < 0) return 0;
   const step = lr * advantage;
   if (step === 0) return 0;
-  const decayStep = lr * weightDecay;
   const keys = state.keys, keyOff = state.keyOff, probs = state.probs;
-  const vals = weights.vals, delta = weights.delta, touched = state.touched;
+  const delta = weights.delta, touched = state.touched;
   let tc = 0;
-  for (let k = keyOff[chosenIndex], e = keyOff[chosenIndex + 1]; k < e; k++) {
-    const idx = keys[k]; touched[tc++] = idx; delta[idx] += step;
+  {
+    const k0 = keyOff[chosenIndex], e = keyOff[chosenIndex + 1], K = e - k0;
+    if (K > 0) {
+      const add = step / K;
+      for (let k = k0; k < e; k++) { const idx = keys[k]; touched[tc++] = idx; delta[idx] += add; }
+    }
   }
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
     if (pi === 0) continue;
-    const sub = step * pi;
-    for (let k = keyOff[i], e = keyOff[i + 1]; k < e; k++) {
-      const idx = keys[k]; touched[tc++] = idx; delta[idx] -= sub;
-    }
+    const k0 = keyOff[i], e = keyOff[i + 1], K = e - k0;
+    if (K === 0) continue;
+    const sub = step * pi / K;
+    for (let k = k0; k < e; k++) { const idx = keys[k]; touched[tc++] = idx; delta[idx] -= sub; }
   }
-  // Apply each touched weight's net delta (+ decoupled decay) exactly once.  The
-  // `d !== 0` guard (matching npat) skips duplicate visits — delta is zeroed on
-  // the first — so a feature shared across moves is decayed once, not once per
-  // occurrence.  (A touched weight whose net delta is 0 isn't decayed this step.)
-  for (let i = 0; i < tc; i++) {
-    const idx = touched[i], d = delta[idx];
-    if (d !== 0) {
-      vals[idx] += d - decayStep * vals[idx];
-      delta[idx] = 0;
-      if (stats) { stats.absSum += Math.abs(vals[idx]); stats.count++; }
-    }
-  }
+  _applyTouchedDelta(state, tc, weights, lr * weightDecay, stats);
   return tc;
 }
 
@@ -868,7 +1047,7 @@ function serialize(weights, meta = {}) {
   }
   return [
     "'use strict';",
-    '// Auto-generated by train-featurepol.js — do not edit by hand.',
+    '// Auto-generated by a featurepol trainer — do not edit by hand.',
     'const featurepolModel = (() => {',
     `  const count = ${count};`,
     `  const scale = ${scale};`,
@@ -915,8 +1094,10 @@ const FeaturePol = {
   extractFeatures,
   computeSoftmax,
   evaluate,
+  scoreAll,
   policyMove,
   greedyMove,
+  applyScoreGradient,
   reinforceUpdate,
   modelWeights,
   serialize,

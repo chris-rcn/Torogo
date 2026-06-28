@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "rng.h"
 #include <string.h>
 
 /* ── Maximum board size (for static array allocation) ──────────────────────── */
@@ -85,7 +86,7 @@ void  g2_play_unchecked(Game2 *g, int32_t idx);  /* skip legality check (caller 
 bool  g2_is_legal(const Game2 *g, int32_t idx);
 bool  g2_is_true_eye(const Game2 *g, int32_t idx);
 bool  g2_is_capture(const Game2 *g, int32_t idx);
-int32_t g2_random_legal_move(Game2 *g);          /* returns idx or PASS */
+int32_t g2_random_legal_move(Game2 *g, Rng *rng);   /* returns idx or PASS */
 
 /* Scoring */
 typedef struct { float black; float white; } Score;
@@ -103,27 +104,6 @@ bool g2_is_ko(const Game2 *g, int32_t idx, int8_t color);
 static inline int g2_popcount(uint32_t x) {
     return __builtin_popcount(x);
 }
-
-/* ── Fast RNG (xorshift32, period 2^32-1) ──────────────────────────────────── */
-extern uint32_t g2_rng_state;
-
-static inline uint32_t g2_rand(void) {
-    uint32_t x = g2_rng_state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return g2_rng_state = x;
-}
-
-static inline uint32_t g2_rand_n(uint32_t n) {
-    return g2_rand() % n;
-}
-
-static inline float g2_randf(void) {
-    return (float)(g2_rand() >> 1) / (float)(0x7FFFFFFFu);
-}
-
-void g2_seed(uint32_t seed);
 
 /* Parse an ASCII board diagram into a Game2. Infers size from row count. */
 void g2_parse_board(Game2 *g, const char *board, int8_t to_move);

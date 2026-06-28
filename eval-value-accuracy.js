@@ -88,7 +88,7 @@ module.exports = { evalValueAccuracy };
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['file', 'games', 'model', 'sample']);
 
   if (opts.help || !opts.file || !opts.model) {
     console.error('Usage: node eval-value-accuracy.js --file <path> --model <path.js> [--games <n>] [--sample <rate>]');

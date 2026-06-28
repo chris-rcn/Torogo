@@ -1,8 +1,8 @@
 'use strict';
 
-// train-featurepol.js — REINFORCE self-play trainer for the featurepol policy.
+// train-featurepol-reinforce.js — REINFORCE self-play trainer for the featurepol policy.
 //
-//   node train-featurepol.js --spec 'capture6,atari4+stones4' [options]
+//   node train-featurepol-reinforce.js --spec 'capture6,atari4+stones4' [options]
 //
 // Plays self-play games with the current policy and applies a REINFORCE update
 // after each game (advantage = outcome − EMA baseline), periodically evaluating
@@ -18,9 +18,11 @@ const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'],
+  ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
+   'eval', 'eval-agent', 'ladder-file', 'md-file', 'load', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
-  console.log(`Usage: node train-featurepol.js --spec '<spec>' [options]
+  console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
                     (required unless --load is given, which supplies its spec)
                     term types: stones{4,8,12,20}  adjLib<n>  stone8AdjLib<n>  capture<n>  atari<n>  selfAtari<n>  lib<n>  joins  flags  ko  anyKo  local  koSolve  dist<n>
@@ -41,7 +43,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
 }
 
 const TRAIN_SIZE  = parseInt(opts['train-size'] || opts.size || '9', 10);
-const EVAL_SIZE   = parseInt(opts['eval-size'] || '13', 10);
+const EVAL_SIZE   = parseInt(opts['eval-size'] || opts.size || '13', 10);
 const LR          = parseFloat(opts.lr || '0.02');
 const REWARD_EMA  = parseFloat(opts['reward-ema'] || '0.99');
 const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');
@@ -180,7 +182,7 @@ function evalVsReference(N, nGames) {
     const policyIsBlack = (g % 2 === 0);
     const game = new Game2(N);
     const game3 = game3FromGame2(game);
-    for (let r = 0; r < 4 && !game.gameOver; r++) { const mv = game.randomLegalMove(); game.play(mv); game3.play(mv); }
+    for (let r = 0; r < 3 && !game.gameOver; r++) { const mv = game.randomLegalMove(); game.play(mv); game3.play(mv); }
     let m = 0;
     while (!game.gameOver && m++ < N * N * 4) {
       let idx;
@@ -233,9 +235,9 @@ while (true) {
     const avgW = wStats.count > 0 ? wStats.absSum / wStats.count : 0;
     const row = [
       Util.fmtMs(Date.now() - t0),
-      Util.fmt4(g),
+      Util.fmt4i(g),
       Util.fmtMs(elapsedAcc / Math.max(1, g - lastG)),
-      Util.fmt4(wNz),
+      Util.fmt4i(wNz),
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
     ];
@@ -250,8 +252,8 @@ while (true) {
       const avgHalf = Math.max(1, Math.floor(evalHistory.length / 2));
       const avgWR = evalHistory.length > 0
         ? evalHistory.slice(-avgHalf).reduce((s, x) => s + x, 0) / avgHalf : 0;
-      row.push(`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4(evalGames)})` +
-               `/${Util.fmtRatio4(avgWR)}(${Util.fmt4(avgHalf)})`);
+      row.push(`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4i(evalGames)})` +
+               `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(avgHalf)})`);
     }
     if (ladderCases) {
       const { passed, total } = evalCases(ladderCases, fpGreedyMove, { budgetMs: 1, oversample: 1 });

@@ -79,8 +79,8 @@ const ROOT_NPAT = Util.envInt('ROOT_NPAT', 0);
 // N_TRUNC truncated playouts, then expansion.  PLAYOUT_LEN is the truncation
 // length (random moves before the static bootstrap); it matters only when
 // N_TRUNC > 0.
-const N_FULL      = Util.envInt('N_FULL', 1);
-const N_TRUNC     = Util.envInt('N_TRUNC', 1);
+const N_FULL      = Util.envInt('N_FULL', 4);
+const N_TRUNC     = Util.envInt('N_TRUNC', 0);
 const PLAYOUT_LEN = Util.envInt('PLAYOUT_LEN', 4);
 
 // Truncated playouts use the vlibpat static eval, which is unreliable deep in
@@ -466,31 +466,19 @@ function backpropagate(node, value, path, played) {
   }
 }
 
-// ── Public interface ──────────────────────────────────────────────────────────
-
-function getMove(game, timeBudgetMs, options = {}) {
-  if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
-
-  const N          = game.cells ? game.N : game.boardSize;
-  const game2      = game.cells ? game.clone() : game.toGame2();
-  const rootPlayer = game2.current;
-
-  if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
-    return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
-  }
-
-  const rng = options.rng || makeRng();
+// Run the PUCT search from `game2` (the root position) and return the root
+// node plus the number of playouts run.  `playoutLimit > 0` runs exactly that
+// many playouts; otherwise it runs until `timeBudgetMs` elapses.  Shared by
+// getMove (move selection) and value (rootWinRatio).
+function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
   // Lockstep Game3 mirror — built once per decision, then maintained by
   // play/undo across simulations so feature extraction never rebuilds it.
   const game3 = game3FromGame2(game2);
-  const root = makeNode(null, null, -1, game2, N, game3);
-
+  const root  = makeNode(null, null, -1, game2, N, game3);
   const played = new Float32Array(N * N);
 
-  const playoutLimit = options.playoutLimit || PLAYOUTS;
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
-
   do {
     playouts++;
     const { node, game2: simGame2, path, depth, doPlayout, doTrunc } = selectAndExpand(root, game2, N, rng, game3);
@@ -505,6 +493,26 @@ function getMove(game, timeBudgetMs, options = {}) {
     for (let i = 0; i < depth; i++) game3.undo();
     backpropagate(node, value, path, trace);
   } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
+
+  return { root, playouts };
+}
+
+// ── Public interface ──────────────────────────────────────────────────────────
+
+function getMove(game, timeBudgetMs, options = {}) {
+  if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
+
+  const N          = game.cells ? game.N : game.boardSize;
+  const game2      = game.cells ? game.clone() : game.toGame2();
+  const rootPlayer = game2.current;
+
+  if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
+    return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
+  }
+
+  const rng = options.rng || makeRng();
+  const playoutLimit = options.playoutLimit || PLAYOUTS;
+  const { root, playouts } = runSearch(game2, N, rng, playoutLimit, timeBudgetMs);
 
   const M = root.legalMoves.length;
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
@@ -546,7 +554,27 @@ function getMove(game, timeBudgetMs, options = {}) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { getMove };
-else window.getMove = getMove;
+// Search value of a Game2 position as P(BLACK wins) in [0,1], for use as an SB
+// value oracle (matches ref-vlibpat.value / mc-vlib.value).  Runs a full search
+// (PLAYOUTS playouts, default 1000) and returns the root win ratio mapped from
+// the side-to-move perspective to absolute P(BLACK wins).
+function value(game, rng) {
+  const N     = game.cells ? game.N : game.boardSize;
+  const game2 = game.cells ? game.clone() : game.toGame2();
+  if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
+
+  const r = rng || makeRng();
+  const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
+  const { root } = runSearch(game2, N, r, playoutLimit, 0);
+
+  let totalChildWins = 0;
+  const M = root.legalMoves.length;
+  for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
+  const rootWinRatio = totalChildWins / root.totalVisits;     // P(side-to-move wins)
+  return game2.current === BLACK ? rootWinRatio : 1 - rootWinRatio;
+}
+
+if (typeof module !== 'undefined') module.exports = { getMove, value };
+else { window.getMove = getMove; window.value = value; }
 
 })();

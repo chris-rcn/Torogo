@@ -33,7 +33,8 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2),
-  ['help', 'use-p1', 'use-p5', 'use-p8', 'use-p9', 'use-p12', 'use-p13', 'captures']);
+  ['help', 'use-p1', 'use-p5', 'use-p8', 'use-p9', 'use-p12', 'use-p13', 'captures'],
+  ['size', 'train-size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'eval', 'eval-agent', 'ladder-file', 'md-file', 'load', 'save']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || '13', 10);
 const LR         = parseFloat(opts.lr || '0.02');
@@ -427,15 +428,15 @@ while (true) {
     const cycleAvgGameMs = cycleN > 0 ? elapsedMsAcc / cycleN : 0;
 
     console.log([
-      Util.fmt4(g),
+      Util.fmt4i(g),
       Util.fmtMs(elapsedMs),
       Util.fmtMs(cycleAvgGameMs),
-      Util.fmt4(wNonZero),
+      Util.fmt4i(wNonZero),
       wAvg.toFixed(4).padStart(6),
       Util.fmt4(updPerPat),
       Util.fmtRatio4(maxPAvg),
-      (`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4(evalGames)})` +
-       `/${Util.fmtRatio4(avgWR)}(${Util.fmt4(avgHalf)})`).padStart(21),
+      (`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4i(evalGames)})` +
+       `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(avgHalf)})`).padStart(21),
       ...(ladrStr !== null ? [ladrStr] : []),
       ...(mdRmsStr !== null ? [mdRmsStr] : []),
     ].join('  '));

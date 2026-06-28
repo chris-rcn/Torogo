@@ -31,7 +31,7 @@ const Util   = require('./util.js');
 const { makeRng } = require('./xorshift.js');
 const PuctStatic = require('./ai/puct-static.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['emit-template', 'file', 'limit', 'playouts', 'seed']);
 if (opts.help || !opts.file) {
   console.log('Usage: node compare-dists.js --file <md.ndjson> [--limit <n>] [--playouts <n>] [--seed <n>]');
   process.exit(opts.help ? 0 : 1);

@@ -9,6 +9,7 @@
 #include <time.h>
 #include <math.h>
 
+static Rng rng;
 static int passed = 0, failed = 0;
 
 static void check(const char *label, int ok) {
@@ -418,7 +419,7 @@ static void test_policy_move(void) {
     float *weights = calloc(total, sizeof(float));
     PpatState st;
     memset(&st, 0, sizeof(st));
-    int32_t m = ppat_policy_move(&g, NULL, &st, weights);
+    int32_t m = ppat_policy_move(&g, NULL, &st, weights, &rng);
     free(weights);
     check("policy: returns legal move", m == PASS || g2_is_legal(&g, m));
     check("policy: not a true eye", m == PASS || !g2_is_true_eye(&g, m));
@@ -442,7 +443,7 @@ static void test_consistency_with_js(void) {
                     if (st.feat[fi] < 0 || st.feat[fi] >= ppat_total_weights()) { ok = 0; break; }
             }
             if (!ok) break;
-            int32_t m = g2_random_legal_move(&g);
+            int32_t m = g2_random_legal_move(&g, &rng);
             g2_play(&g, m >= 0 ? m : PASS);
         }
     }
@@ -486,7 +487,7 @@ static void bench_extract(void) {
         g2_new(&positions[p], 9);
         int moves = 15 + ((p * 7) % 40);
         for (int i = 0; i < moves && !positions[p].game_over; i++) {
-            int32_t m = g2_random_legal_move(&positions[p]);
+            int32_t m = g2_random_legal_move(&positions[p], &rng);
             g2_play(&positions[p], m >= 0 ? m : PASS);
         }
     }
@@ -513,7 +514,7 @@ static void bench_extract(void) {
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(void) {
-    g2_seed((uint32_t)time(NULL));
+    rng_seed_entropy(&rng);
     g2_init_topology(9);
     ppat_init();
 

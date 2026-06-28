@@ -79,7 +79,7 @@ const Trainer = require('./train-npats.js');
 const EvalMD  = require('./evalmovedetails.js');
 const Ladders = require('./evalladders.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'frozen-teacher']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'frozen-teacher'], ['agent', 'epsilon', 'eval-file', 'frozen-teacher', 'limit', 'lr', 'max-train-games', 'model-save', 'opening-phase', 'opening-playouts', 'playouts', 'save', 'seed', 'size', 'target-temp', 'temp', 'temp-moves', 'train-epochs', 'z-weight']);
 
 if (opts.help) {
   console.log('Usage: node record-npats.js [--agent <name>] [--size <n>] [--playouts <n>] ' +
@@ -251,8 +251,8 @@ function trainGeneration() {
 function printStats() {
   const elapsedMs = performance.now() - startTime;
   console.log([
-    Util.fmt4(gamesDone)          .padStart(5),
-    Util.fmt4(posCount)           .padStart(6),
+    Util.fmt4i(gamesDone)         .padStart(5),
+    Util.fmt4i(posCount)          .padStart(6),
     Util.fmtMs(elapsedMs)         .padStart(7),
     Util.fmtMs(moveMs / posCount) .padStart(5),
     ...(() => {
@@ -264,8 +264,8 @@ function printStats() {
       });
       const n = trainModel.weights.size;
       return [
-        Util.fmt4(gen)                  .padStart(4),
-        Util.fmt4(n)                    .padStart(5),
+        Util.fmt4i(gen)                 .padStart(4),
+        Util.fmt4i(n)                   .padStart(5),
         Util.fmt4(n ? sumAbs / n : 0)   .padStart(5),
         Util.fmt4(maxAbs)               .padStart(5),
         Util.fmt4(lastCe)               .padStart(5),

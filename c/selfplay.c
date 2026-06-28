@@ -17,7 +17,8 @@ int main(int argc, char **argv) {
     int po_a = argc > 2 ? atoi(argv[2]) : 1000;
     int po_b = argc > 3 ? atoi(argv[3]) : 2000;
 
-    g2_seed((uint32_t)time(NULL));
+    Rng rng;
+    rng_seed_entropy(&rng);
     g2_init_topology(size);
 
     RaveState *sa = rave_create();
@@ -41,7 +42,7 @@ int main(int argc, char **argv) {
             int po;
             if (g.current == a_color) { s = sa; po = po_a; }
             else                      { s = sb; po = po_b; }
-            RaveResult r = rave_search(s, &g, po, 0);
+            RaveResult r = rave_search(s, &g, po, 0, &rng);
             g2_play(&g, r.move);
         }
 

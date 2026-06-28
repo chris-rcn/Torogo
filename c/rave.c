@@ -8,6 +8,18 @@
 #include <time.h>
 #include <stdio.h>
 
+/* Active configuration (oracle constants).  Hot-path readable; set before
+ * rave_search to evaluate a different config.  Tuning at 1000 and 3000 po found
+ * NO reliable improvement over these (a K=400 "win" at 3000 po was a tol-0.02
+ * false positive — reversed when re-tested with sides swapped).  Confirmed only
+ * that extremes are worse (K=1600, C=0.8). */
+RaveConfig rave_cfg = {
+    .exploration_c = 0.3f,
+    .k             = 600.0f,
+    .n_expand      = 3,
+    .inherit       = 0.3f,
+};
+
 /* ── Node allocation (chunked) ─────────────────────────────────────────────── */
 
 static RaveNode *alloc_node(RaveState *s) {
@@ -74,8 +86,8 @@ static RaveNode *make_node(RaveState *s, int32_t move, RaveNode *parent,
     } else {
         const RaveNode *gp = parent->parent;
         for (int i = 0; i < cap; i++) {
-            n->rave_wins[i]   = RAVE_INHERIT * gp->rave_wins[i];
-            n->rave_visits[i] = RAVE_INHERIT * gp->rave_visits[i];
+            n->rave_wins[i]   = rave_cfg.inherit * gp->rave_wins[i];
+            n->rave_visits[i] = rave_cfg.inherit * gp->rave_visits[i];
         }
     }
 
@@ -84,7 +96,7 @@ static RaveNode *make_node(RaveState *s, int32_t move, RaveNode *parent,
 
 /* ── UCB score ─────────────────────────────────────────────────────────────── */
 
-static float ucb_score(int move_idx, const RaveNode *node) {
+static float ucb_score(int move_idx, const RaveNode *node, Rng *rng) {
     int32_t move = node->legal_moves[move_idx];
 
     float rave_wr = (move == PASS) ? 0.0f
@@ -94,16 +106,16 @@ static float ucb_score(int move_idx, const RaveNode *node) {
     float real_v  = node->visits[move_idx];
     float real_wr = real_w / real_v;
 
-    float rave_weight = RAVE_K / (RAVE_K + real_v);
+    float rave_weight = rave_cfg.k / (rave_cfg.k + real_v);
     float wr = (1.0f - rave_weight) * real_wr + rave_weight * rave_wr;
 
-    return wr + 0.001f * g2_randf()
-         + RAVE_EXPLORATION_C * sqrtf(logf(node->total_visits) / real_v);
+    return wr + 0.001f * rng_float(rng)
+         + rave_cfg.exploration_c * sqrtf(logf(node->total_visits) / real_v);
 }
 
 /* ── Playout (tracked) ─────────────────────────────────────────────────────── */
 
-static int8_t play_tracked(Game2 *g, float *played) {
+static int8_t play_tracked(Game2 *g, float *played, Rng *rng) {
     const int cap = g->cap;
     memset(played, 0, sizeof(float) * cap);
 
@@ -114,7 +126,7 @@ static int8_t play_tracked(Game2 *g, float *played) {
 
     while (!g->game_over && moves < move_limit) {
         int8_t current = g->current;
-        int32_t idx = g2_random_legal_move(g);
+        int32_t idx = g2_random_legal_move(g, rng);
         if (idx == PASS) { g2_play(g, PASS); moves++; continue; }
         if (played[idx] == 0.0f)
             played[idx] = (current == BLACK) ? weight : -weight;
@@ -133,7 +145,7 @@ typedef struct {
     Game2     game;
 } SelectResult;
 
-static SelectResult select_and_expand(RaveState *s, RaveNode *root, const Game2 *root_game) {
+static SelectResult select_and_expand(RaveState *s, RaveNode *root, const Game2 *root_game, Rng *rng) {
     RaveNode *node = root;
     Game2 game;
     g2_clone(&game, root_game);
@@ -146,14 +158,14 @@ static SelectResult select_and_expand(RaveState *s, RaveNode *root, const Game2 
         int best = 0;
         float best_score = -FLT_MAX;
         for (int i = 0; i < M; i++) {
-            float sc = ucb_score(i, node);
+            float sc = ucb_score(i, node, rng);
             if (sc > best_score) { best_score = sc; best = i; }
         }
 
         g2_play(&game, node->legal_moves[best]);
 
         /* Promote if enough visits */
-        if (node->children[best] == NULL && node->visits[best] >= RAVE_N_EXPAND)
+        if (node->children[best] == NULL && node->visits[best] >= rave_cfg.n_expand)
             node->children[best] = make_node(s, node->legal_moves[best], node, best, &game);
 
         /* Force second pass to end game */
@@ -248,7 +260,7 @@ void rave_destroy(RaveState *s) {
 }
 
 RaveResult rave_search(RaveState *s, const Game2 *root_game,
-                       int playout_limit, int time_ms) {
+                       int playout_limit, int time_ms, Rng *rng) {
     /* Reset pool — reuse existing chunks, no free/alloc */
     s->cur = s->head;
     s->cur_used = 0;
@@ -267,16 +279,16 @@ RaveResult rave_search(RaveState *s, const Game2 *root_game,
     int playouts = 0;
     if (playout_limit > 0) {
         for (int p = 0; p < playout_limit; p++) {
-            SelectResult sr = select_and_expand(s, root, root_game);
-            int8_t winner = play_tracked(&sr.game, s->played);
+            SelectResult sr = select_and_expand(s, root, root_game, rng);
+            int8_t winner = play_tracked(&sr.game, s->played, rng);
             backpropagate(sr.node, winner, s->played, root_game->cap);
             playouts++;
         }
     } else {
         clock_t deadline = clock() + (clock_t)((double)time_ms / 1000.0 * CLOCKS_PER_SEC);
         do {
-            SelectResult sr = select_and_expand(s, root, root_game);
-            int8_t winner = play_tracked(&sr.game, s->played);
+            SelectResult sr = select_and_expand(s, root, root_game, rng);
+            int8_t winner = play_tracked(&sr.game, s->played, rng);
             backpropagate(sr.node, winner, s->played, root_game->cap);
             playouts++;
         } while (clock() < deadline);
@@ -288,9 +300,9 @@ RaveResult rave_search(RaveState *s, const Game2 *root_game,
     float best_visits = -1.0f, best_score = -FLT_MAX;
     for (int i = 0; i < M; i++) {
         float cv = root->visits[i];
-        if (cv > best_visits || (cv == best_visits && ucb_score(i, root) > best_score)) {
+        if (cv > best_visits || (cv == best_visits && ucb_score(i, root, rng) > best_score)) {
             best_visits = cv;
-            best_score  = ucb_score(i, root);
+            best_score  = ucb_score(i, root, rng);
             best_idx    = i;
         }
     }

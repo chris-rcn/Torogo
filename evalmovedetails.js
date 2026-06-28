@@ -98,7 +98,7 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 }
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
     console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--index <n>] [--seed <n>] [--oversample <n>] [--show-phases <P>] [--verbose]');
@@ -171,7 +171,7 @@ if (require.main === module) {
   function printStats(count) {
     const elapsedMs = performance.now() - startTime;
     console.log([
-      Util.fmt4(count)                           .padStart(5),
+      Util.fmt4i(count)                          .padStart(5),
       Util.fmtMs(elapsedMs)                      .padStart(7),
       Util.fmtMs(elapsedMs / count)              .padStart(5),
       Util.fmtRatio4(Math.sqrt(gapSqSum / count)).padStart(5),
@@ -267,7 +267,7 @@ if (require.main === module) {
       const rms = n > 0 ? Util.fmtRatio4(Math.sqrt(phaseBandSq[b] / n)) : '-';
       console.log([
         `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(9),
-        Util.fmt4(n) .padStart(5),
+        Util.fmt4i(n).padStart(5),
         rms          .padStart(5),
       ].join('  '));
     }

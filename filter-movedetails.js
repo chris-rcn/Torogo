@@ -24,7 +24,7 @@ const fs = require('fs');
 const { Game2, parseMove } = require('./game2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'max-phase', 'min-phase']);
 if (opts.help || !opts.in) {
   console.error('Usage: node filter-movedetails.js --in <file> [--min-phase F] [--max-phase F] > out.ndjson');
   process.exit(opts.help ? 0 : 1);

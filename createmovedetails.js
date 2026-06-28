@@ -5,7 +5,8 @@
 //
 // Each self-play game is played to completion, recording the agent's
 // rootWinRatio at every position.  One random eligible position — win ratio
-// within [0.3, 0.7] — is then revisited for deep analysis: every legal move
+// within [0.3, 0.7] and board fullness (phase) below 0.7 — is then revisited
+// for deep analysis: every legal move
 // is enumerated, the game is cloned, the move is made, then the agent's
 // getMove is called with the full budget.  The rootWinRatio is flipped to the
 // original player's perspective and recorded as kwr (× 1000).  One position
@@ -29,7 +30,7 @@ const { performance } = require('perf_hooks');
 const { Game2, PASS, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'save', 'size']);
 
 if (opts.help) {
   console.log('Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>]');
@@ -51,6 +52,10 @@ const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js')
 // this, keeping only contested positions in the dataset.
 const WR_DEV = 0.2;
 
+// ...and only in the opening/middle game: board fullness (phase = 1 −
+// empty/area) must be below this, skipping crowded late-game positions.
+const PHASE_MAX = 0.7;
+
 function legalMoves(game2) {
   const N   = game2.N;
   const cap = N * N;
@@ -62,7 +67,7 @@ function legalMoves(game2) {
   return moves;
 }
 
-fs.writeFileSync(SAVE_PATH, `# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}\n`);
+fs.writeFileSync(SAVE_PATH, `# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}\n`);
 
 console.log(`agent=${agentName}  size=${boardSize}  budget=${budget}ms`);
 console.log(`Out: ${SAVE_PATH}`);
@@ -81,7 +86,7 @@ let posCount = 0;
 function printStats() {
   const elapsedMs = performance.now() - startTime;
   console.log([
-    Util.fmt4(posCount)             .padStart(5),
+    Util.fmt4i(posCount)            .padStart(5),
     Util.fmtMs(elapsedMs)           .padStart(7),
     Util.fmtMs(elapsedMs / posCount).padStart(5),
   ].join('  '));
@@ -102,7 +107,8 @@ while (true) {
       console.error('agent did not return rootWinRatio');
       process.exit(1);
     }
-    if (Math.abs(advancingMove.rootWinRatio - 0.5) <= WR_DEV) eligible.push(moves.length);
+    const phase = 1 - game.emptyCount / (N * N);
+    if (Math.abs(advancingMove.rootWinRatio - 0.5) <= WR_DEV && phase < PHASE_MAX) eligible.push(moves.length);
     moves.push(advancingMove.move);
     game.play(advancingMove.move);
   }

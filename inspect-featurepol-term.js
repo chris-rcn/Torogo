@@ -20,7 +20,7 @@ const { game3FromGame2 } = require('./game3.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['data', 'games', 'max-keys', 'seed', 'size', 'temp', 'term']);
 if (opts.help || !opts.data || !opts.term) {
   console.log("Usage: node inspect-featurepol-term.js --data <featurepol.js> --term '<spec term>' [--size 13] [--games 50] [--max-keys 100] [--seed 1] [--temp 1]");
   process.exit(opts.help ? 0 : 1);

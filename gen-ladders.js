@@ -18,7 +18,7 @@ const Util = require('./util.js');
 
 // Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0] [--agent prod]
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
-const opts       = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'playouts', 'size']);
 const SIZE       = parseInt(opts.size       || '13',   10);
 const N          = parseInt(opts.examples   || '1',    10);   // examples per (chain, type) cell
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);

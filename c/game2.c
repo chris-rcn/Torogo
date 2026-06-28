@@ -6,13 +6,7 @@
 #include <stdio.h>
 #include <stddef.h>
 
-/* ── RNG ───────────────────────────────────────────────────────────────────── */
-
-uint32_t g2_rng_state = 1;
-
-void g2_seed(uint32_t seed) {
-    g2_rng_state = seed ? seed : 1;
-}
+/* RNG is now an explicit Rng passed by callers (see game2.h) — no global state. */
 
 /* ── Topology ──────────────────────────────────────────────────────────────── */
 
@@ -555,10 +549,10 @@ void g2_play_unchecked(Game2 *g, int32_t idx) {
 
 /* ── Random legal move ─────────────────────────────────────────────────────── */
 
-int32_t g2_random_legal_move(Game2 *g) {
+int32_t g2_random_legal_move(Game2 *g, Rng *rng) {
     int ec = g->empty_count;
     for (int end = ec - 1; end >= 0; end--) {
-        int ri  = g2_rand_n(end + 1);
+        int ri  = rng_below(rng, end + 1);
         int32_t idx = g->empty_cells[ri];
         if (!g2_is_true_eye(g, idx) && g2_is_legal(g, idx)) return idx;
         int32_t t = g->empty_cells[end];

@@ -74,7 +74,7 @@ module.exports = { loadCases, evalCases };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'oversample', 'verbose']);
   if (opts.help || !opts.file) {
     console.log('Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1] [--verbose]');
     process.exit(opts.help ? 0 : 1);

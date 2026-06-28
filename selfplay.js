@@ -33,10 +33,12 @@ const Util = require('./util.js');
 
 const VERBOSE = Util.envInt('VERBOSE', 0);
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'],
+  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'stop-tol', 'stop-min']);
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>]`);
+  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>]\n` +
+              `       [--stop-tol <a>] [--stop-min <n>]  (early-stop when P(p2 better) reaches 1-a or a)`);
   process.exit(0);
 }
 
@@ -51,6 +53,13 @@ const p2Name    = opts.p2   || p1Name;
 const boardSize = parseInt(opts.size || '13', 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
 const randMoves = parseInt(opts['rand-moves'] || '0', 10);
+
+// Early-stop (SPRT-style): stop once the decision is confident either way.
+// --stop-tol a → stop when P(p2 truly better than 50%) reaches 1-a (p2/candidate
+//                confidently better) or falls to a (confidently worse).  Symmetric.
+// --stop-min n → minimum games before the bound can trigger (avoids tiny-sample stops).
+const stopTol = opts['stop-tol'] !== undefined ? parseFloat(opts['stop-tol']) : null;
+const stopMin = opts['stop-min'] !== undefined ? parseInt(opts['stop-min'], 10) : 0;
 
 if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');
@@ -101,11 +110,11 @@ function printStats(gamesPlayed) {
   const now = performance.now();
   const avgMs = (s) => (s.moves ? Util.fmtMs(s.ms / s.moves) : '    -').padStart(5);
   console.log([
-    Util.fmt4(gamesPlayed)                                 .padStart(5),
+    Util.fmt4i(gamesPlayed)                                .padStart(5),
     Util.fmtMs(now - startTime)                            .padStart(7),
     Util.fmtRatio4(blackWinCount / gamesPlayed)            .padStart(5),
     Util.fmt4(totalGameLen / gamesPlayed)                  .padStart(6),
-    Util.fmt4(maxGameLen)                                  .padStart(6),
+    Util.fmt4i(maxGameLen)                                 .padStart(6),
     avgMs(stats.p1),
     avgMs(stats.p2),
     Util.fmtRatio4(tally.p2 / gamesPlayed)                 .padStart(4),
@@ -271,7 +280,8 @@ function playGame(startGame, p1IsBlack) {
 // Run games until the limit (or forever if no limit).
 // Each opening is played twice with swapped colors.
 let gamesPlayed = 0;
-while (gamesPlayed < gameLimit) {
+let decided = false;
+while (gamesPlayed < gameLimit && !decided) {
   // Generate a random opening position.
   const opening = new Game2(boardSize);
   for (let i = 0; i < randMoves && !opening.gameOver; i++)
@@ -282,6 +292,12 @@ while (gamesPlayed < gameLimit) {
     playGame(opening, swap === 0);
     gamesPlayed++;
     maybePrint(gamesPlayed);
+
+    // SPRT-style early stop: bail once the result is confident either way.
+    if (stopTol !== null && gamesPlayed >= stopMin) {
+      const pb = probPlayerBetter(tally.p2, gamesPlayed);
+      if (pb >= 1 - stopTol || pb <= stopTol) { decided = true; break; }
+    }
   }
 }
 

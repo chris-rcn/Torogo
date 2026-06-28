@@ -27,7 +27,7 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 const PuctStatic = require('./ai/puct-static.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['epsilon', 'limit', 'playouts', 'save', 'seed', 'size', 'temp', 'temp-moves']);
 if (opts.help) {
   console.log('Usage: node gen-search-values.js [--playouts 10] [--size 11] [--temp-moves 20] ' +
               '[--temp 1] [--epsilon 0.1] [--seed n] [--limit games] [--save path]');
@@ -73,8 +73,8 @@ let moveMs    = 0;
 function printStats() {
   const el = performance.now() - startTime;
   console.log([
-    Util.fmt4(gamesDone)           .padStart(5),
-    Util.fmt4(posCount)            .padStart(7),
+    Util.fmt4i(gamesDone)          .padStart(5),
+    Util.fmt4i(posCount)           .padStart(7),
     Util.fmtMs(el)                 .padStart(7),
     Util.fmtMs(moveMs / posCount)  .padStart(5),
   ].join('  '));

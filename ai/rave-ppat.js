@@ -26,7 +26,7 @@ const { createState, ppatMove, loadWeights } = _ppat;
 const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
 
 const _weightsArr = _isNode
-  ? loadWeights(Util.envStr('PPAT_WEIGHTS', ''))
+  ? loadWeights(Util.envStr('PPAT_DATA', ''))
   : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
 // Captured AFTER loadWeights so it reflects whether the loaded model has
@@ -86,6 +86,12 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 // -1 = unlimited (ppat for entire playout).
 const PPAT_MOVES = Util.envInt('PPAT_MOVES', -1);
 
+// Per-move probability of using the ppat policy (vs a uniform-random move) during
+// playouts, within the PPAT_MOVES window.  1 = always ppat (default).  e.g. 0.5
+// mixes in 50% uniform moves: cheaper (skips ppat feature extraction half the
+// time) and injects playout variety.
+const PPAT_RATIO = Util.envFloat('PPAT_RATIO', 1);
+
 // ── Fast playout helpers ──────────────────────────────────────────────────────
 
 // Returns { winner, played }.
@@ -106,18 +112,22 @@ function playTracked(game2, node, played) {
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
-    const usePolicy = _weightsArr && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
+    // ppatActive: ppat is still within its temporal window this move — the g3
+    // mirror must stay synced while it is (even on uniform moves), since ppat may
+    // be chosen again.  usePolicy: actually use ppat this move (subject to PPAT_RATIO).
+    const ppatActive = _weightsArr && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
+    const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || Math.random() < PPAT_RATIO);
     const idx = usePolicy ? ppatMove(game2, _ppatState, _weightsArr, _simG3) : game2.randomLegalMove();
 
     if (idx === PASS) {
       game2.play(PASS);
-      if (usePolicy) _g3Play(PASS);     // mirror only while ppat is still in use
+      if (ppatActive) _g3Play(PASS);    // keep g3 mirror synced while ppat may still be used
       moves++;
       continue;
     }
-    if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
+    if (weight > 0 && played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
     game2.play(idx);
-    if (usePolicy) _g3Play(idx);
+    if (ppatActive) _g3Play(idx);
     moves++;
     weight -= weightStep;
   }

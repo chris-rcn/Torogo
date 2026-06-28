@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2));
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -407,17 +407,17 @@ while (true) {
     const nextMs    = elapsedMs;
     console.log([
       // Training columns (left).
-      Util.fmt4(g),
+      Util.fmt4i(g),
       Util.fmtMs(elapsedMs),
       Util.fmtMs(tGameMs),
-      Util.fmt4(weights.size),
+      Util.fmt4i(weights.size),
       Util.fmt4(avgLen),
       Util.fmtRatio4(avgAcc),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
-      ...(evalGetMove ? [Util.fmt4(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
+      ...(evalGetMove ? [Util.fmt4i(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),

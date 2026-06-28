@@ -31,7 +31,7 @@ const { extractFeatures, evaluateFeatures, prepareSpecs, loadWeights, saveWeight
 const Ladders = require('./evalladders.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['alpha', 'ema-alpha', 'epochs', 'eval-size', 'file', 'hinge', 'hinge-lr', 'limit', 'load', 'lr', 'margin', 'neg-k', 'opening-skip', 'save', 'spec', 'tactics']);
 if (opts.help || !opts.file) {
   console.log('Usage: node train-search-values.js --file <a.ndjson[,b,...]> [--save model.js] ' +
               '[--load model.js] [--spec 2,3] [--lr 0.05] [--epochs 0] [--seed 1] [--ema-alpha 0.95]');
@@ -289,8 +289,8 @@ function printStats() {
   for (const w of weights.values()) { const a = Math.abs(w); wAbs += a; if (a > wMax) wMax = a; }
   const el = performance.now() - t0;
   console.log([
-    Util.fmt4(epoch)                       .padStart(5),
-    Util.fmt4(totalTrained)                .padStart(7),
+    Util.fmt4i(epoch)                      .padStart(5),
+    Util.fmt4i(totalTrained)               .padStart(7),
     Util.fmtMs(el)                         .padStart(7),
     Util.fmtMs(el / Math.max(1, totalTrained)).padStart(5),
     Util.fmtRatio4(intervalN ? intervalCorrect / intervalN : 0).padStart(5),

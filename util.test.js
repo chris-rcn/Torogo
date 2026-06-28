@@ -4,7 +4,7 @@
 // Called by util.js at module load time (Node only) via runTests().
 // Silent on success; logs failures to stderr.
 
-function runTests({ fmt4, fmtRatio4, fmtMs }) {
+function runTests({ fmt4, fmt4i, fmtRatio4, fmtMs }) {
   let failures = 0;
   function fail(msg) { failures++; console.error('FAIL [util]:', msg); }
   function eq(actual, expected, msg) {
@@ -12,16 +12,18 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   }
   function check(cond, msg) { if (!cond) fail(msg); }
 
-  // ── fmt4: small numbers (no suffix), right-padded to 4 chars ────────────────
-  eq(fmt4(0),         '   0',   'fmt4(0)');
-  eq(fmt4(1),         '   1',   'fmt4(1)');
-  eq(fmt4(10),        '  10',   'fmt4(10)');
+  // ── fmt4: small numbers (no suffix) — fmtNoZero drops only the LEADING zero,
+  //    never trailing, so whole numbers keep a decimal (1 → "1.00", 10 → "10.0").
+  eq(fmt4(0),         '.000',   'fmt4(0)');
+  eq(fmt4(1),         '1.00',   'fmt4(1)');
+  eq(fmt4(10),        '10.0',   'fmt4(10)');
   eq(fmt4(100),       ' 100',   'fmt4(100)');
   eq(fmt4(1000),      '1000',   'fmt4(1000)');
   eq(fmt4(9999),      '9999',   'fmt4(9999)');
 
-  // ── fmt4: fractions keep the highest precision that fits ───────────────────
-  eq(fmt4(0.5),       '0.50',   'fmt4(0.5) — trailing zero kept');
+  // ── fmt4: fractions keep the highest precision that fits; sub-1 values lose
+  //    the leading zero to gain a 4th significant digit (0.5 → ".500"). ────────
+  eq(fmt4(0.5),       '.500',   'fmt4(0.5) — leading zero dropped');
   eq(fmt4(1.5),       '1.50',   'fmt4(1.5)');
   eq(fmt4(3.8),       '3.80',   'fmt4(3.8)');
   eq(fmt4(1.23),      '1.23',   'fmt4(1.23)');
@@ -39,13 +41,13 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   // ── fmt4: M suffix ──────────────────────────────────────────────────────────
   eq(fmt4(1.234e6),   '1.2M',   'fmt4(1.234e6)');
   eq(fmt4(1.5e6),     '1.5M',   'fmt4(1.5e6)');
-  eq(fmt4(4e6),       '4.0M',   'fmt4(4e6) — round-magnitude keeps .0 with suffix');
+  eq(fmt4(4e6),       '4.0M',   'fmt4(4e6)');
   eq(fmt4(12.3e6),    ' 12M',   'fmt4(12.3e6)');
   eq(fmt4(123.4e6),   '123M',   'fmt4(123.4e6)');
 
   // ── fmt4: B suffix ──────────────────────────────────────────────────────────
   eq(fmt4(1.234e9),   '1.2B',   'fmt4(1.234e9)');
-  eq(fmt4(1e9),       '1.0B',   'fmt4(1e9) — round-magnitude keeps .0 with suffix');
+  eq(fmt4(1e9),       '1.0B',   'fmt4(1e9)');
   eq(fmt4(12.3e9),    ' 12B',   'fmt4(12.3e9)');
   eq(fmt4(123.4e9),   '123B',   'fmt4(123.4e9)');
 
@@ -54,18 +56,29 @@ function runTests({ fmt4, fmtRatio4, fmtMs }) {
   eq(fmt4(12.3e12),   ' 12T',   'fmt4(12.3e12)');
   eq(fmt4(123.4e12),  '123T',   'fmt4(123.4e12)');
 
-  // ── fmt4: overflow falls back to plain (unpadded) String(units) ─────────────
-  eq(fmt4(1e15),      String(1e15),  'fmt4(1e15) — beyond T, fallback');
+  // ── fmt4: above trillions overflows to the plain String(units) ──────────────
+  eq(fmt4(1e15),      String(1e15),   'fmt4(1e15) — beyond T, fallback');
 
-  // ── fmt4: non-finite, width-safe ─────────────────────────────────────────────
+  // ── fmt4: non-finite maps to fixed ≤4 tokens (never "Infinity") ─────────────
   eq(fmt4(NaN),       ' NaN',   'fmt4(NaN)');
   eq(fmt4(Infinity),  ' inf',   'fmt4(Infinity)');
   eq(fmt4(-Infinity), '-inf',   'fmt4(-Infinity)');
 
   // ── fmt4: negatives still try to fit ────────────────────────────────────────
-  eq(fmt4(-1),        '  -1',   'fmt4(-1)');
+  eq(fmt4(-1),        '-1.0',   'fmt4(-1)');
   eq(fmt4(-1.5),      '-1.5',   'fmt4(-1.5)');
   eq(fmt4(-12.5),     ' -13',   'fmt4(-12.5) — fits at .0f');
+
+  // ── fmt4i: integral counts render plain ("%4d"), wide values fall back ──────
+  eq(fmt4i(0),        '   0',   'fmt4i(0)');
+  eq(fmt4i(1),        '   1',   'fmt4i(1)');
+  eq(fmt4i(10),       '  10',   'fmt4i(10)');
+  eq(fmt4i(9999),     '9999',   'fmt4i(9999)');
+  eq(fmt4i(-1),       '  -1',   'fmt4i(-1)');
+  eq(fmt4i(-999),     '-999',   'fmt4i(-999)');
+  eq(fmt4i(10000),    ' 10K',   'fmt4i(10000) — too wide, fmt4 fallback');
+  eq(fmt4i(12345),    ' 12K',   'fmt4i(12345) — fallback');
+  eq(fmt4i(1234567),  '1.2M',   'fmt4i(1234567) — fallback');
 
   // ── fmt4: invariant — every result is exactly 4 chars, or the plain String ──
   const samples = [0, 1e-9, 0.001, 0.5, 1, 9.9, 99.9, 999, 9999, 99999,

@@ -427,7 +427,7 @@ module.exports = { POSITIONS, evalLadders };
 
 if (require.main === module) {
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'oversample']);
 
 if (opts.help) {
   console.log('Usage: node evalladders.js [--agent <name>] [--budget <ms>] [--oversample <n>]');

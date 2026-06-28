@@ -16,7 +16,8 @@ int main(int argc, char **argv) {
     int games = argc > 1 ? atoi(argv[1]) : 50;
     int moves = argc > 2 ? atoi(argv[2]) : 60;
 
-    g2_seed((uint32_t)time(NULL));
+    Rng rng;
+    rng_seed_entropy(&rng);
     g2_init_topology(9);
     ppat_init();
 
@@ -38,7 +39,7 @@ int main(int argc, char **argv) {
                 }
                 total++;
             }
-            g2_play(&g, g2_random_legal_move(&g));
+            g2_play(&g, g2_random_legal_move(&g, &rng));
         }
     }
 

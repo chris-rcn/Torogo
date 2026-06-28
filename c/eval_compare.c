@@ -29,7 +29,8 @@ int main(int argc, char **argv) {
     int n_positions  = argc > 2 ? atoi(argv[2]) : 20;
     int eval_playouts = argc > 3 ? atoi(argv[3]) : 200000;
 
-    g2_seed((uint32_t)time(NULL));
+    Rng rng;
+    rng_seed_entropy(&rng);
 
     FILE *f = fopen(filename, "r");
     if (!f) { fprintf(stderr, "cannot open %s\n", filename); return 1; }
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
         if (!ok || g.game_over) continue;
 
         /* Evaluate */
-        RaveResult r = rave_search(s, &g, eval_playouts, 0);
+        RaveResult r = rave_search(s, &g, eval_playouts, 0, &rng);
         float c_value = r.win_ratio;
         float delta = c_value - (float)file_value;
 

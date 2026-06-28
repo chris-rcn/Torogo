@@ -9,19 +9,18 @@
 #include "game2.h"
 #include <math.h>
 
-/* ── Tuning parameters ─────────────────────────────────────────────────────── */
-#ifndef RAVE_EXPLORATION_C
-#define RAVE_EXPLORATION_C 0.4f
-#endif
-#ifndef RAVE_K
-#define RAVE_K 800.0f
-#endif
-#ifndef RAVE_N_EXPAND
-#define RAVE_N_EXPAND 2
-#endif
-#ifndef RAVE_INHERIT
-#define RAVE_INHERIT 0.2f
-#endif
+/* ── Tuning parameters (runtime-settable; defaults are the tuned oracle config) ─
+ * Read on the hot path by the search.  Set `rave_cfg` before calling rave_search
+ * to evaluate a different configuration (e.g. head-to-head tuning).  Defaults are
+ * defined in rave.c and double as the gen_evals oracle's constants. */
+typedef struct {
+    float exploration_c;   /* UCT exploration constant */
+    float k;               /* RAVE equivalence parameter */
+    int   n_expand;        /* playout visits before a child is promoted */
+    float inherit;         /* fraction of parent RAVE stats inherited by a child */
+} RaveConfig;
+
+extern RaveConfig rave_cfg;
 
 /* Prior pseudo-counts seeded into wins/visits for new children (50% win rate) */
 #define RAVE_PRIOR_WINS   0.001f
@@ -86,8 +85,9 @@ typedef struct {
 RaveState  *rave_create(void);
 void        rave_destroy(RaveState *s);
 
-/* Search.  playout_limit > 0: fixed count.  playout_limit == 0: use time_ms. */
+/* Search.  playout_limit > 0: fixed count.  playout_limit == 0: use time_ms.
+ * `rng` supplies all randomness (playouts + UCB dithering). */
 RaveResult  rave_search(RaveState *s, const Game2 *root_game,
-                        int playout_limit, int time_ms);
+                        int playout_limit, int time_ms, Rng *rng);
 
 #endif /* RAVE_H */

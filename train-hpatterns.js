@@ -26,7 +26,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2));
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['ema-alpha', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -463,10 +463,10 @@ while (true) {
 
     // Training columns (left).
     const cols = [
-      Util.fmt4(g),
+      Util.fmt4i(g),
       Util.fmtMs(tGameMs),
-      Util.fmt4(ws),
-      Util.fmt4(model.canonMap.size),
+      Util.fmt4i(ws),
+      Util.fmt4i(model.canonMap.size),
       Util.fmt4(avgLen),
       Util.fmtRatio4(accRatio),
       wAvg.toFixed(4).padStart(6),
@@ -474,7 +474,7 @@ while (true) {
       Util.fmtMs(tpMove),
     ];
     // Test / eval columns (right).
-    if (evalGetMove) cols.push(Util.fmt4(batch.length), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR));
+    if (evalGetMove) cols.push(Util.fmt4i(batch.length), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR));
     if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
     if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms).padStart(5));
     cols.push(Util.fmtMs(tTestMs));

@@ -16,7 +16,7 @@ const Util = _isNode ? require('../util.js') : window.Util;
 const { createState, ppatMove, loadWeights } = _isNode ? require('../ppat-lib.js') : window.PPatterns;
 
 const _weightsArr = _isNode
-  ? loadWeights(Util.envStr('PPAT_WEIGHTS', ''))
+  ? loadWeights(Util.envStr('PPAT_DATA', ''))
   : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
 let _ppatState = null;

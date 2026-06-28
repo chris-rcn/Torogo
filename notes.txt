@@ -269,3 +269,109 @@ agent=ref-search-topk
 
 
 Write a script to find the least useful spec term. It accepts a featurepol data file, and plays softmax games. For each position and spec term, track the contribution of that spec term.  Periodically display the list of specs and contribution (sorted by contribution).
+
+I did another similar test.  This time, val=0.5 and lr=0.06.  First, holding LR constant for 56 epochs:
+
+chris@ryzen:~/code/Torogo$ node train-featurepol-points.js --lr 0.06 --data out/point-diffs-1.js --spec stone8AdjLib4 --save out/temp --var 0.5
+spec: stone8AdjLib4  spaces: 1  needsLadder: false
+data: out/point-diffs-1.js  size: 9  samples: 145223 (train 130701, val 14522)
+lr: 0.06  weight-decay: 0  epochs: unlimited
+save: out/temp
+
+elapsed    smpl  epoch      lr    nWts     avgW     tRMS     vRMS
+   1.0s     36K      1    0600    8974   6.5465   17.704   10.727
+   1.9s     57K      1    0600     10K   6.6975   35.324    6.989
+   3.5s     92K      1    0600     11K   6.8054   14.527    7.068
+   5.4s    152K      2    0600     12K   6.9145   19.649    7.283
+   8.4s    239K      2    0600     12K   6.9889   14.372    7.125
+  12.2s    367K      3    0600     12K   7.0376   12.073    7.528
+  17.8s    556K      5    0600     12K   7.0729   13.833    7.071
+  25.5s    824K      7    0600     12K   7.1054   15.077   18.103
+  36.5s    1.2M     10    0600     12K   7.1315   42.882    6.887
+  52.0s    1.8M     14    0600     12K   7.1478   13.677    8.099
+  73.3s    2.5M     20    0600     12K   7.1642   55.278    6.904
+   103s    3.6M     28    0600     12K   7.1776   56.044   16.918
+   2.4m    5.1M     40    0600     12K   7.1841   19.447    7.112
+   3.4m    7.2M     56    0600     12K   7.1892   25.110    7.825
+
+chris@ryzen:~/code/Torogo$ FPOL_DATA=out/temp node selfplay.js --p1 ref-npat --p2 featurepol --rand-moves 4 --limit 2000
+ref-npat: loaded 68413 weights from npat-data.js (p1=true p5=false p8=true p9=false p12=true p13=false captures=false)
+featurepol: loaded 12227 weights from temp  spec='stone8AdjLib4'  temp=0
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+   77     1.0s   5195     210     286  106us   18us  0649      0000
+  175     2.5s   5029     213     315  119us   16us  0457      0000
+  363     4.8s   5041     212     315  108us   16us  0413      0000
+  665     8.1s   5053     211     329  102us   16us  0376      0000
+ 1068    13.2s   5028     211     676  103us   16us  0328      0000
+ 1627    20.8s   5040     211     676  107us   16us  0369      0000
+ 2000    25.3s   5015     211     676  105us   16us  0395      0000
+
+Then, quiesce LR for 30 epochs:
+
+chris@ryzen:~/code/Torogo$ node train-featurepol-points.js --lr 0.06 --data out/point-diffs-1.js --spec stone8AdjLib4 --load out/temp --save out/temp-quiesce --var 0.5 --epochs 30
+Resumed from out/temp: spaces kept 1, added 0, removed 0
+spec: stone8AdjLib4  spaces: 1  needsLadder: false
+data: out/point-diffs-1.js  size: 9  samples: 147227 (train 132505, val 14722)
+lr: 0.06  weight-decay: 0  epochs: 30  (lr linear-decays per epoch)
+save: out/temp-quiesce  (resumed from out/temp)
+
+elapsed    smpl  epoch      lr    nWts     avgW     tRMS     vRMS
+   1.0s     34K      1    0600     12K   7.1925   14.371    7.051
+   1.9s     56K      1    0600     12K   7.1866   12.826    6.804
+   3.4s     93K      1    0600     12K   7.1839   12.781    6.854
+   5.4s    147K      2    0580     12K   7.1905   12.252    6.829
+   8.0s    234K      2    0580     12K   7.1832   11.120    7.180
+  12.1s    352K      3    0560     12K   7.1767   10.957    9.059
+  17.5s    523K      4    0540     12K   7.1676   10.435    7.046
+  25.2s    781K      6    0500     12K   7.1567    9.057    6.882
+  35.7s    1.1M      9    0440     12K   7.1442    7.835    6.873
+  50.8s    1.7M     13    0360     12K   7.1308    7.308    7.296
+  71.6s    2.4M     19    0240     12K   7.1183    7.033    6.799
+   101s    3.5M     27    0080     12K   7.1078    6.861    6.770
+   114s    4.0M     30    0020     12K   7.1040    6.778    6.764
+done: 30 epochs, 3975150 samples -> out/temp-quiesce
+
+chris@ryzen:~/code/Torogo$ FPOL_DATA=out/temp-quiesce node selfplay.js --p1 ref-npat --p2 featurepol --rand-moves 4 --limit 2000
+ref-npat: loaded 68413 weights from npat-data.js (p1=true p5=false p8=true p9=false p12=true p13=false captures=false)
+featurepol: loaded 12269 weights from temp-quiesce  spec='stone8AdjLib4'  temp=0
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+   82     1.0s   4878     211     293  100us   16us  0366      0000
+  198     2.5s   5101     211     302  106us   15us  0606      0000
+  388     4.8s   4974     210     302  104us   14us  0490      0000
+  624     8.3s   4952     212     676  112us   14us  0401      0000
+ 1044    13.4s   4923     213     676  107us   14us  0517      0000
+ 1596    21.0s   4994     212     676  111us   15us  0482      0000
+ 2000    25.9s   4995     211     676  109us   15us  0485      0000
+
+That made everything better.  I also tried quescing for 60 epochs, but it was similar.
+
+model=out/chf.js
+spec=stones8,adjLib4,atari4,capture4,selfAtari2,lib8,flags,joins,urgentKill2,urgentSave2
+data=out/point-diffs-s9-198k.js,out/point-diffs-s13.js
+node train-featurepol-cg.js --data $data --save $model --spec $spec && FPOL_DATA=$model node selfplay.js --p1 ref-npat --p2 featurepol --rand-moves 2 --size 11 --limit 2000
+
+
+$ c/run-ppat-parallel.sh 10 out/evals-s9-500k.txt --sync-every 100 --M 500 --N 500 --lr 10 --train-pos 24000 --test-pos 2000
+launching 10 trainers + 1 monitor;  sync-dir=out/ppat-sync-3720105  checkpoint=out/ppat-data-3720105.js
+monitor: out/ppat-data-3720105.js  (2000 test positions, test-playouts 1000, test-moves -1, 10 workers)
+positions   |ΔV|     RMS   move%   testS  elapsedS    pos/s
+        0   0.073   0.134    2.8    32.5     32.5s        -
+    18000   0.070   0.129    3.3   303.0    303.0s       59  [   1.50   1.05   0.99   1.31   0.99   0.99   0.97 ]
+...
+  2069000   0.062   0.112   13.5  32789.2  32814.2s       63  [   1.76  16.51  17.05   5.45   0.15  17.28   3.49 ]
+
+
+M         100    100    500
+N         100    100    500
+α          10      1     10
+  100k  69.2%  51.8%  71.2%
+  200k  75.5%  57.2%  75.4%
+  300k  70.1%  57.2%  76.0%
+  400k  78.2%  63.7%  76.8%
+  500k  76.2%  65.4%  74.0%
+ 1000k  77.4%  70.1%  76.3%
+ 1500k  73.9%  73.2%  76.9%
+ 2500k         75.4%
+ 3500k         74.8%  76.0%
+ 4500k         74.3%
+ 5500k         76.2%  74.1%

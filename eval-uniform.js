@@ -14,7 +14,7 @@ const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['file', 'N', 'position-limit']);
 if (opts.help || !opts.file) {
   console.error('Usage: node eval-uniform.js --file <datafile> [--N <n>] [--position-limit <n>]');
   process.exit(1);

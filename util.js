@@ -31,16 +31,29 @@ const Util = (() => {
   // Parse --key value or --key=value flags from an argv array.
   // boolFlags: Set (or array) of flag names that take no value (e.g. 'help', 'verbose').
   // -h is always treated as an alias for --help.
-  function parseArgs(argv, boolFlags) {
+  // boolFlags: flags that take no value.  knownFlags (optional): the full set of valid
+  // flag names — when given, parsing is STRICT: any token that isn't a recognised --flag
+  // (or its value) fails with a clean stderr message + exit, instead of being silently
+  // swallowed (so a typo'd --var or a stray -p2 errors rather than vanishing).
+  function parseArgs(argv, boolFlags, knownFlags) {
     const bools = boolFlags instanceof Set ? boolFlags : new Set(boolFlags || []);
+    const known = knownFlags ? (knownFlags instanceof Set ? knownFlags : new Set(knownFlags)) : null;
+    const fail = msg => {
+      if (typeof process !== 'undefined' && process.exit) { console.error(msg); process.exit(1); }
+      throw new Error(msg);
+    };
     const opts = {};
     for (let i = 0; i < argv.length; i++) {
       const a = argv[i];
-      if (a === '-h') { opts.help = true; continue; }
-      if (!a.startsWith('--')) continue;
+      if (a === '-h' || a === '--help') { opts.help = true; continue; }
+      if (!a.startsWith('--')) {
+        if (known) fail(`error: unexpected argument "${a}" (flags must be of the form --name)`);
+        continue;
+      }
       const eq = a.indexOf('=');
-      if (eq !== -1) { opts[a.slice(2, eq)] = a.slice(eq + 1); continue; }
-      const key = a.slice(2);
+      const key = eq !== -1 ? a.slice(2, eq) : a.slice(2);
+      if (known && !known.has(key) && !bools.has(key)) fail(`error: unknown flag "--${key}"`);
+      if (eq !== -1) { opts[key] = a.slice(eq + 1); continue; }
       if (bools.has(key)) { opts[key] = true; continue; }
       opts[key] = argv[++i];
     }
@@ -76,62 +89,75 @@ const Util = (() => {
     return t;
   }
 
-  // Compact 4-character formatter — like printf "%4.Nf" with K/M/B/T suffix scaling.
-  // Tries progressively shorter representations (fewer decimals, then thousands /
-  // millions / billions / trillions) and returns the first whose final length is
-  // ≤ 4 chars, right-padded with spaces to exactly 4 chars.  Fractional values
-  // keep the highest precision that fits, trailing zeros included (3.8 →
-  // "3.80"); integral values render without a fraction.  Falls back to the
-  // unpadded String(units) if even trillions overflow (the only case the
-  // result can exceed 4 chars).
+  // Strip only a *leading* zero (and a sign's zero): "0.500" → ".500",
+  // "-0.5" → "-.5".  Trailing zeros are never touched.  Port of the Java
+  // fmtNoZero used by fmt4.
+  function fmtNoZero(s) {
+    return s.replace(/-0\./g, '-.').replace(/\+0\./g, '+.').replace(/^0\./, '.');
+  }
+
+  // Compact ≤4-character formatter — printf "%W.Pf" with K/M/B/T suffix scaling
+  // (port of the Java fmt4(double)).  Tries progressively coarser precisions,
+  // then thousands / millions / billions / trillions, and returns the first
+  // rendering whose length is ≤ 4 chars.  fmtNoZero drops just the leading zero
+  // (buying sub-1 values a 4th significant char) and never trailing zeros, so
+  // whole numbers keep a decimal — 74 → "74.0", 1 → "1.00" — and fractional
+  // columns line up.  Each attempt is [width, precision, value, suffix],
+  // mirroring "%<W>.<P>f<suffix>".  Staying ≤ 4 chars is the whole point, so
+  // non-finite inputs map to fixed ≤4 tokens rather than "Infinity"/"NaN".
   //
   // Examples:
   //   1.234   → "1.23"      12345   → " 12K"
-  //   3.8     → "3.80"      1.5e9   → "1.5B"
-  //   9999    → "9999"      4e6     → "4.0M"
-  //   0       → "   0"      NaN     → " NaN"
+  //   0.5     → ".500"      1.5e9   → "1.5B"
+  //   74      → "74.0"      1.5e12  → "1.5T"
+  //   1       → "1.00"      Inf     → " inf"
+  function jfmt(width, prec, v) {
+    return v.toFixed(prec).padStart(width);
+  }
   function fmt4(units) {
     if (!Number.isFinite(units)) {
       if (units === Infinity)  return ' inf';
       if (units === -Infinity) return '-inf';
-      return String(units).padStart(4);
+      return ' NaN';
     }
     const kilos = units / 1e3;
     const megas = kilos / 1e3;
     const gigas = megas / 1e3;
     const teras = gigas / 1e3;
     const attempts = [
-      [3, units, ''],
-      [2, units, ''],
-      [1, units, ''],
-      [0, units, ''],
-      [2, kilos, 'K'],
-      [1, kilos, 'K'],
-      [0, kilos, 'K'],
-      [2, megas, 'M'],
-      [1, megas, 'M'],
-      [0, megas, 'M'],
-      [2, gigas, 'B'],
-      [1, gigas, 'B'],
-      [0, gigas, 'B'],
-      [2, teras, 'T'],
-      [1, teras, 'T'],
-      [0, teras, 'T'],
+      [5, 3, units, ''],
+      [4, 2, units, ''],
+      [4, 1, units, ''],
+      [4, 0, units, ''],
+      [4, 2, kilos, 'K'],
+      [3, 1, kilos, 'K'],
+      [3, 0, kilos, 'K'],
+      [4, 2, megas, 'M'],
+      [3, 1, megas, 'M'],
+      [3, 0, megas, 'M'],
+      [4, 2, gigas, 'B'],
+      [3, 1, gigas, 'B'],
+      [3, 0, gigas, 'B'],
+      [4, 2, teras, 'T'],
+      [3, 1, teras, 'T'],
+      [3, 0, teras, 'T'],
     ];
     for (let i = 0; i < attempts.length; i++) {
-      const prec = attempts[i][0], v = attempts[i][1], suf = attempts[i][2];
-      let s = v.toFixed(prec);
-      const dot = s.indexOf('.');
-      if (dot !== -1 && /^0*$/.test(s.slice(dot + 1))) {
-        // Fully-zero fraction: integral values render plain; suffix forms
-        // (K/M/B/T) keep a single trailing zero so e.g. 4e6 shows as "4.0M"
-        // instead of "4M".  Partial trailing zeros are kept (3.8 → "3.80").
-        s = suf ? s.slice(0, dot) + '.0' : s.slice(0, dot);
-      }
-      s += suf;
-      if (s.length <= 4) return s.padStart(4);
+      const w = attempts[i][0], p = attempts[i][1], v = attempts[i][2], suf = attempts[i][3];
+      const s = fmtNoZero(jfmt(w, p, v) + suf);
+      if (s.length <= 4) return s;
     }
     return String(units);
+  }
+
+  // Integral counterpart — port of the Java fmt4(long).  A whole-number count
+  // renders plain ("%4d": 1 → "   1", 9999 → "9999") with no spurious decimal;
+  // values too wide for 4 digits fall back to the K/M/B/T scaling of fmt4.  Use
+  // this for counts (games, positions, epochs); use fmt4 for measured reals.
+  function fmt4i(units) {
+    const s = String(units).padStart(4);
+    if (s.length <= 4) return s;
+    return fmt4(units);
   }
 
   // Format an elapsed-time value (in milliseconds) as a compact ≤5-character
@@ -191,7 +217,7 @@ const Util = (() => {
     return String(n).padStart(4, '0');
   }
 
-  return { shuffle, envStr, envFloat, envInt, parseArgs, makeZobrist, fmt4, fmtRatio4, fmtMs, load };
+  return { shuffle, envStr, envFloat, envInt, parseArgs, makeZobrist, fmt4, fmt4i, fmtRatio4, fmtMs, load };
 
 })();
 

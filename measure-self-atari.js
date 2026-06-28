@@ -13,7 +13,7 @@ const path = require('path');
 const { Game2, PASS } = require('./game2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'size']);
 
 if (opts.help) {
   console.error('Usage: node measure-self-atari.js --agent <name> --size <N>');
@@ -52,9 +52,9 @@ function maybePrint() {
   const tMove  = totalMoves > 0 ? moveTimeMsSum / totalMoves : 0;
   console.log([
     Util.fmtMs(elapsed).padStart(7),
-    Util.fmt4(totalGames).padStart(6),
-    Util.fmt4(totalMoves).padStart(7),
-    Util.fmt4(saMoves).padStart(7),
+    Util.fmt4i(totalGames).padStart(6),
+    Util.fmt4i(totalMoves).padStart(7),
+    Util.fmt4i(saMoves).padStart(7),
     Util.fmtRatio4(rate).padStart(6),
     Util.fmtMs(tMove).padStart(7),
   ].join('  '));

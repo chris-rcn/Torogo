@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+static Rng rng;
 static int passed = 0, failed = 0;
 
 static void check(const char *label, int ok) {
@@ -603,7 +604,7 @@ static void test_stress_random_undo(void) {
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(void) {
-    g2_seed((uint32_t)time(NULL));
+    rng_seed_entropy(&rng);
 
     test_init();
     test_toroidal_neighbors();

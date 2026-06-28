@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+static Rng rng;
 static int passed = 0, failed = 0;
 
 static void check(const char *label, int ok) {
@@ -205,7 +206,7 @@ static void test_random_legal_move(void) {
     /* Play many random moves; game should eventually end */
     int moves = 0;
     while (!g.game_over && moves < 4 * g.cap) {
-        int32_t m = g2_random_legal_move(&g);
+        int32_t m = g2_random_legal_move(&g, &rng);
         g2_play(&g, m >= 0 ? m : PASS);
         moves++;
     }
@@ -218,7 +219,7 @@ static void test_scoring(void) {
     g2_new_empty(&g, 9);
     /* Play until game over, then check scoring doesn't crash */
     while (!g.game_over) {
-        int32_t m = g2_random_legal_move(&g);
+        int32_t m = g2_random_legal_move(&g, &rng);
         g2_play(&g, m >= 0 ? m : PASS);
     }
     Score s = g2_estimate_score(&g);
@@ -272,7 +273,7 @@ static void test_move_limit(void) {
     /* Force game to move limit */
     int limit = 4 * g.cap;
     for (int i = 0; i < limit && !g.game_over; i++) {
-        int32_t m = g2_random_legal_move(&g);
+        int32_t m = g2_random_legal_move(&g, &rng);
         g2_play(&g, m >= 0 ? m : PASS);
     }
     check("move_limit: game_over", g.game_over);
@@ -285,7 +286,7 @@ static void test_consistency_random_games(void) {
         Game2 g;
         g2_new(&g, 9);
         while (!g.game_over) {
-            int32_t m = g2_random_legal_move(&g);
+            int32_t m = g2_random_legal_move(&g, &rng);
             g2_play(&g, m >= 0 ? m : PASS);
 
             /* Check: empty_count matches actual empties */
@@ -324,7 +325,7 @@ static void bench_random_games(void) {
         Game2 g;
         g2_new(&g, 9);
         while (!g.game_over) {
-            int32_t m = g2_random_legal_move(&g);
+            int32_t m = g2_random_legal_move(&g, &rng);
             g2_play(&g, m >= 0 ? m : PASS);
             total_moves++;
         }
@@ -340,7 +341,7 @@ static void bench_random_games(void) {
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(void) {
-    g2_seed((uint32_t)time(NULL));
+    rng_seed_entropy(&rng);
     g2_init_topology(9);
 
     test_init();

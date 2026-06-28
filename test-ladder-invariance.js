@@ -28,7 +28,7 @@ const { Game3 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['games', 'max-report', 'no-pv', 'seed', 'shifts', 'size']);
 if (opts.help) {
   console.log('Usage: node test-ladder-invariance.js [--games N] [--size N] [--seed N] [--shifts K] [--max-report N]');
   process.exit(0);
