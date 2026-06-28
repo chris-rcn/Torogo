@@ -101,13 +101,13 @@ function runTests(NPats) {
       NPat.extractFeatures(g, probe, undefined, undefined, null);
       const rawKeys = new Set();
       for (let i = 0; i < probe.count; i++) {
-        rawKeys.add(probe.patIds33c[i]);
+        rawKeys.add(probe.patIdsP8[i]);
         rawKeys.add(probe.patIdsP12[i]);
       }
       for (let k = 0; k < NPat.N_TACT_SLOTS; k++) rawKeys.add(NPat.TACT_RAW_BASE + k);
 
       // Same random weight per raw key in both stores.
-      const npatW = NPat.createWeights({ use33c: true, useP12: true });
+      const npatW = NPat.createWeights({ useP8: true, useP12: true });
       const polW  = NPats.makeWeights();
       for (const k of rawKeys) {
         const v = rng.random() * 2 - 1;
@@ -123,8 +123,11 @@ function runTests(NPats) {
       NPats.computeProbs(g, s2, undefined, { weights: polW, cfg: CFG });
 
       if (s1.count !== s2.count) { agree = false; break; }
+      // npat stores weights in a Float32Array; npats keeps them float64 in a Map.
+      // The softmax math is identical, so the two agree only to f32 precision
+      // (~1e-7) — a real feature/logic divergence would be O(1e-2+), far above this.
       for (let i = 0; i < s1.count; i++) {
-        if (s1.moves[i] !== s2.moves[i] || Math.abs(s1.probs[i] - s2.probs[i]) > 1e-12) {
+        if (s1.moves[i] !== s2.moves[i] || Math.abs(s1.probs[i] - s2.probs[i]) > 1e-5) {
           agree = false;
           break;
         }
@@ -148,7 +151,7 @@ function runTests(NPats) {
     const refW = NPats.makeWeights();
     NPats.computeProbs(g, state, undefined, { weights: refW, cfg: CFG });
     for (let i = 0; i < state.count; i++) {
-      refW.set(state.patIds33c[i], rng.random() * 2 - 1);
+      refW.set(state.patIdsP8[i], rng.random() * 2 - 1);
       refW.set(state.patIdsP12[i], rng.random() * 2 - 1);
     }
     for (let k = 0; k < NPat.N_TACT_SLOTS; k++) {

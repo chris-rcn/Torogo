@@ -375,3 +375,28 @@ N         100    100    500
  3500k         74.8%  76.0%
  4500k         74.3%
  5500k         76.2%  74.1%
+
+
+$ c/run-ppat-parallel.sh 8 out/eval-s9-puct-p10k+p30k.txt --sync-every 100 --M 500 --N 500 --test-playouts 500 --lr 2 --train-pos 28000 --test-pos 4000 --load out/ppat-data-3955226.js
+sync-dir: out/ppat-sync-3963397  checkpoint: out/ppat-data-3963397.js  best: out/ppat-data-3963397-best.js
+records: 32152 found in out/eval-s9-puct-p10k+p30k.txt (0 skipped)
+positions    trMSE    teMSE   move%  elapsedS    pos/s
+        0        -  0.0666*    0.0     34.5s        -
+    14400  0.0423   0.0496*    0.0    251.4s       57  [   1.40  13.43   2.04   7.10   0.15   0.69   1.41 ]
+    27200  0.0445   0.0498     0.0    475.1s       57  [   2.20   9.39   2.12   7.74   0.16   0.69   1.56 ]
+    39200  0.0449F  0.0494*    0.0    686.6s       57  [   2.11   9.83   2.11   7.80   0.15   0.66   1.56 ]
+    ...
+   216000  0.0442   0.0488*    0.0   3855.8s       56  [   1.40  12.14   2.20  10.77   0.14   0.52   1.81 ]
+
+PPAT_DATA=out/ppat-data-3963397-best.js PLAYOUTS=100 node selfplay.js --p1 ref-vlibpat --p2 puct-ppat --size 9 --rand-moves 3
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+  19K     6.2h   4787    96.3     324  3.1ms   22ms  5840      9999
+
+PPAT_DATA=out/ppat-data-3963397-best.js PLAYOUTS=2000 node selfplay.js --p1 puct --p2 puct-ppat --size 9 --rand-moves 3
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+  890     6.4h   4955    95.6     149  129ms  431ms  8337      9999
+
+PPAT_DATA=out/ppat-data-3963397-best.js node selfplay.js --p1 puct --p2 puct-ppat --size 9 --rand-moves 3 --budget=1000
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+  259     6.6h   5174    96.5     138  996ms  988ms  7336      9999
+

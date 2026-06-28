@@ -190,18 +190,24 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
 
 // ── 6. Feature 1: contiguity to previous move ────────────────────────────────
 {
+  // Previous move W@C3.  Every candidate in C3's 8-neighborhood gets F1 (bit 0);
+  // candidates outside it do not.  (X@E5 is just an earlier stone on the board.)
   const N = 9;
-  const g = new Game2(N, false);
-  // BLACK plays at 40 (center), then WHITE plays somewhere, then extract features.
-  g.play(40); // BLACK (lastMove = 40 from WHITE's perspective is still 40)
-  // Now it's WHITE's turn; WHITE plays at 20, then it's BLACK's turn with lastMove=20.
-  g.play(20);
-  // lastMove = 20. 8-neighbors of 20: up/down/left/right/diag.
-  // On 9×9: 20 = (2,2). N=(1,2)=11, S=(3,2)=29, W=(2,1)=19, E=(2,3)=21,
-  //          NE=(1,3)=12, NW=(1,1)=10, SW=(3,1)=28, SE=(3,3)=30.
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . . X . . . .
+    4 . . . . . . . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(20); // W@C3 (previous move)
 
   const st = createState(N); extractFeatures(g, st);
-  const nbrs8 = new Set([11, 29, 19, 21, 12, 10, 28, 30]);
+  const nbrs8 = new Set([11, 29, 19, 21, 12, 10, 28, 30]); // 8-neighbors of C3
 
   const prevBase = PHASE_COUNT * NUM_PATTERNS;
   let allNbrsHaveBit0 = true, nonNbrsLackBit0 = true;
@@ -224,62 +230,23 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
 
 // ── 7. Feature 4: save string in new atari by extension ──────────────────────
 {
-  // Setup: WHITE puts BLACK's string in atari with their last move.
-  // Then the single liberty of BLACK's string should trigger Feature 4.
-  //
-  // 9×9 board: BLACK string at {40,41}. Surrounded by WHITE except for one liberty.
-  // Place BLACK at 40, 41. Surround with WHITE at 31(N of 40), 30(W of 40), 39(W of 41? no...
-  // Actually: BLACK at 40(4,4), 41(4,5). Neighbors of {40,41}:
-  //   40: N=31, S=49, W=39, E=41(own)
-  //   41: N=32, S=50, W=40(own), E=42
-  // External liberties: 31,49,39,32,50,42 (6 liberties).
-  // To create atari (1 liberty): fill 5 of them. Too complex to set up simply.
-  //
-  // Simpler: single stone in atari. BLACK at 40, surrounds = WHITE at 31,49,39.
-  // That leaves liberty E=41. Then WHITE plays 31 (already placed) — wrong.
-  // Let me try: BLACK at 40 with 3 neighbors occupied by WHITE leaving only E=41.
-  //
-  // Plan: BLACK=40 (placed first). Then WHITE occupies N=31, W=39, S=49. Liberty left = E=41.
-  // Then WHITE plays somewhere else (not 41). It's BLACK's turn. lastMove = WHITE's last move.
-  // For Feature 4 to trigger: lastMove must be the move that PUT BLACK in atari.
-  // lastMove = the white move that was 3rd (filling the 3rd neighbor). Let's make WHITE's
-  // last move = 49 (S of 40). Then BLACK at 40 has 1 liberty = 41 (E).
-
-  const N = 9;
-  const g = new Game2(N, false);
-  g.play(40);  // BLACK at 40
-  g.play(31);  // WHITE at 31 (N of 40)
-  g.play(0);   // BLACK dummy
-  g.play(39);  // WHITE at 39 (W of 40)
-  g.play(1);   // BLACK dummy
-  g.play(49);  // WHITE at 49 (S of 40) — this is the last white move, puts 40 in atari
-  // Now BLACK's turn. lastMove=49. BLACK at 40 should have 1 liberty (E=41).
-  const gid40 = g._gid[40];
-  check('F4 setup: BLACK at 40 in atari', gid40 >= 0 && g._ls[gid40] === 1);
-
-  // Find the single liberty of 40.
-  let singleLib = -1;
-  const W = g._W, lb = gid40 * W, cap = N * N;
-  for (let wi = 0; wi < W; wi++) {
-    const w = g._lw[lb + wi];
-    if (w) { singleLib = wi * 32 + (31 - Math.clz32(w & -w)); break; }
-  }
-  check('F4 setup: single liberty found', singleLib >= 0);
-
-  const st = createState(N); extractFeatures(g, st);
-  let libMask = 0;
-  for (let i = 0; i < st.count; i++) {
-    if (st.moves[i] === singleLib) {
-      const pb = PHASE_COUNT * NUM_PATTERNS;
-      for (let fi = st.featStart[i]; fi < st.featStart[i + 1]; fi++) {
-        const key = st.feat[fi];
-        if (key >= pb) libMask |= 1 << ((key - pb) % 7);
-      }
-      break;
-    }
-  }
-  // Bit 3 = Feature 4 (save by extension, not self-atari)
-  // Bit 4 = Feature 5 (save by extension, self-atari)
+  // Previous move W@E6 puts B@E5 in atari (only lib F5); extending at that liberty
+  // (F5) is the save move → bit 3 (or 4), plus contiguous (bit 0).
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . O X . . . .
+    4 . . . . O . . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(49); // W@E6 (previous move)
+  check('F4/5 setup: B@E5 in atari', g._ls[g._gid[40]] === 1);
+  const libMask = getMask(g, 41); // F5, the saving extension
+  // Bit 3 = F4 (extend, not self-atari); Bit 4 = F5 (extend, self-atari)
   check('F4/5: extension liberty has bit 3 or 4', (libMask & (8 | 16)) !== 0);
   check('F4/5: also has bit 0 (contiguous)', (libMask & 1) !== 0);
 }
@@ -312,25 +279,46 @@ function getMask(game, cell) {
 //     Candidate 41 captures W@32, saving B@31. Not self-atari.
 //     9×9 cells: 31=(3,4) 32=(3,5) 23=(2,5) 30=(3,3) 33=(3,6) 40=(4,4) 41=(4,5)
 {
-  const g = new Game2(9, false);
-  g.play(31); g.play(32); g.play(23); g.play(30); g.play(33); g.play(40);
-  check('F2a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
-  check('F2a setup: W@32 in atari', g._ls[g._gid[32]] === 1);
-  const mask = getMask(g, 41);
+  // Previous move W@E5 puts both B@E4 and W@F4 in atari; candidate F5 captures
+  // W@F4, saving B@E4.  Not self-atari → F2 (bit 1), plus contiguous (bit 0).
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . . . . . . .
+    4 . . . O X O X . .
+    3 . . . . . X . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(40); // W@E5 (previous move)
+  check('F2a setup: B@E4 in atari', g._ls[g._gid[31]] === 1);
+  check('F2a setup: W@F4 in atari', g._ls[g._gid[32]] === 1);
+  const mask = getMask(g, 41); // F5
   check('F2a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F2a: bit 1 set (save by capture)', mask !== -1 && (mask & 2) !== 0);
   check('F2a: bit 2 not set (not self-atari)', mask !== -1 && (mask & 4) === 0);
 }
 
-// 8b: B@40 in atari (lib=31). W@39 in atari (lib=48). lastMove=W@49.
-//     Candidate 48 captures W@39, saving B@40. Not self-atari.
-//     40=(4,4) 39=(4,3) 30=(3,3) 41=(4,5) 38=(4,2) 49=(5,4) 48=(5,3)
+// 8b: mirror — previous move W@E6 ataris B@E5 and W@D5; candidate D6 captures
+//     W@D5, saving B@E5.  Not self-atari.
 {
-  const g = new Game2(9, false);
-  g.play(40); g.play(39); g.play(30); g.play(41); g.play(38); g.play(49);
-  check('F2b setup: B@40 in atari', g._ls[g._gid[40]] === 1);
-  check('F2b setup: W@39 in atari', g._ls[g._gid[39]] === 1);
-  const mask = getMask(g, 48);
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . X O X O . . .
+    4 . . . X . . . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(49); // W@E6 (previous move)
+  check('F2b setup: B@E5 in atari', g._ls[g._gid[40]] === 1);
+  check('F2b setup: W@D5 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 48); // D6
   check('F2b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F2b: bit 1 set (save by capture)', mask !== -1 && (mask & 2) !== 0);
   check('F2b: bit 2 not set (not self-atari)', mask !== -1 && (mask & 4) === 0);
@@ -340,26 +328,46 @@ function getMask(game, cell) {
 // 9a: Same as 8a but W@50,W@42 surround cell 41, making the capture self-atari.
 //     After capturing W@32, B@41 has only lib=32 (N=32 empty, S=50(W), W=40(W), E=42(W)).
 {
-  const g = new Game2(9, false);
-  g.play(31); g.play(32); g.play(23); g.play(30); g.play(33); g.play(50);
-  g.play(0);  g.play(42); g.play(1);  g.play(40);
-  check('F3a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
-  check('F3a setup: W@32 in atari', g._ls[g._gid[32]] === 1);
-  const mask = getMask(g, 41);
+  // As F2a but W@F6 and W@G5 surround F5, so capturing W@F4 leaves B@F5 in
+  // self-atari (only lib F4) → F3 (bit 2), not F2 (bit 1).
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . O . . .
+    5 . . . . . . O . .
+    4 . . . O X O X . .
+    3 . . . . . X . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(40); // W@E5 (previous move)
+  check('F3a setup: B@E4 in atari', g._ls[g._gid[31]] === 1);
+  check('F3a setup: W@F4 in atari', g._ls[g._gid[32]] === 1);
+  const mask = getMask(g, 41); // F5
   check('F3a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F3a: bit 2 set (capture + self-atari)', mask !== -1 && (mask & 4) !== 0);
   check('F3a: bit 1 not set', mask !== -1 && (mask & 2) === 0);
 }
 
-// 9b: Same as 8b but W@57,W@47 surround cell 48, making the capture self-atari.
-//     After capturing W@39, B@48 has only lib=39 (N=39 empty, S=57(W), W=47(W), E=49(W)).
+// 9b: mirror — W@D7 and W@C6 surround D6, so capturing W@D5 leaves B@D6 in
+//     self-atari (only lib D5) → F3.
 {
-  const g = new Game2(9, false);
-  g.play(40); g.play(39); g.play(30); g.play(41); g.play(38); g.play(57);
-  g.play(0);  g.play(47); g.play(1);  g.play(49);
-  check('F3b setup: B@40 in atari', g._ls[g._gid[40]] === 1);
-  check('F3b setup: W@39 in atari', g._ls[g._gid[39]] === 1);
-  const mask = getMask(g, 48);
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . O . . . . .
+    6 . . O . . . . . .
+    5 . . X O X O . . .
+    4 . . . X . . . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(49); // W@E6 (previous move)
+  check('F3b setup: B@E5 in atari', g._ls[g._gid[40]] === 1);
+  check('F3b setup: W@D5 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 48); // D6
   check('F3b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F3b: bit 2 set (capture + self-atari)', mask !== -1 && (mask & 4) !== 0);
   check('F3b: bit 1 not set', mask !== -1 && (mask & 2) === 0);
@@ -400,23 +408,44 @@ function getMask(game, cell) {
 // 10a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal).
 //      Candidate 40 (SE of 30, in 8-nbr) extends B@31. Not self-atari.
 {
-  const g = new Game2(9, false);
-  g.play(31); g.play(22); g.play(0); g.play(32); g.play(1); g.play(30);
-  check('F4a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
-  const mask = getMask(g, 40);
+  // Previous move W@D4 puts B@E4 in atari (only lib E5); candidate E5 extends to
+  // gain liberties → F4 (bit 3), not self-atari.
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . . . . . . .
+    4 . . . . X O . . .
+    3 . . . . O . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(30); // W@D4 (previous move)
+  check('F4a setup: B@E4 in atari', g._ls[g._gid[31]] === 1);
+  const mask = getMask(g, 40); // E5
   check('F4a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F4a: bit 3 set (extend, not self-atari)', mask !== -1 && (mask & 8) !== 0);
   check('F4a: bit 4 not set', mask !== -1 && (mask & 16) === 0);
 }
 
-// 10b: Multi-stone string {40,41} in atari (lib=42). lastMove=W@50.
-//      After B@42: group {40,41,42} has libs {33,51,43} — not self-atari.
+// 10b: multi-stone — previous move W@F6 ataris the B@{E5,F5} string (only lib G5);
+//      candidate G5 extends → F4, not self-atari.
 {
-  const g = new Game2(9, false);
-  g.play(40); g.play(31); g.play(41); g.play(32); g.play(0); g.play(39);
-  g.play(1);  g.play(49); g.play(2);  g.play(50);
-  check('F4b setup: {40,41} in atari', g._ls[g._gid[40]] === 1);
-  const mask = getMask(g, 42);
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . O . . . .
+    5 . . . O X X . . .
+    4 . . . . O O . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(50); // W@F6 (previous move)
+  check('F4b setup: B@{E5,F5} in atari', g._ls[g._gid[40]] === 1);
+  const mask = getMask(g, 42); // G5
   check('F4b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F4b: bit 3 set (extend, not self-atari)', mask !== -1 && (mask & 8) !== 0);
   check('F4b: bit 4 not set', mask !== -1 && (mask & 16) === 0);
@@ -426,24 +455,44 @@ function getMask(game, cell) {
 // 11a: B@31 in atari (lib=40). lastMove=W@30 (W of 31, orthogonal). W@49,W@39 block S,W of 40.
 //      After B@40: group {31,40} has only lib=41 — self-atari.
 {
-  const g = new Game2(9, false);
-  g.play(31); g.play(22); g.play(0); g.play(32); g.play(1); g.play(49);
-  g.play(2);  g.play(39); g.play(3);  g.play(30);
-  check('F5a setup: B@31 in atari', g._ls[g._gid[31]] === 1);
-  const mask = getMask(g, 40);
+  // As F4a but W@E6 and W@D5 block, so extending B@E4 to E5 leaves the {E4,E5}
+  // string in self-atari (only lib F5) → F5 (bit 4), not F4 (bit 3).
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . O . . . .
+    5 . . . O . . . . .
+    4 . . . . X O . . .
+    3 . . . . O . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(30); // W@D4 (previous move)
+  check('F5a setup: B@E4 in atari', g._ls[g._gid[31]] === 1);
+  const mask = getMask(g, 40); // E5
   check('F5a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F5a: bit 4 set (extend + self-atari)', mask !== -1 && (mask & 16) !== 0);
   check('F5a: bit 3 not set', mask !== -1 && (mask & 8) === 0);
 }
 
-// 11b: B@39 in atari (lib=40). lastMove=W@48. W@31,W@49 block N,S of 40.
-//      After B@40: group {39,40} has only lib=41 — self-atari.
+// 11b: mirror — previous move W@D6 ataris B@D5; extending to E5 leaves {D5,E5}
+//      in self-atari (only lib F5) → F5.
 {
-  const g = new Game2(9, false);
-  g.play(39); g.play(30); g.play(0); g.play(38); g.play(1); g.play(31);
-  g.play(2);  g.play(49); g.play(3);  g.play(48);
-  check('F5b setup: B@39 in atari', g._ls[g._gid[39]] === 1);
-  const mask = getMask(g, 40);
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . O . . . .
+    5 . . O X . . . . .
+    4 . . . O O . . . .
+    3 . . . . . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(48); // W@D6 (previous move)
+  check('F5b setup: B@D5 in atari', g._ls[g._gid[39]] === 1);
+  const mask = getMask(g, 40); // E5
   check('F5b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F5b: bit 4 set (extend + self-atari)', mask !== -1 && (mask & 16) !== 0);
   check('F5b: bit 3 not set', mask !== -1 && (mask & 8) === 0);
@@ -488,32 +537,55 @@ function getMask(game, cell) {
 //      Candidate 39 (W of 40, in 8-nbr) gives W@30 atari.
 //      31=(3,4) 30=(3,3) 21=(2,3) 40=(4,4) 39=(4,3)
 {
-  const g = new Game2(9, false);
-  g.play(31); g.play(30); g.play(21); g.play(40);
-  check('F7a setup: B@31 has 2 libs', g._ls[g._gid[31]] === 2);
-  check('F7a setup: W@30 has 2 libs', g._ls[g._gid[30]] === 2);
-  const mask = getMask(g, 39);
+  // Previous move W@E5 leaves both B@E4 and W@D4 with 2 libs (a 2-point semeai).
+  // Candidate D5 gives the enemy W@D4 atari → F7 (bit 6), plus contiguous (bit 0).
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . . . . . . .
+    4 . . . O X . . . .
+    3 . . . X . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(40); // W@E5 (previous move)
+  check('F7a setup: B@E4 has 2 libs', g._ls[g._gid[31]] === 2);
+  check('F7a setup: W@D4 has 2 libs', g._ls[g._gid[30]] === 2);
+  const mask = getMask(g, 39); // D5
   check('F7a: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F7a: bit 6 set (2-point semeai)', mask !== -1 && (mask & 64) !== 0);
 }
 
-// 13b: B@39 has 2 libs {48,38}. W@30 has 2 libs {29,31}. lastMove=W@40.
-//      Candidate 31 (N of 40, in 8-nbr) gives W@30 atari.
+// 13b: mirror — previous move W@E5 leaves B@D5 and W@D4 with 2 libs; candidate
+//      E4 gives the enemy W@D4 atari → F7.
 {
-  const g = new Game2(9, false);
-  g.play(39); g.play(30); g.play(21); g.play(40);
-  check('F7b setup: B@39 has 2 libs', g._ls[g._gid[39]] === 2);
-  check('F7b setup: W@30 has 2 libs', g._ls[g._gid[30]] === 2);
-  const mask = getMask(g, 31);
+  const g = parseBoard(`
+    9 . . . . . . . . .
+    8 . . . . . . . . .
+    7 . . . . . . . . .
+    6 . . . . . . . . .
+    5 . . . X . . . . .
+    4 . . . O . . . . .
+    3 . . . X . . . . .
+    2 . . . . . . . . .
+    1 . . . . . . . . .
+  `, WHITE);
+  g.play(40); // W@E5 (previous move)
+  check('F7b setup: B@D5 has 2 libs', g._ls[g._gid[39]] === 2);
+  check('F7b setup: W@D4 has 2 libs', g._ls[g._gid[30]] === 2);
+  const mask = getMask(g, 31); // E4
   check('F7b: bit 0 set (contiguous)', mask !== -1 && (mask & 1) !== 0);
   check('F7b: bit 6 set (2-point semeai)', mask !== -1 && (mask & 64) !== 0);
 }
 
 // 13c: Realistic F7 scenario. B@H2 leaves WHITE group H3 with 2 libs.
 // E4 BLACK group has 2 libs (D5, E5). W@E5 kills (B@D5 response is self-atari).
-// W@D5 does not kill (B@E5 response joins). Neither is in 8-nbr of H2.
-// KNOWN LIMITATION: Feature 7 gated by 8-neighborhood of prev.
-// Also: our code doesn't distinguish killing vs non-killing atari.
+// W@D5 does not kill (B@E5 response joins).  Both E5 and D5 are outside H2's
+// 8-neighborhood, yet F7 still fires for the killing move E5 — with bit 0 set
+// alongside, matching the paper's "Feature 1 also active for all features 2-7".
+// The code does distinguish the killing atari (E5) from the non-killing one (D5).
 {
   const g = parseBoard(`
     9 . . . . . . . . .  \n

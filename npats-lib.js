@@ -163,7 +163,7 @@ function computeProbs(game, state, game3, model, temperature = 1) {
   if (useTact) {
     for (let k = 0; k < NTS; k++) tW[k] = weights.get(NPat.TACT_RAW_BASE + k) ?? 0;
   }
-  const pid33c = cfg.use33c ? state.patIds33c : null;
+  const pidP8 = cfg.use33c ? state.patIdsP8 : null;
   const pidP12 = cfg.useP12 ? state.patIdsP12 : null;
 
   let maxL = -Infinity, maxI = 0;
@@ -173,7 +173,7 @@ function computeProbs(game, state, game3, model, temperature = 1) {
       const tOff = i * NTS;
       for (let k = 0; k < NTS; k++) s += tact[tOff + k] * tW[k];
     }
-    if (pid33c) s += weights.get(pid33c[i]) ?? 0;
+    if (pidP8) s += weights.get(pidP8[i]) ?? 0;
     if (pidP12) s += weights.get(pidP12[i]) ?? 0;
     lg[i] = s;
     if (s > maxL) { maxL = s; maxI = i; }
@@ -207,14 +207,14 @@ function crossEntropyUpdate(state, model, target, lr) {
   const useTact = cfg.useTactical !== false;
   const NTS  = NPat.N_TACT_SLOTS;
   const tact = state.tact;
-  const pid33c = cfg.use33c ? state.patIds33c : null;
+  const pidP8 = cfg.use33c ? state.patIdsP8 : null;
   const pidP12 = cfg.useP12 ? state.patIdsP12 : null;
   const tacc = useTact ? new Float64Array(NTS) : null;
 
   for (let i = 0; i < n; i++) {
     const g = lr * (target[i] - pr[i]);
     if (g === 0) continue;
-    if (pid33c) { const k = pid33c[i]; weights.set(k, (weights.get(k) ?? 0) + g); }
+    if (pidP8) { const k = pidP8[i]; weights.set(k, (weights.get(k) ?? 0) + g); }
     if (pidP12) { const k = pidP12[i]; weights.set(k, (weights.get(k) ?? 0) + g); }
     if (useTact) {
       const tOff = i * NTS;

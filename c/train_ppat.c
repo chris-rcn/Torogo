@@ -266,33 +266,36 @@ static void split_data(void) {
         for (int i = 0; i < ne; i++) test_idx[i] = i;
         n_test = ne;
     } else {
-        /* Train from the head of the file, test from the tail — no proportional split
-         * and no random draw, so both sets are deterministic and identical across runs
-         * (head and tail of a shuffled file are each representative).  --train-pos unset
-         * → train uses all data before the test tail.  Overlap is allowed but warned,
-         * since it leaks test positions into training. */
+        /* Test from the head of the file, train from the data after it — no
+         * proportional split and no random draw, so both sets are deterministic and
+         * identical across runs (head and tail of a shuffled file are each
+         * representative).  Keeping the test set as a fixed block at the start means
+         * new training samples can be appended to the end of the file without
+         * disturbing the (known, reproducible) test set.  --train-pos unset → train
+         * uses all data after the test head. */
         int test_n  = cfg_test_pos > 0 ? cfg_test_pos : 0;
         if (test_n > n_all) test_n = n_all;
-        int train_n = cfg_train_pos > 0 ? cfg_train_pos : (n_all - test_n);
-        if (train_n > n_all) train_n = n_all;
+        int avail   = n_all - test_n;                                     /* data after the test head */
+        int train_n = cfg_train_pos > 0 ? cfg_train_pos : avail;
+        if (train_n > avail) {
+            fprintf(stderr, "warning: train (%d) exceeds data after the test head (%d) in %d total; clamping\n",
+                    train_n, avail, n_all);
+            train_n = avail;
+        }
 
-        int test_start = n_all - test_n;                                  /* tail */
-        if (train_n > test_start)
-            fprintf(stderr, "warning: train (first %d) and test (last %d) overlap by %d positions in %d total\n",
-                    train_n, test_n, train_n - test_start, n_all);
-
+        int train_start = test_n;                                         /* train begins right after test */
         n_train_total = train_n;
-        /* Partition the train head into disjoint contiguous slices: worker w trains
-         * on [w·n/K, (w+1)·n/K), so one epoch is a single pass over the whole train
-         * set (the workers cover it between them), not K passes.  No shuffle here — a
-         * contiguous slice of the pre-shuffled file is already a random sample; each
-         * worker shuffles its own slice's order every epoch. */
+        /* Partition the train tail into disjoint contiguous slices: worker w trains
+         * on [w·n/K, (w+1)·n/K) within the train region, so one epoch is a single pass
+         * over the whole train set (the workers cover it between them), not K passes.
+         * No shuffle here — a contiguous slice of the pre-shuffled file is already a
+         * random sample; each worker shuffles its own slice's order every epoch. */
         int lo = (int)((long)cfg_worker_id       * train_n / cfg_workers);
         int hi = (int)((long)(cfg_worker_id + 1)  * train_n / cfg_workers);
         n_train = hi - lo;
-        for (int i = 0; i < n_train; i++) train_idx[i] = lo + i;          /* this worker's slice */
+        for (int i = 0; i < n_train; i++) train_idx[i] = train_start + lo + i;  /* this worker's slice */
         n_test = test_n;
-        for (int i = 0; i < test_n; i++) test_idx[i] = test_start + i;    /* tail (shared) */
+        for (int i = 0; i < test_n; i++) test_idx[i] = i;                /* head (shared) */
     }
 }
 
@@ -623,17 +626,26 @@ static double  next_print;
 static double  cumulative_test_s = 0;
 
 /* Render the trMSE column.  A freshly-completed epoch (full_count>0, mean differs
- * from *last_full) is shown once with a '*' suffix = "full"; otherwise the current
+ * from *last_full) is shown once with an 'F' suffix = "full"; otherwise the current
  * epoch's partial running mean is shown with a trailing space; else "-".
  * *last_full latches the most recent full value so it prints exactly once. */
 static const char *trmse_col(double full_sum, long full_count, double part_sum, long part_count,
                              double *last_full, char *buf, size_t n) {
     if (full_count > 0) {
         double fm = full_sum / (double)full_count;
-        if (fm != *last_full) { *last_full = fm; snprintf(buf, n, "%.4f*", fm); return buf; }
+        if (fm != *last_full) { *last_full = fm; snprintf(buf, n, "%.4fF", fm); return buf; }
     }
     if (part_count > 0) snprintf(buf, n, "%.4f ", part_sum / (double)part_count);
     else { buf[0] = '-'; buf[1] = 0; }
+    return buf;
+}
+
+/* teMSE column: '*' when v is a new minimum (best generalization so far), else
+ * ' ' for equal spacing.  *best tracks the lowest teMSE seen. */
+static const char *temse_col(float v, float *best, char *buf, size_t n) {
+    char mark = ' ';
+    if (v < *best) { *best = v; mark = '*'; }
+    snprintf(buf, n, "%.4f%c", v, mark);
     return buf;
 }
 
@@ -654,6 +666,26 @@ static void save_weights(int iterations, int total_positions, const char *elapse
     snprintf(tmp, sizeof(tmp), "%s.tmp", weights_file);
     ppat_save_weights(tmp, theta, TOTAL, comment);
     rename(tmp, weights_file);
+}
+
+/* Snapshot the currently-loaded theta to "<checkpoint>-best.js" — called whenever
+ * a new teMSE low is found.  "-best" is inserted before a trailing .js so
+ * out/foo.js → out/foo-best.js.  Written atomically (tmp + rename). */
+static void best_path(const char *ckpt_path, char *buf, size_t n) {
+    const char *dot = strrchr(ckpt_path, '.');
+    if (dot && strcmp(dot, ".js") == 0)
+        snprintf(buf, n, "%.*s-best.js", (int)(dot - ckpt_path), ckpt_path);
+    else
+        snprintf(buf, n, "%s-best.js", ckpt_path);
+}
+
+static void save_best(const char *ckpt_path, const char *comment) {
+    char best[320];
+    best_path(ckpt_path, best, sizeof best);
+    char tmp[330];
+    snprintf(tmp, sizeof tmp, "%s.tmp", best);
+    ppat_save_weights(tmp, theta, TOTAL, comment);
+    rename(tmp, best);
 }
 
 /* Read the `positions: N` count embedded in a checkpoint comment (-1 if absent). */
@@ -685,6 +717,16 @@ static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psu
     }
     fclose(f);
     return got ? 0 : -1;
+}
+
+/* Mean magnitude of the weight vector, Σ|theta[i]| / TOTAL — a single scalar for
+ * tracking how large the learned weights are growing (overfitting often shows up
+ * as a steadily climbing avgW). */
+static double avg_abs_weight(void) {
+    if (TOTAL <= 0) return 0;
+    double s = 0;
+    for (int i = 0; i < TOTAL; i++) s += fabs(theta[i]);
+    return s / TOTAL;
 }
 
 /* Print the exp'd prev-move (and optional ladder) feature multipliers from theta,
@@ -729,11 +771,12 @@ static void print_weights(void) {
 static void run_monitor(void) {
     printf("monitor: %d test positions, test-playouts %d, %d workers\n",
            n_test, cfg_test_playouts, cfg_workers);
-    printf("%9s  %7s  %6s  %6s  %8s  %7s\n",
-           "positions", "trMSE", "teMSE", "move%", "elapsedS", "pos/s");
+    printf("%9s  %7s  %7s  %7s  %6s  %8s  %7s\n",
+           "positions", "trMSE", "teMSE", "avgW", "move%", "elapsedS", "pos/s");
     fflush(stdout);
     ppat_load_quiet = 1;   /* suppress the per-cycle "loaded N weights" noise */
     wall_start = wall_now();
+    float mon_best_te = 1e30f;   /* lowest teMSE seen, for the '*' new-low marker */
 
     /* Uniform-policy baseline, before any model exists — mirrors the solo path's
      * leading uniform row so the table starts with the no-skill reference. */
@@ -741,8 +784,9 @@ static void run_monitor(void) {
         TestResult tr = measure_test(1, n_test);
         double el = wall_now() - wall_start;
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fs", el);
-        printf("%9d  %7s  %6.4f  %5.1f  %8s  %7s\n",
-               0, "-", tr.mse, tr.move_match * 100.0f, eb, "-");
+        char tebuf[16];
+        printf("%9d  %7s  %7s  %7s  %5.1f  %8s  %7s\n",
+               0, "-", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf), "-", tr.move_match * 100.0f, eb, "-");
         fflush(stdout);
     }
 
@@ -765,14 +809,21 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fs", el);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
-        double dsum, psum; long dcnt, pcnt; char trbuf[24];
+        double dsum, psum; long dcnt, pcnt; char trbuf[24], tebuf[16];
         if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt) == 0)
             trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
         else { trbuf[0] = '-'; trbuf[1] = 0; }
-        printf("%9ld  %7s  %6.4f  %5.1f  %8s  %7.0f",
-               agg, trbuf, tr.mse, tr.move_match * 100.0f, eb, posps);
+        int is_best = tr.mse < mon_best_te;
+        printf("%9ld  %7s  %7s  %7.4f  %5.1f  %8s  %7.0f",
+               agg, trbuf, temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
+               avg_abs_weight(), tr.move_match * 100.0f, eb, posps);
         print_weights();
         printf("\n");
+        if (is_best) {
+            char bc[256];
+            snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %ld", tr.mse, agg);
+            save_best(cfg_monitor, bc);
+        }
         fflush(stdout);
         usleep(200000);   /* small floor so tiny test sets don't spin */
     }
@@ -803,16 +854,24 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
      * barrier-locked); posMs stays per-process (worker 0's CPU time / its own count).
      * tPos = how many test positions this row actually used (capped early). */
     static double last_full = -1;
-    char trbuf[24];
+    static float best_te = 1e30f;
+    char trbuf[24], tebuf[16];
+    int is_best = mse < best_te;
     trmse_col(done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, &last_full, trbuf, sizeof trbuf);
-    printf("%9ld  %7s  %6.4f  %5.1f  %5d  %6.1f  %6.1f  %8s  %6.1f  %7.0f",
-           (long)cfg_workers * total_positions, trbuf, mse, tr.move_match * 100.0f,
+    printf("%9ld  %7s  %7s  %7.4f  %5.1f  %5d  %6.1f  %6.1f  %8s  %6.1f  %7.0f",
+           (long)cfg_workers * total_positions, trbuf,
+           temse_col(mse, &best_te, tebuf, sizeof tebuf), avg_abs_weight(), tr.move_match * 100.0f,
            test_n, cumulative_test_s, cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
     if (show_weights) print_weights();
     printf("\n");
     fflush(stdout);
 
     save_weights(iterations, total_positions, elapsed_buf);
+    if (is_best) {
+        char bc[256];
+        snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %d", mse, total_positions);
+        save_best(weights_file, bc);
+    }
     /* Exponential cadence (½·elapsed of training between tests), but never let the
      * train cycle be shorter than the test that just ran — otherwise an expensive
      * test would dominate wall time. */
@@ -912,10 +971,11 @@ int main(int argc, char **argv) {
            cfg_ladder ? "true" : "false");
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
-    printf("test: %d positions  test-playouts: %d  output: %s\n",
-           n_test, cfg_test_playouts, weights_file);
-    printf("%9s  %7s  %6s  %6s  %5s  %6s  %6s  %8s  %6s  %7s\n",
-           "positions", "trMSE", "teMSE", "move%", "tPos", "testS", "syncS", "elapsedS", "posMs", "pos/s");
+    char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
+    printf("test: %d positions  test-playouts: %d  output: %s  best: %s\n",
+           n_test, cfg_test_playouts, weights_file, best_file);
+    printf("%9s  %7s  %7s  %7s  %6s  %5s  %6s  %6s  %8s  %6s  %7s\n",
+           "positions", "trMSE", "teMSE", "avgW", "move%", "tPos", "testS", "syncS", "elapsedS", "posMs", "pos/s");
     }
 
     start_time = clock();

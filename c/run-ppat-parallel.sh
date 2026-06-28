@@ -23,6 +23,7 @@ K="$1"; DATA="$2"; shift 2
 RUN="$$"
 SYNC_DIR="out/ppat-sync-$RUN"
 CKPT="out/ppat-data-$RUN.js"
+BEST="${CKPT%.js}-best.js"
 
 # Pull --train-pos out of the passed args, for reporting.
 TRAIN_POS=""; prev=""
@@ -40,7 +41,7 @@ fi
 rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 
 echo "launching $K trainers + 1 monitor;  $TP_MSG"
-echo "sync-dir: $SYNC_DIR  checkpoint: $CKPT"
+echo "sync-dir: $SYNC_DIR  checkpoint: $CKPT  best: $BEST"
 PIDS=""
 i=0
 while [ "$i" -lt "$K" ]; do

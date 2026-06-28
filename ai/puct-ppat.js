@@ -4,10 +4,10 @@
 // nodes (the root searches full width), RAVE, and full-playout leaf
 // evaluation.
 //
-// Each unexpanded edge takes N_EXPAND playout visits; after that the child
-// node is expanded (policy extraction + priors) and the descent continues
-// into it.  Node creation — the most expensive step — only happens on edges
-// the search keeps returning to.
+// Each unexpanded edge is expanded on first contact: a leaf node is created
+// (policy extraction + priors) and one playout is run from it.  A ppat playout
+// is expensive enough that the node-creation cost is always worth paying, so
+// there is no lazy-expansion threshold.
 //
 // Terminal positions are scored exactly.  Values are backpropagated
 // fractionally: each chooser is credited value (BLACK) or 1 − value (WHITE).
@@ -35,9 +35,28 @@ const { PASS, BLACK } = Util.load('./game2.js', 'Game2');
 const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
 const NPats                 = Util.load('./npats-lib.js', 'NPatsLib');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
+const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
+const { createState, ppatMove, loadWeights } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
   ? window.performance : require('perf_hooks').performance;
+
+// ppat playout policy weights (PPAT_DATA env, or window.PPATWeights in browser).
+// When absent, playouts fall back to uniform-random — same trace/scoring path.
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const _weightsArr = _isNode
+  ? loadWeights(Util.envStr('PPAT_DATA', ''))
+  : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+// Captured AFTER loadWeights so it reflects whether the loaded model carries
+// ladder features.  When false, the Game3 mirror is never touched in playouts.
+const _LADDER_ENABLED = !!(_weightsArr && _ppat.LADDER_ENABLED);
+console.log(`puct-ppat: loaded ${_weightsArr ? _weightsArr.length : 0} ppat weights (ladder: ${_LADDER_ENABLED})`);
+
+let _ppatState = null;
+function _ensurePpatState(N) {
+  if (_ppatState === null || _ppatState.moves.length < N * N)
+    _ppatState = createState(N);
+}
 
 // ── Hardcoded configuration ──────────────────────────────────────────────────
 
@@ -56,20 +75,25 @@ const C_PUCT        = Util.envFloat('C_PUCT', 0.5);
 // win-rate with weight RAVE_K / (RAVE_K + n).  0 disables.
 const RAVE_K        = Util.envFloat('RAVE_K', 400);
 
-const NPATS_K = Util.envInt('NPATS_K', 40);  // kept move count
-
-// Fixed playout count per decision.  When non-zero, overrides the time budget.
-const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
-
-// Playout visits per unexpanded edge before the child node is created.  Defaults
-// to 1 in fixed-playout mode (PLAYOUTS set) so the limited budget builds tree
-// rather than piling extra rollouts onto each edge; 4 in time-budget mode.
-const N_EXPAND = Util.envInt('N_EXPAND', PLAYOUTS > 0 ? 1 : 4);
+const NPATS_K = Util.envInt('NPATS_K', 40);  // kept move count (applies only below root).
 
 const PRIOR_WINS   = 0.001;
 const PRIOR_VISITS = 2 * PRIOR_WINS;
 
 const RESIGN_MIN_PLAYOUTS = 20000;
+
+// Fixed playout count per decision.  When non-zero, overrides the time budget.
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
+
+// Number of playout moves to use the ppat policy before switching to uniform.
+// -1 = unlimited (ppat for the entire playout).
+const PPAT_MOVES = Util.envInt('PPAT_MOVES', -1);
+
+// Per-move probability of using the ppat policy (vs a uniform-random move) during
+// playouts, within the PPAT_MOVES window.  1 = always ppat (default).  e.g. 0.5
+// mixes in 50% uniform moves: cheaper (skips ppat feature extraction half the
+// time) and injects playout variety.
+const PPAT_RATIO = Util.envFloat('PPAT_RATIO', 1);
 
 // NPats model: NPATS_WEIGHTS env overrides the canonical npats-data.js.
 // Exported (Node) so record-npats.js can train these weights in-process:
@@ -115,30 +139,48 @@ function _pruneToTopK(allMoves, state, K, N) {
 
 // ── Playout ───────────────────────────────────────────────────────────────────
 
-// Random playout from `game2` to the end of the game (mutates it; game3 is
-// untouched).  Fills `played` (pre-zeroed by the caller) with the
-// colour-signed first-occupancy RAVE trace: +weight if BLACK played the
-// point first, −weight if WHITE, with weight decaying over the playout.
-// Returns the result as P(BLACK wins) ∈ {0, 1}.
-function playout(game2, played, rng) {
+// ppat-policy playout from `game2` to the end of the game (mutates it).  Fills
+// `played` (pre-zeroed by the caller) with the colour-signed first-occupancy
+// RAVE trace: +weight if BLACK played the point first, −weight if WHITE, with
+// weight decaying over the playout.  Returns the result as P(BLACK wins) ∈ {0,1}.
+//
+// `game3` is the persistent lockstep mirror, already in sync with `game2` at the
+// leaf.  When the loaded model has ladder features, ppat needs it for ladder
+// analysis, so each ppat-window move is mirrored in; those mirror plays are
+// undone before return, leaving `game3` exactly as it was at entry (the caller's
+// descent-rewind is therefore unaffected).
+function playout(game2, played, rng, game3) {
   const N   = game2.N;
   const cap = N * N;
+
+  _ensurePpatState(N);
+  const g3 = _LADDER_ENABLED ? game3 : null;   // ppat ladder mirror, or unused
 
   const moveLimit = 3 * game2.emptyCount + 20;
   const weightStep = 1 / cap;
   let moves = 0;
   let weight = 1.0;
+  let g3Plays = 0;
 
   while (!game2.gameOver && moves < moveLimit) {
     const current = game2.current;
-    const idx = game2.randomLegalMove(rng);
+    // ppatActive: ppat is still within its temporal window this move — the g3
+    // mirror must stay synced while it is (even on uniform moves), since ppat may
+    // be chosen again.  usePolicy: actually use ppat this move (subject to PPAT_RATIO).
+    const ppatActive = _weightsArr && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
+    const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
+    const idx = usePolicy ? ppatMove(game2, _ppatState, _weightsArr, g3)
+                          : game2.randomLegalMove(rng);
     if (idx !== PASS && weight > 0 && played[idx] === 0) {
       played[idx] = current === BLACK ? weight : -weight;
     }
     game2.play(idx);
+    if (g3 && ppatActive) { g3.play(idx); g3Plays++; }
     moves++;
     weight -= weightStep;
   }
+
+  for (let i = 0; i < g3Plays; i++) game3.undo();   // restore mirror to the leaf
 
   return game2.estimateWinner() === BLACK ? 1 : 0;
 }
@@ -293,17 +335,15 @@ function selectAndExpand(root, rootGame2, N, rng, game3) {
       break;
     }
 
-    // Staged per-edge evaluation: N_EXPAND playout visits, then the child is
-    // expanded and the descent continues into it (its best edge takes the
-    // first playout).  `visits` carries the PRIOR_VISITS offset, so the
-    // comparison lands strictly above the threshold.
+    // Expand on first contact: create the leaf node, descend into it, and run
+    // one playout from it.  No lazy-expansion threshold — a ppat playout costs
+    // far more than node creation, so a new node is always worthwhile.
     if (node.children[best] === null) {
-      if (node.visits[best] < N_EXPAND) {
-        node.selectedChild = best;
-        doPlayout = true;
-        break;
-      }
       node.children[best] = makeNode(move, node, best, game2, N, game3);
+      node = node.children[best];
+      node.selectedChild = -1;
+      doPlayout = true;
+      break;
     }
 
     node = node.children[best];
@@ -377,6 +417,39 @@ function backpropagate(node, value, path, played) {
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
+// Run the search from `game2` and return the populated root.  Shared by
+// getMove (move selection) and value (rootWinRatio).
+function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
+  // Lockstep Game3 mirror — built once per decision, then maintained by
+  // play/undo across simulations so feature extraction never rebuilds it.
+  const game3 = game3FromGame2(game2);
+  const root = makeNode(null, null, -1, game2, N, game3);
+
+  const played = new Float32Array(N * N);
+
+  const deadline = performance.now() + timeBudgetMs;
+  let playouts = 0;
+
+  do {
+    playouts++;
+    const { node, game2: simGame2, path, depth, doPlayout } = selectAndExpand(root, game2, N, rng, game3);
+    let value, trace = null;
+    if (doPlayout && !simGame2.gameOver) {
+      played.fill(0);
+      value = playout(simGame2, played, rng, game3);
+      trace = played;
+    } else {
+      // Simulations that end without a playout are at terminal positions
+      // (double pass or descent into a finished game) — score them exactly.
+      value = simGame2.calcWinner() === BLACK ? 1 : 0;
+    }
+    for (let i = 0; i < depth; i++) game3.undo();
+    backpropagate(node, value, path, trace);
+  } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
+
+  return { root, playouts };
+}
+
 function getMove(game, timeBudgetMs, options = {}) {
   if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
@@ -389,33 +462,8 @@ function getMove(game, timeBudgetMs, options = {}) {
   }
 
   const rng = options.rng || makeRng();
-  // Lockstep Game3 mirror — built once per decision, then maintained by
-  // play/undo across simulations so feature extraction never rebuilds it.
-  const game3 = game3FromGame2(game2);
-  const root = makeNode(null, null, -1, game2, N, game3);
-
-  const played = new Float32Array(N * N);
-
   const playoutLimit = options.playoutLimit || PLAYOUTS;
-  const deadline = performance.now() + timeBudgetMs;
-  let playouts = 0;
-
-  do {
-    playouts++;
-    const { node, game2: simGame2, path, depth, doPlayout } = selectAndExpand(root, game2, N, rng, game3);
-    let value, trace = null;
-    if (doPlayout && !simGame2.gameOver) {
-      played.fill(0);
-      value = playout(simGame2, played, rng);
-      trace = played;
-    } else {
-      // Simulations that end without a playout are at terminal positions
-      // (double pass or descent into a finished game) — score them exactly.
-      value = simGame2.calcWinner() === BLACK ? 1 : 0;
-    }
-    for (let i = 0; i < depth; i++) game3.undo();
-    backpropagate(node, value, path, trace);
-  } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
+  const { root, playouts } = runSearch(game2, N, rng, playoutLimit, timeBudgetMs);
 
   const M = root.legalMoves.length;
   let bestIdx = 0, bestVisits = -1, bestScore = -Infinity;
@@ -457,7 +505,27 @@ function getMove(game, timeBudgetMs, options = {}) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { getMove, npatsModel };
-else window.getMove = getMove;
+// Search value of a Game2 position as P(BLACK wins) in [0,1], for use as an SB
+// value oracle (matches ref-vlibpat.value / mc-vlib.value / puct-hybrid.value).
+// Runs a full search (PLAYOUTS playouts, default 1000) and returns the root win
+// ratio mapped from the side-to-move perspective to absolute P(BLACK wins).
+function value(game, rng) {
+  const N     = game.cells ? game.N : game.boardSize;
+  const game2 = game.cells ? game.clone() : game.toGame2();
+  if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
+
+  const r = rng || makeRng();
+  const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
+  const { root } = runSearch(game2, N, r, playoutLimit, 0);
+
+  let totalChildWins = 0;
+  const M = root.legalMoves.length;
+  for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
+  const rootWinRatio = totalChildWins / root.totalVisits;     // P(side-to-move wins)
+  return game2.current === BLACK ? rootWinRatio : 1 - rootWinRatio;
+}
+
+if (typeof module !== 'undefined') module.exports = { getMove, value, npatsModel };
+else { window.getMove = getMove; window.value = value; }
 
 })();
