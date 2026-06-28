@@ -1,7 +1,7 @@
 'use strict';
 
 // gen-agent-evals.js — generate (position, value) training data for Simulation
-// Balancing (train_ppat), using any agent's value() method as the value oracle.
+// Balancing (train_ppat), using any agent's valueB() method as the value oracle.
 //
 // Positions come from ref-npat-softmax self-play (fast, stochastic), with 4
 // random opening moves per game for diversity.  Each game is sampled once, and
@@ -12,7 +12,7 @@
 //
 //   <size> <move1,move2,...> <winRatio> pass
 //
-// The agent module (ai/<name>.js) must export a value(game) -> P(BLACK wins).
+// The agent module (ai/<name>.js) must export a valueB(game, options) -> P(BLACK wins).
 // e.g. ref-vlibpat, mc-vlib.
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
@@ -42,8 +42,8 @@ const maxPhase  = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase']
 const limit     = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
-if (typeof agent.value !== 'function') {
-  console.error(`Agent '${agentName}' does not export a value() method`);
+if (typeof agent.valueB !== 'function') {
+  console.error(`Agent '${agentName}' does not export a valueB() method`);
   process.exit(1);
 }
 
@@ -89,7 +89,7 @@ while (emitted < limit) {
   // Replay to the chosen position and label it with the agent's value().
   const pos = new Game2(size);
   for (let i = 0; i < chosenPos; i++) pos.play(moves[i]);
-  const val = agent.value(pos, rng);                          // P(BLACK wins)
+  const val = agent.valueB(pos, { rng });                     // P(BLACK wins)
   const winRatio = pos.current === BLACK ? val : 1 - val;     // P(side-to-move wins)
 
   const seq = moves.slice(0, chosenPos).map(m => coordStr(m, size)).join(',');

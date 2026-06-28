@@ -60,7 +60,7 @@ function uniformValue(child, k, rng) {
 
 // vlibpat value of `g`, side-to-move perspective.
 function vlibValue(g) {
-  const pBlack = RefVlib.value(g);                // P(BLACK wins)
+  const pBlack = RefVlib.valueB(g);              // P(BLACK wins)
   return g.current === BLACK ? pBlack : 1 - pBlack;
 }
 
@@ -106,11 +106,12 @@ function getMove(game, budgetMs, opts) {
 }
 
 // Blended value of a Game2 position: P(BLACK wins) in [0,1], matching
-// ref-vlibpat.value's convention (absolute, not side-to-move).  For use as an
+// ref-vlibpat.valueB's convention (absolute, not side-to-move).  For use as an
 // SB value oracle / for comparison against ref-vlibpat.
-function value(game, rng = defaultRng) {
+function valueB(game, options = {}) {
+  const rng = options.rng || defaultRng;
   const stm = blendStm(game, rng);
   return game.current === BLACK ? stm : 1 - stm;
 }
 
-module.exports = { getMove, value };
+module.exports = { getMove, valueB };

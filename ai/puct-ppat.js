@@ -506,15 +506,15 @@ function getMove(game, timeBudgetMs, options = {}) {
 }
 
 // Search value of a Game2 position as P(BLACK wins) in [0,1], for use as an SB
-// value oracle (matches ref-vlibpat.value / mc-vlib.value / puct-hybrid.value).
+// value oracle (matches ref-vlibpat.valueB / mc-vlib.valueB / puct-hybrid.valueB).
 // Runs a full search (PLAYOUTS playouts, default 1000) and returns the root win
 // ratio mapped from the side-to-move perspective to absolute P(BLACK wins).
-function value(game, rng) {
+function valueB(game, options = {}) {
   const N     = game.cells ? game.N : game.boardSize;
   const game2 = game.cells ? game.clone() : game.toGame2();
   if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
 
-  const r = rng || makeRng();
+  const r = options.rng || makeRng();
   const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
   const { root } = runSearch(game2, N, r, playoutLimit, 0);
 
@@ -525,7 +525,7 @@ function value(game, rng) {
   return game2.current === BLACK ? rootWinRatio : 1 - rootWinRatio;
 }
 
-if (typeof module !== 'undefined') module.exports = { getMove, value, npatsModel };
-else { window.getMove = getMove; window.value = value; }
+if (typeof module !== 'undefined') module.exports = { getMove, valueB, npatsModel };
+else { window.getMove = getMove; window.valueB = valueB; }
 
 })();

@@ -38,8 +38,8 @@ function getMove(game) {
 
 // Raw vlibpat value of a Game2 position: P(BLACK wins) in [0,1] (leaf eval, no
 // search).  For use as an SB value oracle.
-function value(game) {
+function valueB(game, options) {   // options unused (static leaf eval); kept for API uniformity
   return evaluateFeatures(extractFeatures(game3FromGame2(game), model.preparedSpecs), model.weights);
 }
 
-module.exports = { getMove, search, value };
+module.exports = { getMove, search, valueB };
