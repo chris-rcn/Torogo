@@ -28,6 +28,33 @@ const Util = (() => {
     return (typeof process !== 'undefined' && process.env[name] !== undefined) ? parseInt(process.env[name], 10) : def;
   }
 
+  // Build a config reader scoped to an optional agent slot (1 or 2).  For each
+  // key the resolution order is: explicit override → slot-prefixed env
+  // (P<slot>_KEY) → plain env (KEY) → the caller-supplied default.  Browser (no
+  // process.env) resolves to overrides/default.  This lets two agents in one
+  // process read differentiated config via P1_/P2_ while plain env stays a
+  // shared default.  Pass slot = null/undefined for a single, unprefixed agent.
+  function makeCfg(slot, overrides) {
+    const ov = overrides || {};
+    function raw(key) {
+      if (ov[key] !== undefined) return ov[key];
+      if (typeof process === 'undefined') return undefined;
+      if (slot != null) {
+        const p = process.env['P' + slot + '_' + key];
+        if (p !== undefined) return p;
+      }
+      return process.env[key];
+    }
+    return {
+      slot:  slot != null ? slot : null,
+      has:   (key)      => raw(key) !== undefined,
+      str:   (key, def) => { const v = raw(key); return v !== undefined ? v : def; },
+      int:   (key, def) => { const v = raw(key); return v !== undefined ? parseInt(v, 10) : def; },
+      float: (key, def) => { const v = raw(key); return v !== undefined ? parseFloat(v) : def; },
+      bool:  (key, def) => { const v = raw(key); return v !== undefined ? (v === '1' || v === 'true') : def; },
+    };
+  }
+
   // Parse --key value or --key=value flags from an argv array.
   // boolFlags: Set (or array) of flag names that take no value (e.g. 'help', 'verbose').
   // -h is always treated as an alias for --help.
@@ -217,7 +244,7 @@ const Util = (() => {
     return String(n).padStart(4, '0');
   }
 
-  return { shuffle, envStr, envFloat, envInt, parseArgs, makeZobrist, fmt4, fmt4i, fmtRatio4, fmtMs, load };
+  return { shuffle, envStr, envFloat, envInt, makeCfg, parseArgs, makeZobrist, fmt4, fmt4i, fmtRatio4, fmtMs, load };
 
 })();
 

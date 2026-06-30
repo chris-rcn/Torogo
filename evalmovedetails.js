@@ -254,7 +254,7 @@ if (require.main === module) {
   }
 
   if (showPhases !== null) {
-    console.log(`\nphase bands (phase = board fullness 1−empty/area, in [0,1]):`);
+    console.log(`\nPhase bands:`);
     console.log([
       'phase'.padStart(9),
       'n'    .padStart(5),

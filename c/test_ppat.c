@@ -29,7 +29,7 @@ static bool play_seq(Game2 *g, const int32_t *moves, int n) {
 static int get_mask(const Game2 *g, int32_t cell) {
     PpatState st;
     memset(&st, 0, sizeof(st));
-    ppat_extract(g, NULL, &st);
+    ppat_extract(g, &st);
     int prev_base = ppat_phase_count * ppat_num_patterns;
     for (int i = 0; i < st.count; i++) {
         if (st.moves[i] != cell) continue;
@@ -55,7 +55,7 @@ static void test_extract_basic(void) {
     g2_new(&g, 9);
     PpatState st;
     memset(&st, 0, sizeof(st));
-    ppat_extract(&g, NULL, &st);
+    ppat_extract(&g, &st);
     check("extract: count > 0", st.count > 0);
     /* All patIds in valid range */
     int valid = 1;
@@ -83,7 +83,7 @@ static void test_d4_symmetry(void) {
         g2_play(&g, PASS);     /* W pass → B's turn */
         PpatState st;
         memset(&st, 0, sizeof(st));
-        ppat_extract(&g, NULL, &st);
+        ppat_extract(&g, &st);
         ids[d] = -1;
         for (int i = 0; i < st.count; i++) {
             if (st.moves[i] == center) { ids[d] = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
@@ -109,9 +109,9 @@ static void test_mover_relative(void) {
     PpatState st;
     memset(&st, 0, sizeof(st));
     int32_t idA = -1, idB = -1;
-    ppat_extract(&gA, NULL, &st);
+    ppat_extract(&gA, &st);
     for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idA = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
-    ppat_extract(&gB, NULL, &st);
+    ppat_extract(&gB, &st);
     for (int i = 0; i < st.count; i++) if (st.moves[i] == center) { idB = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     check("mover-relative: FRIEND vs FOE different patIds", idA >= 0 && idB >= 0 && idA != idB);
 }
@@ -141,9 +141,9 @@ static void test_atari_encoding(void) {
     PpatState st;
     memset(&st, 0, sizeof(st));
     int32_t id1 = -1, id2 = -1;
-    ppat_extract(&g1, NULL, &st);
+    ppat_extract(&g1, &st);
     for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id1 = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
-    ppat_extract(&g2, NULL, &st);
+    ppat_extract(&g2, &st);
     for (int i = 0; i < st.count; i++) if (st.moves[i] == c) { id2 = (st.feat[st.feat_start[i]] % ppat_num_patterns); break; }
     check("atari vs non-atari: different patId", id1 >= 0 && id2 >= 0 && id1 != id2);
 }
@@ -160,7 +160,7 @@ static void test_feature1_contiguity(void) {
 
     PpatState st;
     memset(&st, 0, sizeof(st));
-    ppat_extract(&g, NULL, &st);
+    ppat_extract(&g, &st);
 
     /* Build set of 8-neighbors of other */
     uint8_t is_nbr[MAX_CAP];
@@ -419,7 +419,7 @@ static void test_policy_move(void) {
     float *weights = calloc(total, sizeof(float));
     PpatState st;
     memset(&st, 0, sizeof(st));
-    int32_t m = ppat_policy_move(&g, NULL, &st, weights, &rng);
+    int32_t m = ppat_policy_move(&g, &st, weights, &rng);
     free(weights);
     check("policy: returns legal move", m == PASS || g2_is_legal(&g, m));
     check("policy: not a true eye", m == PASS || !g2_is_true_eye(&g, m));
@@ -435,7 +435,7 @@ static void test_consistency_with_js(void) {
         Game2 g;
         g2_new(&g, 9);
         while (!g.game_over) {
-            ppat_extract(&g, NULL, &st);
+            ppat_extract(&g, &st);
             for (int i = 0; i < st.count; i++) {
                 if ((st.feat[st.feat_start[i]] % ppat_num_patterns) < 0 || (st.feat[st.feat_start[i]] % ppat_num_patterns) >= ppat_num_patterns) { ok = 0; break; }
                 /* Check all feature keys are in valid range */
@@ -499,7 +499,7 @@ static void bench_extract(void) {
     double target = 2.0;
     do {
         for (int p = 0; p < 200; p++) {
-            ppat_extract(&positions[p], NULL, &st);
+            ppat_extract(&positions[p], &st);
             total_moves += st.count;
             calls++;
         }

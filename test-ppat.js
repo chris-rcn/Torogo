@@ -1,6 +1,6 @@
 'use strict';
 
-const { createState, extractFeatures, evaluate, ppatMove, totalWeights, NUM_PATTERNS, PHASE_COUNT } = require('./ppat-lib.js');
+const { createState, extractFeatures, evaluate, ppatMove, totalWeights, NUM_PATTERNS } = require('./ppat-lib.js');
 // NUM_PATTERNS is the count of canonical IDs under D4 spatial symmetry only
 // (color swap is NOT applied since the encoding is already mover-relative).
 const { Game2, BLACK, WHITE, PASS, parseBoard } = require('./game2.js');
@@ -209,7 +209,7 @@ check('NUM_PATTERNS is 6810', NUM_PATTERNS === 6810);
   const st = createState(N); extractFeatures(g, st);
   const nbrs8 = new Set([11, 29, 19, 21, 12, 10, 28, 30]); // 8-neighbors of C3
 
-  const prevBase = PHASE_COUNT * NUM_PATTERNS;
+  const prevBase = NUM_PATTERNS;   // single-phase extraction (phaseCount defaults to 1)
   let allNbrsHaveBit0 = true, nonNbrsLackBit0 = true;
   for (let i = 0; i < st.count; i++) {
     const m = st.moves[i];
@@ -261,7 +261,7 @@ function getPatId(st, i) {
 function getMask(game, cell) {
   const st = createState(game.N);
   extractFeatures(game, st);
-  const prevBase = PHASE_COUNT * NUM_PATTERNS;
+  const prevBase = NUM_PATTERNS;   // single-phase extraction (phaseCount defaults to 1)
   for (let i = 0; i < st.count; i++) {
     if (st.moves[i] !== cell) continue;
     let mask = 0;

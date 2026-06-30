@@ -5,7 +5,7 @@
 // Usage: node find-ppat-features.js [games] [moves_per_game]
 
 const { Game2 } = require('./game2.js');
-const { createState, extractFeatures, NUM_PATTERNS, PHASE_COUNT } = require('./ppat-lib.js');
+const { createState, extractFeatures, NUM_PATTERNS } = require('./ppat-lib.js');
 
 const games = parseInt(process.argv[2], 10) || 50;
 const moves = parseInt(process.argv[3], 10) || 60;
@@ -13,7 +13,7 @@ const moves = parseInt(process.argv[3], 10) || 60;
 const bits = new Array(7).fill(0);
 let total = 0;
 const st = createState(9);
-const prevBase = PHASE_COUNT * NUM_PATTERNS;
+const prevBase = NUM_PATTERNS;   // single-phase extraction (phaseCount defaults to 1)
 
 for (let t = 0; t < games; t++) {
   const g = new Game2(9);

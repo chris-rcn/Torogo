@@ -400,3 +400,235 @@ PPAT_DATA=out/ppat-data-3963397-best.js node selfplay.js --p1 puct --p2 puct-ppa
 games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
   259     6.6h   5174    96.5     138  996ms  988ms  7336      9999
 
+
+evalmovedetails.js --file out/movedetails-phase_0-0.7.ndjson
+agent=prod  budget=1000ms  oversample=1  positions=548/548
+  pos  elapsed    tMv    rms
+  548     9.1m   1.0s   0144
+worst 3 samples:
+  idx=180 gap=0.103 hist=67  top=f1 (0.703)  agent=m13 (0.600)  value=0.669
+  idx=178 gap=0.092 hist=51  top=d7 (0.571)  agent=l6 (0.479)  value=0.516
+  idx= 13 gap=0.082 hist=85  top=e3 (0.348)  agent=a2 (0.266)  value=0.448
+Phase bands:
+    phase      n    rms
+0.00-0.14    133   0088
+0.14-0.29    152   0115
+0.29-0.43    141   0181
+0.43-0.57     79   0178
+0.57-0.71     43   0169
+
+agent=prod  budget=500ms  oversample=1  positions=563/563
+  pos  elapsed    tMv    rms
+  563     4.7m  501ms   0490
+worst 3 samples:
+  idx=541 gap=0.788 hist=143  top=d2 (0.794)  agent=l10 (0.006)  value=0.011
+  idx=311 gap=0.493 hist=166  top=m10 (0.812)  agent=m12 (0.319)  value=0.736
+  idx=209 gap=0.415 hist=133  top=g8 (0.526)  agent=c1 (0.111)  value=0.307
+Phase bands:
+    phase      n    rms
+0.00-0.10     83   0078 *
+0.10-0.20    119   0122 *
+0.20-0.30     98   0187 *
+0.30-0.40     96   0209 *
+0.40-0.50     73   0224 *
+0.50-0.60     43   0199 *
+0.60-0.70     36   0256 *
+0.70-0.80     10   2871
+0.80-0.90      5   2651
+
+agent=puct-ppat  budget=500ms  oversample=1  positions=563/563
+  pos  elapsed    tMv    rms
+puct-ppat[-]: 6817 ppat weights (ladder: false), 52874 npats weights from npats-data.js
+  563     4.7m  502ms   0462
+worst 3 samples:
+  idx=541 gap=0.788 hist=143  top=d2 (0.794)  agent=l10 (0.006)  value=0.000
+  idx=311 gap=0.493 hist=166  top=m10 (0.812)  agent=m12 (0.319)  value=0.911
+  idx=374 gap=0.164 hist=175  top=f12 (0.583)  agent=m1 (0.419)  value=0.948
+Phase bands:
+    phase      n    rms
+0.00-0.10     83   0079 -0001
+0.10-0.20    119   0137 -0015
+0.20-0.30     98   0219 -0032
+0.30-0.40     96   0296 -0087
+0.40-0.50     73   0294 -0070
+0.50-0.60     43   0239 -0040
+0.60-0.70     36   0272 -0016
+0.70-0.80     10   2536 +0335
+0.80-0.90      5   2382 +0269
+
+Surprising result of 20k playouts not outperforming 10k playouts (the paper used 100k playouts):
+
+$ c/run-ppat-parallel.sh 4 out/eval-s9-puctppat-p10k.txt --lr 1 --test-pos 4000 --train-pos 30000                                                                    04:31:46 [165/1998]
+sync-dir: out/ppat-sync-4109760  checkpoint: out/ppat-data-4109760.js  best: out/ppat-data-4109760-best.js
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0291*        -    0.0     27.1s        -
+     7600  0.0268   0.0260*   0.0033    0.0    266.0s       29  [   2.57   1.68   0.91   1.20   0.92   0.99   0.91 ]
+...
+   226000  0.0205   0.0197*   0.0561    0.0   7538.3s       30  [   5.84  20.27   0.44  12.99   0.14   1.36   2.47 ]
+
+$ c/run-ppat-parallel.sh 14 out/eval-s9-puctppat-p20k.txt --lr 1 --test-pos 4000 --train-pos 30000
+sync-dir: out/ppat-sync-4142080  checkpoint: out/ppat-data-4142080.js  best: out/ppat-data-4142080-best.js
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0330*        -    0.0     17.8s        -
+    25200  0.0282   0.0302*   0.0021    0.0    180.9s      139  [   2.51   1.48   1.00   1.13   1.01   0.98   1.03 ]
+...
+   613200  0.0240F  0.0250*   0.0484    0.0   3973.3s      154  [   4.84  22.11   3.97   7.01   0.09   1.28   1.93 ]
+
+chris@ryzen:~/code/Torogo$ P1_PPAT_DATA=out/ppat-data-4109760-best.js P2_PPAT_DATA=out/ppat-data-4142080-best.js PLAYOUTS=2000 node selfplay.js --p1 puct-ppat --p2 puct-ppat --rand-moves 3 --size 9
+games  elapsed  blkWR  avgLen  maxLen  tP1mv  tP2Mv  P2WR  P2Better
+...
+   90    82.6m   5444    95.6     133  602ms  600ms  4444      1472
+
+
+
+$ c/run-ppat-parallel.sh 4 out/eval-s9-puctppat-p10k.txt --lr 1 --test-pos 4000 --train-pos 30000                                                                    04:31:46 [191/1824]
+launching 4 trainers + 1 monitor;  train-pos/worker: 30000
+sync-dir: out/ppat-sync-4109760  checkpoint: out/ppat-data-4109760.js  best: out/ppat-data-4109760-best.js
+records: 34005 found in out/eval-s9-puctppat-p10k.txt (0 skipped)
+monitor: 4000 test positions, test-playouts 500, 4 workers
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0291*        -    0.0     27.1s        -
+    34800  0.0227F  0.0205*   0.0206    0.0   1190.3s       29  [   3.57  24.58   0.77  10.62   0.25   1.02   1.64 ]
+    62000  0.0213F  0.0202    0.0292    0.0   2095.2s       30  [   4.06  29.81   0.63  10.90   0.20   1.06   3.25 ]
+    96000  0.0210F  0.0200    0.0357    0.0   3227.1s       30  [   2.38  42.17   0.61  18.53   0.20   1.12   3.28 ]
+   123200  0.0208F  0.0200    0.0406    0.0   4127.2s       30  [   3.37  38.45   0.56  14.03   0.22   1.17   3.60 ]
+   150400  0.0207F  0.0199    0.0447    0.0   5039.0s       30  [   3.92  31.63   0.53  10.80   0.16   1.22   3.15 ]
+   184400  0.0206F  0.0197*   0.0505    0.0   6159.3s       30  [   4.79  29.53   0.46  13.97   0.15   1.27   3.65 ]
+   212800  0.0204F  0.0200    0.0540    0.0   7084.7s       30  [   2.38  25.90   0.44  22.08   0.16   1.37   2.46 ]
+   246800  0.0204F  0.0199    0.0585    0.0   8223.7s       30  [   3.55  23.84   0.40  11.95   0.10   1.41   2.15 ]
+   274000  0.0203F  0.0199    0.0616    0.0   9128.8s       30  [   5.09  23.39   0.38  16.72   0.09   1.42   2.38 ]
+   301600  0.0202F  0.0200    0.0648    0.0  10052.5s       30  [   3.93  21.24   0.41  17.89   0.09   1.49   3.05 ]
+   336000  0.0201F  0.0199    0.0692    0.0  11180.3s       30  [   5.75  19.28   0.42  14.23   0.06   1.53   2.75 ]
+   362800  0.0200F  0.0201    0.0724    0.0  12071.3s       30  [   5.97  23.62   0.39  16.87   0.06   1.60   2.84 ]
+   396400  0.0200F  0.0199    0.0756    0.0  13180.2s       30  [   6.17  26.32   0.39  17.30   0.06   1.68   3.39 ]
+   424000  0.0200F  0.0200    0.0786    0.0  14075.3s       30  [   3.55  25.23   0.36  17.15   0.06   1.76   3.02 ]
+   450800  0.0199F  0.0198    0.0813    0.0  14971.5s       30  [   3.64  26.69   0.36  17.78   0.06   1.81   4.21 ]
+   485200  0.0199F  0.0199    0.0846    0.0  16096.8s       30  [   3.73  23.91   0.35  18.22   0.06   1.95   4.11 ]
+   512000  0.0199F  0.0199    0.0872    0.0  16999.0s       30  [   6.08  20.36   0.33  14.86   0.07   1.99   3.91 ]
+   545600  0.0198F  0.0200    0.0902    0.0  18105.7s       30  [   4.03  16.99   0.33  16.79   0.06   2.17   3.04 ]
+   572800  0.0198F  0.0200    0.0920    0.0  19004.0s       30  [   4.72  17.61   0.31  15.59   0.06   2.25   3.57 ]
+   606800  0.0197F  0.0201    0.0958    0.0  20134.1s       30  [   6.47  15.76   0.32  17.73   0.06   2.31   3.82 ]
+   634800  0.0197F  0.0201    0.0983    0.0  21038.4s       30  [   8.38  14.57   0.33  12.49   0.06   2.37   4.04 ]
+   661600  0.0197F  0.0204    0.0999    0.0  21930.8s       30  [   2.64  17.34   0.31  16.69   0.06   2.44   3.43 ]
+   696400  0.0196F  0.0202    0.1036    0.0  23141.1s       30  [   5.21  22.14   0.30  18.99   0.05   2.53   3.28 ]
+
+$ c/run-ppat-parallel.sh 14 out/eval-s9-puctppat-p10k+p20k.txt --lr 1 --test-pos 4000 --train-pos 65000
+launching 14 trainers + 1 monitor;  train-pos/worker: 65000
+sync-dir: out/ppat-sync-4149027  checkpoint: out/ppat-data-4149027.js  best: out/ppat-data-4149027-best.js
+records: 69208 found in out/eval-s9-puctppat-p10k+p20k.txt (0 skipped)
+monitor: 4000 test positions, test-playouts 500, 14 workers
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0312*        -    0.0     17.8s        -
+    68600  0.0250F  0.0234*   0.0120    0.0    458.1s      150  [   5.26  13.38   1.00   4.50   0.39   0.96   1.29 ]
+   134400  0.0235F  0.0227*   0.0193    0.0    907.0s      148  [   5.43  24.81   1.04   7.02   0.28   1.01   1.62 ]
+   200200  0.0231F  0.0226    0.0247    0.0   1353.0s      148  [   4.39  27.07   1.11   8.54   0.21   0.97   1.80 ]
+   267400  0.0230F  0.0226    0.0288    0.0   1811.8s      148  [   3.73  26.93   1.20  10.01   0.18   0.97   2.24 ]
+   333200  0.0228F  0.0224*   0.0324    0.0   2251.9s      148  [   4.08  30.25   1.27  10.39   0.16   0.98   2.42 ]
+   399000  0.0227F  0.0225    0.0351    0.0   2701.1s      148  [   3.10  28.54   1.34  10.43   0.13   0.96   2.32 ]
+   466200  0.0226F  0.0224    0.0378    0.0   3154.1s      148  [   4.18  28.32   1.40  10.94   0.12   0.93   2.39 ]
+   532000  0.0226F  0.0224    0.0404    0.0   3634.6s      146  [   4.16  32.91   1.43  10.92   0.10   0.91   2.70 ]
+
+
+
+$ c/run-ppat-parallel.sh 4 out/eval-s9-puctppat-p10k.txt --lr 1 --test-pos 4000 --train-pos 30000
+launching 4 trainers + 1 monitor;  train-pos/worker: 30000
+sync-dir: out/ppat-sync-4109760  checkpoint: out/ppat-data-4109760.js  best: out/ppat-data-4109760-best.js
+records: 34005 found in out/eval-s9-puctppat-p10k.txt (0 skipped)
+monitor: 4000 test positions, test-playouts 500, 4 workers
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0291*        -    0.0     27.1s        -
+     7600  0.0268   0.0260*   0.0033    0.0    266.0s       29  [   2.57   1.68   0.91   1.20   0.92   0.99   0.91 ]
+    14800  0.0251   0.0222*   0.0097    0.0    504.6s       29  [   6.17   7.35   0.87   2.82   0.56   1.00   0.96 ]
+    21600  0.0238   0.0212*   0.0143    0.0    737.0s       29  [   5.16  14.56   0.84   4.06   0.34   1.00   1.15 ]
+    28000  0.0229   0.0209*   0.0176    0.0    965.8s       29  [   5.92  17.84   0.79   7.61   0.30   1.02   1.36 ]
+    34800  0.0227F  0.0205*   0.0206    0.0   1190.3s       29  [   3.57  24.58   0.77  10.62   0.25   1.02   1.64 ]
+    41600  0.0222   0.0205*   0.0227    0.0   1410.0s       30  [   2.32  29.00   0.77   8.32   0.23   1.03   2.05 ]
+    48400  0.0214   0.0204*   0.0257    0.0   1637.7s       30  [   5.15  33.51   0.76  11.18   0.22   1.03   1.86 ]
+    55200  0.0209   0.0202*   0.0274    0.0   1868.6s       30  [   6.20  32.02   0.75  11.61   0.21   1.05   2.19 ]
+    62000  0.0213F  0.0202    0.0292    0.0   2095.2s       30  [   4.06  29.81   0.63  10.90   0.20   1.06   3.25 ]
+    68800  0.0210   0.0200*   0.0307    0.0   2319.6s       30  [   2.71  35.13   0.60  14.48   0.18   1.09   3.07 ]
+    75600  0.0216   0.0201    0.0321    0.0   2549.6s       30  [   3.35  35.75   0.61  17.17   0.18   1.04   3.13 ]
+    82400  0.0213   0.0202    0.0334    0.0   2774.6s       30  [   2.47  41.59   0.60  17.98   0.18   1.04   3.29 ]
+    89200  0.0210   0.0201    0.0344    0.0   3000.2s       30  [   2.54  41.53   0.59  16.19   0.20   1.06   3.02 ]
+    96000  0.0210F  0.0200    0.0357    0.0   3227.1s       30  [   2.38  42.17   0.61  18.53   0.20   1.12   3.28 ]
+   103200  0.0200   0.0199*   0.0372    0.0   3454.9s       30  [   4.16  39.15   0.63  16.66   0.19   1.16   4.07 ]
+   109600  0.0205   0.0199*   0.0387    0.0   3678.3s       30  [   3.76  45.16   0.59  15.47   0.19   1.17   3.89 ]
+   116400  0.0211   0.0198*   0.0396    0.0   3899.5s       30  [   3.75  40.40   0.62  15.18   0.22   1.19   4.33 ]
+   123200  0.0208F  0.0200    0.0406    0.0   4127.2s       30  [   3.37  38.45   0.56  14.03   0.22   1.17   3.60 ]
+   129600  0.0196   0.0200    0.0418    0.0   4347.5s       30  [   4.22  43.75   0.54  12.17   0.19   1.16   3.14 ]
+   136800  0.0205   0.0200    0.0431    0.0   4579.6s       30  [   4.14  41.16   0.55  11.77   0.19   1.21   2.62 ]
+   143600  0.0201   0.0198*   0.0440    0.0   4812.6s       30  [   3.53  37.04   0.56  12.38   0.15   1.23   3.67 ]
+   150400  0.0207F  0.0199    0.0447    0.0   5039.0s       30  [   3.92  31.63   0.53  10.80   0.16   1.22   3.15 ]
+   157200  0.0187   0.0198*   0.0460    0.0   5260.7s       30  [   4.96  31.13   0.51  14.16   0.16   1.25   2.99 ]
+   164000  0.0204   0.0199    0.0471    0.0   5485.9s       30  [   4.71  26.18   0.47  13.11   0.15   1.30   2.51 ]
+   170800  0.0205   0.0198    0.0481    0.0   5706.9s       30  [   4.73  21.38   0.48  13.53   0.14   1.30   3.22 ]
+   178000  0.0209   0.0198    0.0492    0.0   5933.4s       30  [   4.06  28.47   0.47  14.36   0.14   1.28   2.72 ]
+   184400  0.0206F  0.0197*   0.0505    0.0   6159.3s       30  [   4.79  29.53   0.46  13.97   0.15   1.27   3.65 ]
+
+$ c/run-ppat-parallel.sh 14 out/eval-s10-puctppat-p10k.txt --lr 1 --test-pos 4000 --train-pos 30000
+launching 14 trainers + 1 monitor;  train-pos/worker: 30000
+sync-dir: out/ppat-sync-4187164  checkpoint: out/ppat-data-4187164.js  best: out/ppat-data-4187164-best.js
+records: 34025 kept of 34025 in out/eval-s10-puctppat-p10k.txt (0 filtered, 0 skipped)
+monitor: 4000 test positions, test-playouts 500, 14 workers
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0285*        -    0.0     21.5s        -
+    25200  0.0255   0.0264*   0.0022    0.0    232.4s      108  [   1.66   1.50   0.99   1.17   0.94   0.99   0.97 ]
+    46200  0.0250F  0.0215*   0.0080    0.0    443.8s      104  [   9.67   8.52   0.93   2.77   0.58   0.97   1.28 ]
+    68600  0.0232F  0.0209*   0.0113    0.0    653.9s      105  [   7.92  14.63   0.91   4.33   0.47   0.96   1.50 ]
+    91000  0.0227F  0.0206*   0.0140    0.0    870.2s      105  [   5.13  19.36   0.92   5.87   0.42   0.97   1.70 ]
+   113400  0.0229   0.0203*   0.0163    0.0   1078.9s      105  [   4.70  25.94   0.92   6.57   0.34   0.97   2.02 ]
+   135800  0.0224F  0.0203*   0.0183    0.0   1294.1s      105  [   4.07  26.43   0.93   7.87   0.34   0.95   2.39 ]
+   158200  0.0223F  0.0202*   0.0202    0.0   1502.4s      105  [   4.40  30.85   0.94   8.35   0.31   0.97   2.58 ]
+   180600  0.0222F  0.0201*   0.0220    0.0   1715.6s      105  [   4.33  31.29   0.97  10.10   0.29   0.95   2.54 ]
+
+When a new weight is created, initialize it from the subsequent phase (if available).
+P phases
+for p in P-1 to 0
+  sampleCount = 0;
+  sampleThresh = 1000;
+  mseCheckpoint = 1.0
+  mseBreachCount = 0
+  while true
+    while sampleCount < sampleThresh
+      generate a training sample for this phase (using puct-ppat and current weights)
+      if (rand < 0.5)
+        measure and accumulate error on this sample
+      train on this sample (only updating current phase)
+      # Finished with sample; overfitting impossible
+    calculate mse
+    if mse > mseCheckpoint + mseGrace
+      mseBreachCount++
+      if mseBreachCount >= mseBreachThresh
+        break
+    sampleThresh += sampleThresh/2
+    mseCheckpoint = mse
+evaluate resulting puct-ppat against prod in real games
+
+  # Dense weight blocks, one per phase. Backward curriculum, single pass.
+  for p in P-1 .. 0:
+    if p < P-1: copy block[p+1] -> block[p]      # warm-start
+    freeze all blocks except p
+    best = +inf; noImprove = 0; window = 1000
+    loop:
+      sq = 0; n = 0
+      repeat window times:
+        s = sample a phase-p position (self-play to phase p)
+        Vstar = puct-ppat(s)            # oracle eval, current weights, later blocks frozen
+        V     = SB update on s, updating block[p] only   # V is the M-rollout mean
+        sq += (Vstar - V)^2; n += 1     # free byproduct, no extra rollouts
+      mse = sq / n
+      if mse < best - grace:            # meaningful improvement
+        best = mse; noImprove = 0
+      else:                             # plateau or regression
+        noImprove += 1
+        if noImprove >= patience: break
+      window += window / 2              # grow → lower-noise MSE as it converges
+  evaluate the resulting puct-ppat vs prod in real games
+
+This shows the difference in feature values between phases:
+
+$ c/run-ppat-parallel.sh 1 out/eval-s9-mega.txt --lr 1 --test-pos 1 --train-pos 1 --phases 2 --phase 0 --load out/ppat-data-12087.js
+        0        -  0.0002*   0.0258    0.0      0.2s        -  [   7.36   1.20   1.04   8.79   0.82   1.02   1.22 ]
+
+$ c/run-ppat-parallel.sh 1 out/eval-s9-mega.txt --lr 1 --test-pos 1 --train-pos 1 --phases 2 --phase 1 --load out/ppat-data-12087.js
+        0        -  0.0000*   0.0259    0.0      0.0s        -  [   3.24  17.72   1.41   8.79   0.11   0.84   2.06 ]

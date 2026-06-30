@@ -15,7 +15,7 @@ const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 const { createState, ppatMove, loadWeights } = _isNode ? require('../ppat-lib.js') : window.PPatterns;
 
-const _weightsArr = _isNode
+const _model = _isNode
   ? loadWeights(Util.envStr('PPAT_DATA', ''))
   : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
@@ -31,7 +31,7 @@ function getMove(game, timeBudgetMs) {
   const game2 = game.cells ? game.clone() : game.toGame2();
   const N = game2.N;
   _ensureState(N);
-  const m = ppatMove(game2, _ppatState, _weightsArr);
+  const m = ppatMove(game2, _ppatState, _model);
   const result = m === PASS ? { type: 'pass', move: PASS }
                             : { type: 'place', move: m, x: m % N, y: (m / N) | 0 };
   return result;

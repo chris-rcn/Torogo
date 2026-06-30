@@ -12,18 +12,18 @@
  *   ./train_ppat <file> [options]
  *   Options:
  *     --lr <f>              learning rate (default 10)
- *     --M <n>               rollouts for V estimate (default 100)
+ *     --playouts <n>        default for --M, --N, and --test-playouts (default 500)
+ *     --M <n>               rollouts for V estimate (default --playouts)
  *     --N <n>               rollouts for gradient (default M)
  *     --batch <n>           batch size (default 10)
  *     --test-pos <n>        test positions (default 100)
  *     --train-pos <n>       train positions (default 0 = all)
- *     --test-playouts <n>   playouts per test position (default 1000)
+ *     --test-playouts <n>   playouts per test position (default --playouts)
  *     --filter <f>          filter margin for extreme values (default 0)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
  */
 #include "game2.h"
-#include "game3.h"
 #include "ppat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,7 +54,6 @@ static int    cfg_overfit;
 static int    cfg_init;
 static int    cfg_train_moves;         /* -1 = unlimited; else ppat for first N moves, then uniform (train + test rollouts) */
 static int    cfg_phase;               /* -1 = all phases; >= 0 = train/test only this phase */
-static int    cfg_ladder;              /* 0 = no ladder features; 1 = enable (requires Game3 mirror) */
 
 /* Parameter-averaging across processes: K workers each run batch-1 SB with their
  * own seed; every --sync-every positions they file-barrier all-reduce (average) θ. */
@@ -90,7 +89,8 @@ static int     n_train_total = 0;      /* full train set across all workers' sli
 static int     test_idx[MAX_LINES];
 static int     n_test = 0;
 
-/* Per-epoch training-fit: accumulate Σ (v* − V)^2 over the current epoch (V is the
+/* Per-epoch training-fit: accumulate Σ (v* − V)^2 (v*, V normalised to win-prob
+ * [0,1], matching the SB paper's MSE units) over the current epoch (V is the
  * M-rollout policy value already computed for the gradient), then latch into done_*
  * at each epoch boundary.  The reported value is the LAST completed epoch over the
  * worker's fixed training set (same positions every epoch → stable, like the fixed
@@ -109,35 +109,6 @@ static long    agg_part_sq_count = 0;
 static Rng  g_rng;          /* this process's RNG (seeded in main) */
 static int    TOTAL;
 static float *theta;
-
-/* Persistent Game3 used for ladder analysis.  Replayed from each training
- * position once via g3_from_game2(), then kept in sync with the Game2 sim
- * during rollouts via mirrored g3_play / g3_undo. */
-static Game3 *sim_g3 = NULL;
-
-static void ladder_g3_ensure(int N) {
-    if (!cfg_ladder) return;
-    if (!sim_g3 || sim_g3->N != N) {
-        if (sim_g3) g3_free(sim_g3);
-        sim_g3 = g3_new(N);
-    }
-}
-
-/* Sync sim_g3 to match the given Game2 position.  Call once per training
- * position before any rollouts. */
-static void ladder_g3_sync(const Game2 *g) {
-    if (!cfg_ladder) return;
-    ladder_g3_ensure(g->N);
-    if (!g3_from_game2(sim_g3, g)) {
-        fprintf(stderr, "train_ppat: g3_from_game2 failed during ladder sync\n");
-        exit(1);
-    }
-}
-
-/* Returns the Game3 pointer passed to ppat_extract (NULL when ladder off). */
-static inline Game3 *ladder_g3(void) {
-    return cfg_ladder ? sim_g3 : NULL;
-}
 
 /* Scratch buffers */
 static PpatState rollout_feat_st;
@@ -213,7 +184,8 @@ static void load_positions(void) {
     if (!f) { fprintf(stderr, "cannot open %s\n", cfg_file); exit(1); }
     char buf[8192];
     int lineno = 0;
-    int skipped = 0;
+    int skipped = 0;       /* unparseable lines */
+    int filtered = 0;      /* valid positions dropped by --filter / --phase */
     int topo_init = 0;
     float filter_threshold = 1.0f - 2.0f * cfg_filter;
 
@@ -227,7 +199,7 @@ static void load_positions(void) {
             if (skipped <= 5) {
                 size_t len = strlen(buf);
                 if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-                fprintf(stderr, "warning: skipping line %d: %s\n", lineno, buf);
+                fprintf(stderr, "WARNING: skipping line %d: %s\n", lineno, buf);
             }
             continue;
         }
@@ -236,7 +208,7 @@ static void load_positions(void) {
         if (!topo_init) { g2_init_topology(pos.board_size); topo_init = 1; }
 
         /* Value filter */
-        if (cfg_filter > 0 && fabsf(pos.value) > filter_threshold) continue;
+        if (cfg_filter > 0 && fabsf(pos.value) > filter_threshold) { filtered++; continue; }
 
         /* Compute and filter by phase */
         Game2 g;
@@ -245,16 +217,17 @@ static void load_positions(void) {
             pos.phase = ppat_phase_count * (g.cap - g.empty_count) / g.cap;
         else
             pos.phase = -1;
-        if (cfg_phase >= 0 && pos.phase != cfg_phase) continue;
+        if (cfg_phase >= 0 && pos.phase != cfg_phase) { filtered++; continue; }
 
         all_positions[n_all++] = pos;
     }
     fclose(f);
     if (skipped > 5)
-        fprintf(stderr, "warning: %d more lines skipped\n", skipped - 5);
+        fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
     if (n_all == 0) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", cfg_file, skipped); exit(1); }
     if (cfg_worker_id == 0)
-        printf("records: %d found in %s (%d skipped)\n", n_all, cfg_file, skipped);
+        printf("records: %d kept of %d in %s (%d filtered, %d skipped)\n",
+               n_all, n_all + filtered, cfg_file, filtered, skipped);
 }
 
 static void split_data(void) {
@@ -278,7 +251,7 @@ static void split_data(void) {
         int avail   = n_all - test_n;                                     /* data after the test head */
         int train_n = cfg_train_pos > 0 ? cfg_train_pos : avail;
         if (train_n > avail) {
-            fprintf(stderr, "warning: train (%d) exceeds data after the test head (%d) in %d total; clamping\n",
+            fprintf(stderr, "WARNING: train (%d) exceeds data after the test head (%d) in %d total; clamping\n",
                     train_n, avail, n_all);
             train_n = avail;
         }
@@ -326,7 +299,7 @@ static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx) {
  * Leaves rollout_feat_st and rollout_probs populated. */
 
 static int policy_select(Game2 *g) {
-    ppat_extract(g, ladder_g3(), &rollout_feat_st);
+    ppat_extract(g, &rollout_feat_st);
     int n = rollout_feat_st.count;
     if (n == 0) return -1;
 
@@ -360,13 +333,11 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
     Game2 sim;
     g2_clone(&sim, game);
     int pm = ppat_moves;
-    int g3_depth = 0;       /* moves mirrored into sim_g3 (for rewind on exit) */
 
     for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
         if (chosen == -1) {
             g2_play(&sim, PASS);
-            if (cfg_ladder) { g3_play(sim_g3, PASS); g3_depth++; }
             continue;
         }
 
@@ -385,16 +356,10 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
 
         int32_t mv = rollout_feat_st.moves[chosen];
         g2_play(&sim, mv);
-        if (cfg_ladder) { g3_play(sim_g3, mv); g3_depth++; }
     }
 
-    /* Finish game with uniform random play.  No need to mirror — ladder isn't
-     * consulted past the policy phase. */
+    /* Finish game with uniform random play. */
     while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim, &g_rng));
-
-    /* Rewind sim_g3 to its state at rollout entry so the next rollout starts
-     * from the same base position. */
-    if (cfg_ladder) for (int i = 0; i < g3_depth; i++) g3_undo(sim_g3);
 
     return g2_estimate_winner(&sim) == player ? 1 : -1;
 }
@@ -403,10 +368,6 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
 
 static void update_theta(const Game2 *game, float v_star) {
     int8_t player = game->current;
-
-    /* Sync ladder Game3 to this training position once; rollouts then keep it
-     * in lockstep via mirrored play/undo. */
-    ladder_g3_sync(game);
 
     /* V: M rollouts, no gradient */
     float V = 0;
@@ -423,9 +384,12 @@ static void update_theta(const Game2 *game, float v_star) {
         for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
     }
 
-    /* Accumulate bias*g into batch */
+    /* Gradient uses the un-normalised [-1,1] bias (the SB paper's faster-learning
+     * -1/1 regime).  The MSE byproduct normalises v* and V to win-probability
+     * [0,1] before squaring, so trMSE/teMSE are reported in the paper's units. */
     float bias = v_star - V;
-    epoch_sq_sum += (double)bias * bias;   /* per-epoch training-fit byproduct (V already computed) */
+    float v01 = 0.5f * (v_star + 1.0f), V01 = 0.5f * (V + 1.0f);
+    epoch_sq_sum += (double)(v01 - V01) * (v01 - V01);
     epoch_sq_count++;
     for (int k = 0; k < TOTAL; k++) batch_buf[k] += bias * g_buf[k];
     batch_count++;
@@ -550,8 +514,7 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 static float move_probability(const Game2 *g, int32_t move) {
     static PpatState st;
     static float logits[MAX_CAP];
-    ladder_g3_sync(g);
-    ppat_extract(g, ladder_g3(), &st);
+    ppat_extract(g, &st);
     int n = st.count;
     if (n == 0) return 0;
     float mx = -1e30f;
@@ -592,7 +555,7 @@ static TestResult measure_test(int use_uniform, int n) {
         Game2 g;
         int bad = -1;
         int rp = replay_position(pos, &g, &bad);
-        if (rp < 0) { fprintf(stderr, "warning: illegal move #%d (idx %d) in test position %d, skipping\n", bad, pos->history[bad], test_idx[ti]); continue; }
+        if (rp < 0) { fprintf(stderr, "WARNING: illegal move #%d (idx %d) in test position %d, skipping\n", bad, pos->history[bad], test_idx[ti]); continue; }
         if (rp == 0) continue;
 
         if (pos->best_move != PASS) {
@@ -604,7 +567,11 @@ static TestResult measure_test(int use_uniform, int n) {
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
             sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, cfg_train_moves);
-        float d = pos->value - sum / cfg_test_playouts;
+        /* Normalise v* and the rollout mean from [-1,1] to win-probability [0,1]
+         * before the error, so MSE matches the SB paper's units. */
+        float v01 = 0.5f * (pos->value + 1.0f);
+        float V01 = 0.5f * (sum / cfg_test_playouts + 1.0f);
+        float d = v01 - V01;
         abs_sum += fabsf(d);
         sq_sum += d * d;
         count++;
@@ -729,37 +696,21 @@ static double avg_abs_weight(void) {
     return s / TOTAL;
 }
 
-/* Print the exp'd prev-move (and optional ladder) feature multipliers from theta,
+/* Print the exp'd prev-move feature multipliers from theta,
  * as a "[ ... ]" suffix.  Shared by the solo print_stats and the parallel monitor. */
 static void print_weights(void) {
-    int prev_base   = ppat_phase_count * ppat_num_patterns;
-    int ladder_base = ppat_phase_count * (ppat_num_patterns + 7);
+    int prev_base = ppat_phase_count * ppat_num_patterns;
     printf("  [ ");
     if (cfg_phase >= 0) {
         int pb = prev_base + cfg_phase * 7;
         for (int i = 0; i < 7; i++)
             printf("%6.2f ", expf(theta[pb + i]));
-        if (cfg_ladder) {
-            int lb = ladder_base + cfg_phase * PPAT_NUM_LADDER;
-            printf("| ");
-            for (int i = 0; i < PPAT_NUM_LADDER; i++)
-                printf("%6.2f ", expf(theta[lb + i]));
-        }
     } else {
         for (int i = 0; i < 7; i++) {
             float avg = 0;
             for (int p = 0; p < ppat_phase_count; p++)
                 avg += expf(theta[prev_base + p * 7 + i]);
             printf("%6.2f ", avg / ppat_phase_count);
-        }
-        if (cfg_ladder) {
-            printf("| ");
-            for (int i = 0; i < PPAT_NUM_LADDER; i++) {
-                float avg = 0;
-                for (int p = 0; p < ppat_phase_count; p++)
-                    avg += expf(theta[ladder_base + p * PPAT_NUM_LADDER + i]);
-                printf("%6.2f ", avg / ppat_phase_count);
-            }
         }
     }
     printf("]");
@@ -769,8 +720,8 @@ static void print_weights(void) {
  * the metrics — without training or touching the sync barrier, so the training
  * workers never stall on the (expensive) test. */
 static void run_monitor(void) {
-    printf("monitor: %d test positions, test-playouts %d, %d workers\n",
-           n_test, cfg_test_playouts, cfg_workers);
+    printf("monitor: %d test positions, test-playouts %d, %d workers, phases %d\n",
+           n_test, cfg_test_playouts, cfg_workers, ppat_phase_count);
     printf("%9s  %7s  %7s  %7s  %6s  %8s  %7s\n",
            "positions", "trMSE", "teMSE", "avgW", "move%", "elapsedS", "pos/s");
     fflush(stdout);
@@ -778,15 +729,25 @@ static void run_monitor(void) {
     wall_start = wall_now();
     float mon_best_te = 1e30f;   /* lowest teMSE seen, for the '*' new-low marker */
 
-    /* Uniform-policy baseline, before any model exists — mirrors the solo path's
-     * leading uniform row so the table starts with the no-skill reference. */
+    /* Baseline row.  Fresh run: the uniform no-skill reference.  --load: the
+     * loaded model's actual test + its weights (theta already holds the loaded
+     * weights at this point), so the table starts from the real starting point. */
     {
-        TestResult tr = measure_test(1, n_test);
+        int loaded = (cfg_load != NULL);
+        TestResult tr = measure_test(loaded ? 0 : 1, n_test);
         double el = wall_now() - wall_start;
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fs", el);
         char tebuf[16];
-        printf("%9d  %7s  %7s  %7s  %5.1f  %8s  %7s\n",
-               0, "-", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf), "-", tr.move_match * 100.0f, eb, "-");
+        if (loaded) {
+            printf("%9d  %7s  %7s  %7.4f  %5.1f  %8s  %7s",
+                   0, "-", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
+                   avg_abs_weight(), tr.move_match * 100.0f, eb, "-");
+            print_weights();
+            printf("\n");
+        } else {
+            printf("%9d  %7s  %7s  %7s  %5.1f  %8s  %7s\n",
+                   0, "-", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf), "-", tr.move_match * 100.0f, eb, "-");
+        }
         fflush(stdout);
     }
 
@@ -884,21 +845,22 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
 
 int main(int argc, char **argv) {
     if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
-        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--M <n>] [--N <n>]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--filter <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--overfit] [--ladder]\n");
+        fprintf(stderr, "       [--overfit]\n");
         return 1;
     }
 
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
-    cfg_M            = get_int_arg(argc, argv, "--M", 100);
+    int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N, test-playouts */
+    cfg_M            = get_int_arg(argc, argv, "--M", playouts);
     cfg_N            = get_int_arg(argc, argv, "--N", cfg_M);
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 100);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
-    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 1000);
+    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", playouts);
     cfg_filter       = get_float_arg(argc, argv, "--filter", 0.0f);
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
@@ -910,17 +872,12 @@ int main(int argc, char **argv) {
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
     cfg_phase = get_int_arg(argc, argv, "--phase", -1);
-    cfg_ladder = has_flag(argc, argv, "--ladder");
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
-    cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 0);
+    cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 100);
     cfg_sync_dir   = get_str_arg(argc, argv, "--sync-dir", "out/ppat-sync");
     int parallel = (cfg_workers > 1 && cfg_sync_every > 0);
     if (parallel) mkdir(cfg_sync_dir, 0777);   /* idempotent; launcher should clear it first */
-
-    /* When loading, the file's `ladder` field is authoritative — ppat_load_weights
-     * sets ppat_ladder_enabled.  For fresh runs, --ladder controls layout. */
-    if (!cfg_load) ppat_ladder_enabled = cfg_ladder;
 
     /* Per-worker seed so workers explore independently before averaging. */
     rng_seed(&g_rng, (uint32_t)time(NULL) ^ (uint32_t)(cfg_worker_id * 0x9e3779b9u + 1u));
@@ -934,13 +891,6 @@ int main(int argc, char **argv) {
     if (cfg_load) {
         float *loaded = ppat_load_weights(cfg_load);
         if (!loaded) { fprintf(stderr, "failed to load weights\n"); exit(1); }
-        if (cfg_ladder && !ppat_ladder_enabled) {
-            fprintf(stderr, "warning: --ladder set but loaded file has no ladder weights; running without ladder features\n");
-            cfg_ladder = 0;
-        } else if (!cfg_ladder && ppat_ladder_enabled) {
-            fprintf(stderr, "note: loaded file has ladder weights; enabling ladder features\n");
-            cfg_ladder = 1;
-        }
         TOTAL = ppat_total_weights();
         free(theta);
         theta = loaded;
@@ -964,11 +914,10 @@ int main(int argc, char **argv) {
     else          snprintf(weights_file, sizeof(weights_file), "out/ppat-data-%08x.js", rng_next(&g_rng));
 
     if (cfg_worker_id == 0) {
-    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d  ladder: %s\n",
+    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d\n",
            cfg_file, n_train_total, n_train, cfg_workers, cfg_lr, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_filter,
-           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase,
-           cfg_ladder ? "true" : "false");
+           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase);
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
@@ -990,9 +939,10 @@ int main(int argc, char **argv) {
     const int do_inline = (cfg_workers == 1);
     int last_print_positions = 0;   /* for the per-cycle test-size cap */
 
-    /* baseline (uniform, cheap): full test set.  --baseline-only stops here. */
+    /* baseline: fresh run shows the uniform no-skill reference; --load shows the
+     * loaded model's actual test + weights.  --baseline-only stops here. */
     if (do_inline || baseline_only) {
-        print_stats(iterations, total_positions, 1, 0, n_test);
+        print_stats(iterations, total_positions, cfg_load ? 0 : 1, cfg_load ? 1 : 0, n_test);
         last_print_positions = total_positions;
         if (baseline_only) return 0;
     }
@@ -1013,7 +963,7 @@ int main(int argc, char **argv) {
             Game2 g;
             int bad = -1;
             int rp = replay_position(pos, &g, &bad);
-            if (rp < 0) { fprintf(stderr, "warning: illegal move #%d (idx %d) in training position, skipping\n", bad, pos->history[bad]); continue; }
+            if (rp < 0) { fprintf(stderr, "WARNING: illegal move #%d (idx %d) in training position, skipping\n", bad, pos->history[bad]); continue; }
             if (rp == 0) continue;
             update_theta(&g, pos->value);
             total_positions++;

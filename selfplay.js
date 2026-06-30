@@ -12,14 +12,26 @@ const { performance } = require('perf_hooks');
  *   --size    <n>        Board size: 9, 13, or 19    (default 13)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
- *   --rand-moves <n>     Play n random moves at the start of each position (default 0)
+ *   --rand-moves <n>     Play n random moves at the start of each position (default 3)
+ *   --min-phase <f>      p1/p2 only play once board phase (1−empty/area) ≥ f; the
+ *                        fallback plays the opening up to it       (default 0)
+ *   --max-phase <f>      p1/p2 stop once phase > f; the fallback completes the
+ *                        game                                      (default 1)
+ *   --fallback <policy>  Agent that plays outside the phase window (default ref-npat)
  *   --help               Show this help message
  *
  * Env variables:
  *   VERBOSE=1            Print the board after every move
+ *   P1_ / P2_ prefix     Per-slot agent config (e.g. P1_PPAT_DATA, P2_RAVE_K)
+ *   P1_BUDGET, P2_BUDGET Per-slot time budget override (asymmetric-time matches)
+ *   PF_ prefix, PF_BUDGET Fallback-agent config and budget
  *
  * Colors alternate each game: p1 is black in odd games, white in even games.
  * Policy names are filenames without the .js extension inside the ai/ folder.
+ * A phase window ([min-phase, max-phase] ≠ [0,1]) isolates the agents' play to a
+ * phase band — the opening (rand-moves + fallback to min-phase) is built once per
+ * colour-swapped pair so the comparison stays fair.  Use it to profile
+ * strength by game phase.
  *
  * Examples:
  *   node selfplay.js --p1 random --p2 always-pass
@@ -34,7 +46,8 @@ const Util = require('./util.js');
 const VERBOSE = Util.envInt('VERBOSE', 0);
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'stop-tol', 'stop-min']);
+  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'stop-tol', 'stop-min',
+   'min-phase', 'max-phase', 'fallback']);
 
 if (opts.help) {
   console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>]\n` +
@@ -52,7 +65,22 @@ const p1Name    = opts.p1   || 'prod';
 const p2Name    = opts.p2   || p1Name;
 const boardSize = parseInt(opts.size || '13', 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
-const randMoves = parseInt(opts['rand-moves'] || '0', 10);
+const randMoves = parseInt(opts['rand-moves'] || '3', 10);
+
+// Phase window: p1/p2 only play moves with phase (= 1 − empty/area) in
+// [min-phase, max-phase]; the fallback agent plays both sides outside it.  The
+// opening (rand-moves + fallback up to min-phase) is built ONCE per match pair
+// and shared by both colour assignments, so the windowed comparison stays fair
+// under colour swap.  Past max-phase the fallback completes the game (per-move
+// gate).  This isolates the agents' contribution to a phase band — a
+// game-played strength-by-phase profile.  Defaults (0,1) = whole game, no fallback.
+const minPhase     = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
+const maxPhase     = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
+const fallbackName = opts.fallback || 'ref-npat';
+if (minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
+  console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
+  process.exit(1);
+}
 
 // Early-stop (SPRT-style): stop once the decision is confident either way.
 // --stop-tol a → stop when P(p2 truly better than 50%) reaches 1-a (p2/candidate
@@ -66,8 +94,41 @@ if (!Number.isInteger(boardSize)) {
   process.exit(1);
 }
 
-const { getMove: p1 } = require(path.join(__dirname, 'ai', p1Name + '.js'));
-const { getMove: p2 } = require(path.join(__dirname, 'ai', p2Name + '.js'));
+// Load an agent for slot 1 or 2.  Factory agents (exporting create) get their
+// own instance built from a slot-scoped config reader, so the same agent file
+// can run on both sides with differentiated config (P1_*/P2_* env).  Legacy
+// agents (no create) are used directly — they read plain env at load, so they
+// can't be differentiated, but otherwise behave as before.
+function loadAgent(name, slot) {
+  const mod  = require(path.join(__dirname, 'ai', name + '.js'));
+  const inst = (typeof mod.create === 'function') ? mod.create(Util.makeCfg(slot)) : mod;
+  return inst.getMove;
+}
+// Per-slot time budget: P<slot>_BUDGET overrides the shared --budget for that
+// side (enables asymmetric-time matches), else falls back to --budget.
+function slotBudget(slot) {
+  const v = typeof process !== 'undefined' ? process.env['P' + slot + '_BUDGET'] : undefined;
+  return v !== undefined ? parseInt(v, 10) : budgetMs;
+}
+const p1 = loadAgent(p1Name, 1);
+const p2 = loadAgent(p2Name, 2);
+const p1Budget = slotBudget(1);
+const p2Budget = slotBudget(2);
+
+// Fallback agent (slot 'F': PF_* config / PF_BUDGET) — only loaded when a phase
+// window is requested.  It plays the opening up to min-phase and completes the
+// game past max-phase, for both sides.
+const usePhaseWindow = minPhase > 0 || maxPhase < 1;
+const fallback       = usePhaseWindow ? loadAgent(fallbackName, 'F') : null;
+const fallbackBudget = slotBudget('F');
+if (usePhaseWindow)
+  console.log(`phase window: [${minPhase}, ${maxPhase}]  fallback: ${fallbackName} (budget ${fallbackBudget}ms)`);
+
+// Board fullness used to gate the window: 1 − empty/area, per the canonical
+// "phase" definition.  Not strictly monotonic (captures lower it), which is fine
+// here — only the max-phase cutoff is a per-move gate; min-phase is baked into
+// the shared opening.
+function phaseOf(g) { return 1 - g.emptyCount / (g.N * g.N); }
 
 function printBoard(game) {
   console.log(game.toString());
@@ -248,10 +309,24 @@ function playGame(startGame, p1IsBlack) {
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === BLACK;
+
+    // Past max-phase: the fallback completes the game for both sides, not
+    // attributed to p1/p2 timing.  (min-phase is already satisfied by the shared
+    // opening; we don't re-gate on it mid-game — see phaseOf note above.)
+    if (fallback && phaseOf(game) > maxPhase) {
+      const fm = fallback(game, fallbackBudget);
+      if (!game.play(fm.move)) {
+        console.error(`Illegal fallback move: ${JSON.stringify(fm)}`);
+        process.exit(1);
+      }
+      continue;
+    }
+
     const policy = isBlackTurn ? black : white;
     const mover  = (isBlackTurn === p1IsBlack) ? 'p1' : 'p2';
+    const budget = mover === 'p1' ? p1Budget : p2Budget;
     const t0 = performance.now();
-    const move = policy(game, budgetMs);
+    const move = policy(game, budget);
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
     const idx = move.move;
@@ -286,6 +361,19 @@ while (gamesPlayed < gameLimit && !decided) {
   const opening = new Game2(boardSize);
   for (let i = 0; i < randMoves && !opening.gameOver; i++)
     opening.play(opening.randomLegalMove());
+
+  // Advance with the fallback (both sides) up to min-phase, as part of the
+  // shared opening — so both colour assignments start from the identical
+  // position and the windowed comparison is fair under colour swap.
+  if (fallback) {
+    while (!opening.gameOver && phaseOf(opening) < minPhase) {
+      const fm = fallback(opening, fallbackBudget);
+      if (!opening.play(fm.move)) {
+        console.error(`Illegal fallback setup move: ${JSON.stringify(fm)}`);
+        process.exit(1);
+      }
+    }
+  }
 
   // Play from this opening with both color assignments.
   for (let swap = 0; swap < 2 && gamesPlayed < gameLimit; swap++) {
