@@ -22,6 +22,12 @@
  *     --filter <f>          filter margin for extreme values (default 0)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
+ *     --phases <n>          number of phase-conditioned weight slices (default 1)
+ *     --phase <p>           train/test only phase p; freezes the other phases
+ *     --init-phase-scale <f>  seed phase p's weights from phase p+1 (scaled by f)
+ *                           before training (endgame-first warm-start; requires
+ *                           --phase). γ → γ^f, so f<1 softens toward uniform,
+ *                           f=0 seeds zeros. Absent = no seeding.
  */
 #include "game2.h"
 #include "ppat.h"
@@ -187,6 +193,7 @@ static void load_positions(void) {
     int skipped = 0;       /* unparseable lines */
     int filtered = 0;      /* valid positions dropped by --filter / --phase */
     int topo_init = 0;
+    int topo_size = 0;
     float filter_threshold = 1.0f - 2.0f * cfg_filter;
 
     while (fgets(buf, sizeof(buf), f) && n_all < MAX_LINES) {
@@ -204,8 +211,15 @@ static void load_positions(void) {
             continue;
         }
 
-        /* Init topology on first valid position */
-        if (!topo_init) { g2_init_topology(pos.board_size); topo_init = 1; }
+        /* Init topology on first valid position; the board size is global, so all
+         * positions must share it — mixed sizes would index the wrong neighbour
+         * tables (a segfault).  Throw on the first discrepancy instead. */
+        if (!topo_init) { g2_init_topology(pos.board_size); topo_size = pos.board_size; topo_init = 1; }
+        else if (pos.board_size != topo_size) {
+            fprintf(stderr, "error: mixed board sizes in %s (line %d: size %d, expected %d; train one size per file)\n",
+                    cfg_file, lineno, pos.board_size, topo_size);
+            exit(1);
+        }
 
         /* Value filter */
         if (cfg_filter > 0 && fabsf(pos.value) > filter_threshold) { filtered++; continue; }
@@ -366,6 +380,20 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
 
 /* ── Core update (Algorithm 1) ─────────────────────────────────────────────── */
 
+/* When --phase P is set, zero the gradient outside phase P's pattern and
+ * prev-move slices so the other phases stay frozen at their loaded/init value.
+ * Rollouts still traverse later phases for move selection, but only phase P's
+ * weights are updated — exact coordinate-restricted SB gradient descent. */
+static void mask_to_phase(float *v) {
+    const int np = ppat_num_patterns;
+    const int prev_base = ppat_phase_count * np;
+    const int pat_lo = cfg_phase * np,           pat_hi = pat_lo + np;
+    const int prev_lo = prev_base + cfg_phase * 7, prev_hi = prev_lo + 7;
+    for (int k = 0; k < TOTAL; k++)
+        if (!((k >= pat_lo && k < pat_hi) || (k >= prev_lo && k < prev_hi)))
+            v[k] = 0.0f;
+}
+
 static void update_theta(const Game2 *game, float v_star) {
     int8_t player = game->current;
 
@@ -383,6 +411,7 @@ static void update_theta(const Game2 *game, float v_star) {
         float scale = (float)z / N;
         for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
     }
+    if (cfg_phase >= 0) mask_to_phase(g_buf);
 
     /* Gradient uses the un-normalised [-1,1] bias (the SB paper's faster-learning
      * -1/1 regime).  The MSE byproduct normalises v* and V to win-probability
@@ -691,29 +720,69 @@ static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psu
  * as a steadily climbing avgW). */
 static double avg_abs_weight(void) {
     if (TOTAL <= 0) return 0;
+    /* With --phase P, average only phase P's slice (patterns + prev-move) so the
+     * column tracks the weights actually being trained, not the frozen phases. */
+    if (cfg_phase >= 0) {
+        const int np = ppat_num_patterns;
+        const int prev_base = ppat_phase_count * np;
+        double s = 0;
+        for (int i = 0; i < np; i++) s += fabs(theta[cfg_phase * np + i]);
+        for (int i = 0; i < 7; i++)  s += fabs(theta[prev_base + cfg_phase * 7 + i]);
+        return s / (np + 7);
+    }
     double s = 0;
     for (int i = 0; i < TOTAL; i++) s += fabs(theta[i]);
     return s / TOTAL;
 }
 
-/* Print the exp'd prev-move feature multipliers from theta,
- * as a "[ ... ]" suffix.  Shared by the solo print_stats and the parallel monitor. */
-static void print_weights(void) {
-    int prev_base = ppat_phase_count * ppat_num_patterns;
-    printf("  [ ");
-    if (cfg_phase >= 0) {
-        int pb = prev_base + cfg_phase * 7;
-        for (int i = 0; i < 7; i++)
-            printf("%6.2f ", expf(theta[pb + i]));
-    } else {
-        for (int i = 0; i < 7; i++) {
-            float avg = 0;
-            for (int p = 0; p < ppat_phase_count; p++)
-                avg += expf(theta[prev_base + p * 7 + i]);
-            printf("%6.2f ", avg / ppat_phase_count);
-        }
-    }
+/* Short names for the 7 prev-move features (≤6 chars to align with %6.2f). */
+static const char *PREV_FEAT_NAMES[7] = {
+    "contig", "savcap", "cap+sa", "extend", "ext+sa", "ko", "semeai"
+};
+
+/* Print one phase's 7 exp'd prev-move feature multipliers as "[ ... ]". */
+static void print_phase_weights(int p) {
+    int pb = ppat_phase_count * ppat_num_patterns + p * 7;
+    printf("[ ");
+    for (int i = 0; i < 7; i++) printf("%6.2f ", expf(theta[pb + i]));
     printf("]");
+}
+
+/* Print the exp'd prev-move feature multipliers from theta, as a suffix.
+ * Single phase (--phase P, or phaseCount 1): that phase's vector.
+ * Multiple phases trained together: first and last phase, to show divergence.
+ * Shared by the solo print_stats and the parallel monitor. */
+static void print_weights(void) {
+    printf("  ");
+    if (cfg_phase >= 0) {
+        print_phase_weights(cfg_phase);
+    } else if (ppat_phase_count <= 1) {
+        print_phase_weights(0);
+    } else {
+        printf("p0 ");                          print_phase_weights(0);
+        printf("  p%d ", ppat_phase_count - 1);  print_phase_weights(ppat_phase_count - 1);
+    }
+}
+
+/* Print the prev-move feature-name header aligned under one phase's "[ ... ]". */
+static void print_phase_header(void) {
+    printf("[ ");
+    for (int i = 0; i < 7; i++) printf("%6s ", PREV_FEAT_NAMES[i]);
+    printf("]");
+}
+
+/* Header counterpart of print_weights: same layout, feature names instead of
+ * values, so the column titles sit over the right brackets. */
+static void print_weights_header(void) {
+    printf("  ");
+    if (cfg_phase >= 0) {
+        print_phase_header();
+    } else if (ppat_phase_count <= 1) {
+        print_phase_header();
+    } else {
+        printf("p0 ");                          print_phase_header();
+        printf("  p%d ", ppat_phase_count - 1);  print_phase_header();
+    }
 }
 
 /* Dedicated monitor: repeatedly load the latest checkpoint and test it, printing
@@ -722,8 +791,10 @@ static void print_weights(void) {
 static void run_monitor(void) {
     printf("monitor: %d test positions, test-playouts %d, %d workers, phases %d\n",
            n_test, cfg_test_playouts, cfg_workers, ppat_phase_count);
-    printf("%9s  %7s  %7s  %7s  %6s  %8s  %7s\n",
+    printf("%9s  %7s  %7s  %7s  %5s  %8s  %7s",
            "positions", "trMSE", "teMSE", "avgW", "move%", "elapsedS", "pos/s");
+    print_weights_header();
+    printf("\n");
     fflush(stdout);
     ppat_load_quiet = 1;   /* suppress the per-cycle "loaded N weights" noise */
     wall_start = wall_now();
@@ -848,7 +919,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--filter <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--overfit]\n");
         return 1;
     }
 
@@ -872,6 +943,9 @@ int main(int argc, char **argv) {
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
     cfg_phase = get_int_arg(argc, argv, "--phase", -1);
+    /* Presence of --init-phase-scale enables seeding phase P from phase P+1. */
+    int cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
+    float cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
     cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 100);
@@ -901,6 +975,31 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 7; i++)
                 theta[prev_base + p * 7 + i] = logf(init_prev[i]);
     }
+
+    /* Warm-start (--init-phase-scale present): seed phase P's weights from the
+     * already-trained phase P+1, scaled by sc (the endgame-first chain). Only the
+     * pattern + prev-move slices of phase P are overwritten; the rest of theta
+     * (incl. the frozen later phases) is left as loaded. The gradient mask then
+     * refines phase P alone. */
+    if (cfg_init_from_next) {
+        if (cfg_phase < 0) {
+            fprintf(stderr, "error: --init-phase-scale requires --phase\n");
+            exit(1);
+        }
+        if (cfg_phase + 1 >= ppat_phase_count) {
+            fprintf(stderr, "error: --init-phase-scale: phase %d has no successor (phases %d)\n",
+                    cfg_phase, ppat_phase_count);
+            exit(1);
+        }
+        const int np = ppat_num_patterns;
+        const int prev_base = ppat_phase_count * np;
+        const float sc = cfg_init_phase_scale;   /* θ scale: γ → γ^sc (sc<1 softens toward uniform) */
+        for (int i = 0; i < np; i++)
+            theta[cfg_phase * np + i] = sc * theta[(cfg_phase + 1) * np + i];
+        for (int i = 0; i < 7; i++)
+            theta[prev_base + cfg_phase * 7 + i] = sc * theta[prev_base + (cfg_phase + 1) * 7 + i];
+    }
+
     rollout_grad_buf = calloc(TOTAL, sizeof(float));
     g_buf           = calloc(TOTAL, sizeof(float));
     batch_buf       = calloc(TOTAL, sizeof(float));
@@ -914,17 +1013,22 @@ int main(int argc, char **argv) {
     else          snprintf(weights_file, sizeof(weights_file), "out/ppat-data-%08x.js", rng_next(&g_rng));
 
     if (cfg_worker_id == 0) {
-    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d\n",
+    char scalebuf[32];
+    if (cfg_init_from_next) snprintf(scalebuf, sizeof scalebuf, "%.3g", cfg_init_phase_scale);
+    else                    snprintf(scalebuf, sizeof scalebuf, "off");
+    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d  init-phase-scale: %s\n",
            cfg_file, n_train_total, n_train, cfg_workers, cfg_lr, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_filter,
-           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase);
+           cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase, scalebuf);
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
     printf("test: %d positions  test-playouts: %d  output: %s  best: %s\n",
            n_test, cfg_test_playouts, weights_file, best_file);
-    printf("%9s  %7s  %7s  %7s  %6s  %5s  %6s  %6s  %8s  %6s  %7s\n",
+    printf("%9s  %7s  %7s  %7s  %5s  %5s  %6s  %6s  %8s  %6s  %7s",
            "positions", "trMSE", "teMSE", "avgW", "move%", "tPos", "testS", "syncS", "elapsedS", "posMs", "pos/s");
+    print_weights_header();
+    printf("\n");
     }
 
     start_time = clock();

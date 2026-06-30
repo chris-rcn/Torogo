@@ -73,6 +73,11 @@ function create(cfg) {
     ? loadWeights(cfg.str('PPAT_DATA', ''))
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
+  // Use uniform-random playout moves while board fullness < this fraction [0,1]
+  // (0 = off).  Skips ppat feature extraction in the early game, where the
+  // policy is ≈ uniform.
+  if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+
   // npat policy model (priors + top-K pruning).  NPAT_WEIGHTS overrides the
   // canonical npat-data.js.
   const npatModel   = NPat.loadModel({ name: 'puct-ppat', path: cfg.str('NPAT_WEIGHTS', undefined) });

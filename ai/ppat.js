@@ -19,6 +19,9 @@ const _model = _isNode
   ? loadWeights(Util.envStr('PPAT_DATA', ''))
   : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
+// Use uniform-random playout moves while board fullness < this fraction [0,1] (0 = off).
+if (_model) _model.uniformBelowPhase = Util.envFloat('PPAT_UNIFORM_BELOW_PHASE', 0);
+
 let _ppatState = null;
 function _ensureState(N) {
   if (_ppatState === null || _ppatState.moves.length < N * N)

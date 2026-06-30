@@ -10,6 +10,7 @@
 int16_t ppat_canon_id[PPAT_RAW_SIZE];
 int32_t ppat_num_patterns = 0;
 int     ppat_phase_count = 1;
+float   ppat_uniform_below_phase = 0.0f;
 int     ppat_load_quiet = 0;
 
 /* D4 permutations: perm[src] = dst */
@@ -476,6 +477,15 @@ static inline float fast_expf(float x) {
 }
 
 int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights, Rng *rng) {
+    /* Uniform fast-path: skip feature extraction in the early game where the
+     * policy is ≈ uniform.  Threshold is board fullness (cap-empty)/cap in [0,1].
+     * g2_random_legal_move only reorders the empty list, so the const-cast is
+     * logically safe. */
+    if (ppat_uniform_below_phase > 0) {
+        float fullness = (float)(g->cap - g->empty_count) / g->cap;
+        if (fullness < ppat_uniform_below_phase) return g2_random_legal_move((Game2 *)g, rng);
+    }
+
     ppat_extract(g, st);
     int n = st->count;
     if (n == 0) return PASS;

@@ -604,9 +604,10 @@ for p in P-1 to 0
     mseCheckpoint = mse
 evaluate resulting puct-ppat against prod in real games
 
+
   # Dense weight blocks, one per phase. Backward curriculum, single pass.
   for p in P-1 .. 0:
-    if p < P-1: copy block[p+1] -> block[p]      # warm-start
+    #if p < P-1: copy block[p+1] -> block[p]      # warm-start.  better to not do this?
     freeze all blocks except p
     best = +inf; noImprove = 0; window = 1000
     loop:
@@ -625,10 +626,27 @@ evaluate resulting puct-ppat against prod in real games
       window += window / 2              # grow → lower-noise MSE as it converges
   evaluate the resulting puct-ppat vs prod in real games
 
-This shows the difference in feature values between phases:
 
-$ c/run-ppat-parallel.sh 1 out/eval-s9-mega.txt --lr 1 --test-pos 1 --train-pos 1 --phases 2 --phase 0 --load out/ppat-data-12087.js
-        0        -  0.0002*   0.0258    0.0      0.2s        -  [   7.36   1.20   1.04   8.79   0.82   1.02   1.22 ]
+$ c/run-ppat-parallel.sh 12 out/eval-s9-mega.txt --lr 1 --test-pos 4000 --train-pos 102000 --phases 3 --phase 1 --load out/ppat-data-28826-best.js
+positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
+        0        -  0.0078*   0.0217    0.0    139.1s        -  [   0.90   0.99   1.00   0.99   0.94   1.00   1.02 ]
+    43200  0.0083F  0.0076*   0.0218    0.0    284.4s      152  [   2.73   1.11   1.01   1.16   0.91   1.00   1.18 ]
+    64800  0.0078F  0.0074*   0.0221    0.0    431.6s      150  [   5.86   1.40   1.03   1.59   0.84   1.01   1.28 ]
+    86400  0.0078   0.0073*   0.0223    0.0    573.8s      151  [   6.48   1.72   1.05   2.42   0.79   1.03   1.37 ]
+   108000  0.0078F  0.0073*   0.0226    0.0    714.9s      151  [   5.51   2.18   1.08   3.47   0.74   1.03   1.47 ]
+   129600  0.0077F  0.0073    0.0228    0.0    860.3s      151  [   5.81   2.87   1.12   4.49   0.69   1.05   1.57 ]
+   151200  0.0075   0.0072*   0.0231    0.0   1003.1s      151  [   5.55   3.64   1.14   5.58   0.65   1.06   1.78 ]
+   172800  0.0075F  0.0071*   0.0233    0.0   1143.5s      151  [   6.06   4.50   1.17   6.04   0.61   1.07   1.77 ]
+   194400  0.0075F  0.0072    0.0236    0.0   1287.8s      151  [   4.94   5.86   1.20   6.68   0.58   1.08   1.97 ]
+   216000  0.0075   0.0070*   0.0239    0.0   1434.9s      151  [   5.56   7.39   1.24   8.39   0.56   1.10   2.11 ]
+   237600  0.0074F  0.0070    0.0241    0.0   1585.1s      150  [   3.97   9.30   1.27   8.96   0.53   1.11   2.32 ]
 
-$ c/run-ppat-parallel.sh 1 out/eval-s9-mega.txt --lr 1 --test-pos 1 --train-pos 1 --phases 2 --phase 1 --load out/ppat-data-12087.js
-        0        -  0.0000*   0.0259    0.0      0.0s        -  [   3.24  17.72   1.41   8.79   0.11   0.84   2.06 ]
+In the paper, Algorithm 1 shows the gradient accumulation as g ← g + z/NT * sumOfPhis
+We mask the portion of the sum that is not our phase.  But do we also reduce T?
+Your earlier comments:
+  One thing worth flagging, though (per "only the paper is ground truth"): omitting 1/T is a genuine divergence from Algorithm 1. Its practical effect is that the per-position gradient magnitude scales with
+  in-phase playout length, so the effective step size is larger for emptier-board positions (longer playouts) than for endgame ones. That's relevant to the phase work — phase 0's long playouts produce bigger raw
+  gradients than phase 2's short ones at the same lr — and it's plausibly part of why lr=1 behaves reasonably here while the paper used α=10 under its z/NT scaling (I'd call that a likely consequence, not a
+  verified cause). If you want true parity with the paper, adding 1/T per rollout — and 1/T_P once masking is on — would be the faithful version, and we could A/B it.
+
+I've already started a fresh run on the existing code.  Make the change and I'll start the B side of the test.

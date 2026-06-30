@@ -26,6 +26,7 @@
 extern int16_t ppat_canon_id[PPAT_RAW_SIZE];
 extern int32_t ppat_num_patterns;      /* set by ppat_init() */
 extern int     ppat_phase_count;       /* number of game phases (default 1 = no phase splitting) */
+extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_move plays uniform random while board fullness (cap-empty)/cap < this fraction [0,1] */
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
 /* Max features per candidate: 1 pattern + 7 prev-move */
