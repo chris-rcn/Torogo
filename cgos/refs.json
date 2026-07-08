@@ -7,12 +7,12 @@
 
   "refs": [
     { "name": "random",             "agent": "random",             "budget": 1 },
-    { "name": "mc-20",              "agent": "mc",                 "budget": 20 },
+    { "name": "mc-200po",           "agent": "mc",                 "budget": 1, "env": { "PLAYOUTS": 200 } },
     { "name": "ref-npat-softmax",   "agent": "ref-npat-softmax",   "budget": 1 },
     { "name": "vlibpat-ref-2x2",    "agent": "vlibpat-ref-2x2",    "budget": 1 },
     { "name": "vlibpat-ref-3x3",    "agent": "vlibpat-ref-3x3",    "budget": 1 },
     { "name": "vlibpat-ref-3x3-d2", "agent": "vlibpat-ref-3x3-d2", "budget": 1 },
     { "name": "ref-search-topk",    "agent": "ref-search-topk",    "budget": 1 },
-    { "name": "rave-100",           "agent": "rave",               "budget": 100 }
+    { "name": "rave-1kpo",          "agent": "rave",               "budget": 1, "env": { "PLAYOUTS": 1000 } }
   ]
 }

@@ -25,6 +25,11 @@ const performance = (typeof window !== 'undefined') ? window.performance
 
 const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
+const Util = _isNode ? require('../util.js') : window.Util;
+
+// PLAYOUTS > 0: fixed total playout count per move (ignores the time
+// budget) — machine-independent, same convention as rave.js.
+const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 
 function playRandom(game2, rng) {
   const N   = game2.N;
@@ -93,14 +98,17 @@ function getMove(game, timeBudgetMs, options = {}) {
 
   const stats = candidates.map(() => ({ wins: 0, plays: 0 }));
 
+  const playoutLimit = options.playoutLimit || PLAYOUTS;
   const deadline = performance.now() + timeBudgetMs;
   let cidx = 0;
-  while (performance.now() < deadline) {
+  let playouts = 0;
+  while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline) {
     const clone = game2.clone();
     clone.play(candidates[cidx]);
     playRandom(clone, rng);
 
     stats[cidx].plays++;
+    playouts++;
     if (clone.estimateWinner() === player) stats[cidx].wins++;
 
     cidx = (cidx + 1) % candidates.length;
