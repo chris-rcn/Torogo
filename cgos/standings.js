@@ -71,6 +71,14 @@ for (const rec of recList) {
   }
 }
 
+// Count games from the games table itself — the password.games counter
+// is cumulative and survives game deletions.
+const gamesOf = new Map();
+for (const g of games) {
+  gamesOf.set(g.w, (gamesOf.get(g.w) || 0) + 1);
+  gamesOf.set(g.b, (gamesOf.get(g.b) || 0) + 1);
+}
+
 const rows = players.map(p => {
   const m = fitted.get(p.name);
   const ci = vs.has(p.name) ? mleRating(vs.get(p.name)) : null;
@@ -83,7 +91,7 @@ const rows = players.map(p => {
   }
   return {
     name: p.name,
-    games: p.games,
+    games: gamesOf.get(p.name) || 0,
     cgos: `${Math.round(p.rating)}${p.K > 16 ? '?' : ''}`,
     mle: m !== undefined && Number.isFinite(m) ? String(Math.round(m)) : '-',
     ci: ciStr,
