@@ -24,7 +24,7 @@ if (opts.help) {
   console.log('Usage: node cgos/standings.js [--size <n>] [--data <dir>]');
   process.exit(0);
 }
-const size    = opts.getInt('size', 9);
+const size    = opts.getInt('size', 13);
 const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'), { readOnly: true });
 

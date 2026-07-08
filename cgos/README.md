@@ -21,7 +21,7 @@ node cgos/join.js --p my-new-agent --budget 100 --games 50
 node cgos/standings.js
 ```
 
-State persists in `cgos/data/9x9/` (ratings, game archive, SGF records), so
+State persists in `cgos/data/13x13/` (ratings, game archive, SGF records), so
 the reference ladder keeps improving across runs.
 
 ## Pieces
@@ -33,7 +33,8 @@ the reference ladder keeps improving across runs.
 | `join.js`       | Connect one engine (your candidate) to a running server; prints its rating after each game |
 | `standings.js`  | Rating table: server's incremental Elo + anchored Bradley–Terry MLE fit with 95% CI (uses `elo-lib.js`) |
 | `refs.json`     | Reference fleet: engine names, agents, per-move budgets, and rating anchors |
-| `torogo9.ini`   | Server config: 9×9, komi 3.5, **simple ko** (matches Game2), 300 s/side |
+| `torogo13.ini`  | Server config: 13×13 (the default size), komi 3.5, **simple ko** (matches Game2), 300 s/side |
+| `torogo9.ini`   | Same for 9×9 (port 1919); pass `--size 9` to use it |
 | `server/`       | Vendored `zakki/cgos` python server, patched for toroidal rules (see `server/UPSTREAM.txt`) |
 | `client/`       | Vendored python CGOS client (unmodified) — bridges any GTP engine to the server |
 | `tests/`        | Toroidal rule tests + Game2↔server replay-equivalence check |
@@ -86,7 +87,7 @@ process).  Keep total engines under your core count or per-move budgets
 get noisy.
 
 The stock CGOS delays (45 s startup, 15 s scheduler ticks, 3 s match
-start) are meant for internet play; `torogo9.ini` overrides them
+start) are meant for internet play; the torogo inis override them
 (`startupDelay`/`scheduleInterval`/`matchStartDelay` = 3/2/0.25 s), so
 per-game overhead is roughly one tick.
 
@@ -134,5 +135,5 @@ server clock (300 s/side) is just an anti-hang forfeit.
   vlibpat refs, search agents).
 - The web page builder (`webuild.py`) and Tcl viewer were not vendored;
   `standings.js` replaces them.  Game records land in
-  `cgos/data/9x9/SGF/` (note: standard SGF viewers will render toroidal
+  `cgos/data/<size>x<size>/SGF/` (note: standard SGF viewers will render toroidal
   games with flat-board assumptions).

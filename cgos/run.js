@@ -9,7 +9,7 @@
 //   node cgos/run.js [options]
 //
 // Options:
-//   --size <n>      Board size — selects config and data dir     (default 9)
+//   --size <n>      Board size — selects config and data dir     (default 13)
 //   --refs <file>   Reference fleet definition   (default cgos/refs.json)
 //   --ini  <file>   Server config                (default cgos/torogo<size>.ini)
 //   --data <dir>    Runtime data directory       (default cgos/data/<size>x<size>)
@@ -39,7 +39,7 @@ if (opts.help) {
   process.exit(0);
 }
 
-const size     = opts.getInt('size', 9);
+const size     = opts.getInt('size', 13);
 const refsFile = path.resolve(opts.get('refs', path.join(__dirname, 'refs.json')));
 const iniFile  = path.resolve(opts.get('ini',  path.join(__dirname, `torogo${size}.ini`)));
 const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));

@@ -8,7 +8,7 @@
 // Options:
 //   --p       <policy>  AI policy: filename without .js inside ai/  (required)
 //   --budget  <ms>      Fixed time budget per move in ms            (default 1)
-//   --size    <n>       Initial board size                          (default 9)
+//   --size    <n>       Initial board size                          (default 13)
 //
 // Speaks GTP 2 on stdin/stdout, enough for the CGOS client (boardsize,
 // clear_board, komi, play, genmove, quit + the cgos-* notifications).
@@ -178,7 +178,7 @@ if (require.main === module) {
     process.exit(opts.help ? 0 : 1);
   }
   const budgetMs = opts.getInt('budget', 1);
-  const size     = opts.getInt('size', 9);
+  const size     = opts.getInt('size', 13);
   runGtp(makeEngine(opts.p, budgetMs, size));
 }
 

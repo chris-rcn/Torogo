@@ -14,7 +14,7 @@
 //   --house             Join as a HOUSE engine: idle until a trial engine
 //                       needs an opponent (default: trial — the server
 //                       keeps this engine playing continuously)
-//   --size    <n>       Board size — selects the ladder to join (default 9)
+//   --size    <n>       Board size — selects the ladder to join (default 13)
 //   --refs    <file>    Fleet file for host/password     (default cgos/refs.json)
 //   --ini     <file>    Server config, read for the port (default cgos/torogo<size>.ini)
 //   --data    <dir>     Data directory of the server     (default cgos/data/<size>x<size>)
@@ -39,7 +39,7 @@ const agent    = opts.p;
 const budget   = opts.getInt('budget', 1);
 const name     = opts.get('name', budget > 1 ? `${agent}-${budget}` : agent);
 const maxGames = opts.getInt('games', 0);
-const size     = opts.getInt('size', 9);
+const size     = opts.getInt('size', 13);
 const refsFile = path.resolve(opts.get('refs', path.join(__dirname, 'refs.json')));
 const iniFile  = path.resolve(opts.get('ini',  path.join(__dirname, `torogo${size}.ini`)));
 const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));

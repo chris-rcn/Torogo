@@ -22,7 +22,7 @@ const Util = require('../../util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 const GAMES = opts.getInt('games', 25);
-const SIZE  = opts.getInt('size', 9);
+const SIZE  = opts.getInt('size', 13);
 
 const games = [];
 for (let i = 0; i < GAMES; i++) {
