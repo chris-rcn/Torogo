@@ -107,8 +107,9 @@ function writeFleetTables() {
     'CREATE TABLE IF NOT EXISTS house(name, primary key(name));',
     'DELETE FROM house;',
     ...houseNames.map(n => `INSERT INTO house VALUES(${JSON.stringify(n)});`),
+    'DELETE FROM anchors;',   // refs.json is authoritative — drop stale pins
     ...Object.entries(anchors)
-      .map(([n, r]) => `INSERT OR REPLACE INTO anchors VALUES(${JSON.stringify(n)}, ${r});`),
+      .map(([n, r]) => `INSERT INTO anchors VALUES(${JSON.stringify(n)}, ${r});`),
   ].join(' ');
   const py = `
 import sqlite3, sys
