@@ -1890,8 +1890,10 @@ def match_games(ctme: datetime.datetime) -> None:
             wp = aa[0]  # actual player names
             bp = bb[0]  # actual player names
 
-            # delte anchor vs anchor
-            if aa in anchors and bb in anchors:
+            # delete anchor vs anchor
+            # (Torogo: upstream compared the (name, rating) tuples against
+            # the anchors dict, so the throttle never fired)
+            if wp in anchors and bp in anchors:
                 r = random.random()
                 if r > cfg.anchor_match_rate:
                     logger.info(f"delete this match. {wp}, {bp}, r={r}")
@@ -1912,10 +1914,9 @@ def match_games(ctme: datetime.datetime) -> None:
 
         db.commit()
 
-        # add a 3 second delay to let all programs complete setup.
-        # ------------------------------------------------------
-
-        time.sleep(3000 / 1000)
+        # small delay to let all programs complete setup (upstream: 3s)
+        # --------------------------------------------------------------
+        time.sleep(cfg.matchStartDelay)
 
         view_count = len(viewers.vact)
         logger.info(f"Active viewers: {view_count}")
@@ -1933,8 +1934,8 @@ def match_games(ctme: datetime.datetime) -> None:
 
 async def schedule_games_task() -> None:
 
-    # after 45000ms schedule_games
-    await asyncio.sleep(45.0)
+    # startup delay before the first round (upstream: 45s)
+    await asyncio.sleep(cfg.startupDelay)
 
     n = 0
     while True:
@@ -1988,6 +1989,9 @@ def runServer() -> None:
         cfg = Configs()
         cfg.load(sys.argv[1])
         leeway = int(cfg.timeGift * 1000.0)
+
+        global schedule_games_interval
+        schedule_games_interval = cfg.scheduleInterval
 
         defaultRatingAverage = cfg.defaultRating
 

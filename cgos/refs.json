@@ -7,11 +7,11 @@
 
   "refs": [
     { "name": "random",             "agent": "random",             "budget": 1 },
+    { "name": "mc-20",              "agent": "mc",                 "budget": 20 },
     { "name": "ref-npat-softmax",   "agent": "ref-npat-softmax",   "budget": 1 },
     { "name": "vlibpat-ref-2x2",    "agent": "vlibpat-ref-2x2",    "budget": 1 },
     { "name": "vlibpat-ref-3x3",    "agent": "vlibpat-ref-3x3",    "budget": 1 },
     { "name": "vlibpat-ref-3x3-d2", "agent": "vlibpat-ref-3x3-d2", "budget": 1 },
-    { "name": "rave-100",           "agent": "rave",               "budget": 100 },
-    { "name": "rave-500",           "agent": "rave",               "budget": 500 }
+    { "name": "rave-100",           "agent": "rave",               "budget": 100 }
   ]
 }

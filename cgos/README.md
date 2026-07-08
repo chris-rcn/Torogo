@@ -46,9 +46,30 @@ the reference ladder keeps improving across runs.
 - `standings.js` additionally fits all games with an anchored
   Bradley–Terry maximum-likelihood model (`elo-lib.js`); this uses every
   game optimally and is the number to quote.
+- **Adding lower anchors:** after a burn-in run, copy the fast engines'
+  stable `mleElo` values into the `anchors` map of `refs.json` (they are
+  written to the server on the next `run.js` start).  Multiple pinned
+  rungs make new-engine ratings settle faster and stop ladder drift;
+  anchor-vs-anchor games are throttled by `anchor_match_rate`.  Don't
+  guess anchor values — a mispinned anchor warps the whole scale.
 - Matchmaking pairs engines of adjacent (jittered) rating each round, so a
   new engine climbs to its level within a few rounds and then plays
   informative near-50% games — this is what makes the estimate fast.
+
+## Throughput
+
+Rounds are barrier-synchronized: the server pairs every waiting engine,
+then waits for **all** games to finish before pairing the next round.  Two
+consequences:
+
+- One slow engine (e.g. `rave-500` at ~30 s/game) gates every round even
+  for the fast pairs.  Keep the standing fleet fast; attach slow engines
+  deliberately (`join.js`) when you want them rated, or run them on a
+  second server (`--ini`/`--data`/port of their own).
+- The stock CGOS delays (45 s startup, 15 s between rounds, 3 s round
+  start) are meant for internet play.  `torogo9.ini` overrides them
+  (`startupDelay`/`scheduleInterval`/`matchStartDelay` = 3/2/0.25 s), so
+  round overhead is well under a second per game with a fast fleet.
 
 ## Budgets and engine identity
 
@@ -62,7 +83,11 @@ server clock (300 s/side) is just an anti-hang forfeit.
 - `server/cgos/gogame/go.py`: adjacency wraps in both directions
   (precomputed `nbrs` table) — affects captures, suicide, and the
   Tromp–Taylor scoring flood-fill.  Rule tests: `python3 -m unittest
-  discover -s cgos/tests`.
+  discover -s cgos/tests`.  (The scoring flood-fill is *not* dead-stone
+  adjudication — Tromp–Taylor counts every stone as alive, same as
+  `Game2.calcWinner`; it only assigns empty regions (eyes/territory) to
+  the color that fully surrounds them.  Agents must capture dead stones
+  to get credit, as everywhere else in Torogo.)
 - Ko: server must use `ko = SIMPLE` (Game2 implements simple ko; positional
   superko would forfeit engines for legal-in-Game2 moves).
 - First move: `gtp.js` answers the game's first `genmove` with the center

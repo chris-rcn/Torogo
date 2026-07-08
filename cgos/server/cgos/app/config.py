@@ -120,6 +120,12 @@ class Configs:
         else:
             self.hashPassword = False
 
+        # Torogo: scheduling delays, tunable for fast local ladders.
+        # Upstream hardcodes 45s startup, 15s between rounds, 3s round start.
+        self.startupDelay = float(cfg.get("startupDelay", "45.0"))
+        self.scheduleInterval = float(cfg.get("scheduleInterval", "15.0"))
+        self.matchStartDelay = float(cfg.get("matchStartDelay", "3.0"))
+
         self.matchMode = MatchMode.AUTO
         if "matchMode" in cfg:
             try:
