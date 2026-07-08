@@ -126,6 +126,10 @@ class Configs:
         self.scheduleInterval = float(cfg.get("scheduleInterval", "15.0"))
         self.matchStartDelay = float(cfg.get("matchStartDelay", "3.0"))
 
+        # Torogo: refit all ratings with the anchored Bradley-Terry MLE
+        # every N finalized games and write the result back (0 = off).
+        self.mleInterval = int(cfg.get("mleInterval", "0"))
+
         self.matchMode = MatchMode.AUTO
         if "matchMode" in cfg:
             try:

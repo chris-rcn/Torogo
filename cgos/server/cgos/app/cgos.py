@@ -43,7 +43,7 @@ from util.timeutils import now_milliseconds, now_seconds, now_string
 
 from .client import Client
 from .config import Configs, MatchMode
-from .rating import newrating, strRate
+from .rating import fitRatings, newrating, strRate
 
 # Setup logger
 logger = getLogger("cgos_server")
@@ -317,11 +317,54 @@ def getAnchors() -> Dict[str, float]:
     return anchors
 
 
+# finalized games since the last Bradley-Terry refit
+mleGamesSinceFit = 0
+
+
+# Refit every rating from the full games table with the anchored
+# Bradley-Terry MLE (rating.fitRatings) and write the results back to the
+# password table AND the live act ratings, so matchmaking immediately
+# uses them.  K values are untouched — K is the incremental updater's
+# step size for the games played between refits.
+def mleRefit() -> None:
+    global act
+    global ratingOf
+    global db
+
+    anchors = getAnchors()
+
+    recs = []
+    for w, b, res in db.execute("SELECT w, b, res FROM games"):
+        c = (res or "?")[0]
+        if c == "W":
+            recs.append((w, b, 1.0, 0.0))
+        elif c == "B":
+            recs.append((w, b, 0.0, 1.0))
+        elif c == "D":
+            recs.append((w, b, 0.5, 0.5))
+    if not recs:
+        return
+
+    fitted = fitRatings(recs, anchors, defaultRating=cfg.defaultRating)
+
+    with db:
+        for name, r in fitted.items():
+            if name in anchors:
+                continue
+            db.execute("UPDATE password SET rating=? WHERE name==?", (r, name))
+            if name in act:
+                act[name].rating = r
+                ratingOf[name] = strRate(r, act[name].k)
+    db.commit()
+    logger.info(f"MLE refit: {len(fitted)} players from {len(recs)} games")
+
+
 def batchRate() -> None:
 
     global act
     global ratingOf
     global db
+    global mleGamesSinceFit
 
     anchors = getAnchors()
 
@@ -428,7 +471,13 @@ def batchRate() -> None:
             )
             db.execute("""UPDATE games SET final="y" WHERE gid=?""", (gid,))
 
+        mleGamesSinceFit += 1
+
     db.commit()
+
+    if cfg.mleInterval > 0 and mleGamesSinceFit >= cfg.mleInterval:
+        mleGamesSinceFit = 0
+        mleRefit()
 
 
 RE_PASSWORD = re.compile(r"[^\d\w\.-]")
