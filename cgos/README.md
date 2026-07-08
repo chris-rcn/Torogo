@@ -45,7 +45,10 @@ the reference ladder keeps improving across runs.
   K=200, decaying toward K=3 as games accrue.  A `?` marks provisional
   ratings (K>16).
 - Engines in the `anchors` map of `refs.json` are pinned to a fixed rating
-  and define the scale (default: `vlibpat-ref-3x3` = 1700).
+  and define the scale (default: `random` = 0 as the absolute floor and
+  `vlibpat-ref-3x3` = 1700).  With two anchors the scale is fully
+  determined at both ends; if their true gap differs from 1700, the
+  in-between ratings compress or stretch proportionally.
 - `standings.js` additionally fits all games with an anchored
   Bradley–Terry maximum-likelihood model (`elo-lib.js`); this uses every
   game optimally and is the number to quote.
