@@ -87,8 +87,14 @@ const client = spawn('python3',
   [path.join(__dirname, 'client', 'cgosclient.py'), cfgPath],
   { cwd: dataDir, stdio: ['ignore', 'inherit', 'inherit'] });
 
+// Never orphan the client: whatever ends this process (Ctrl-C, SIGTERM,
+// a broken stdout pipe) must take the python client — and with it the
+// GTP engine — down too, or they keep playing rated games unattended.
 client.on('exit', code => process.exit(code ?? 0));
-process.on('SIGINT', () => { client.kill('SIGTERM'); process.exit(0); });
+function stop() { client.kill('SIGTERM'); process.exit(0); }
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
+process.on('exit', () => { try { client.kill('SIGTERM'); } catch {} });
 
 // ── Progress: poll the server DB, report rating after each finished game ─────
 
