@@ -3,7 +3,7 @@
 // standings.js — print the rating table for a toroidal CGOS server.
 //
 // Usage:
-//   node cgos/standings.js [--data <dir>]
+//   node cgos/standings.js [--size <n>] [--data <dir>]
 //
 // Two ratings are shown for each engine:
 //   cgosElo — the server's own incremental Elo (K decays as games accrue;
@@ -21,10 +21,11 @@ const { fitRatings, mleRating } = require('../elo-lib.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help']);
 if (opts.help) {
-  console.log('Usage: node cgos/standings.js [--data <dir>]');
+  console.log('Usage: node cgos/standings.js [--size <n>] [--data <dir>]');
   process.exit(0);
 }
-const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', '9x9')));
+const size    = opts.getInt('size', 9);
+const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'), { readOnly: true });
 
 const players = db.prepare('SELECT name, rating, K, games FROM password ORDER BY rating DESC').all();

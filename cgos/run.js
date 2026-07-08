@@ -9,10 +9,14 @@
 //   node cgos/run.js [options]
 //
 // Options:
+//   --size <n>      Board size — selects config and data dir     (default 9)
 //   --refs <file>   Reference fleet definition   (default cgos/refs.json)
-//   --ini  <file>   Server config                (default cgos/torogo9.ini)
-//   --data <dir>    Runtime data directory       (default cgos/data/9x9)
+//   --ini  <file>   Server config                (default cgos/torogo<size>.ini)
+//   --data <dir>    Runtime data directory       (default cgos/data/<size>x<size>)
 //   --server-only   Start only the server (attach engines with cgos/join.js)
+//
+// Each size is its own ladder: its own server config, port, database and
+// ratings.  Run several sizes side by side (e.g. --size 9 and --size 13).
 //
 // The fleet file lists the reference engines (name, ai/ agent, per-move
 // budget in ms) and the rating anchors.  Anchors are written into the
@@ -31,15 +35,21 @@ const ROOT = path.join(__dirname, '..');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'server-only']);
 if (opts.help) {
-  console.log('Usage: node cgos/run.js [--refs <file>] [--ini <file>] [--data <dir>] [--server-only]');
+  console.log('Usage: node cgos/run.js [--size <n>] [--refs <file>] [--ini <file>] [--data <dir>] [--server-only]');
   process.exit(0);
 }
 
+const size     = opts.getInt('size', 9);
 const refsFile = path.resolve(opts.get('refs', path.join(__dirname, 'refs.json')));
-const iniFile  = path.resolve(opts.get('ini',  path.join(__dirname, 'torogo9.ini')));
-const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', '9x9')));
+const iniFile  = path.resolve(opts.get('ini',  path.join(__dirname, `torogo${size}.ini`)));
+const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 
 const fleet = JSON.parse(fs.readFileSync(refsFile, 'utf8'));
+
+// The server config is the source of truth for the port, so one refs.json
+// can serve every board size.
+const portMatch = fs.readFileSync(iniFile, 'utf8').match(/^\s*portNumber\s*=\s*(\d+)/m);
+const port = portMatch ? parseInt(portMatch[1], 10) : (fleet.port || 1919);
 
 // ── Data directory layout ─────────────────────────────────────────────────────
 
@@ -117,7 +127,7 @@ GTPEngine:
   Name = ${name}
   CommandLine = node ${gtp} --p ${agent} --budget ${budget}
   ServerHost = ${fleet.host || '127.0.0.1'}
-  ServerPort = ${fleet.port || 1919}
+  ServerPort = ${port}
   ServerUser = ${name}
   ServerPassword = ${fleet.password || 'torogo'}
   NumberOfGames = 1
@@ -125,7 +135,7 @@ GTPEngine:
 `;
 }
 
-waitForPort(fleet.port || 1919, fleet.host || '127.0.0.1', () => {
+waitForPort(port, fleet.host || '127.0.0.1', () => {
   writeFleetTables();
   if (opts['server-only']) {
     console.log('server up (server-only mode); attach engines with cgos/join.js');

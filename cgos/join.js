@@ -14,8 +14,10 @@
 //   --house             Join as a HOUSE engine: idle until a trial engine
 //                       needs an opponent (default: trial — the server
 //                       keeps this engine playing continuously)
-//   --refs    <file>    Fleet file for host/port/password (default cgos/refs.json)
-//   --data    <dir>     Data directory of the server      (default cgos/data/9x9)
+//   --size    <n>       Board size — selects the ladder to join (default 9)
+//   --refs    <file>    Fleet file for host/password     (default cgos/refs.json)
+//   --ini     <file>    Server config, read for the port (default cgos/torogo<size>.ini)
+//   --data    <dir>     Data directory of the server     (default cgos/data/<size>x<size>)
 //
 // Runs in the foreground and prints the engine's rating after each game.
 // The budget is part of the engine's identity: rate the same agent at two
@@ -37,9 +39,14 @@ const agent    = opts.p;
 const budget   = opts.getInt('budget', 1);
 const name     = opts.get('name', budget > 1 ? `${agent}-${budget}` : agent);
 const maxGames = opts.getInt('games', 0);
+const size     = opts.getInt('size', 9);
 const refsFile = path.resolve(opts.get('refs', path.join(__dirname, 'refs.json')));
-const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', '9x9')));
+const iniFile  = path.resolve(opts.get('ini',  path.join(__dirname, `torogo${size}.ini`)));
+const dataDir  = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 const fleet    = JSON.parse(fs.readFileSync(refsFile, 'utf8'));
+
+const portMatch = fs.readFileSync(iniFile, 'utf8').match(/^\s*portNumber\s*=\s*(\d+)/m);
+const port = portMatch ? parseInt(portMatch[1], 10) : (fleet.port || 1919);
 
 if (name.startsWith('admin')) {
   console.error('names starting with "admin" are reserved by the server');
@@ -69,7 +76,7 @@ GTPEngine:
   Name = ${name}
   CommandLine = node ${path.join(__dirname, 'gtp.js')} --p ${agent} --budget ${budget}
   ServerHost = ${fleet.host || '127.0.0.1'}
-  ServerPort = ${fleet.port || 1919}
+  ServerPort = ${port}
   ServerUser = ${name}
   ServerPassword = ${fleet.password || 'torogo'}
   NumberOfGames = 1
