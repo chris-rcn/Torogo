@@ -157,6 +157,13 @@ class GoGame:
 
     # return a "board" with correct status
     # ------------------------------------
+    # TOROIDAL VARIANT (Torogo): 1-step area scoring matching
+    # Game2.estimateScore(), NOT the upstream Tromp-Taylor region
+    # flood-fill.  An empty point scores for a color only when every
+    # adjacent stone is that color; empty points deeper inside open
+    # regions are neutral.  This keeps the server's verdict identical to
+    # Game2.calcWinner() in every reachable ending, including early
+    # double-passes over large open areas.
     def score_board(self, dead_list: List[str]) -> List[int]:
         b = self.bd.copy()  # work from a copy
 
@@ -166,38 +173,18 @@ class GoGame:
             imv = self.mvToIndex(s)
             b[imv] = 0
 
-        for x in range(1, self.size1):
-            for y in range(1, self.size1):
-                i = y * self.size1 + x
-
-                if b[i] == 0:  # empty square and hasn't been covered yet
-                    lst = [i]
-                    cc = 0  # color of surrounding stones
-                    flag = {i: 1}
-
-                    while True:
-                        nlst = []
-                        # build a new list
-                        for ix in lst:
-                            for p in self.nbrs[ix]:
-
-                                if b[p] == 0 and p not in flag:
-                                    nlst.append(p)
-                                    flag[p] = 1
-                                elif b[p] == 1:
-                                    cc = cc | 1
-                                elif b[p] == 2:
-                                    cc = cc | 2
-
-                        if len(nlst) == 0:
-                            if cc == 1 or cc == 2:
-                                for ix in flag.keys():
-                                    b[ix] = cc
-                            del flag
-                            break
-                        else:
-                            lst = nlst
-        return b
+        out = b.copy()
+        for i in self.nbrs:
+            if b[i] == 0:  # empty square
+                cc = 0  # color of adjacent stones
+                for p in self.nbrs[i]:
+                    if b[p] == 1:
+                        cc = cc | 1
+                    elif b[p] == 2:
+                        cc = cc | 2
+                if cc == 1 or cc == 2:
+                    out[i] = cc
+        return out
 
     #  make -
     #
@@ -378,8 +365,9 @@ class GoGame:
                 board.append(b[ix])
         return board
 
-    # tromp/taylor chinese style scoring
-    # ----------------------------------
+    # area scoring: stones + 1-step adjacent empty points
+    # (Torogo: matches Game2.estimateScore; see score_board)
+    # ------------------------------------------------------
     def ttScore(self) -> int:
         tbd = self.getFinalBoard([])
         score = 0

@@ -64,7 +64,17 @@ class TestTorusRules(TestCase):
         self.assertEqual(g.make("f5"), 1)    # black captures e5 (ko)
         self.assertEqual(g.make("e5"), -2)   # immediate recapture: ko violation
 
-    def test_tromp_taylor_score_whole_board(self):
+    def test_score_is_one_step_area_like_game2(self):
+        # Scoring must match Game2.estimateScore(): stones plus empty points
+        # whose adjacent stones are all one color.  No region flood-fill —
+        # a lone stone scores itself + its 4 neighbours, not the whole torus.
         g = game()
         g.make("e5")
-        self.assertEqual(g.ttScore(), 81)    # lone black stone owns the torus
+        self.assertEqual(g.ttScore(), 5)
+
+    def test_deep_empty_points_are_neutral(self):
+        # All black except a 3x3 empty block: the 8 stone-adjacent empties
+        # score for black, the centre of the block is neutral.
+        rows = ["XXX...XXX" if 3 <= y <= 5 else "XXXXXXXXX" for y in range(9)]
+        g = GoGame.from_string("\n".join(rows), Rule(KoRule.SIMPLE))
+        self.assertEqual(g.ttScore(), 80)    # 72 stones + 8 border empties

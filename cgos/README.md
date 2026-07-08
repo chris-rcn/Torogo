@@ -81,13 +81,17 @@ server clock (300 s/side) is just an anti-hang forfeit.
 ## Toroidal adaptations (vs stock CGOS)
 
 - `server/cgos/gogame/go.py`: adjacency wraps in both directions
-  (precomputed `nbrs` table) — affects captures, suicide, and the
-  Tromp–Taylor scoring flood-fill.  Rule tests: `python3 -m unittest
-  discover -s cgos/tests`.  (The scoring flood-fill is *not* dead-stone
-  adjudication — Tromp–Taylor counts every stone as alive, same as
-  `Game2.calcWinner`; it only assigns empty regions (eyes/territory) to
-  the color that fully surrounds them.  Agents must capture dead stones
-  to get credit, as everywhere else in Torogo.)
+  (precomputed `nbrs` table) — affects captures, suicide, and scoring.
+  Rule tests: `python3 -m unittest discover -s cgos/tests`.
+- Scoring: upstream CGOS uses a Tromp–Taylor region flood-fill; this
+  server instead uses the same 1-step area count as
+  `Game2.estimateScore()` (which is what `calcWinner()` calls): every
+  stone counts as alive, an empty point counts only when all its
+  adjacent stones are one color, and deeper empty points are neutral.
+  Dead stones must be captured to get credit for them.  The two scorings
+  agree on played-out boards but can differ after an early double-pass
+  over a large open region — matching Game2 exactly means the server's
+  verdict can never disagree with the engines' own.
 - Ko: server must use `ko = SIMPLE` (Game2 implements simple ko; positional
   superko would forfeit engines for legal-in-Game2 moves).
 - First move: `gtp.js` answers the game's first `genmove` with the center

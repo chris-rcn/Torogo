@@ -6,7 +6,7 @@
 // Plays random Game2 games, replays each move by move into the python
 // GoGame with the same rules (simple ko, komi from game2), and verifies:
 //   1. every Game2-legal move is accepted by the server, and
-//   2. the server's Tromp-Taylor score picks the same winner as
+//   2. the server's 1-step area score picks the same winner as
 //      Game2.calcWinner().
 //
 // This is the guarantee that the CGOS server will never forfeit an engine

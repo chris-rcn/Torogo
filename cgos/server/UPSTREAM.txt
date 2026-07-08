@@ -4,7 +4,9 @@ commit 4dcff8754400fa43a71323ffc3d2c5eb4a19f7f1 (2024-07-25)
 server-python/ -> cgos/server/   (MIT license, headers retained)
   Local modifications:
     - gogame/go.py: toroidal adjacency (wrapped neighbours) for captures,
-      suicide and Tromp-Taylor scoring — see cgos/tests/
+      suicide and scoring; scoring replaced with the 1-step area count of
+      Game2.estimateScore (upstream used Tromp-Taylor region flood-fill)
+      — see cgos/tests/
     - util/logutils.py: fall back to console logging when log.ini is absent
     - app/cgos.py: create_parent_dir tolerates relative database paths
   Omitted: webuild.py + webuild_template (web page builder), reset_password.py,
