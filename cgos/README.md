@@ -51,13 +51,13 @@ the reference ladder keeps improving across runs.
 - `standings.js` additionally fits all games with an anchored
   Bradley–Terry maximum-likelihood model (`elo-lib.js`); this uses every
   game optimally and is the number to quote.
-- **Adding lower anchors:** after a burn-in run (e.g. join each reference
-  agent as a trial for a while so the house fleet gets played), copy the
-  fast engines' stable `mleElo` values into the `anchors` map of
-  `refs.json` (they are written to the server on the next `run.js`
-  start).  Multiple pinned rungs make new-engine ratings settle faster
-  and stop ladder drift.  Don't guess anchor values — a mispinned anchor
-  warps the whole scale.
+- **Calibrating the fleet:** `node cgos/run.js --calibrate` registers the
+  references as all-trial, so they play each other continuously — run it
+  for a while when setting up a new ladder (or after adding engines) to
+  establish the references' ratings, then restart without the flag for
+  normal idle-house mode.  Optionally copy stable `mleElo` values into
+  the `anchors` map of `refs.json` afterwards to pin more rungs — but
+  don't guess anchor values; a mispinned anchor warps the whole scale.
 - Matchmaking pairs each trial engine with the waiting opponent of nearest
   (jittered) rating, so a new engine climbs to its level within a few games
   and then plays informative near-50% games — this is what makes the

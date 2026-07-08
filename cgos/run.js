@@ -14,6 +14,10 @@
 //   --ini  <file>   Server config                (default cgos/torogo<size>.ini)
 //   --data <dir>    Runtime data directory       (default cgos/data/<size>x<size>)
 //   --server-only   Start only the server (attach engines with cgos/join.js)
+//   --calibrate     Burn-in mode: register the fleet as all-trial instead of
+//                   house, so the reference engines play each other
+//                   continuously until Ctrl-C.  Use this to establish the
+//                   references' ratings; a normal run restores house mode.
 //
 // Each size is its own ladder: its own server config, port, database and
 // ratings.  Run several sizes side by side (e.g. --size 9 and --size 13).
@@ -33,9 +37,9 @@ const Util = require('../util.js');
 
 const ROOT = path.join(__dirname, '..');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'server-only']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'server-only', 'calibrate']);
 if (opts.help) {
-  console.log('Usage: node cgos/run.js [--size <n>] [--refs <file>] [--ini <file>] [--data <dir>] [--server-only]');
+  console.log('Usage: node cgos/run.js [--size <n>] [--refs <file>] [--ini <file>] [--data <dir>] [--server-only] [--calibrate]');
   process.exit(0);
 }
 
@@ -98,10 +102,11 @@ function waitForPort(port, host, cb, tries = 50) {
 // (cgos/join.js) needs an opponent.  Anchor ratings are pinned.
 function writeFleetTables() {
   const anchors = fleet.anchors || {};
+  const houseNames = opts.calibrate ? [] : fleet.refs.map(r => r.name);
   const stmts = [
     'CREATE TABLE IF NOT EXISTS house(name, primary key(name));',
     'DELETE FROM house;',
-    ...fleet.refs.map(r => `INSERT INTO house VALUES(${JSON.stringify(r.name)});`),
+    ...houseNames.map(n => `INSERT INTO house VALUES(${JSON.stringify(n)});`),
     ...Object.entries(anchors)
       .map(([n, r]) => `INSERT OR REPLACE INTO anchors VALUES(${JSON.stringify(n)}, ${r});`),
   ].join(' ');
@@ -112,7 +117,9 @@ db.executescript(sys.argv[2])
 db.commit()
 `;
   execFileSync('python3', ['-c', py, path.join(dataDir, 'cgos.state'), stmts]);
-  console.log(`house:   ${fleet.refs.map(r => r.name).join(', ')}`);
+  console.log(opts.calibrate
+    ? 'mode:    CALIBRATE — fleet plays continuously'
+    : `house:   ${houseNames.join(', ')}`);
   console.log(`anchors: ${Object.entries(anchors).map(([n, r]) => `${n}=${r}`).join(', ') || '(none)'}`);
 }
 
@@ -148,6 +155,11 @@ waitForPort(port, fleet.host || '127.0.0.1', () => {
     launch('client-' + ref.name, 'python3', [path.join(__dirname, 'client', 'cgosclient.py'), cfgPath], dataDir);
     console.log(`engine:  ${ref.name} (ai/${ref.agent}.js, ${ref.budget}ms/move)`);
   }
-  console.log('\nhouse fleet idle and ready — games start when a trial engine');
-  console.log('connects (node cgos/join.js --p <agent>).  Ctrl-C to stop.');
+  if (opts.calibrate) {
+    console.log('\ncalibrating — fleet plays continuously.  Ctrl-C to stop;');
+    console.log('rerun without --calibrate for normal (idle house) mode.');
+  } else {
+    console.log('\nhouse fleet idle and ready — games start when a trial engine');
+    console.log('connects (node cgos/join.js --p <agent>).  Ctrl-C to stop.');
+  }
 });
