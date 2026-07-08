@@ -48,7 +48,7 @@
   Start the ladder with `node cgos/run.js`, attach a candidate with
   `node cgos/join.js --p <agent> --budget <ms> --games <n>`, read ratings
   with `node cgos/standings.js` (quote the `mleElo` column and game count).
-  The scale is anchored at `random` = 0 and `vlibpat-ref-3x3` = 1700.
+  The scale is anchored at `random` = 0; all other ratings float.
   The server must keep
   `ko = SIMPLE` and komi 3.5 to match Game2.  Rule/compat tests:
   `python3 -m unittest discover -s cgos/tests` and

@@ -3,7 +3,7 @@
   "port": 1919,
   "password": "torogo",
 
-  "anchors": { "random": 0, "vlibpat-ref-3x3": 1700 },
+  "anchors": { "random": 0 },
 
   "refs": [
     { "name": "random",             "agent": "random",             "budget": 1 },
