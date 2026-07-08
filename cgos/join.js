@@ -11,6 +11,10 @@
 //   --name    <user>    CGOS username        (default: <policy>[-<budget>])
 //   --budget  <ms>      Per-move budget      (default 1)
 //   --games   <n>       Stop after n more completed games (default: unlimited)
+//   --env     <K=V,..>  Env vars for the engine (set before the agent loads),
+//                       e.g. --env PLAYOUTS=3000 for a fixed playout count
+//                       instead of a time budget; pick a --name that says so
+//                       (e.g. rave-3kpo)
 //   --house             Join as a HOUSE engine: idle until a trial engine
 //                       needs an opponent (default: trial — the server
 //                       keeps this engine playing continuously)
@@ -74,7 +78,7 @@ fs.writeFileSync(cfgPath, `Common:
 
 GTPEngine:
   Name = ${name}
-  CommandLine = node ${path.join(__dirname, 'gtp.js')} --p ${agent} --budget ${budget}
+  CommandLine = node ${path.join(__dirname, 'gtp.js')} --p ${agent} --budget ${budget}${opts.env ? ' --env ' + opts.env : ''}
   ServerHost = ${fleet.host || '127.0.0.1'}
   ServerPort = ${port}
   ServerUser = ${name}

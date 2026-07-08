@@ -100,6 +100,25 @@ budget is fixed per engine name (`rave-100`, `rave-500`), never taken from
 the server clock, so ratings stay comparable across machines and runs.  The
 server clock (300 s/side) is just an anti-hang forfeit.
 
+Search agents that read the `PLAYOUTS` env var (`rave`, `amaf`, `prod`, …)
+can be given a **fixed playout count instead of a time budget** — fully
+machine-independent and immune to CPU contention from concurrent games.
+Env vars are set before the agent loads:
+
+```sh
+node cgos/join.js --p rave --env PLAYOUTS=3000 --name rave-3kpo
+```
+
+or per reference in `refs.json`:
+
+```json
+{ "name": "rave-3kpo", "agent": "rave", "budget": 1,
+  "env": { "PLAYOUTS": 3000 } }
+```
+
+Prefer playout-based references when the agent supports it; name them so
+the setting is visible (`rave-3kpo`).
+
 ## Toroidal adaptations (vs stock CGOS)
 
 - `server/cgos/gogame/go.py`: adjacency wraps in both directions
