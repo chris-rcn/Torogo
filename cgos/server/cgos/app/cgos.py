@@ -69,6 +69,12 @@ dbrec: Optional[sqlite3.Connection]
 
 gme: Dict[int, GoGame] = dict()
 
+# Torogo: per-game move-time accumulators, gid -> [b_ms, b_n, w_ms, w_n].
+# Raw wall time between sending genmove and receiving the reply (the
+# clock's leeway fudge would round fast agents' moves down to 0).
+# Flushed into password.total_move_ms/total_moves at gameover.
+moveTimes: Dict[int, List[float]] = dict()
+
 defaultRatingAverage = 0.0
 schedule_games_interval = 15.0
 
@@ -105,7 +111,8 @@ def initDatabase() -> None:
 
         conn.execute("create table gameid(gid int)")
         conn.execute(
-            "create table password(name, pass, games int, rating, K, last_game, primary key(name) )"
+            "create table password(name, pass, games int, rating, K, last_game, "
+            "total_move_ms DEFAULT 0, total_moves DEFAULT 0, primary key(name) )"
         )
         conn.execute(
             "create table games(gid int, w, wr, b, br, dte, wtu, btu, res, final, primary key(gid))"
@@ -128,8 +135,14 @@ def openDatabase() -> None:
     # set up a long timeout for transactions
     try:
         db = sqlite3.connect(cfg.database_state_file, timeout=40000)
-        # Torogo: migrate state files created before the house table existed
+        # Torogo: migrate state files created before the house table and
+        # move-time columns existed
         db.execute("create table if not exists house(name, primary key(name))")
+        for col in ("total_move_ms", "total_moves"):
+            try:
+                db.execute(f"ALTER TABLE password ADD COLUMN {col} DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # column already exists
         db.commit()
     except sqlite3.Error as e:
         logger.error(f"Error opening {cfg.database_state_file} datbase.")
@@ -637,6 +650,17 @@ def gameover(gid: int, sc: str, err: str) -> None:
     viewers.sendObservers(gid, f"update {gid} {sc}")
     viewers.removeObservers(gid)
 
+    # flush move-time stats into the persistent per-agent totals
+    st = moveTimes.pop(gid, None)
+    if st is not None:
+        for name, ms, n in ((game.b, st[0], st[1]), (game.w, st[2], st[3])):
+            if n > 0:
+                db.execute(
+                    "UPDATE password SET total_move_ms=total_move_ms+?, "
+                    "total_moves=total_moves+? WHERE name==?",
+                    (int(ms), int(n), name),
+                )
+
     see, see2 = seeRecord(games[gid], sc, dte, tme)
 
     if dbrec:
@@ -911,7 +935,8 @@ def _handle_player_password(sock: Client, data: str) -> None:
         else:
             pw_store = pw
         db.execute(
-            """INSERT INTO password VALUES(?, ?, 0, ?, ?, "2000-01-01 00:00")""",
+            """INSERT INTO password(name, pass, games, rating, K, last_game)
+               VALUES(?, ?, 0, ?, ?, "2000-01-01 00:00")""",
             (
                 who,
                 pw_store,
@@ -1091,6 +1116,13 @@ def _handle_player_genmove(sock: Client, data: str) -> None:
 
     ctm = gme[gid].colorToMove()  # who's turn to move?
     maybe = ["W+", "B+"][ctm & 1]  # opponent wins if there is an error
+
+    # accumulate this player's think time (raw, unclamped by leeway)
+    st = moveTimes.get(gid)
+    if st is not None:
+        i = 2 if (ctm & 1) else 0
+        st[i] += max(0, ct - games[gid].last_move_start_time)
+        st[i + 1] += 1
 
     mv = data.strip()
     analysis = None
@@ -1791,6 +1823,7 @@ def init_game(
 
     rule = Rule(cfg.koRule)
     gme[gid] = GoGame(cfg.boardsize, rule)
+    moveTimes[gid] = [0.0, 0, 0.0, 0]
 
     for mv, _, _ in moves:
         err = gme[gid].make(mv)

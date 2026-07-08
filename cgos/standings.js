@@ -28,7 +28,16 @@ const size    = opts.getInt('size', 13);
 const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'), { readOnly: true });
 
-const players = db.prepare('SELECT name, rating, K, games FROM password ORDER BY rating DESC').all();
+let players;
+try {
+  players = db.prepare(
+    'SELECT name, rating, K, games, total_move_ms, total_moves FROM password ORDER BY rating DESC'
+  ).all();
+} catch {
+  // database predates the move-time columns (migrated on next server start)
+  players = db.prepare('SELECT name, rating, K, games FROM password ORDER BY rating DESC')
+    .all().map(p => ({ ...p, total_move_ms: 0, total_moves: 0 }));
+}
 const anchors = new Map(db.prepare('SELECT name, rating FROM anchors').all()
   .map(r => [r.name, r.rating]));
 const games = db.prepare('SELECT w, b, res FROM games').all();
@@ -78,13 +87,14 @@ const rows = players.map(p => {
     cgos: `${Math.round(p.rating)}${p.K > 16 ? '?' : ''}`,
     mle: m !== undefined && Number.isFinite(m) ? String(Math.round(m)) : '-',
     ci: ciStr,
+    msMove: p.total_moves > 0 ? Util.fmt4(p.total_move_ms / p.total_moves) : '-',
     anchor: anchors.has(p.name) ? '⚓' : '',
   };
 }).sort((x, y) => (y.mle === '-' ? -Infinity : +y.mle) - (x.mle === '-' ? -Infinity : +x.mle));
 
 const W = Math.max(6, ...rows.map(r => r.name.length));
-console.log(`${'engine'.padEnd(W)}  ${'games'.padStart(5)}  ${'cgosElo'.padStart(7)}  ${'mleElo'.padStart(6)}  ${'95%'.padStart(5)}`);
+console.log(`${'engine'.padEnd(W)}  ${'games'.padStart(5)}  ${'cgosElo'.padStart(7)}  ${'mleElo'.padStart(6)}  ${'95%'.padStart(5)}  ${'ms/mv'.padStart(5)}`);
 for (const r of rows) {
-  console.log(`${r.name.padEnd(W)}  ${String(r.games).padStart(5)}  ${r.cgos.padStart(7)}  ${r.mle.padStart(6)}  ${r.ci.padStart(5)}  ${r.anchor}`);
+  console.log(`${r.name.padEnd(W)}  ${String(r.games).padStart(5)}  ${r.cgos.padStart(7)}  ${r.mle.padStart(6)}  ${r.ci.padStart(5)}  ${r.msMove.padStart(5)}  ${r.anchor}`);
 }
 console.log(`\n${games.length} games in database.  ⚓ = rating anchor.`);
