@@ -17,6 +17,11 @@
 
 ## Workflow
 
+- **Never use `pkill`.** To stop a process, kill specific PIDs (e.g. track
+  the child PIDs you spawned, or `pgrep -f '<pattern>' | xargs -r kill`
+  with a pattern that cannot match unrelated processes or the shell
+  running the command itself).
+
 - **After a background job completes, cat the log file.** When a Bash command
   was started with `run_in_background: true` and the harness reports its
   completion, immediately `cat` the output file so the user can review it
