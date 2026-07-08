@@ -38,6 +38,15 @@
   Do **not** use `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight
   model and runs its own search at every move, roughly doubling per-move
   cost.
+- **Elo rating via local CGOS.** `cgos/` contains a toroidal CGOS server
+  (vendored + patched) for rating agents against the reference fleet.
+  Start the ladder with `node cgos/run.js`, attach a candidate with
+  `node cgos/join.js --p <agent> --budget <ms> --games <n>`, read ratings
+  with `node cgos/standings.js` (quote the `mleElo` column and game count).
+  The scale is anchored at `vlibpat-ref-3x3` = 1700.  The server must keep
+  `ko = SIMPLE` and komi 3.5 to match Game2.  Rule/compat tests:
+  `python3 -m unittest discover -s cgos/tests` and
+  `node cgos/tests/replay-compat.js`.
 - **Eval reporting.** When summarising selfplay/eval results, report the
   win-rate (e.g. p2 win% or p1 win%) and game count.  Do **not** report
   the `p2Better%` column.
