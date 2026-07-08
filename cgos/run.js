@@ -82,14 +82,19 @@ function waitForPort(port, host, cb, tries = 50) {
   });
 }
 
-// ── Anchors ───────────────────────────────────────────────────────────────────
+// ── Anchors and house list ────────────────────────────────────────────────────
 
-function writeAnchors() {
+// The reference fleet are HOUSE engines: they idle until a trial engine
+// (cgos/join.js) needs an opponent.  Anchor ratings are pinned.
+function writeFleetTables() {
   const anchors = fleet.anchors || {};
-  const stmts = Object.entries(anchors)
-    .map(([n, r]) => `INSERT OR REPLACE INTO anchors VALUES(${JSON.stringify(n)}, ${r});`)
-    .join(' ');
-  if (!stmts) return;
+  const stmts = [
+    'CREATE TABLE IF NOT EXISTS house(name, primary key(name));',
+    'DELETE FROM house;',
+    ...fleet.refs.map(r => `INSERT INTO house VALUES(${JSON.stringify(r.name)});`),
+    ...Object.entries(anchors)
+      .map(([n, r]) => `INSERT OR REPLACE INTO anchors VALUES(${JSON.stringify(n)}, ${r});`),
+  ].join(' ');
   const py = `
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -97,7 +102,8 @@ db.executescript(sys.argv[2])
 db.commit()
 `;
   execFileSync('python3', ['-c', py, path.join(dataDir, 'cgos.state'), stmts]);
-  console.log(`anchors: ${Object.entries(anchors).map(([n, r]) => `${n}=${r}`).join(', ')}`);
+  console.log(`house:   ${fleet.refs.map(r => r.name).join(', ')}`);
+  console.log(`anchors: ${Object.entries(anchors).map(([n, r]) => `${n}=${r}`).join(', ') || '(none)'}`);
 }
 
 // ── Engine clients ────────────────────────────────────────────────────────────
@@ -120,7 +126,7 @@ GTPEngine:
 }
 
 waitForPort(fleet.port || 1919, fleet.host || '127.0.0.1', () => {
-  writeAnchors();
+  writeFleetTables();
   if (opts['server-only']) {
     console.log('server up (server-only mode); attach engines with cgos/join.js');
     return;
@@ -132,5 +138,6 @@ waitForPort(fleet.port || 1919, fleet.host || '127.0.0.1', () => {
     launch('client-' + ref.name, 'python3', [path.join(__dirname, 'client', 'cgosclient.py'), cfgPath], dataDir);
     console.log(`engine:  ${ref.name} (ai/${ref.agent}.js, ${ref.budget}ms/move)`);
   }
-  console.log('\nrunning — Ctrl-C to stop.  Standings: node cgos/standings.js');
+  console.log('\nhouse fleet idle and ready — games start when a trial engine');
+  console.log('connects (node cgos/join.js --p <agent>).  Ctrl-C to stop.');
 });

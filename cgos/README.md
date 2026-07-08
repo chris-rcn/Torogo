@@ -1,10 +1,12 @@
 # Toroidal CGOS — Elo rating for Torogo agents
 
 A local [CGOS](https://github.com/zakki/cgos) (Computer Go Server) adapted to
-Torogo's toroidal board.  A fleet of reference engines plays continuously;
-any new agent connects as one more engine and gets an Elo estimate quickly
-(new players start at K=200, so ~15–20 games already give a usable number,
-and the Bradley–Terry fit in `standings.js` converges even faster).
+Torogo's toroidal board.  A fleet of **house** reference engines sits idle,
+always ready; connecting a **trial** engine (the agent you want rated)
+starts a continuous stream of games against the nearest-rated opponents,
+and the Elo estimate arrives quickly (new players start at K=200, so
+~15–20 games already give a usable number, and the Bradley–Terry fit in
+`standings.js` converges even faster).
 
 ## Quick start
 
@@ -46,30 +48,47 @@ the reference ladder keeps improving across runs.
 - `standings.js` additionally fits all games with an anchored
   Bradley–Terry maximum-likelihood model (`elo-lib.js`); this uses every
   game optimally and is the number to quote.
-- **Adding lower anchors:** after a burn-in run, copy the fast engines'
-  stable `mleElo` values into the `anchors` map of `refs.json` (they are
-  written to the server on the next `run.js` start).  Multiple pinned
-  rungs make new-engine ratings settle faster and stop ladder drift;
-  anchor-vs-anchor games are throttled by `anchor_match_rate`.  Don't
-  guess anchor values — a mispinned anchor warps the whole scale.
-- Matchmaking pairs engines of adjacent (jittered) rating each round, so a
-  new engine climbs to its level within a few rounds and then plays
-  informative near-50% games — this is what makes the estimate fast.
+- **Adding lower anchors:** after a burn-in run (e.g. join each reference
+  agent as a trial for a while so the house fleet gets played), copy the
+  fast engines' stable `mleElo` values into the `anchors` map of
+  `refs.json` (they are written to the server on the next `run.js`
+  start).  Multiple pinned rungs make new-engine ratings settle faster
+  and stop ladder drift.  Don't guess anchor values — a mispinned anchor
+  warps the whole scale.
+- Matchmaking pairs each trial engine with the waiting opponent of nearest
+  (jittered) rating, so a new engine climbs to its level within a few games
+  and then plays informative near-50% games — this is what makes the
+  estimate fast.
 
-## Throughput
+## House vs trial engines, and scheduling
 
-Rounds are barrier-synchronized: the server pairs every waiting engine,
-then waits for **all** games to finish before pairing the next round.  Two
-consequences:
+Every engine is either **house** (listed in the server's `house` table)
+or **trial** (everything else):
 
-- One slow engine (e.g. `rave-500` at ~30 s/game) gates every round even
-  for the fast pairs.  Keep the standing fleet fast; attach slow engines
-  deliberately (`join.js`) when you want them rated, or run them on a
-  second server (`--ini`/`--data`/port of their own).
-- The stock CGOS delays (45 s startup, 15 s between rounds, 3 s round
-  start) are meant for internet play.  `torogo9.ini` overrides them
-  (`startupDelay`/`scheduleInterval`/`matchStartDelay` = 3/2/0.25 s), so
-  round overhead is well under a second per game with a fast fleet.
+- *House* engines never initiate a game.  With no trial connected the
+  server sits completely idle — the reference fleet costs nothing while
+  it waits.
+- *Trial* engines play continuously while connected.  Every scheduler
+  tick (`scheduleInterval`, default 2 s) each waiting trial is paired
+  with the waiting engine of nearest jittered rating (house or another
+  trial).
+
+`run.js` registers its whole fleet as house; `join.js` joins as a trial
+by default (`--house` to add an extra house engine on the fly — the
+server re-reads the table every tick).
+
+There is **no round barrier** (stock CGOS waits for all games to finish
+before pairing the next round): a finished engine is re-paired on the
+next tick while other games keep running, so several trials play in
+parallel and a slow game never blocks a fast one.  Concurrency = number
+of connected trials (each gets its own game; every engine is its own OS
+process).  Keep total engines under your core count or per-move budgets
+get noisy.
+
+The stock CGOS delays (45 s startup, 15 s scheduler ticks, 3 s match
+start) are meant for internet play; `torogo9.ini` overrides them
+(`startupDelay`/`scheduleInterval`/`matchStartDelay` = 3/2/0.25 s), so
+per-game overhead is roughly one tick.
 
 ## Budgets and engine identity
 

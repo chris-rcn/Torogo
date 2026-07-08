@@ -11,6 +11,9 @@
 //   --name    <user>    CGOS username        (default: <policy>[-<budget>])
 //   --budget  <ms>      Per-move budget      (default 1)
 //   --games   <n>       Stop after n more completed games (default: unlimited)
+//   --house             Join as a HOUSE engine: idle until a trial engine
+//                       needs an opponent (default: trial — the server
+//                       keeps this engine playing continuously)
 //   --refs    <file>    Fleet file for host/port/password (default cgos/refs.json)
 //   --data    <dir>     Data directory of the server      (default cgos/data/9x9)
 //
@@ -24,9 +27,9 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const Util = require('../util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'house']);
 if (opts.help || !opts.p) {
-  console.log('Usage: node cgos/join.js --p <policy> [--name <user>] [--budget <ms>] [--games <n>]');
+  console.log('Usage: node cgos/join.js --p <policy> [--name <user>] [--budget <ms>] [--games <n>] [--house]');
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -41,6 +44,17 @@ const fleet    = JSON.parse(fs.readFileSync(refsFile, 'utf8'));
 if (name.startsWith('admin')) {
   console.error('names starting with "admin" are reserved by the server');
   process.exit(1);
+}
+
+// Register the house/trial role.  The server re-reads the house table
+// every scheduler tick, so this takes effect immediately.
+{
+  const db = new DatabaseSync(path.join(dataDir, 'cgos.state'));
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS house(name, primary key(name))');
+    if (opts.house) db.prepare('INSERT OR REPLACE INTO house VALUES(?)').run(name);
+    else            db.prepare('DELETE FROM house WHERE name = ?').run(name);
+  } finally { db.close(); }
 }
 
 const killFile = path.join(dataDir, `kill-${name}.txt`);

@@ -113,6 +113,7 @@ def initDatabase() -> None:
         conn.execute("create index white on games(w)")
         conn.execute("create index black on games(b)")
         conn.execute("create table anchors(name, rating, primary key(name))")
+        conn.execute("create table house(name, primary key(name))")
         conn.execute("create table clients(name, count)")
         conn.execute("INSERT into gameid VALUES(1)")
 
@@ -127,6 +128,9 @@ def openDatabase() -> None:
     # set up a long timeout for transactions
     try:
         db = sqlite3.connect(cfg.database_state_file, timeout=40000)
+        # Torogo: migrate state files created before the house table existed
+        db.execute("create table if not exists house(name, primary key(name))")
+        db.commit()
     except sqlite3.Error as e:
         logger.error(f"Error opening {cfg.database_state_file} datbase.")
         raise Exception(e)
@@ -1608,37 +1612,33 @@ def schedule_games() -> None:
                 )
             last_est = curTime
 
-    # should we begin another round of scheduling?
-    # --------------------------------------------
-    if count > 0:
-        ctme = datetime.datetime.now(datetime.timezone.utc)
-        write_web_data_file(ctme)
-    else:
-        logger.info("Batch rating")
-        batchRate()
+    # Torogo: no round barrier.  Rate any newly finished games and pair
+    # waiting trial engines every tick, regardless of games still in
+    # progress — an engine that just finished is re-paired on the next
+    # tick while other games keep running.
+    ctme = datetime.datetime.now(datetime.timezone.utc)
 
-        # handle bad users file
-        global badUsers
+    batchRate()
 
-        badUsers = []
-        if os.path.exists(cfg.badUsersFile):
-            with open(cfg.badUsersFile, "r") as f:
-                badUsers = f.read().splitlines()
-            logger.info(f"sizeof bad_users: {len(badUsers)}")
-        else:
-            logger.info("bad_users_file is not found.")
+    # handle bad users file
+    global badUsers
 
-        for name, v in list(act.items()):
-            if v.msg_state == "waiting":
-                if name in badUsers:
-                    logger.info(f"found bad user {name}. kick.")
-                    del act[name]
-                    v.sock.close()
+    badUsers = []
+    if cfg.badUsersFile and os.path.exists(cfg.badUsersFile):
+        with open(cfg.badUsersFile, "r") as f:
+            badUsers = f.read().splitlines()
+        logger.info(f"sizeof bad_users: {len(badUsers)}")
 
-        # match games & write file
-        ctme = datetime.datetime.now(datetime.timezone.utc)
+    for name, v in list(act.items()):
+        if v.msg_state == "waiting":
+            if name in badUsers:
+                logger.info(f"found bad user {name}. kick.")
+                del act[name]
+                v.sock.close()
 
-        if os.path.exists(cfg.killFile):
+    if os.path.exists(cfg.killFile):
+        # stop scheduling; exit once running games have completed
+        if count == 0:
             write_web_data_file(ctme)
 
             db.commit()
@@ -1650,11 +1650,10 @@ def schedule_games() -> None:
 
             logger.info("KILL FILE FOUND - EXIT CGOS")
             sys.exit(0)
+    elif cfg.matchMode == MatchMode.AUTO:
+        match_games(ctme)
 
-        if cfg.matchMode == MatchMode.AUTO:
-            match_games(ctme)
-
-        write_web_data_file(ctme)
+    write_web_data_file(ctme)
 
 
 def write_web_data_file(ctme: datetime.datetime) -> None:
@@ -1803,133 +1802,85 @@ def start_game(game: Game) -> None:
     act[ctm].msg_state = "genmove"
 
 
+def getHouseUsers() -> set:
+    global db
+    return {name for (name,) in db.execute("SELECT name FROM house")}
+
+
+# Torogo matchmaking: HOUSE engines (listed in the `house` table) idle
+# until needed; TRIAL engines (everyone else) are paired with the
+# nearest-rated waiting opponent every scheduler tick.  No rounds, no
+# barrier — only currently-waiting engines are touched, so a game
+# finishing anywhere immediately frees its two players for re-pairing
+# while other games keep running.  With no trial engine connected the
+# server sits idle.
 def match_games(ctme: datetime.datetime) -> None:
-    global SKIP
     global act
     global games
-    global gme
     global db
 
-    RANGE = 500.0  # minmum elo range allowed
-
-    # dynamically computer ELO RANGE
-    # ------------------------------
-    lst: List[Tuple[str, float]] = []
-    r_sum = 0.0
-
-    for name, v in act.items():
-        # sock, state, gid, rating = v
-
-        if v.msg_state == "waiting":
-            r = v.rating
-            lst.append((name, r))
-            r_sum += r
-
-    lst.sort(key=lambda e: -e[1])
-    max_interval = 0.0
-
-    ll = len(lst)
-    e = ll - SKIP
+    JITTER = 200.0  # Elo noise when choosing an opponent, for variety
 
     global defaultRatingAverage
-    if ll > 0:
-        defaultRatingAverage = r_sum / ll
-        logger.info(f"defaultRatingAverage: {defaultRatingAverage}  : playes {ll}")
+    ratings = [v.rating for v in act.values()]
+    if ratings:
+        defaultRatingAverage = sum(ratings) / len(ratings)
     else:
         defaultRatingAverage = cfg.defaultRating
 
-    for i in range(e):
-        cr = lst[i][1]
-        nr = lst[i + SKIP][1]
+    house = getHouseUsers()
+    waiting = [name for name, v in act.items() if v.msg_state == "waiting"]
+    trials = [n for n in waiting if n not in house]
+    if not trials:
+        return
 
-        diff = cr - nr
+    available = set(waiting)
+    random.shuffle(trials)  # rotate who picks first when opponents are scarce
+    started = []
 
-        if diff > max_interval:
-            max_interval = diff
+    for t in trials:
+        if t not in available:
+            continue  # already matched as another trial's opponent
+        cands = available - {t}
+        if not cands:
+            continue
+        available.discard(t)
+        tr = act[t].rating
+        opp = min(
+            cands,
+            key=lambda n: abs(act[n].rating - tr) + JITTER * random.random(),
+        )
+        available.discard(opp)
 
-    # cover the case where there are very few players
-    # -----------------------------------------------
-    if e <= 0:
-        max_interval = 2000.0
+        # balance colors by past pairing counts
+        wp, bp = opp, t
+        wco = db.execute(
+            "SELECT count(*) FROM games WHERE w==? AND b==?", (wp, bp)
+        ).fetchone()[0]
+        bco = db.execute(
+            "SELECT count(*) FROM games WHERE w==? AND b==?", (bp, wp)
+        ).fetchone()[0]
+        if bco < wco:
+            bp, wp = wp, bp
 
-    logger.info(f"maximum skip elo: {max_interval}")
-    max_interval = max_interval * 1.50
+        gid = init_game(ctme, wp, bp)
+        if gid:
+            started.append(gid)
 
-    if max_interval > RANGE:
-        RANGE = max_interval
-
-    logger.info(f"ELO permutation factor to be used: {RANGE}")
-
-    # now permute the players up to RANGE amount
-    # ------------------------------------------
-    lst = []
-
-    for name, v in act.items():
-        # sock, state, gid, rating = v
-
-        if v.msg_state == "waiting":
-            r = v.rating + RANGE * random.random()
-            lst.append((name, r))
-
-    lst.sort(key=lambda e: -e[1])
-
-    if len(lst) > 1:
-
-        logger.info(f"will schedule: {len(lst)} players")
-
-        anchors = getAnchors()
-
-        lst_pairs = iter(lst)
-        for aa, bb in zip(lst_pairs, lst_pairs):
-
-            if bb is None:
-                continue
-
-            # set up white and black players
-            # ------------------------------
-            wp = aa[0]  # actual player names
-            bp = bb[0]  # actual player names
-
-            # delete anchor vs anchor
-            # (Torogo: upstream compared the (name, rating) tuples against
-            # the anchors dict, so the throttle never fired)
-            if wp in anchors and bp in anchors:
-                r = random.random()
-                if r > cfg.anchor_match_rate:
-                    logger.info(f"delete this match. {wp}, {bp}, r={r}")
-                    continue
-
-            wco = db.execute(
-                "SELECT count(*) FROM games WHERE w==? AND b==?", (wp, bp)
-            ).fetchone()[0]
-            bco = db.execute(
-                "SELECT count(*) FROM games WHERE w==? AND b==?", (bp, wp)
-            ).fetchone()[0]
-
-            # swap white and black if black has not been played as many times
-            if bco < wco:
-                bp, wp = wp, bp
-
-            init_game(ctme, wp, bp)
-
+    if started:
         db.commit()
 
-        # small delay to let all programs complete setup (upstream: 3s)
+        # small delay to let the programs complete setup (upstream: 3s)
         # --------------------------------------------------------------
         time.sleep(cfg.matchStartDelay)
 
-        view_count = len(viewers.vact)
-        logger.info(f"Active viewers: {view_count}")
-
-        # gentlemen, start your clocks!
-        # -------------------------------------
-        # [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S" -timezone :UTC]
-        for gid, rec in games.items():
-            # wp, bp = rec
-            logger.info(
-                f"match-> {rec.w}({ rating(rec.w) })   {rec.b}({ rating(rec.b) })"
-            )
-            start_game(rec)
+        for gid in started:
+            if gid in games:
+                rec = games[gid]
+                logger.info(
+                    f"match-> {rec.w}({ rating(rec.w) })   {rec.b}({ rating(rec.b) })"
+                )
+                start_game(rec)
 
 
 async def schedule_games_task() -> None:
