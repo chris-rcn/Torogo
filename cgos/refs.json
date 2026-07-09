@@ -13,6 +13,7 @@
     { "name": "vlibpat-ref-3x3",    "agent": "vlibpat-ref-3x3",    "budget": 1 },
     { "name": "vlibpat-ref-3x3-d2", "agent": "vlibpat-ref-3x3-d2", "budget": 1 },
     { "name": "ref-search-topk",    "agent": "ref-search-topk",    "budget": 1 },
-    { "name": "ref-rave-1k",        "agent": "ref-rave-1k",        "budget": 1 }
+    { "name": "ref-rave-1k",        "agent": "ref-rave-1k",        "budget": 1 },
+    { "name": "ref-rave-2k",        "agent": "ref-rave-2k",        "budget": 1 }
   ]
 }
