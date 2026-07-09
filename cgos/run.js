@@ -126,17 +126,17 @@ db.commit()
 
 // ── Engine clients ────────────────────────────────────────────────────────────
 
-function clientCfg(name, agent, budget, env) {
+// House agents run with hardcoded parameters (fixed-config ai/ref-*.js
+// files) and budget 1 — no env vars, so an engine name always means the
+// same strength.  Use join.js --env for trial-side experiments.
+function clientCfg(name, agent, budget) {
   const gtp = path.join(__dirname, 'gtp.js');
-  const envArg = env && Object.keys(env).length
-    ? ' --env ' + Object.entries(env).map(([k, v]) => `${k}=${v}`).join(',')
-    : '';
   return `Common:
   KillFile = ${path.join(dataDir, 'kill-' + name + '.txt')}
 
 GTPEngine:
   Name = ${name}
-  CommandLine = node ${gtp} --p ${agent} --budget ${budget}${envArg}
+  CommandLine = node ${gtp} --p ${agent} --budget ${budget}
   ServerHost = ${fleet.host || '127.0.0.1'}
   ServerPort = ${port}
   ServerUser = ${name}
@@ -154,11 +154,10 @@ waitForPort(port, fleet.host || '127.0.0.1', () => {
   }
   for (const ref of fleet.refs) {
     const cfgPath = path.join(dataDir, 'clients', ref.name + '.cfg');
-    fs.writeFileSync(cfgPath, clientCfg(ref.name, ref.agent, ref.budget, ref.env));
+    fs.writeFileSync(cfgPath, clientCfg(ref.name, ref.agent, ref.budget));
     try { fs.unlinkSync(path.join(dataDir, `kill-${ref.name}.txt`)); } catch {}
     launch('client-' + ref.name, 'python3', [path.join(__dirname, 'client', 'cgosclient.py'), cfgPath], dataDir);
-    const envInfo = ref.env ? ' ' + Object.entries(ref.env).map(([k, v]) => `${k}=${v}`).join(' ') : '';
-    console.log(`engine:  ${ref.name} (ai/${ref.agent}.js, ${ref.budget}ms/move${envInfo})`);
+    console.log(`engine:  ${ref.name} (ai/${ref.agent}.js, ${ref.budget}ms/move)`);
   }
   if (opts.calibrate) {
     console.log('\ncalibrating — fleet plays continuously.  Ctrl-C to stop;');
