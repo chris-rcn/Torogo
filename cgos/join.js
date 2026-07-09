@@ -57,6 +57,13 @@ if (name.startsWith('admin')) {
   process.exit(1);
 }
 
+if (opts.house && opts.env) {
+  console.error('--env cannot be combined with --house: house engines must be ' +
+    'fixed-config so a name always means one exact strength.  Hardcode the ' +
+    'settings in a thin ai/ref-*.js wrapper instead (see ai/ref-rave-1k.js).');
+  process.exit(1);
+}
+
 // Register the house/trial role.  The server re-reads the house table
 // every scheduler tick, so this takes effect immediately.
 {
