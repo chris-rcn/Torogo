@@ -4,6 +4,7 @@
 //
 // Usage:
 //   node cgos/purge.js --name <engine> [--size <n>] [--data <dir>] [--dry-run]
+//                      [--ini <file>] [--force]
 //
 // Deletes the engine's account, all games it played (results table, game
 // archive, and per-game SGF/bin records), and its house/anchor entries,
@@ -11,25 +12,55 @@
 // Bradley-Terry MLE so the stored ratings no longer reflect the purged
 // games.
 //
-// Run this while the server is stopped: a live server holds stale
-// ratings in memory and may be writing the database concurrently.
+// The server must be stopped: a live server holds stale ratings in
+// memory and may be writing the database concurrently.  This is
+// enforced by probing the ladder's port (from the ini) — --force skips
+// the check if that port is known to belong to something else.
 
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const Util = require('../util.js');
 const { fitRatings } = require('../elo-lib.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'dry-run']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'dry-run', 'force']);
 if (opts.help || !opts.name) {
-  console.log('Usage: node cgos/purge.js --name <engine> [--size <n>] [--data <dir>] [--dry-run]');
+  console.log('Usage: node cgos/purge.js --name <engine> [--size <n>] [--data <dir>] [--dry-run] [--force]');
   process.exit(opts.help ? 0 : 1);
 }
 
 const name    = opts.name;
 const size    = opts.getInt('size', 13);
 const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
+const iniFile = path.resolve(opts.get('ini', path.join(__dirname, `torogo${size}.ini`)));
 const dryRun  = !!opts['dry-run'];
+
+// Refuse to modify a ladder whose server is running (--dry-run is
+// read-only and safe either way).
+function checkServerStopped(cb) {
+  if (dryRun || opts.force) { cb(); return; }
+  let port = 0;
+  try {
+    const m = fs.readFileSync(iniFile, 'utf8').match(/^\s*portNumber\s*=\s*(\d+)/m);
+    if (m) port = parseInt(m[1], 10);
+  } catch { /* no ini — nothing to probe */ }
+  if (!port) { cb(); return; }
+  const s = net.connect({ port, host: '127.0.0.1', timeout: 1000 });
+  s.on('connect', () => {
+    s.destroy();
+    console.error(`a CGOS server is listening on port ${port} — stop it before purging` +
+      ` (or pass --force if that port belongs to a different ladder)`);
+    process.exit(1);
+  });
+  const clear = () => { s.destroy(); cb(); };
+  s.on('error', clear);
+  s.on('timeout', clear);
+}
+
+checkServerStopped(main);
+
+function main() {
 
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'));
 
@@ -108,3 +139,5 @@ db.close();
 
 console.log(`done: ${gids.length} games, ${sgfCount} game records deleted; ` +
   `${refitted} remaining players refit over ${records.length} games`);
+
+}  // main

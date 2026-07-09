@@ -31,7 +31,7 @@ the reference ladder keeps improving across runs.
 | `gtp.js`        | GTP wrapper: exposes any `ai/*.js` agent as a GTP engine (`node cgos/gtp.js --p rave --budget 500`) |
 | `run.js`        | Launcher: server + one client per engine in `refs.json`, writes rating anchors |
 | `join.js`       | Connect one engine (your candidate) to a running server; prints its rating after each game |
-| `purge.js`      | Remove an engine and all its games from a ladder (`--dry-run` to preview), then refit the remaining ratings |
+| `purge.js`      | Remove an engine and all its games from a ladder (`--dry-run` to preview), then refit the remaining ratings; refuses to run while the ladder's server is up |
 | `standings.js`  | Rating table: server's incremental Elo + anchored Bradley–Terry MLE fit with 95% CI (uses `elo-lib.js`) |
 | `refs.json`     | Reference fleet: engine names, agents, per-move budgets, and rating anchors |
 | `torogo13.ini`  | Server config: 13×13 (the default size), komi 3.5, **simple ko** (matches Game2), 300 s/side |
