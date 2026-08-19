@@ -1,0 +1,379 @@
+# The MIT License
+#
+# Copyright (C) 2009 Don Dailey and Jason House
+# Copyright (c) 2022 Kensuke Matsuzaki
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+from __future__ import annotations
+
+import re
+from enum import Enum
+from typing import Dict, List
+
+from util.logutils import getLogger
+
+logger = getLogger("cgos_server")
+
+RE_MOVE = re.compile(r"^[a-z]\d+")
+
+
+class KoRule(Enum):
+    SIMPLE = 0
+    POSITIONAL = 1
+
+
+class Rule:
+    koRule: KoRule
+
+    def __init__(self, koRule: KoRule) -> None:
+        self.koRule = koRule
+
+
+class GoGame:
+    # TOROIDAL VARIANT (Torogo): the board wraps in both directions, so every
+    # point has exactly 4 neighbours and there are no edges or corners.
+    # Adjacency goes through the precomputed self.nbrs table instead of the
+    # flat +/-1, +/-row offsets of upstream CGOS; the sentinel border cells
+    # (value 3) still exist in the array but are never reachable.
+
+    __LEGAL_COORDINATES = "abcdefghjklmnopqrstuvwxyz"
+
+    ctm: int  # where in the game we are
+    bd: List[int]
+    size: int
+    size1: int
+    his: Dict[int, List[int]]  # a list of board copies
+    moves: List[str]  # a list of moves
+    nbrs: Dict[int, List[int]]  # toroidal adjacency: index -> 4 neighbour indices
+    rule: Rule
+
+    def __init__(self, size: int, rule: Rule) -> None:
+        self.bd = []
+        self.ctm = 0
+        self.size = size
+        self.size1 = size + 1
+        self.moves = []
+        self.his = dict()
+        self.rule = rule
+
+        for y in range(self.size + 2):
+            for x in range(self.size1):
+                if y < 1 or y > self.size or x == 0:
+                    self.bd.append(3)
+                else:
+                    self.bd.append(0)
+        self.his[self.ctm] = self.bd.copy()
+
+        # Precompute wrapped neighbours for every on-board point.
+        self.nbrs = dict()
+        for y in range(1, self.size + 1):
+            for x in range(1, self.size + 1):
+                up = self.size if y == 1 else y - 1
+                dn = 1 if y == self.size else y + 1
+                lt = self.size if x == 1 else x - 1
+                rt = 1 if x == self.size else x + 1
+                self.nbrs[y * self.size1 + x] = [
+                    y * self.size1 + lt,
+                    y * self.size1 + rt,
+                    up * self.size1 + x,
+                    dn * self.size1 + x,
+                ]
+
+    def mvToIndex(self, mv: str) -> int:
+        m = mv.lower()
+
+        if m[0:2] == "pa":
+            return 0
+
+        match = re.search(RE_MOVE, m)
+        if match is not None:
+            y = self.size1 - int(m[1:])  # [string range $m 1 2]]
+            if y > self.size or y <= 0:
+                return -4
+            try:
+                x = self.__LEGAL_COORDINATES.index(m[0:1]) + 1
+                if x > self.size:
+                    return -4
+            except ValueError:
+                return -4
+        else:
+            # puts "Sorry"
+            return -4
+
+        return y * self.size1 + x  # index of point on board
+
+    # return a list of captured stones
+    # --------------------------------
+    def capture_group(self, target: int) -> List[int]:
+        tbd = self.bd.copy()  # copy of board for restoration if needed
+        lst = [target]
+        est = self.bd[target]  # enemy (color of group to be captured)
+        ret = [target]  # list of stones to return
+        # flag($target) = 1
+        flag = {target: 1}
+
+        while True:
+            nlst = []  # build a new list
+            for ix in lst:
+                for p in self.nbrs[ix]:
+
+                    if self.bd[p] == 0:
+                        self.bd = tbd
+                        return []  # nothing captured nothing gained
+
+                    if self.bd[p] == est:
+                        if p not in flag:
+                            nlst.append(p)
+                            ret.append(p)  # list of stones to be captured
+                            flag[p] = 1
+
+            if len(nlst) == 0:
+                for ix in ret:
+                    # set bd [lreplace $bd $ix $ix 0]
+                    self.bd[ix] = 0
+                return ret
+            else:
+                lst = nlst
+
+    def colorToMove(self) -> int:
+        return self.ctm
+
+    # return a "board" with correct status
+    # ------------------------------------
+    # TOROIDAL VARIANT (Torogo): 1-step area scoring matching
+    # Game2.estimateScore(), NOT the upstream Tromp-Taylor region
+    # flood-fill.  An empty point scores for a color only when every
+    # adjacent stone is that color; empty points deeper inside open
+    # regions are neutral.  This keeps the server's verdict identical to
+    # Game2.calcWinner() in every reachable ending, including early
+    # double-passes over large open areas.
+    def score_board(self, dead_list: List[str]) -> List[int]:
+        b = self.bd.copy()  # work from a copy
+
+        # kill the dead stones
+        # --------------------------------
+        for s in dead_list:
+            imv = self.mvToIndex(s)
+            b[imv] = 0
+
+        out = b.copy()
+        for i in self.nbrs:
+            if b[i] == 0:  # empty square
+                cc = 0  # color of adjacent stones
+                for p in self.nbrs[i]:
+                    if b[p] == 1:
+                        cc = cc | 1
+                    elif b[p] == 2:
+                        cc = cc | 2
+                if cc == 1 or cc == 2:
+                    out[i] = cc
+        return out
+
+    #  make -
+    #
+    #   Return: -4  if str_move formatted wrong
+    #   Return: -3  move to occupied square
+    #   Return: -2  Positional super KO move
+    #   Return: -1  suicide
+    #   Return   0  non capture move
+    #   Return  >0  number of stones captured
+    #   --------------------------------------
+    def make(self, mov: str) -> int:
+
+        mv = mov.upper()
+        fst = 2 - (self.ctm & 1)  # friendly stone color
+        est = fst ^ 3  # enemy stone color
+
+        if mv[0:2] == "PA":
+            self.moves.append("PASS")
+            self.ctm += 1
+            self.his[self.ctm] = self.bd.copy()
+            return 0
+
+        ix = self.mvToIndex(mv)
+
+        # set ix [expr $y * $n1 + $x]   ;# index of point on board
+        if ix < 0:
+            return ix
+
+        if self.bd[ix] != 0:
+            return -3  # move to occupied square
+
+        self.bd[ix] = fst
+
+        # determine if a capture was made in one or more directions
+        # ---------------------------------------------------------
+        clist = []
+        for p in self.nbrs[ix]:
+            if self.bd[p] == est:
+                clist.extend(self.capture_group(p))
+
+        # is the move suicidal?
+        # ---------------------
+        if len(clist) == 0:  # move was not a capture!
+            if len(self.capture_group(ix)) > 0:
+                self.bd = self.his[self.ctm].copy()
+                return -1
+
+        # test for KO
+        # ------------
+        for i in range(self.ctm):
+            if self.his[i] == self.bd:
+                logger.info(f"KO positional: {i} == {self.ctm} {mov}")
+
+        if self.rule.koRule == KoRule.POSITIONAL:
+            for i in range(self.ctm):
+                if self.his[i] == self.bd:
+                    self.bd = self.his[self.ctm].copy()
+                    return -2  # KO move
+        if self.rule.koRule == KoRule.SIMPLE:
+            if self.ctm > 0:
+                if self.his[self.ctm - 1] == self.bd:
+                    self.bd = self.his[self.ctm].copy()
+                    return -2  # KO move
+
+        # ok, the move was apparently valid!  accept it.
+        # ----------------------------------------------
+        self.moves.append(mv)
+        self.ctm += 1
+        self.his[self.ctm] = self.bd.copy()
+        return len(clist)
+
+    def unmake(self) -> bool:
+        if self.ctm > 0:
+            self.ctm -= 1
+            self.bd = self.his[self.ctm].copy()
+            return True
+        else:
+            return False
+
+    def twopass(self) -> bool:
+        if self.ctm > 1:
+            if (
+                self.moves[self.ctm - 1] == "PASS"
+                and self.moves[self.ctm - 2] == "PASS"
+            ):
+                return True
+            else:
+                return False
+        else:
+            return False
+
+    def list_moves(self) -> List[str]:
+        all = []
+
+        for ix in range(self.ctm):
+            all.append(self.moves[ix])
+
+        return all
+
+    def displayAll(self) -> None:
+        for y in range(self.size + 2):
+            print()
+            for x in range(self.size1):
+                ix = y * self.size1 + x
+                print("%3d" % (self.bd[ix]), end="")
+        print()
+
+    def display(self, pretty=True) -> None:
+        print(self.to_string(pretty))
+
+    def to_string(self, pretty=True) -> str:
+        out = ""
+        for y in range(1, self.size + 1):
+            for x in range(1, self.size + 1):
+                ix = y * self.size1 + x
+                p = self.bd[ix]
+                if pretty:
+                    if p == 0:
+                        out += "."
+                    elif p == 1:
+                        out += "O"
+                    elif p == 2:
+                        out += "X"
+                    elif p == 3:
+                        out += "#"
+                else:
+                    out += "%3d" % (self.bd[ix])
+            out += "\n"
+        return out
+
+    @staticmethod
+    def from_string(board: str, rule: Rule) -> GoGame:
+        lines = board.upper().splitlines()
+        sy = len(lines)
+        sx = len(lines[0])
+        if sx != sy:
+            raise ValueError(f"non rectangle board {sx}x{sy}")
+        if any([sx != len(line) for line in lines]):
+            raise ValueError("unique size")
+
+        game = GoGame(sx, rule)
+        for y, line in enumerate(lines, start=1):
+            for x, p in enumerate(line, start=1):
+                ix = y * game.size1 + x
+                v = None
+                if p == ".":
+                    v = 0
+                elif p == "O":
+                    v = 1
+                elif p == "X":
+                    v = 2
+                else:
+                    raise ValueError(f"unexpected character {p} at {x} {y}")
+                game.bd[ix] = v
+
+        game.his[game.ctm] = game.bd.copy()
+
+        return game
+
+    # return a copy of the current board as a tcl list
+    # ------------------------------------------------
+    def getboard(self) -> List[int]:
+        board = []
+        for y in range(1, self.size + 1):
+            for x in range(1, self.size + 1):
+                ix = y * self.size1 + x
+                board.append(self.bd[ix])
+        return board
+
+    # return a copy of the current board as a tcl list
+    # ------------------------------------------------
+    def getFinalBoard(self, dead: List[str]) -> List[int]:
+        b = self.score_board(dead)
+        board = []
+        for y in range(1, self.size + 1):
+            for x in range(1, self.size + 1):
+                ix = y * self.size1 + x
+                board.append(b[ix])
+        return board
+
+    # area scoring: stones + 1-step adjacent empty points
+    # (Torogo: matches Game2.estimateScore; see score_board)
+    # ------------------------------------------------------
+    def ttScore(self) -> int:
+        tbd = self.getFinalBoard([])
+        score = 0
+        for j in tbd:
+            if j == 2:
+                score += 1
+            elif j == 1:
+                score -= 1
+        return score

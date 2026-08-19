@@ -17,6 +17,11 @@
 
 ## Workflow
 
+- **Never use `pkill`.** To stop a process, kill specific PIDs (e.g. track
+  the child PIDs you spawned, or `pgrep -f '<pattern>' | xargs -r kill`
+  with a pattern that cannot match unrelated processes or the shell
+  running the command itself).
+
 - **After a background job completes, cat the log file.** When a Bash command
   was started with `run_in_background: true` and the harness reports its
   completion, immediately `cat` the output file so the user can review it
@@ -30,6 +35,16 @@
   Do **not** use `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight
   model and runs its own search at every move, roughly doubling per-move
   cost.
+- **Elo rating via local CGOS.** `cgos/` contains a toroidal CGOS server
+  (vendored + patched) for rating agents against the reference fleet.
+  Start the ladder with `node cgos/run.js`, attach a candidate with
+  `node cgos/join.js --p <agent> --budget <ms> --games <n>`, read ratings
+  with `node cgos/standings.js` (quote the `mleElo` column and game count).
+  The scale is anchored at `random` = 0; all other ratings float.
+  The server must keep
+  `ko = SIMPLE` and komi 3.5 to match Game2.  Rule/compat tests:
+  `python3 -m unittest discover -s cgos/tests` and
+  `node cgos/tests/replay-compat.js`.
 - **Eval reporting.** When summarising selfplay/eval results, report the
   win-rate (e.g. p2 win% or p1 win%) and game count.  Do **not** report
   the `p2Better%` column.

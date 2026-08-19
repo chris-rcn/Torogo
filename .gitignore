@@ -7,3 +7,6 @@ out/
 ref/
 *.bin
 *.tmp
+cgos/data/
+__pycache__/
+*.pyc
