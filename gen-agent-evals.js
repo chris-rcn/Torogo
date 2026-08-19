@@ -5,8 +5,9 @@
 //
 // Positions come from ref-npat-softmax self-play (fast, stochastic), with 4
 // random opening moves per game for diversity.  Each game is sampled once, and
-// only positions with board phase <= --max-phase are eligible (cap how full the
-// board may be, e.g. where the oracle is trustworthy).  The label is the agent's
+// only positions with --min-phase <= board phase <= --max-phase are eligible
+// (board fullness 1-empty/area, e.g. to target the range where the oracle is
+// trustworthy).  The label is the agent's
 // value() (P(BLACK wins)) mapped to P(side-to-move wins), to match the gen_evals
 // format consumed by train_ppat:
 //
@@ -17,7 +18,7 @@
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
 // Non-deterministic.  Usage:
-//   node gen-agent-evals.js --agent <name> [--size 9] [--max-phase 1] [--limit N]  > out.txt
+//   node gen-agent-evals.js --agent <name> [--size 9] [--min-phase 0] [--max-phase 1] [--limit N]  > out.txt
 
 const path = require('path');
 const { Game2, BLACK, PASS, coordStr } = require('./game2.js');
@@ -31,13 +32,14 @@ console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
 const RefNpat = require('./ai/ref-npat-softmax.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'size', 'max-phase', 'limit']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'size', 'min-phase', 'max-phase', 'limit']);
 if (opts.help || !opts.agent) {
-  console.error('Usage: node gen-agent-evals.js --agent <name> [--size 9] [--max-phase 1] [--limit N]  > out.txt');
+  console.error('Usage: node gen-agent-evals.js --agent <name> [--size 9] [--min-phase 0] [--max-phase 1] [--limit N]  > out.txt');
   process.exit(opts.help ? 0 : 1);
 }
 const agentName = opts.agent;
 const size      = parseInt(opts.size || '9', 10);
+const minPhase  = parseFloat(opts['min-phase'] !== undefined ? opts['min-phase'] : '0');
 const maxPhase  = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase'] : '1');
 const limit     = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
 
@@ -52,7 +54,7 @@ const RAND_OPEN = 4;                 // random moves sprinkled at the start of e
 const MIN_POS   = RAND_OPEN + 1;     // sample at least one policy move past the random opening
 const rng = makeRng(((Date.now() ^ (process.pid << 16)) >>> 0) || 1);   // non-deterministic
 
-process.stderr.write(`gen-agent-evals: agent=${agentName} size=${size} max-phase=${maxPhase} limit=${limit}\n`);
+process.stderr.write(`gen-agent-evals: agent=${agentName} size=${size} min-phase=${minPhase} max-phase=${maxPhase} limit=${limit}\n`);
 
 let emitted = 0;
 const t0 = Date.now();
@@ -68,15 +70,16 @@ while (emitted < limit) {
     moves.push(m);
   }
 
-  // ref-npat-softmax self-play, reservoir-sampling one eligible (phase <= maxPhase)
-  // position; stop once the board passes the phase cap (no eligible positions left).
+  // ref-npat-softmax self-play, reservoir-sampling one eligible position
+  // (minPhase <= phase <= maxPhase); stop once the board passes the max cap
+  // (board only fills, so no eligible positions remain past it).
   let chosenPos = -1, seen = 0;
   const guard = area * 4;
   while (!game.gameOver && moves.length < guard) {
     const phase = 1 - game.emptyCount / area;
     const pos   = moves.length;
     if (phase > maxPhase && pos > RAND_OPEN) break;
-    if (pos >= MIN_POS && phase <= maxPhase) {
+    if (pos >= MIN_POS && phase >= minPhase && phase <= maxPhase) {
       seen++;
       if (rng.random() < 1 / seen) chosenPos = pos;
     }

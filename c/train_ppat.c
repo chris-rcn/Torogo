@@ -19,7 +19,7 @@
  *     --test-pos <n>        test positions (default 100)
  *     --train-pos <n>       train positions (default 0 = all)
  *     --test-playouts <n>   playouts per test position (default --playouts)
- *     --filter <f>          filter margin for extreme values (default 0)
+ *     --no-extreme <f>      drop positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
  *     --phases <n>          number of phase-conditioned weight slices (default 1)
@@ -54,7 +54,7 @@ static int    cfg_batch;
 static int    cfg_test_pos;
 static int    cfg_train_pos;
 static int    cfg_test_playouts;
-static float  cfg_filter;
+static float  cfg_no_extreme;
 static int    cfg_iter_limit;          /* 0 = infinite */
 static int    cfg_overfit;
 static int    cfg_init;
@@ -191,10 +191,10 @@ static void load_positions(void) {
     char buf[8192];
     int lineno = 0;
     int skipped = 0;       /* unparseable lines */
-    int filtered = 0;      /* valid positions dropped by --filter / --phase */
+    int filtered = 0;      /* valid positions dropped by --no-extreme / --phase */
     int topo_init = 0;
     int topo_size = 0;
-    float filter_threshold = 1.0f - 2.0f * cfg_filter;
+    float extreme_threshold = 1.0f - 2.0f * cfg_no_extreme;
 
     while (fgets(buf, sizeof(buf), f) && n_all < MAX_LINES) {
         lineno++;
@@ -222,7 +222,7 @@ static void load_positions(void) {
         }
 
         /* Value filter */
-        if (cfg_filter > 0 && fabsf(pos.value) > filter_threshold) { filtered++; continue; }
+        if (cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
 
         /* Compute and filter by phase */
         Game2 g;
@@ -341,12 +341,17 @@ static int policy_select(Game2 *g) {
 
 /* ── Rollout ───────────────────────────────────────────────────────────────── */
 /* Returns z ∈ {-1, +1} from player's perspective.
- * If grad_acc != NULL, accumulates ψ(s,a) per step. */
+ * If grad_acc != NULL, accumulates ψ(s,a) per step.
+ * If out_steps != NULL, reports T for the paper's 1/T gradient normalisation:
+ * all policy steps when training every phase, or only the in-phase steps
+ * (board phase == cfg_phase) when a single phase is masked — i.e. T_P, matching
+ * the steps whose ψ survives mask_to_phase. */
 
-static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_moves) {
+static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_moves, int *out_steps) {
     Game2 sim;
     g2_clone(&sim, game);
     int pm = ppat_moves;
+    int steps = 0;
 
     for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
@@ -366,6 +371,11 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
             }
             for (int fi = rollout_feat_st.feat_start[chosen]; fi < rollout_feat_st.feat_start[chosen + 1]; fi++)
                 grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
+
+            /* Count this step toward T (all phases) / T_P (masked single phase). */
+            if (cfg_phase < 0 ||
+                ppat_phase_count * (sim.cap - sim.empty_count) / sim.cap == cfg_phase)
+                steps++;
         }
 
         int32_t mv = rollout_feat_st.moves[chosen];
@@ -375,6 +385,7 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
     /* Finish game with uniform random play. */
     while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim, &g_rng));
 
+    if (out_steps) *out_steps = steps;
     return g2_estimate_winner(&sim) == player ? 1 : -1;
 }
 
@@ -399,17 +410,22 @@ static void update_theta(const Game2 *game, float v_star) {
 
     /* V: M rollouts, no gradient */
     float V = 0;
-    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, cfg_train_moves);
+    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, cfg_train_moves, NULL);
     V /= cfg_M;
 
-    /* g: N rollouts with gradient */
+    /* g: N rollouts with gradient.  Algorithm 1: g ← g + z/(N·T)·Σ_t ψ.  T is the
+     * rollout's policy-step count (T_P, the in-phase steps, when a phase is masked).
+     * T == 0 means no ψ was accumulated, so that rollout contributes nothing. */
     int N = cfg_N;
     memset(g_buf, 0, sizeof(float) * TOTAL);
     for (int j = 0; j < N; j++) {
         memset(rollout_grad_buf, 0, sizeof(float) * TOTAL);
-        int z = rollout(game, player, rollout_grad_buf, cfg_train_moves);
-        float scale = (float)z / N;
-        for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
+        int T = 0;
+        int z = rollout(game, player, rollout_grad_buf, cfg_train_moves, &T);
+        if (T > 0) {
+            float scale = (float)z / ((float)N * (float)T);
+            for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
+        }
     }
     if (cfg_phase >= 0) mask_to_phase(g_buf);
 
@@ -595,7 +611,7 @@ static TestResult measure_test(int use_uniform, int n) {
         int8_t player = g.current;
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
-            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, cfg_train_moves);
+            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, cfg_train_moves, NULL);
         /* Normalise v* and the rollout mean from [-1,1] to win-probability [0,1]
          * before the error, so MSE matches the SB paper's units. */
         float v01 = 0.5f * (pos->value + 1.0f);
@@ -918,7 +934,7 @@ int main(int argc, char **argv) {
     if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>]\n");
-        fprintf(stderr, "       [--test-playouts <n>] [--filter <f>] [--iteration-limit <n>]\n");
+        fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--overfit]\n");
         return 1;
     }
@@ -932,7 +948,7 @@ int main(int argc, char **argv) {
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 100);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
     cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", playouts);
-    cfg_filter       = get_float_arg(argc, argv, "--filter", 0.0f);
+    cfg_no_extreme       = get_float_arg(argc, argv, "--no-extreme", 0.0f);
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
     int baseline_only = has_flag(argc, argv, "--baseline-only");  /* print uniform baseline, then exit */
@@ -1016,9 +1032,9 @@ int main(int argc, char **argv) {
     char scalebuf[32];
     if (cfg_init_from_next) snprintf(scalebuf, sizeof scalebuf, "%.3g", cfg_init_phase_scale);
     else                    snprintf(scalebuf, sizeof scalebuf, "off");
-    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  filter: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d  init-phase-scale: %s\n",
+    printf("train: %s (%d positions; %d/worker × %d)  lr: %.1f  M: %d  N: %d  batch: %d  overfit: %s  no-extreme: %.1f  init: %s  train-moves: %d  phases: %d  phase: %d  init-phase-scale: %s\n",
            cfg_file, n_train_total, n_train, cfg_workers, cfg_lr, cfg_M, cfg_N, cfg_batch,
-           cfg_overfit ? "true" : "false", cfg_filter,
+           cfg_overfit ? "true" : "false", cfg_no_extreme,
            cfg_init ? "true" : "false", cfg_train_moves, ppat_phase_count, cfg_phase, scalebuf);
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);

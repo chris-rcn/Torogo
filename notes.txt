@@ -641,12 +641,3 @@ positions    trMSE    teMSE     avgW   move%  elapsedS    pos/s
    216000  0.0075   0.0070*   0.0239    0.0   1434.9s      151  [   5.56   7.39   1.24   8.39   0.56   1.10   2.11 ]
    237600  0.0074F  0.0070    0.0241    0.0   1585.1s      150  [   3.97   9.30   1.27   8.96   0.53   1.11   2.32 ]
 
-In the paper, Algorithm 1 shows the gradient accumulation as g ← g + z/NT * sumOfPhis
-We mask the portion of the sum that is not our phase.  But do we also reduce T?
-Your earlier comments:
-  One thing worth flagging, though (per "only the paper is ground truth"): omitting 1/T is a genuine divergence from Algorithm 1. Its practical effect is that the per-position gradient magnitude scales with
-  in-phase playout length, so the effective step size is larger for emptier-board positions (longer playouts) than for endgame ones. That's relevant to the phase work — phase 0's long playouts produce bigger raw
-  gradients than phase 2's short ones at the same lr — and it's plausibly part of why lr=1 behaves reasonably here while the paper used α=10 under its z/NT scaling (I'd call that a likely consequence, not a
-  verified cause). If you want true parity with the paper, adding 1/T per rollout — and 1/T_P once masking is on — would be the faithful version, and we could A/B it.
-
-I've already started a fresh run on the existing code.  Make the change and I'll start the B side of the test.
