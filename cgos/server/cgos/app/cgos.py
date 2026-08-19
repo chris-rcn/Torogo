@@ -254,6 +254,7 @@ class ActiveUser:
 
 
 act: Dict[str, ActiveUser] = dict()  # users currently logged on
+reserved: Dict[str, str] = dict()  # name -> partner: booked follow-up matches
 games: Dict[int, Game] = dict()  # currently active games
 ratingOf: Dict[str, str] = dict()  # ratings of any player who logs on
 viewers = ViewerList()
@@ -532,8 +533,8 @@ def valid_name(user_name: str) -> str:
     if len(user_name) < 3:
         return "User name must be 3 characters or more."
 
-    if len(user_name) > 18:
-        return "User name must be no more than 18 characters long."
+    if len(user_name) > 32:
+        return "User name must be no more than 32 characters long."
 
     # user "1024" crashed original CGOS.
     if user_name[0].isdigit():
@@ -674,6 +675,12 @@ def gameover(gid: int, sc: str, err: str) -> None:
     db.commit()
 
     saveSgf(gid, games[gid], sc, err)
+
+    # Torogo: book each finisher's next match now (see _reserve_followup);
+    # random order so neither side systematically gets first pick.
+    first, second = (game.w, game.b) if random.random() < 0.5 else (game.b, game.w)
+    _reserve_followup(first, second)
+    _reserve_followup(second, first)
 
     # we can kill the active game record now.
     # ----------------------------------------
@@ -1889,6 +1896,47 @@ def getHouseUsers() -> set:
     return {name for (name,) in db.execute("SELECT name FROM house")}
 
 
+MATCH_JITTER = 200.0  # Elo noise when choosing an opponent, for variety
+
+
+# Torogo: book the finisher's next match at gameover time — even if the
+# chosen opponent is mid-game — so informative (nearest-rated) pairings do
+# not depend on two engines coincidentally idling in the same scheduler
+# tick.  The just-finished opponent is excluded (no immediate rematch), and
+# engines already holding a booking are skipped: one booked match per
+# engine, so a booking waits on at most one running game, never a chain.
+def _reserve_followup(finisher: str, exclude: str) -> None:
+    if finisher in reserved or finisher not in act:
+        return
+    if finisher in getHouseUsers():
+        return  # house engines never initiate games
+    r = act[finisher].rating
+    cands = [n for n in act if n != finisher and n != exclude and n not in reserved]
+    if not cands:
+        return
+    opp = min(
+        cands,
+        key=lambda n: abs(act[n].rating - r) + MATCH_JITTER * random.random(),
+    )
+    reserved[finisher] = opp
+    reserved[opp] = finisher
+    logger.info(f"reserve-> {finisher}({rating(finisher)}) vs {opp}({rating(opp)})")
+
+
+# Colour-balance a pairing by past pairing counts and create the game.
+def _init_pair(ctme: datetime.datetime, t: str, opp: str) -> int:
+    wp, bp = opp, t
+    wco = db.execute(
+        "SELECT count(*) FROM games WHERE w==? AND b==?", (wp, bp)
+    ).fetchone()[0]
+    bco = db.execute(
+        "SELECT count(*) FROM games WHERE w==? AND b==?", (bp, wp)
+    ).fetchone()[0]
+    if bco < wco:
+        bp, wp = wp, bp
+    return init_game(ctme, wp, bp)
+
+
 # Torogo matchmaking: HOUSE engines (listed in the `house` table) idle
 # until needed; TRIAL engines (everyone else) are paired with the
 # nearest-rated waiting opponent every scheduler tick.  No rounds, no
@@ -1901,8 +1949,6 @@ def match_games(ctme: datetime.datetime) -> None:
     global games
     global db
 
-    JITTER = 200.0  # Elo noise when choosing an opponent, for variety
-
     global defaultRatingAverage
     ratings = [v.rating for v in act.values()]
     if ratings:
@@ -1911,16 +1957,42 @@ def match_games(ctme: datetime.datetime) -> None:
         defaultRatingAverage = cfg.defaultRating
 
     house = getHouseUsers()
-    waiting = [name for name, v in act.items() if v.msg_state == "waiting"]
-    trials = [n for n in waiting if n not in house]
-    if not trials:
-        return
-
-    available = set(waiting)
-    random.shuffle(trials)  # rotate who picks first when opponents are scarce
+    waiting = {name for name, v in act.items() if v.msg_state == "waiting"}
     started = []
 
+    # Torogo: start booked follow-up matches first (see _reserve_followup).
+    # A booking whose party has disconnected self-heals here.
+    for a, b in [(a, b) for a, b in reserved.items() if a < b]:
+        if a not in act or b not in act:
+            reserved.pop(a, None)
+            reserved.pop(b, None)
+            continue
+        if cfg.maxGames > 0 and len(games) >= cfg.maxGames:
+            break
+        if a in waiting and b in waiting:
+            del reserved[a]
+            del reserved[b]
+            waiting.discard(a)
+            waiting.discard(b)
+            gid = _init_pair(ctme, a, b)
+            if gid:
+                started.append(gid)
+
+    # Pool matching for engines without a booking (fresh logins, engines whose
+    # booking could not be made).  Engines waiting on a booked opponent are
+    # not up for grabs.
+    available = {n for n in waiting if n not in reserved}
+    trials = [n for n in available if n not in house]
+    random.shuffle(trials)  # rotate who picks first when opponents are scarce
+
     for t in trials:
+        # Torogo: cap concurrent games.  Leaving engines in the waiting pool
+        # is what lets rating-proximity matching find informative pairings —
+        # with unlimited slots everyone is re-paired instantly with whoever
+        # happens to be free (init_game adds to `games`, so len(games)
+        # already counts pairings made earlier in this loop).
+        if cfg.maxGames > 0 and len(games) >= cfg.maxGames:
+            break
         if t not in available:
             continue  # already matched as another trial's opponent
         cands = available - {t}
@@ -1930,22 +2002,10 @@ def match_games(ctme: datetime.datetime) -> None:
         tr = act[t].rating
         opp = min(
             cands,
-            key=lambda n: abs(act[n].rating - tr) + JITTER * random.random(),
+            key=lambda n: abs(act[n].rating - tr) + MATCH_JITTER * random.random(),
         )
         available.discard(opp)
-
-        # balance colors by past pairing counts
-        wp, bp = opp, t
-        wco = db.execute(
-            "SELECT count(*) FROM games WHERE w==? AND b==?", (wp, bp)
-        ).fetchone()[0]
-        bco = db.execute(
-            "SELECT count(*) FROM games WHERE w==? AND b==?", (bp, wp)
-        ).fetchone()[0]
-        if bco < wco:
-            bp, wp = wp, bp
-
-        gid = init_game(ctme, wp, bp)
+        gid = _init_pair(ctme, t, opp)
         if gid:
             started.append(gid)
 

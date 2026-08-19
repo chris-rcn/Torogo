@@ -9,6 +9,18 @@ server-python/ -> cgos/server/   (MIT license, headers retained)
       — see cgos/tests/
     - util/logutils.py: fall back to console logging when log.ini is absent
     - app/cgos.py: create_parent_dir tolerates relative database paths
+    - app/cgos.py: user-name length limit raised 18 -> 32 (date-stamped
+      engine names like prod-2026-08-18-10k exceed 18)
+    - app/cgos.py: follow-up match booking — at gameover each finisher's
+      next match is booked immediately (nearest jittered rating, no
+      immediate rematch, at most one booking per engine), even if the
+      chosen opponent is mid-game; booked matches start when both parties
+      are free.  Replaces an earlier randomized re-entry delay: informative
+      pairings no longer depend on two engines idling at the same moment,
+      which slow engines almost never do
+    - app/cgos.py + app/config.py: maxGames ini setting caps concurrent
+      games (0 = unlimited) so the waiting pool stays populated and
+      rating-proximity matchmaking has real choices
   Omitted: webuild.py + webuild_template (web page builder), reset_password.py,
   tests (replaced by cgos/tests/ which test the toroidal rules).
 

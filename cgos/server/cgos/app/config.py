@@ -129,6 +129,7 @@ class Configs:
         # Torogo: refit all ratings with the anchored Bradley-Terry MLE
         # every N finalized games and write the result back (0 = off).
         self.mleInterval = int(cfg.get("mleInterval", "0"))
+        self.maxGames = int(cfg.get("maxGames", "0"))  # max concurrent games; 0 = unlimited
 
         self.matchMode = MatchMode.AUTO
         if "matchMode" in cfg:

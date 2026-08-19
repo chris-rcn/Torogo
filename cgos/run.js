@@ -157,7 +157,7 @@ waitForPort(port, fleet.host || '127.0.0.1', () => {
     fs.writeFileSync(cfgPath, clientCfg(ref.name, ref.agent, ref.budget));
     try { fs.unlinkSync(path.join(dataDir, `kill-${ref.name}.txt`)); } catch {}
     launch('client-' + ref.name, 'python3', [path.join(__dirname, 'client', 'cgosclient.py'), cfgPath], dataDir);
-    console.log(`engine:  ${ref.name} (ai/${ref.agent}.js, ${ref.budget}ms/move)`);
+    console.log(`engine:  ${ref.name} (ai/${ref.agent}.js)`);
   }
   if (opts.calibrate) {
     console.log('\ncalibrating — fleet plays continuously.  Ctrl-C to stop;');
