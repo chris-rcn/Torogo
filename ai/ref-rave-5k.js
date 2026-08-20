@@ -8,12 +8,12 @@
 
 /**
  * Fixed-config reference agent: RAVE (Rapid Action Value Estimation) MCTS
- * with exactly 2000 uniform-random playouts per move.
+ * with exactly 5000 uniform-random playouts per move.
  *
- * Self-contained copy of ai/rave.js, frozen 2026-08-19 (identical constants
- * to what this rung always ran, so its rated history stays valid) —
- * house/reference agents are immutable and must not track live files.
- * All parameters are hardcoded; this script reads no environment variables.
+ * Self-contained copy of ai/rave.js, frozen 2026-08-19 — house/reference
+ * agents are immutable, and this rung is a future rating-anchor candidate
+ * precisely because it depends on no weights files and no live code.  All
+ * parameters are hardcoded; this script reads no environment variables.
  *
  * Node structure: all stats kept in compact child-indexed arrays on the parent.
  * Child nodes are promoted lazily after N_EXPAND playout visits.
@@ -32,7 +32,7 @@ const EXPLORATION_C = 0.4;
 
 const RAVE_K = 1200;
 
-const PLAYOUTS = 2000;
+const PLAYOUTS = 5000;
 
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = 4;

@@ -676,11 +676,11 @@ def gameover(gid: int, sc: str, err: str) -> None:
 
     saveSgf(gid, games[gid], sc, err)
 
-    # Torogo: book each finisher's next match now (see _reserve_followup);
-    # random order so neither side systematically gets first pick.
-    first, second = (game.w, game.b) if random.random() < 0.5 else (game.b, game.w)
-    _reserve_followup(first, second)
-    _reserve_followup(second, first)
+    # Torogo: the game's picker books its next match now (see init_game and
+    # _reserve_followup); the other participant stays up for grabs.
+    picker = getattr(game, "picker", None)
+    if picker is not None:
+        _reserve_followup(picker, game.b if picker == game.w else game.w)
 
     # we can kill the active game record now.
     # ----------------------------------------
@@ -1846,6 +1846,13 @@ def init_game(
         wp, bp, 0, white_remaining_time, black_remaining_time, wr, br, moves, ctme
     )
     games[gid] = game
+    # Torogo: coin-flip which participant is this game's "picker" — the one
+    # who books its own next opponent at gameover.  The other participant is
+    # up for grabs: it may be claimed (booked) by other finishers, even
+    # mid-game.  This gives every engine the chooser role in ~half its games
+    # regardless of how fast it cycles; without it, fast-cycling engines
+    # claim slow ones before they ever reach their own gameover unreserved.
+    game.picker = random.choice((wp, bp))
     act[wp].gid = gid
     act[wp].msg_state = "ok"
     act[bp].gid = gid
@@ -1902,16 +1909,22 @@ MATCH_JITTER = 200.0  # Elo noise when choosing an opponent, for variety
 # Torogo: book the finisher's next match at gameover time — even if the
 # chosen opponent is mid-game — so informative (nearest-rated) pairings do
 # not depend on two engines coincidentally idling in the same scheduler
-# tick.  The just-finished opponent is excluded (no immediate rematch), and
-# engines already holding a booking are skipped: one booked match per
-# engine, so a booking waits on at most one running game, never a chain.
+# tick.  Only the game's picker (see init_game) books, and active pickers
+# cannot be claimed by others — their choice is guaranteed to execute.  The
+# just-finished opponent is excluded (no immediate rematch), and engines
+# already holding a booking are skipped: one booked match per engine, so a
+# booking waits on at most one running game, never a chain.
 def _reserve_followup(finisher: str, exclude: str) -> None:
     if finisher in reserved or finisher not in act:
         return
     if finisher in getHouseUsers():
         return  # house engines never initiate games
+    pickers = {getattr(g, "picker", None) for g in games.values()}
     r = act[finisher].rating
-    cands = [n for n in act if n != finisher and n != exclude and n not in reserved]
+    cands = [
+        n for n in act
+        if n != finisher and n != exclude and n not in reserved and n not in pickers
+    ]
     if not cands:
         return
     opp = min(

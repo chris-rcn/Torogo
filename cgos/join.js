@@ -69,6 +69,7 @@ if (opts.house && opts.env) {
 {
   const db = new DatabaseSync(path.join(dataDir, 'cgos.state'));
   try {
+    db.exec('PRAGMA busy_timeout = 2000');   // wait out server writes instead of SQLITE_BUSY
     db.exec('CREATE TABLE IF NOT EXISTS house(name, primary key(name))');
     if (opts.house) db.prepare('INSERT OR REPLACE INTO house VALUES(?)').run(name);
     else            db.prepare('DELETE FROM house WHERE name = ?').run(name);
@@ -118,6 +119,7 @@ function poll() {
   try { db = new DatabaseSync(dbPath, { readOnly: true }); }
   catch { return; }
   try {
+    db.exec('PRAGMA busy_timeout = 2000');   // wait out server writes instead of SQLITE_BUSY
     const g = db.prepare(
       'SELECT count(*) AS n FROM games WHERE (w = ? OR b = ?) AND final = ?'
     ).get(name, name, 'y');
@@ -134,6 +136,10 @@ function poll() {
         fs.writeFileSync(killFile, '');
       }
     }
+  } catch (e) {
+    // The rating display must never kill the engine: skip this tick and let
+    // the next poll retry (the DB can still be briefly locked mid-write).
+    console.error(`[${name}] rating poll skipped: ${e.message}`);
   } finally { db.close(); }
 }
 

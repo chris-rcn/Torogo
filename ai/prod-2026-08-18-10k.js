@@ -1,6 +1,7 @@
 'use strict';
 
-// Fixed-config reference agent: prod (rave-npat-prune) with exactly 10000
+// Fixed-config reference agent: prod-as-of-2026-08-18 (rave-npat-prune,
+// now ai/prodOldC.js) with exactly 10000
 // playouts per move — prod as of 2026-08-18, frozen as a ladder rung.
 //
 // Playout-count budgets are machine-independent, so this engine's strength
@@ -8,7 +9,7 @@
 //
 // All parameters are hardcoded.  This script reads no environment variables.
 
-const { getMove: prodMove } = require('./prod.js');
+const { getMove: prodMove } = require('./prodOldC.js');
 
 const PLAYOUTS = 10000;
 

@@ -277,8 +277,9 @@ function evalVsReference(N, refGetMove, nGames, budget) {
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
     const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
-    // Random opening: 4 random legal moves to diversify positions.
-    for (let r = 0; r < 4 && !game.gameOver; r++) game.play(game.randomLegalMove());
+    // Random opening: 3 random legal moves to diversify positions (same as
+    // selfplay.js --rand-moves default).
+    for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());
     const maxMoves = N * N * 4;
     let   moves    = 0;
 

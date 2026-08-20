@@ -1,9 +1,10 @@
 'use strict';
 
-// Production agent (self-contained copy of ai/puct-ppat.js, hardcoded
-// config — promoted 2026-08-19, beating the previous prod (rave-npat-prune,
-// now ai/prodOldC.js) at equal time: 9×9 83%/100g @100ms, 87%/100g @300ms;
-// 13×13 78%/37g @1s, margin growing with budget).
+// Fixed-config reference agent: puct-ppat with exactly 300 playouts per
+// move (self-contained copy — frozen 2026-08-19 as a ladder rung; frozen
+// names must never track live files).  Playout-count budgets are
+// machine-independent, so this engine's strength is reproducible on any
+// hardware.
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
 // nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
@@ -62,8 +63,8 @@ function create() {
   const RAVE_K     = 400;
   // Top-K kept move count (applies only below root).
   const NPAT_K     = 40;
-  // Fixed playout count per decision; 0 = follow the caller's time budget.
-  const PLAYOUTS   = 0;
+  // Fixed playout count per decision (overrides any time budget).
+  const PLAYOUTS   = 300;
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
   const PPAT_MOVES = -1;
   // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
@@ -81,8 +82,9 @@ function create() {
   if (_model) _model.uniformBelowPhase = 0;
 
   // npat policy model (priors + top-K pruning), from the canonical npat-data.js.
-  const npatModel   = NPat.loadModel({ name: 'prod' });
+  const npatModel   = NPat.loadModel({ name: 'ref-puct-ppat-300' });
   const npatWeights = npatModel.weights;
+  console.log(`ref-puct-ppat-300: ${_model ? _model.weights.length : 0} ppat weights, ${npatWeights.size} npat weights from ${npatModel.modelName}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {

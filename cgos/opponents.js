@@ -20,6 +20,7 @@ const top     = opts.getInt('top', 10);
 const size    = opts.getInt('size', 13);
 const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'), { readOnly: true });
+db.exec('PRAGMA busy_timeout = 2000');   // wait out server writes instead of SQLITE_BUSY
 
 const games = db.prepare('SELECT w, b, res FROM games WHERE w = ? OR b = ?').all(player, player);
 db.close();

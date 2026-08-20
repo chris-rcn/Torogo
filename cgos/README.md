@@ -53,7 +53,8 @@ the reference ladder keeps improving across runs.
   Bradley–Terry maximum-likelihood model (`elo-lib.js`); this uses every
   game optimally and is the number to quote.
 - **Calibrating the fleet:** `node cgos/run.js --calibrate` registers the
-  references as all-trial, so they play each other continuously — run it
+  references as all-trial (except refs marked `"house": true` in refs.json,
+  which idle in every mode), so they play each other continuously — run it
   for a while when setting up a new ladder (or after adding engines) to
   establish the references' ratings, then restart without the flag for
   normal idle-house mode.  Optionally copy stable `mleElo` values into

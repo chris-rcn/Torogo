@@ -6,15 +6,21 @@
   "anchors": { "random": 0 },
 
   "refs": [
-    { "name": "random",             "agent": "random",             "budget": 1 },
+    { "name": "random",             "agent": "random",             "budget": 1, "house": true },
     { "name": "ref-mc-200",         "agent": "ref-mc-200",         "budget": 1 },
+    { "name": "ref-ppat",           "agent": "ref-ppat",           "budget": 1 },
     { "name": "ref-npat-softmax",   "agent": "ref-npat-softmax",   "budget": 1 },
     { "name": "ref-vlibpat",        "agent": "ref-vlibpat",        "budget": 1 },
+    { "name": "ref-featurepol-softmax", "agent": "ref-featurepol-softmax", "budget": 1 },
     { "name": "ref-search-topk",    "agent": "ref-search-topk",    "budget": 1 },
+    { "name": "ref-search-top2-fp", "agent": "ref-search-top2-fp", "budget": 1 },
     { "name": "ref-rave-1k",        "agent": "ref-rave-1k",        "budget": 1 },
     { "name": "ref-rave-2k",        "agent": "ref-rave-2k",        "budget": 1 },
     { "name": "prod-2026-08-18-5k", "agent": "prod-2026-08-18-5k", "budget": 1 },
     { "name": "prod-2026-08-18-10k", "agent": "prod-2026-08-18-10k", "budget": 1 },
-    { "name": "prod-2026-08-18-20k", "agent": "prod-2026-08-18-20k", "budget": 1 }
+    { "name": "prod-2026-08-18-20k", "agent": "prod-2026-08-18-20k", "budget": 1 },
+    { "name": "ref-puct-ppat-300",  "agent": "ref-puct-ppat-300",  "budget": 1 },
+    { "name": "ref-puct-ppat-1k",   "agent": "ref-puct-ppat-1k",   "budget": 1 },
+    { "name": "ref-puct-ppat-3k",   "agent": "ref-puct-ppat-3k",   "budget": 1 }
   ]
 }

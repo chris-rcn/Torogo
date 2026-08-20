@@ -102,7 +102,9 @@ function waitForPort(port, host, cb, tries = 50) {
 // (cgos/join.js) needs an opponent.  Anchor ratings are pinned.
 function writeFleetTables() {
   const anchors = fleet.anchors || {};
-  const houseNames = opts.calibrate ? [] : fleet.refs.map(r => r.name);
+  // Refs marked "house": true stay house even in calibrate mode (e.g. random:
+  // anchored rating, so playing continuously adds nothing but churn).
+  const houseNames = fleet.refs.filter(r => !opts.calibrate || r.house).map(r => r.name);
   const stmts = [
     'CREATE TABLE IF NOT EXISTS house(name, primary key(name));',
     'DELETE FROM house;',
@@ -110,6 +112,10 @@ function writeFleetTables() {
     'DELETE FROM anchors;',   // refs.json is authoritative — drop stale pins
     ...Object.entries(anchors)
       .map(([n, r]) => `INSERT INTO anchors VALUES(${JSON.stringify(n)}, ${r});`),
+    // Seed the admin login (fleet password) for query tools (standings.js
+    // "who").  admin* names are rejected by the server unless the row exists.
+    `INSERT OR IGNORE INTO password(name, pass, games, rating, K, last_game)
+       VALUES('admin', ${JSON.stringify(fleet.password || 'torogo')}, 0, 0, 0, '2000-01-01 00:00');`,
   ].join(' ');
   const py = `
 import sqlite3, sys

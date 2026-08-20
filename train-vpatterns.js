@@ -53,7 +53,7 @@ const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
-const ON_POLICY  = parseFloat(opts['on-policy'] || '0');   // share of non-random moves from own search1ply (vs --ext)
+const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
@@ -219,8 +219,9 @@ function evalVsReference(N, refGetMove, nGames, budget) {
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
     const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
-    // Random opening: 4 random legal moves to diversify positions.
-    for (let r = 0; r < 4 && !game.gameOver; r++) game.play(game.randomLegalMove());
+    // Random opening: 3 random legal moves to diversify positions (same as
+    // selfplay.js --rand-moves default).
+    for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
@@ -308,7 +309,9 @@ console.log([
   'tTran'.padStart(5),
   'turn'.padStart(5),
   // Test / eval columns (right).
-  ...(evalGetMove ? ['gRef'.padStart(4), 'wrRf'.padStart(4), 'wrAv'.padStart(4)] : []),
+  // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
+  // interval's, and the rolling-half window).  Fixed 21 chars wide.
+  ...(evalGetMove ? ['winRatio'.padStart(21)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
@@ -350,7 +353,7 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    let latestWR = null, avgWR = null, resultsBatchLen = 0;
+    let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
@@ -363,8 +366,8 @@ while (true) {
       for (const r of resultsBatch) evalHistory.push(r);
 
       latestWR = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
-      const half = Math.max(1, Math.floor(evalHistory.length / 2));
-      avgWR = evalHistory.slice(-half).reduce((s, r) => s + r, 0) / half;
+      evalHalf = Math.max(1, Math.floor(evalHistory.length / 2));
+      avgWR = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
       resultsBatchLen = resultsBatch.length;
     }
 
@@ -417,7 +420,8 @@ while (true) {
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
-      ...(evalGetMove ? [Util.fmt4i(resultsBatchLen), Util.fmtRatio4(latestWR), Util.fmtRatio4(avgWR)] : []),
+      ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
+                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21)] : []),
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
