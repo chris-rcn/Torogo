@@ -8,8 +8,8 @@
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
 // nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
 // evaluation.  Playout policy: single-phase SB-trained ppat checkpoint
-// ref/ppat-3374337.js (teMSE 0.0213 on eval-s9-mega); in the browser, load
-// ppat-lib.js and ref/ppat-3374337.js (sets window.PPATWeights) first.
+// ppat-data.js (= ppat-3374337, teMSE 0.0213 on eval-s9-mega); in the
+// browser, load ppat-lib.js and ppat-data.js (sets window.PPATWeights) first.
 //
 // Each unexpanded edge is expanded on first contact: a leaf node is created
 // (policy extraction + priors) and one playout is run from it.  A ppat playout
@@ -72,7 +72,7 @@ function create() {
   // ppat playout policy weights: the fixed prod checkpoint (window.PPATWeights
   // in the browser).  ppat model { phaseCount, weights }.
   const _model = _isNode
-    ? loadWeights(require('path').join(__dirname, '..', 'ref', 'ppat-3374337.js'))
+    ? loadWeights(require('path').join(__dirname, '..', 'ppat-data.js'))
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
 
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
