@@ -1123,6 +1123,12 @@ class Game2 {
     return score.black > score.white ? BLACK : WHITE;
   }
 
+  // Game phase: board fullness in [0,1] — 1 − empty/area.  The canonical
+  // definition; use this instead of re-deriving it at call sites.
+  phase() {
+    return 1 - this.emptyCount / (this.N * this.N);
+  }
+
   // Returns a uniform random legal non-true-eye move, or PASS if none exists.
   // Fisher-Yates over the empty-cell list in-place; _emptySlot kept consistent.
   randomLegalMove(rng = Math) {

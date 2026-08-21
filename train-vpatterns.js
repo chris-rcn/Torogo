@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-patterns.js — learn pattern weights via TD(λ) self-play.
+// train-vpatterns.js — learn pattern weights via TD(λ) self-play.
 //
 // Value function (absolute, P(BLACK wins)):
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
@@ -215,6 +215,7 @@ function trainGame(N) {
 // Returns { results } where each element is 1 (policy win), 0 (agent win), or 0.5 (draw).
 function evalVsReference(N, refGetMove, nGames, budget) {
   const results = [];
+  let totalMoves = 0;
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -239,6 +240,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
 
     const winner = game.calcWinner();
+    totalMoves += moves;
     if ((winner === BLACK) === policyIsBlack) {
       results.push(1);
     } else {
@@ -246,7 +248,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
   }
 
-  return { results };
+  return { results, moves: totalMoves };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -282,8 +284,15 @@ if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
-    if (opts.spec) console.warn('Warning: --spec ignored — using the specs from the --load checkpoint.');
+    // Warn only when --spec actually disagrees with the checkpoint.  Compare
+    // canonical fields, not whole objects (spec objects can carry derived
+    // properties that would false-positive the comparison).
+    const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs}`).join(',');
+    const cliSpecKey = opts.spec ? specKey(specs) : null;
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    if (cliSpecKey !== null && cliSpecKey !== specKey(specs)) {
+      console.warn('Warning: --spec ignored — using the specs from the --load checkpoint.');
+    }
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -316,7 +325,9 @@ console.log([
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   ...(mdPositions ? ['mdRms'.padStart(5)] : []),
-  ...(evalGetMove ? ['tTest'.padStart(5)] : []),
+  // tTest = whole eval pass; the trailing turn = wall-clock per move of the
+  // reference MATCHES only (both sides' moves), vs the left turn = training.
+  ...(evalGetMove ? ['tTest'.padStart(5), 'turn'.padStart(5)] : []),
 ].join('  '));
 
 const t0 = Date.now();
@@ -354,13 +365,15 @@ while (true) {
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
+    let evalMatchMs = 0, evalMatchMoves = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
-        const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        const { results, moves } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
         for (const r of results) resultsBatch.push(r);
-        const tTestMs   = Date.now() - tTestStart;
-        if (tTestMs > 0.3 * intervalTrainMs) break;
+        evalMatchMoves += moves;
+        evalMatchMs = Date.now() - tTestStart;
+        if (evalMatchMs > 0.3 * intervalTrainMs) break;
         if (resultsBatch.length >= 998) break;
       }
       for (const r of resultsBatch) evalHistory.push(r);
@@ -426,7 +439,8 @@ while (true) {
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
       ...(mdRmsCol ? [mdRmsCol]             : []),
-      ...(evalGetMove ? [Util.fmtMs(tTestMs)] : []),
+      ...(evalGetMove ? [Util.fmtMs(tTestMs),
+                         Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
     ].join('  '));
     saveWeights(SAVE_PATH, { weights, specs, preparedSpecs: prepSpecs });
     nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);

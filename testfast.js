@@ -1075,9 +1075,13 @@ section('getAllLadderStatuses – each entry matches getLadderStatus2');
     const single = getLadderStatus2(g2, stoneIdx);
     assert(single !== null, `getLadderStatus2 returned null for gid ${gid}`);
     assert(status.moverSucceeds === single.moverSucceeds, 'moverSucceeds matches');
-    assert(status.urgentLibs.length === single.urgentLibs.length, 'urgentLibs length matches');
-    for (let i = 0; i < status.urgentLibs.length; i++) {
-      assert(status.urgentLibs[i] === single.urgentLibs[i], `urgentLibs[${i}] matches`);
+    // urgentLibs is a SET (ladder2 randomizes candidate order, so array order
+    // is unspecified); compare sorted.
+    const a = [...status.urgentLibs].sort((x, y) => x - y);
+    const b = [...single.urgentLibs].sort((x, y) => x - y);
+    assert(a.length === b.length, 'urgentLibs length matches');
+    for (let i = 0; i < a.length; i++) {
+      assert(a[i] === b[i], `urgentLibs[${i}] matches (set compare)`);
     }
   }
 }

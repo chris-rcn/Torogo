@@ -76,7 +76,7 @@ while (emitted < limit) {
   let chosenPos = -1, seen = 0;
   const guard = area * 4;
   while (!game.gameOver && moves.length < guard) {
-    const phase = 1 - game.emptyCount / area;
+    const phase = game.phase();
     const pos   = moves.length;
     if (phase > maxPhase && pos > RAND_OPEN) break;
     if (pos >= MIN_POS && phase >= minPhase && phase <= maxPhase) {

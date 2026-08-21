@@ -128,7 +128,7 @@ if (usePhaseWindow)
 // "phase" definition.  Not strictly monotonic (captures lower it), which is fine
 // here — only the max-phase cutoff is a per-move gate; min-phase is baked into
 // the shared opening.
-function phaseOf(g) { return 1 - g.emptyCount / (g.N * g.N); }
+function phaseOf(g) { return g.phase(); }
 
 function printBoard(game) {
   console.log(game.toString());

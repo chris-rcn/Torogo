@@ -71,7 +71,7 @@ function evalPosition(valueB, pos, minPhase = 0, maxPhase = 1) {
   for (const m of moves) {
     if (!game.play(parseMove(m, size))) return null;
   }
-  const phase = 1 - game.emptyCount / (size * size);
+  const phase = game.phase();
   if (phase < minPhase || phase > maxPhase) return FILTERED;
   const pBlack = valueB(game, { rng: makeRng(agentSeed++) });    // P(BLACK wins)
   const pred   = game.current === BLACK ? pBlack : 1 - pBlack;   // P(side-to-move wins)
