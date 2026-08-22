@@ -62,7 +62,7 @@ let MAX_STONES = SPEC;
 
 let model = createModel(MAX_STONES, MAX_SIZE);
 const velocity = new Map();  // SGD momentum
-let wAbsSum = 0, wUpdateCount = 0;  // running |weight| sum/count over every weight update this run (avgW)
+let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over weight updates (avgW; reset each print)
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
@@ -248,7 +248,6 @@ function trainGame(N) {
 
   let prev2 = null, prev1 = null;
   let moves = 0;
-  let correct = 0;
   const vals = [];
   let maxSearch = MAX_SIZE;  // shrinks when a level has no eligible patterns; reset on capture/new game
 
@@ -286,15 +285,14 @@ function trainGame(N) {
   if (prev2 !== null) tdUpdate(prev2, outcome, LR);
   if (prev1 !== null) tdUpdate(prev1, outcome, LR);
 
-  for (const v of vals) if ((v >= 0.5) === (outcome === 1)) correct++;
-
-  return { elapsedMs: Date.now() - tStartMs, moves, correct, nVals: vals.length };
+  return { elapsedMs: Date.now() - tStartMs, moves };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
 
 function evalVsReference(N, refGetMove, nGames) {
   const results = [];
+  let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
     const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
@@ -304,7 +302,9 @@ function evalVsReference(N, refGetMove, nGames) {
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
+    const gameVals = [];
     while (!game.gameOver && moves++ < maxMoves) {
+      gameVals.push(evaluateFeatures(extractFeatures(game, model, MAX_SIZE), model.weights));
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
         idx = search1ply(game);
@@ -316,9 +316,11 @@ function evalVsReference(N, refGetMove, nGames) {
     }
 
     const winner = game.calcWinner();
+    for (const v of gameVals) if ((v >= 0.5) === (winner === BLACK)) accCorrect++;
+    accN += gameVals.length;
     results.push((winner === BLACK) === policyIsBlack ? 1 : 0);
   }
-  return results;
+  return { results, accCorrect, accN };
 }
 
 // ── CLI setup ─────────────────────────────────────────────────────────────────
@@ -370,15 +372,14 @@ const headerCols = [
   'nWts'.padStart(4),
   'lut '.padStart(4),
   'avgL'.padStart(4),
-  ' acc'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
-  'turn'.padStart(5),
+  'tTurn'.padStart(5),
 ];
 // Test / eval columns (right).
 // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
 // interval's, and the rolling-half window).  Fixed 21 chars wide.
-if (evalGetMove) headerCols.push('winRatio'.padStart(21));
+if (evalGetMove) headerCols.push('winRatio'.padStart(21), ' acc'.padStart(4));
 if (ladderCases) headerCols.push('ladr'.padStart(4));
 if (mdPositions) headerCols.push('mdRms'.padStart(5));
 headerCols.push('tTest'.padStart(5));
@@ -391,23 +392,18 @@ let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalMoves = 0;
 let intervalGames = 0, intervalMoves = 0;
-let intervalCorrect = 0, intervalNVals = 0;
-let totalCorrect = 0, totalNVals = 0;
 let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 const evalHistory = [];
 
 while (true) {
   g++;
-  const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
   // Polyak / SWA: nudge EMA toward updated weights once per game.
   applyEMA(model, EMA_ALPHA);
   totalMoves      += moves;
   intervalGames++;
   intervalMoves   += moves;
-  intervalCorrect += correct;  intervalNVals   += nVals;
-  totalCorrect    += correct;
-  totalNVals      += nVals;
   moveElapsedMs   += elapsedMs;  intervalTrainMs += elapsedMs;
 
   // Force the print/save block to fire on the limit-reaching iteration so
@@ -417,11 +413,13 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    let batch = null, latestWR = 0, avgWR = 0, evalHalf = 0;
+    let batch = null, latestWR = 0, avgWR = 0, evalHalf = 0, evalAccC = 0, evalAccN = 0;
     if (evalGetMove) {
       batch = [];
       while (true) {
-        for (const r of evalVsReference(EVAL_SIZE, evalGetMove, 2)) batch.push(r);
+        const { results, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2);
+        for (const r of results) batch.push(r);
+        evalAccC += accCorrect; evalAccN += accN;
         const tMs = Date.now() - tTestStart;
         if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
       }
@@ -432,18 +430,16 @@ while (true) {
     }
     const avgLen    = intervalMoves / intervalGames;
     const tGameMs   = intervalTrainMs / intervalGames;
-    const accRatio  = totalNVals > 0 ? totalCorrect / totalNVals : 0;
     const tpMove    = moveElapsedMs / totalMoves;
 
     intervalGames   = 0;
     intervalMoves   = 0;
-    intervalCorrect = 0;
-    intervalNVals   = 0;
 
     const ws   = model.weights.size;
     // avgW: mean |weight| encountered across weight updates (frequency-weighted
     // active weights), not the mean over all stored weights.
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
+    wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
 
     const trainMs   = intervalTrainMs;
     intervalTrainMs = 0;
@@ -471,14 +467,14 @@ while (true) {
       Util.fmt4i(ws),
       Util.fmt4i(model.canonMap.size),
       Util.fmt4(avgLen),
-      Util.fmtRatio4(accRatio),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       Util.fmtMs(tpMove),
     ];
     // Test / eval columns (right).
     if (evalGetMove) cols.push((`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
-                                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21));
+                                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21),
+                               Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0));
     if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
     if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms).padStart(5));
     cols.push(Util.fmtMs(tTestMs));

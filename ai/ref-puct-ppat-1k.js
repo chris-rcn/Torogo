@@ -62,7 +62,7 @@ function create() {
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = 400;
   // Top-K kept move count (applies only below root).
-  const NPAT_K     = 40;
+  const TOP_K     = 40;
   // Fixed playout count per decision (overrides any time budget).
   const PLAYOUTS   = 1000;
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
@@ -147,8 +147,8 @@ function create() {
     let movesArr = getLegalMoves(game2);
     // Top-K pruning at interior nodes only: at the root it would constrain the
     // actual decision, and the root gets enough visits to search full width.
-    if (NPAT_K > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, npatState, NPAT_K, N);
+    if (TOP_K > 0 && parent !== null) {
+      movesArr = _pruneToTopK(movesArr, npatState, TOP_K, N);
     }
     const M = movesArr.length;
     const area = N * N;

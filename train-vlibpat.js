@@ -100,7 +100,7 @@ let weights    = new Map();  // pattern key (int32) → weight (float)
 let weightsEMA = new Map();  // Polyak-averaged shadow (saved on disk for eval)
 let weightsEMAInit = false;  // first applyEMA seeds EMA = weights
 let velocity = new Map();  // SGD momentum: vel_k ← β·vel_k + g_k
-let wAbsSum = 0, wUpdateCount = 0;  // running |weight| sum/count over every weight update this run (avgW)
+let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over weight updates (avgW; reset each print)
 
 // Polyak / SWA averaging.  Updates weightsEMA in-place to track a smoothed
 // version of weights:
@@ -244,12 +244,7 @@ function trainGame(N) {
     tdUpdate(features, outcome, lamdbaLr);
   }
 
-  let correct = 0;
-  for (const v of vals) {
-    if ((v >= 0.5) === (outcome === 1)) correct++;
-  }
-
-  return { winner: game.estimateWinner(), elapsedMs, moves, correct, nVals: vals.length };
+  return { winner: game.estimateWinner(), elapsedMs, moves };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -273,6 +268,7 @@ function evalMove(game) {
 // Returns { results } where each element is 1 (policy win), 0 (agent win), or 0.5 (draw).
 function evalVsReference(N, refGetMove, nGames, budget) {
   const results = [];
+  let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -283,7 +279,9 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
+    const gameVals = [];
     while (!game.gameOver && moves++ < maxMoves) {
+      gameVals.push(_evalEvaluate(game3FromGame2(game)));
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
         idx = evalMove(game);
@@ -297,6 +295,8 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
 
     const winner = game.calcWinner();
+    for (const v of gameVals) if ((v >= 0.5) === (winner === BLACK)) accCorrect++;
+    accN += gameVals.length;
     if ((winner === BLACK) === policyIsBlack) {
       results.push(1);
     } else {
@@ -304,7 +304,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
   }
 
-  return { results };
+  return { results, accCorrect, accN };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -372,14 +372,13 @@ console.log([
   'tGm '.padStart(5),
   'nWts'.padStart(4),
   'avgL'.padStart(4),
-  ' acc'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
-  'turn'.padStart(5),
+  'tTurn'.padStart(5),
   // Test / eval columns (right).
   // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
   // interval's, and the rolling-half window).  Fixed 21 chars wide.
-  ...(evalGetMove ? ['winRatio'.padStart(21)] : []),
+  ...(evalGetMove ? ['winRatio'.padStart(21), ' acc'.padStart(4)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
@@ -393,8 +392,6 @@ let g = 0;
 let totalMoves = 0;
 let intervalGames = 0;
 let intervalMoves = 0;
-let intervalCorrect = 0, intervalNVals = 0;
-let totalCorrect = 0, totalNVals = 0;
 let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
@@ -410,15 +407,11 @@ const EMA_PERIOD = 50;
 
 while (true) {
   g++;
-  const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
   if (g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
-  intervalCorrect += correct;
-  intervalNVals   += nVals;
-  totalCorrect    += correct;
-  totalNVals      += nVals;
   moveElapsedMs += elapsedMs;
   intervalTrainMs += elapsedMs;
   const timePerMoveMs = moveElapsedMs / totalMoves;
@@ -428,12 +421,13 @@ while (true) {
 
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
-    let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
+    let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0, evalAccC = 0, evalAccN = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
-        const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        const { results, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
         for (const r of results) resultsBatch.push(r);
+        evalAccC += accCorrect; evalAccN += accN;
         const tTestMs   = Date.now() - tTestStart;
         if (tTestMs > 0.3 * intervalTrainMs) break;
         if (resultsBatch.length >= 998) break;
@@ -448,10 +442,8 @@ while (true) {
 
     const avgLen   = intervalMoves / intervalGames;
     const tGameMs  = intervalTrainMs / intervalGames;
-    const avgAcc   = totalNVals > 0 ? totalCorrect / totalNVals : 0;
     intervalGames = 0;
     intervalMoves = 0;
-    intervalCorrect = 0; intervalNVals = 0;
     let vaccCell = null;
     if (ACCURACY_FILE) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
@@ -485,6 +477,7 @@ while (true) {
     // avgW: mean |weight| encountered across weight updates (frequency-weighted
     // active weights), not the mean over all stored weights.
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
+    wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
 
     const tTestMs   = Date.now() - tTestStart;
     const elapsedMs = Date.now() - t0;
@@ -498,13 +491,13 @@ while (true) {
       Util.fmtMs(tGameMs),
       Util.fmt4i(weights.size),
       Util.fmt4(avgLen),
-      Util.fmtRatio4(avgAcc),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
       ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
-                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21)] : []),
+                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21),
+                         Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0)] : []),
       ...(ladrRatio !== null ? [Util.fmtRatio4(ladrRatio)] : []),
       ...(vaccCell   ? [vaccCell]                : []),
       ...(rmsCell    ? [rmsCell, rmsAvgCell]     : []),

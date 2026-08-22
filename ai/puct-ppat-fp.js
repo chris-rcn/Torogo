@@ -5,7 +5,8 @@
 // CGOS ladder, so its priors and top-K candidate sets should be sharper).
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
+// nodes (the root searches full width unless ROOT_TOP_K caps it), RAVE, and
+// ppat-policy full-playout leaf
 // evaluation.
 //
 // Each unexpanded edge is expanded on first contact: a leaf node is created
@@ -62,7 +63,17 @@ function create(cfg) {
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
   // Top-K kept move count (applies only below root).
-  const NPAT_K     = cfg.int('NPAT_K', 40);
+  const TOP_K     = cfg.int('TOP_K', 40);
+  // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
+  // the classic full-width root).
+  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 0);
+  // Lazy expansion: an edge must accumulate this many visits before its child
+  // node (featurepol extraction + priors) is created; playouts before that
+  // run from the unexpanded position.  1 = expand on first contact (the
+  // original economics, tuned for cheap npat extraction).  Featurepol
+  // extraction is pricier, so 2 skips the extraction for the many leaves
+  // that are only ever visited once.
+  const N_EXPAND   = cfg.int('N_EXPAND', 1);
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
@@ -81,6 +92,11 @@ function create(cfg) {
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
   if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+  if (!_model) {
+    console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no PPAT_DATA` +
+      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' env var') +
+      ' — playouts will be uniform random, not the ppat policy');
+  }
 
   // featurepol policy model (priors + top-K pruning).  FP_WEIGHTS overrides
   // the default checkpoint (browser: window.featurepolModel).
@@ -151,10 +167,11 @@ function create(cfg) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
     const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
-    // Top-K pruning at interior nodes only: at the root it would constrain the
-    // actual decision, and the root gets enough visits to search full width.
-    if (NPAT_K > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, fpState, NPAT_K, N);
+    // Top-K pruning: TOP_K below the root; at the root, full width unless
+    // ROOT_TOP_K caps the actual decision's candidate set.
+    const k = parent !== null ? TOP_K : ROOT_TOP_K;
+    if (k > 0) {
+      movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
     const M = movesArr.length;
     const area = N * N;
@@ -268,13 +285,18 @@ function create(cfg) {
         break;
       }
 
-      // Expand on first contact: create the leaf node, descend into it, and run
-      // one playout from it.  No lazy-expansion threshold — a ppat playout costs
-      // far more than node creation, so a new node is always worthwhile.
+      // Expansion: create the child (featurepol extraction + priors) once its
+      // edge has N_EXPAND visits; before that, run the playout from the
+      // unexpanded position with stats accumulating on the parent's edge
+      // (same backprop shape as the pass-break case above).
       if (node.children[best] === null) {
-        node.children[best] = makeNode(move, node, best, game2, N, game3);
-        node = node.children[best];
-        node.selectedChild = -1;
+        if (node.visits[best] >= N_EXPAND - 1 + PRIOR_VISITS - 1e-9) {
+          node.children[best] = makeNode(move, node, best, game2, N, game3);
+          node = node.children[best];
+          node.selectedChild = -1;
+        } else {
+          node.selectedChild = best;
+        }
         doPlayout = true;
         break;
       }

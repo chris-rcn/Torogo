@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -54,6 +54,7 @@ const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) 
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
+const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
@@ -92,7 +93,7 @@ let prepSpecs = prepareSpecs(specs);
 // ── Weight table ──────────────────────────────────────────────────────────────
 
 let weights  = new Map();  // pattern key (int32) → weight (float)
-let wAbsSum = 0, wUpdateCount = 0;  // running |weight| sum/count over every feature update this run
+let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over feature updates (avgW; reset each print)
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -161,6 +162,10 @@ function trainGame(N) {
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
 
+  // --start-phase: fill the board with random stones up to the target phase
+  // before training begins.  The prefix is untrained (no features recorded).
+  while (game.phase() < START_PHASE && !game.gameOver) game.play(game.randomLegalMove());
+
   let moves = 0;
   const featsArr = [];
   const vals = [];
@@ -201,12 +206,7 @@ function trainGame(N) {
     }
   }
 
-  let correct = 0;
-  for (const v of vals) {
-    if ((v >= 0.5) === (outcome === 1)) correct++;
-  }
-
-  return { winner: game.estimateWinner(), elapsedMs, moves, correct, nVals: vals.length };
+  return { winner: game.estimateWinner(), elapsedMs, moves };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -216,6 +216,7 @@ function trainGame(N) {
 function evalVsReference(N, refGetMove, nGames, budget) {
   const results = [];
   let totalMoves = 0;
+  let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -226,7 +227,11 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
+    const gameVals = [];
     while (!game.gameOver && moves++ < maxMoves) {
+      const f = extractFeatures(game, prepSpecs);
+      evaluateFeatures(f, weights);
+      gameVals.push(f.val);
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
         idx = search(game, { weights, specs, preparedSpecs: prepSpecs });
@@ -241,6 +246,8 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
     const winner = game.calcWinner();
     totalMoves += moves;
+    for (const v of gameVals) if ((v >= 0.5) === (winner === BLACK)) accCorrect++;
+    accN += gameVals.length;
     if ((winner === BLACK) === policyIsBlack) {
       results.push(1);
     } else {
@@ -248,7 +255,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
   }
 
-  return { results, moves: totalMoves };
+  return { results, moves: totalMoves, accCorrect, accN };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -300,7 +307,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log();
@@ -313,21 +320,20 @@ console.log([
   'tGm '.padStart(5),
   'nWts'.padStart(4),
   'avgL'.padStart(4),
-  ' acc'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
-  'turn'.padStart(5),
+  'tTurn'.padStart(5),
   // Test / eval columns (right).
   // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
   // interval's, and the rolling-half window).  Fixed 21 chars wide.
-  ...(evalGetMove ? ['winRatio'.padStart(21)] : []),
+  ...(evalGetMove ? ['winRatio'.padStart(21), ' acc'.padStart(4)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   ...(mdPositions ? ['mdRms'.padStart(5)] : []),
   // tTest = whole eval pass; the trailing turn = wall-clock per move of the
   // reference MATCHES only (both sides' moves), vs the left turn = training.
-  ...(evalGetMove ? ['tTest'.padStart(5), 'turn'.padStart(5)] : []),
+  ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
 ].join('  '));
 
 const t0 = Date.now();
@@ -337,8 +343,6 @@ let g = 0;
 let totalMoves = 0;
 let intervalGames = 0;
 let intervalMoves = 0;
-let intervalCorrect = 0, intervalNVals = 0;
-let totalCorrect = 0, totalNVals = 0;
 let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
@@ -347,14 +351,10 @@ const rmsHistory  = [];   // per-interval rmsErr values
 
 while (true) {
   g++;
-  const { moves, elapsedMs, correct, nVals } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
-  intervalCorrect += correct;
-  intervalNVals   += nVals;
-  totalCorrect    += correct;
-  totalNVals      += nVals;
   moveElapsedMs += elapsedMs;
   intervalTrainMs += elapsedMs;
   const timePerMoveMs = moveElapsedMs / totalMoves;
@@ -365,13 +365,14 @@ while (true) {
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
-    let evalMatchMs = 0, evalMatchMoves = 0;
+    let evalMatchMs = 0, evalMatchMoves = 0, evalAccC = 0, evalAccN = 0;
     if (evalGetMove) {
       const resultsBatch = [];
       while (true) {
-        const { results, moves } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        const { results, moves, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
         for (const r of results) resultsBatch.push(r);
         evalMatchMoves += moves;
+        evalAccC += accCorrect; evalAccN += accN;
         evalMatchMs = Date.now() - tTestStart;
         if (evalMatchMs > 0.3 * intervalTrainMs) break;
         if (resultsBatch.length >= 998) break;
@@ -386,10 +387,8 @@ while (true) {
 
     const avgLen  = intervalMoves / intervalGames;
     const tGameMs = intervalTrainMs / intervalGames;
-    const avgAcc  = totalNVals > 0 ? totalCorrect / totalNVals : 0;
     intervalGames = 0;
     intervalMoves = 0;
-    intervalCorrect = 0; intervalNVals = 0;
     let ladrCol = null;
     if (ladderCases) {
       const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
@@ -415,6 +414,7 @@ while (true) {
       mdRmsCol = Util.fmtRatio4(rmsErr).padStart(5);
     }
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
+    wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
 
     const tTestMs   = Date.now() - tTestStart;
     const elapsedMs = Date.now() - t0;
@@ -428,13 +428,13 @@ while (true) {
       Util.fmtMs(tGameMs),
       Util.fmt4i(weights.size),
       Util.fmt4(avgLen),
-      Util.fmtRatio4(avgAcc),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
       ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
-                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21)] : []),
+                          `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21),
+                         Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0)] : []),
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),

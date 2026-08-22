@@ -58,7 +58,7 @@ function create(cfg) {
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
   // Top-K kept move count (applies only below root).
-  const NPAT_K     = cfg.int('NPAT_K', 40);
+  const TOP_K     = cfg.int('TOP_K', 40);
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
@@ -77,6 +77,11 @@ function create(cfg) {
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
   if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+  if (!_model) {
+    console.warn(`WARNING: puct-ppat[${cfg.slot != null ? cfg.slot : '-'}]: no PPAT_DATA` +
+      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' env var') +
+      ' — playouts will be uniform random, not the ppat policy');
+  }
 
   // npat policy model (priors + top-K pruning).  NPAT_WEIGHTS overrides the
   // canonical npat-data.js.
@@ -145,8 +150,8 @@ function create(cfg) {
     let movesArr = getLegalMoves(game2);
     // Top-K pruning at interior nodes only: at the root it would constrain the
     // actual decision, and the root gets enough visits to search full width.
-    if (NPAT_K > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, npatState, NPAT_K, N);
+    if (TOP_K > 0 && parent !== null) {
+      movesArr = _pruneToTopK(movesArr, npatState, TOP_K, N);
     }
     const M = movesArr.length;
     const area = N * N;

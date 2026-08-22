@@ -1,16 +1,17 @@
 'use strict';
 
-// Fixed-config reference agent: puct-ppat with exactly 3000 playouts per
-// move (self-contained copy — frozen 2026-08-19 as a ladder rung; frozen
-// names must never track live files).  Playout-count budgets are
-// machine-independent, so this engine's strength is reproducible on any
-// hardware.
+// Fixed-config reference agent: puct-ppat-fp (featurepol priors/pruning,
+// ppat playouts) with exactly 1000 playouts per move and N_EXPAND=2 lazy
+// expansion — an edge needs 2 visits before its child (featurepol
+// extraction + priors) is built, converting extraction time into playouts.
+// Self-contained copy, frozen 2026-08-21 as a ladder rung; frozen names
+// must never track live files.  All parameters are hardcoded; this script
+// reads no environment variables.
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
-// evaluation.  Playout policy: single-phase SB-trained ppat checkpoint
-// ref/ppat-3374337.js (teMSE 0.0213 on eval-s9-mega); in the browser, load
-// ppat-lib.js and ref/ppat-3374337.js (sets window.PPATWeights) first.
+// nodes (the root searches full width unless ROOT_TOP_K caps it), RAVE, and
+// ppat-policy full-playout leaf
+// evaluation.
 //
 // Each unexpanded edge is expanded on first contact: a leaf node is created
 // (policy extraction + priors) and one playout is run from it.  A ppat playout
@@ -35,7 +36,7 @@
 const Util = (typeof require === 'function') ? require('../util.js') : window.Util;
 const { PASS, BLACK } = Util.load('./game2.js', 'Game2');
 const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
-const NPat                  = Util.load('./npat-lib.js', 'NPatterns');
+const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
 const { createState, ppatMove, loadWeights } = _ppat;
@@ -53,38 +54,33 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 
 // ── Factory ────────────────────────────────────────────────────────────────────
 
-// Build an independent agent instance.  Config is hardcoded above the fold;
-// all per-instance state lives in this closure.
+// Build an independent agent instance whose config and state are bound at
+// construction.  cfg is a Util.makeCfg reader (slot-aware env); all per-instance
+// state lives in this closure.
 function create() {
   // ── Hardcoded configuration ─────────────────────────────────────────────────
-  // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
   const C_PUCT     = 0.5;
-  // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = 400;
-  // Top-K kept move count (applies only below root).
-  const TOP_K     = 40;
-  // Fixed playout count per decision (overrides any time budget).
-  const PLAYOUTS   = 3000;
-  // Playout moves to use the ppat policy before switching to uniform (-1 = all).
+  const TOP_K      = 40;
+  const ROOT_TOP_K = 0;
+  const N_EXPAND   = 2;
+  const PLAYOUTS   = 1000;
   const PPAT_MOVES = -1;
-  // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
   const PPAT_RATIO = 1;
 
-  // ppat playout policy weights: the fixed prod checkpoint (window.PPATWeights
-  // in the browser).  ppat model { phaseCount, weights }.
   const _model = _isNode
     ? loadWeights(require('path').join(__dirname, '..', 'ref', 'ppat-3374337.js'))
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
-
-  // Use uniform-random playout moves while board fullness < this fraction [0,1]
-  // (0 = off).  Skips ppat feature extraction in the early game, where the
-  // policy is ≈ uniform.
   if (_model) _model.uniformBelowPhase = 0;
 
-  // npat policy model (priors + top-K pruning), from the canonical npat-data.js.
-  const npatModel   = NPat.loadModel({ name: 'ref-puct-ppat-3k' });
-  const npatWeights = npatModel.weights;
-  console.log(`ref-puct-ppat-3k: ${_model ? _model.weights.length : 0} ppat weights, ${npatWeights.size} npat weights from ${npatModel.modelName}`);
+  // featurepol policy model (priors + top-K pruning).  FP_WEIGHTS overrides
+  // the default checkpoint (browser: window.featurepolModel).
+  const _isBrowser  = typeof window !== 'undefined';
+  const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-ppat-fp-e2-1k',
+    path: _isBrowser ? undefined
+                     : require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js') });
+  const fpWeights   = fpModel.weights;
+  console.log(`ref-puct-ppat-fp-e2-1k: ${_model ? _model.weights.length : 0} ppat weights, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
@@ -94,17 +90,18 @@ function create() {
 
   const stateByN = new Map();
 
-  // Run npat policy extraction + softmax for `game2`.  `game3` is the lockstep
-  // mirror (maintained by the search, so extraction skips the game3FromGame2
-  // rebuild).  Returns the shared state (moves/probs populated) or null.
-  function _runNpat(game2, game3) {
-    if (!npatWeights || game2.gameOver) return null;
+  // Run featurepol policy extraction + softmax for `game2`.  `game3` is the
+  // lockstep mirror (maintained by the search, so extraction skips the
+  // game3FromGame2 rebuild).  Returns the shared state (moves/probs
+  // populated) or null.
+  function _runFp(game2, game3) {
+    if (!fpWeights || game2.gameOver) return null;
     const N = game2.N;
     let state = stateByN.get(N);
-    if (!state) { state = NPat.createState(N); stateByN.set(N, state); }
-    NPat.extractFeatures(game2, state, undefined, game3, npatWeights);
+    if (!state) { state = FeaturePol.createState(N, fpWeights.spec); stateByN.set(N, state); }
+    FeaturePol.extractFeatures(game2, state, fpWeights, game3);
     if (state.count === 0) return null;
-    NPat.computeSoftmax(state, npatWeights);
+    FeaturePol.computeSoftmax(state, fpWeights);
     return state;
   }
 
@@ -143,12 +140,13 @@ function create() {
 
   function makeNode(move, parent, ci, game2, N, game3) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
-    const npatState = _runNpat(game2, game3);
+    const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
-    // Top-K pruning at interior nodes only: at the root it would constrain the
-    // actual decision, and the root gets enough visits to search full width.
-    if (TOP_K > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, npatState, TOP_K, N);
+    // Top-K pruning: TOP_K below the root; at the root, full width unless
+    // ROOT_TOP_K caps the actual decision's candidate set.
+    const k = parent !== null ? TOP_K : ROOT_TOP_K;
+    if (k > 0) {
+      movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
     const M = movesArr.length;
     const area = N * N;
@@ -165,9 +163,9 @@ function create() {
     // PUCT priors per move (renormalised to sum to 1).  PASS gets a 1/area floor;
     // all other entries take the softmax probability directly; then renormalise.
     const priors = new Float32Array(M);
-    if (npatState) {
+    if (fpState) {
       const probByMove = new Float64Array(area);
-      for (let i = 0; i < npatState.count; i++) probByMove[npatState.moves[i]] = npatState.probs[i];
+      for (let i = 0; i < fpState.count; i++) probByMove[fpState.moves[i]] = fpState.probs[i];
       const floor = 1 / area;
       let sum = 0;
       for (let i = 0; i < M; i++) {
@@ -262,13 +260,18 @@ function create() {
         break;
       }
 
-      // Expand on first contact: create the leaf node, descend into it, and run
-      // one playout from it.  No lazy-expansion threshold — a ppat playout costs
-      // far more than node creation, so a new node is always worthwhile.
+      // Expansion: create the child (featurepol extraction + priors) once its
+      // edge has N_EXPAND visits; before that, run the playout from the
+      // unexpanded position with stats accumulating on the parent's edge
+      // (same backprop shape as the pass-break case above).
       if (node.children[best] === null) {
-        node.children[best] = makeNode(move, node, best, game2, N, game3);
-        node = node.children[best];
-        node.selectedChild = -1;
+        if (node.visits[best] >= N_EXPAND - 1 + PRIOR_VISITS - 1e-9) {
+          node.children[best] = makeNode(move, node, best, game2, N, game3);
+          node = node.children[best];
+          node.selectedChild = -1;
+        } else {
+          node.selectedChild = best;
+        }
         doPlayout = true;
         break;
       }
@@ -344,7 +347,7 @@ function create() {
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
-    // Lockstep Game3 mirror for npat feature extraction — built once per
+    // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
     const game3 = game3FromGame2(game2);
@@ -488,8 +491,7 @@ function _pruneToTopK(allMoves, state, K, N) {
 }
 
 // ── Default instance (lazy) for direct-require / browser callers ───────────────
-// create() takes no config, so the default instance and any create()d
-// instance are identical.
+// create() takes no config, so every instance is identical.
 let _default = null;
 function _def() { return _default || (_default = create()); }
 

@@ -62,6 +62,7 @@ class Game3 {
     const W = (cap + 31) >> 5;
     this._W = W;
     const MAX_G = 4 * cap + 4;
+    this._maxG = MAX_G;
     this._gc = new Uint8Array(MAX_G);       // group color
     this._sw = new Int32Array(MAX_G * W);   // stones bitset
     this._ss = new Int32Array(MAX_G);       // stones count
@@ -453,7 +454,13 @@ class Game3 {
     // Step 4: Create or merge group
     let mainGid;
     if (sameColorGroupIds.length === 0) {
-      // Create new group
+      // Create new group.  Exhaustion must FAIL LOUDLY: typed-array writes
+      // past MAX_G are silently ignored, which corrupted group-size
+      // accounting during runaway cyclic ladder reads (2026-08-21) — a
+      // throw turns any recurrence into an immediate stack trace.
+      if (this._nextGid >= this._maxG) {
+        throw new Error(`game3: group ids exhausted (${this._maxG}) — play/undo depth too deep for board size ${this.N}`);
+      }
       mainGid = this._nextGid++;
       this._gc[mainGid] = color;
       this._gid[move] = mainGid;
