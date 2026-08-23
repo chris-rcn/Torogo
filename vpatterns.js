@@ -68,6 +68,14 @@ function _cellLibCounts(game, out) {
   const seen  = _libSeen.length  >= cap ? _libSeen  : (_libSeen  = new Int32Array(cap));
   const mark  = _libMark.length  >= cap ? _libMark  : (_libMark  = new Int32Array(cap));
   const group = _libGroup.length >= cap ? _libGroup : (_libGroup = new Int32Array(cap));
+  // seen/mark are Int32Arrays: past 2^31 the stored stamp wraps while the JS
+  // counter doesn't, so equality never holds again and the flood loops
+  // forever (hit live 2026-08-22 after ~35min of training).  Reset with
+  // headroom for this call's per-group increments (<= cap + 1 << 65535).
+  if (_libStampVal > 0x7fff0000) {
+    _libSeen.fill(0); _libMark.fill(0);
+    _libStampVal = 0;
+  }
   const seenStamp = ++_libStampVal;   // per call: which stones are flooded
   for (let i = 0; i < cap; i++) {
     if (cells[i] === 0) { out[i] = 0; continue; }
