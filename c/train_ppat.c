@@ -19,11 +19,14 @@
  *     --test-pos <n>        test positions (default 100)
  *     --train-pos <n>       train positions (default 0 = all)
  *     --test-playouts <n>   playouts per test position (default --playouts)
- *     --no-extreme <f>      drop positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
+ *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
  *     --phases <n>          number of phase-conditioned weight slices (default 1)
- *     --phase <p>           train/test only phase p; freezes the other phases
+ *     --phase <p>           train only phase p; freezes the other phases.
+ *                           The test head stays UNFILTERED (all phases), so
+ *                           teMSE is always the end-to-end number, comparable
+ *                           across runs regardless of masking.
  *     --init-phase-scale <f>  seed phase p's weights from phase p+1 (scaled by f)
  *                           before training (endgame-first warm-start; requires
  *                           --phase). γ → γ^f, so f<1 softens toward uniform,
@@ -221,17 +224,24 @@ static void load_positions(void) {
             exit(1);
         }
 
-        /* Value filter */
-        if (cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
+        /* The first --test-pos kept records become the test head; filters
+         * apply only past it (train pool), so the test set is identical
+         * across all filter/mask configs and teMSE is always end-to-end.
+         * (--overfit shares records between train and test, so it keeps the
+         * filters everywhere.) */
+        int in_test_head = !cfg_overfit && n_all < cfg_test_pos;
 
-        /* Compute and filter by phase */
+        /* Value filter (train pool only) */
+        if (!in_test_head && cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
+
+        /* Compute phase; filter by it (train pool only) */
         Game2 g;
         int bad;
         if (replay_position(&pos, &g, &bad) > 0)
             pos.phase = ppat_phase_count * (g.cap - g.empty_count) / g.cap;
         else
             pos.phase = -1;
-        if (cfg_phase >= 0 && pos.phase != cfg_phase) { filtered++; continue; }
+        if (!in_test_head && cfg_phase >= 0 && pos.phase != cfg_phase) { filtered++; continue; }
 
         all_positions[n_all++] = pos;
     }
@@ -240,7 +250,7 @@ static void load_positions(void) {
         fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
     if (n_all == 0) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", cfg_file, skipped); exit(1); }
     if (cfg_worker_id == 0)
-        printf("records: %d kept of %d in %s (%d filtered, %d skipped)\n",
+        printf("records: %d kept of %d in %s (%d train-filtered, %d skipped)\n",
                n_all, n_all + filtered, cfg_file, filtered, skipped);
 }
 
@@ -805,8 +815,10 @@ static void print_weights_header(void) {
  * the metrics — without training or touching the sync barrier, so the training
  * workers never stall on the (expensive) test. */
 static void run_monitor(void) {
-    printf("monitor: %d test positions, test-playouts %d, %d workers, phases %d\n",
+    printf("monitor: %d test positions, test-playouts %d, %d workers, phases %d",
            n_test, cfg_test_playouts, cfg_workers, ppat_phase_count);
+    if (cfg_phase >= 0) printf(", phase %d only (others frozen)", cfg_phase);
+    printf("\n");
     printf("%9s  %7s  %7s  %7s  %5s  %8s  %7s",
            "positions", "trMSE", "teMSE", "avgW", "move%", "elapsedS", "pos/s");
     print_weights_header();

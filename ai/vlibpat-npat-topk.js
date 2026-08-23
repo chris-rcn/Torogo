@@ -18,19 +18,19 @@ const NPat = require('../npat-lib.js');
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-const TOP_K  = Math.max(1, parseInt(process.env.NPAT_FILTER_TOPK || '6', 10));
-const DITHER = 0.002;
+const NPAT_FILTER_TOPK  = Math.max(1, parseInt(process.env.NPAT_FILTER_TOPK || '6', 10));
+const dither = 0.002;
 
-const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-4074.js');
-const NPAT_PATH = path.join(__dirname, '..', 'npat-data.js');
+const vpatPath = path.join(__dirname, '..', 'ref', 'vlibpat-4074.js');
+const npatPath = path.join(__dirname, '..', 'npat-data.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
 
-const vModel = vLoadWeights(VPAT_PATH);
+const vModel = vLoadWeights(vpatPath);
 
-const { weights: npatWeights } = NPat.loadModel({ name: 'vlibpat-npat-topk', path: NPAT_PATH });
+const { weights: npatWeights } = NPat.loadModel({ name: 'vlibpat-npat-topk', path: npatPath });
 
-console.error(`vlibpat-npat-topk: vlibpat=${vModel.weights.size}w npat=${npatWeights.size}w  top-K=${TOP_K}  (3x3c=${npatWeights.cfg.use33c} p12=${npatWeights.cfg.useP12})`);
+console.error(`vlibpat-npat-topk: vlibpat=${vModel.weights.size}w npat=${npatWeights.size}w  top-K=${NPAT_FILTER_TOPK}  (3x3c=${npatWeights.cfg.use33c} p12=${npatWeights.cfg.useP12})`);
 
 // ── Move selection ───────────────────────────────────────────────────────────
 //
@@ -58,7 +58,7 @@ function _topKCandidates(game, game3) {
   NPat.policyMove(game, state, npatWeights, Math, game3);
   const n = state.count;
   if (n === 0) return [];
-  const k = Math.min(TOP_K, n);
+  const k = Math.min(NPAT_FILTER_TOPK, n);
   const probs = state.probs;
   const order = new Array(n);
   for (let i = 0; i < n; i++) order[i] = i;
@@ -76,7 +76,7 @@ function getMove(game, _budgetMs, opts) {
   const game3 = game3FromGame2(game);
   const candidates = _topKCandidates(game, game3);
   if (candidates.length === 0) return { move: PASS };
-  const move = abSearch(game3, 1, _vEvaluate, DITHER, {
+  const move = abSearch(game3, 1, _vEvaluate, dither, {
     getCandidates: () => candidates,
     rng: opts && opts.rng,
   });

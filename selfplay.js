@@ -41,6 +41,7 @@ const { performance } = require('perf_hooks');
 
 const path = require('path');
 const { Game2, BLACK, WHITE, PASS } = require('./game2.js');
+const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const VERBOSE = Util.envInt('VERBOSE', 0);
@@ -298,7 +299,18 @@ function logGamma(z) {
 }
 
 // Play one game from a given starting position with assigned colors.
-function playGame(startGame, p1IsBlack) {
+//
+// seatSeeds [blackSeed, whiteSeed]: per opening pair, each SEAT gets its own
+// seeded RNG stream, recreated identically for the colour-swapped replay — so
+// both agents experience the same randomness in the same seat (common random
+// numbers).  The seat stream is installed as Math.random for the duration of
+// each move, so all agent-internal randomness (dither, playout sampling,
+// tie-breaks) draws from it.  Identical agents therefore mirror exactly
+// across a pair when moves are deterministic given the stream (e.g. fixed
+// playouts); time budgets reintroduce divergence via playout-count jitter.
+function playGame(startGame, p1IsBlack, seatSeeds) {
+  const seatRng = [makeRng(seatSeeds[0]), makeRng(seatSeeds[1])];   // [black, white]
+  const origRandom = Math.random;
   const names = [ p1IsBlack ? p1Name : p2Name, p1IsBlack ? p2Name : p1Name];
   const black = p1IsBlack ? p1 : p2;
   const white = p1IsBlack ? p2 : p1;
@@ -314,7 +326,9 @@ function playGame(startGame, p1IsBlack) {
     // attributed to p1/p2 timing.  (min-phase is already satisfied by the shared
     // opening; we don't re-gate on it mid-game — see phaseOf note above.)
     if (fallback && phaseOf(game) > maxPhase) {
+      Math.random = (isBlackTurn ? seatRng[0] : seatRng[1]).random;
       const fm = fallback(game, fallbackBudget);
+      Math.random = origRandom;
       if (!game.play(fm.move)) {
         console.error(`Illegal fallback move: ${JSON.stringify(fm)}`);
         process.exit(1);
@@ -326,7 +340,9 @@ function playGame(startGame, p1IsBlack) {
     const mover  = (isBlackTurn === p1IsBlack) ? 'p1' : 'p2';
     const budget = mover === 'p1' ? p1Budget : p2Budget;
     const t0 = performance.now();
+    Math.random = (isBlackTurn ? seatRng[0] : seatRng[1]).random;
     const move = policy(game, budget);
+    Math.random = origRandom;
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
     const idx = move.move;
@@ -375,9 +391,14 @@ while (gamesPlayed < gameLimit && !decided) {
     }
   }
 
+  // Seat seeds for this pair: both colour assignments replay the same
+  // black-stream and white-stream (see playGame).
+  const seatSeeds = [(Math.random() * 0x100000000) | 0,
+                     (Math.random() * 0x100000000) | 0];
+
   // Play from this opening with both color assignments.
   for (let swap = 0; swap < 2 && gamesPlayed < gameLimit; swap++) {
-    playGame(opening, swap === 0);
+    playGame(opening, swap === 0, seatSeeds);
     gamesPlayed++;
     maybePrint(gamesPlayed);
 

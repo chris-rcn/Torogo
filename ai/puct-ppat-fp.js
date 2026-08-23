@@ -73,7 +73,7 @@ function create(cfg) {
   // original economics, tuned for cheap npat extraction).  Featurepol
   // extraction is pricier, so 2 skips the extraction for the many leaves
   // that are only ever visited once.
-  const N_EXPAND   = cfg.int('N_EXPAND', 1);
+  const N_EXPAND   = cfg.int('N_EXPAND', 2);
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).

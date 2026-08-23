@@ -13,10 +13,10 @@ const FeaturePol = require('../featurepol-lib.js');
 const { PASS } = require('../game2.js');
 const { game3FromGame2 } = require('../game3.js');
 
-const TEMP = process.env.FPOL_TEMP !== undefined ? parseFloat(process.env.FEATUREPOL_TEMP) : 0;
-const WEIGHTS = process.env.FPOL_DATA || path.join(__dirname, '..', 'featurepol-data.js');
+const FPOL_TEMP = process.env.FPOL_TEMP !== undefined ? parseFloat(process.env.FPOL_TEMP) : 0;
+const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, '..', 'featurepol-data.js');
 
-const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: WEIGHTS });
+const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 const _stateByN = new Map();
 
 function getMove(game, _budgetMs, opts) {
@@ -25,11 +25,11 @@ function getMove(game, _budgetMs, opts) {
   if (!state) { state = FeaturePol.createState(game.N, weights.spec); _stateByN.set(game.N, state); }
   const game3 = weights.spec.needsLadder ? game3FromGame2(game) : undefined;
   const rng = opts && opts.rng;
-  const move = FeaturePol.policyMove(game, state, weights, rng, game3, TEMP).move;
+  const move = FeaturePol.policyMove(game, state, weights, rng, game3, FPOL_TEMP).move;
   return { move };
 }
 
-console.error(`featurepol: loaded ${weights.size} weights from ${modelName}  spec='${weights.spec.str}'  temp=${TEMP}`);
+console.error(`featurepol: loaded ${weights.size} weights from ${modelName}  spec='${weights.spec.str}'  temp=${FPOL_TEMP}`);
 
 module.exports = { getMove };
 

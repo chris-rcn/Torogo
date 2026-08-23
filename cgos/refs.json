@@ -22,6 +22,9 @@
     { "name": "ref-puct-ppat-1k",   "agent": "ref-puct-ppat-1k",   "budget": 1 },
     { "name": "ref-puct-ppat-3k",   "agent": "ref-puct-ppat-3k",   "budget": 1 },
     { "name": "ref-cascade-k3-v2-p100", "agent": "ref-cascade-k3-v2-p100", "budget": 1 },
-    { "name": "ref-cascade-k3-v2-p300", "agent": "ref-cascade-k3-v2-p300", "budget": 1 }
+    { "name": "ref-cascade-k3-v2-p300", "agent": "ref-cascade-k3-v2-p300", "budget": 1 },
+    { "name": "ref-vlibpat-or-fp",  "agent": "ref-vlibpat-or-fp",  "budget": 1 },
+    { "name": "ref-puct-ppat-fp-e2-1k", "agent": "ref-puct-ppat-fp-e2-1k", "budget": 1 },
+    { "name": "ref-puct-ppat-fp-e2-3k", "agent": "ref-puct-ppat-fp-e2-3k", "budget": 1 }
   ]
 }

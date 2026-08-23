@@ -20,8 +20,8 @@
 // fractionally: each chooser is credited value (BLACK) or 1 − value (WHITE).
 //
 // Node selection:
-//   score = Q + C_PUCT · P(s,a) · √N_total / (1 + N_a)
-// where Q is the move's mean backpropagated value (RAVE-blended when RAVE_K
+//   score = Q + cPuct · P(s,a) · √N_total / (1 + N_a)
+// where Q is the move's mean backpropagated value (RAVE-blended when raveK
 // > 0) and P(s,a) is the policy softmax probability for the move.
 //
 // ── Factory ──
@@ -46,9 +46,9 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 
 // ── Config-free constants & helpers (shared across instances) ──────────────────
 
-const PRIOR_WINS   = 0.001;
-const PRIOR_VISITS = 2 * PRIOR_WINS;
-const RESIGN_MIN_PLAYOUTS = 20000;
+const priorWins   = 0.001;
+const priorVisits = 2 * priorWins;
+const resignMinPlayouts = 20000;
 
 // ── Factory ────────────────────────────────────────────────────────────────────
 
@@ -57,17 +57,17 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 function create() {
   // ── Hardcoded configuration ─────────────────────────────────────────────────
   // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
-  const C_PUCT     = 0.5;
-  // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
-  const RAVE_K     = 400;
+  const cPuct     = 0.5;
+  // RAVE blend strength: Q mixes rave/real win-rate with weight raveK/(raveK+n).
+  const raveK     = 400;
   // Top-K kept move count (applies only below root).
-  const TOP_K     = 40;
+  const topK     = 40;
   // Fixed playout count per decision; 0 = follow the caller's time budget.
-  const PLAYOUTS   = 0;
+  const fixedPlayouts = 0;
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
-  const PPAT_MOVES = -1;
-  // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
-  const PPAT_RATIO = 1;
+  const ppatMoves = -1;
+  // Per-move probability of using ppat (vs uniform) within the ppatMoves window.
+  const ppatRatio = 1;
 
   // ppat playout policy weights: the fixed prod checkpoint (window.PPATWeights
   // in the browser).  ppat model { phaseCount, weights }.
@@ -122,10 +122,10 @@ function create() {
 
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
-      // usePolicy: use the ppat policy this move — within the PPAT_MOVES window
-      // and (subject to PPAT_RATIO) not a randomly-mixed uniform move.
-      const ppatActive = _model && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
-      const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
+      // usePolicy: use the ppat policy this move — within the ppatMoves window
+      // and (subject to ppatRatio) not a randomly-mixed uniform move.
+      const ppatActive = _model && (ppatMoves < 0 || moves < ppatMoves);
+      const usePolicy  = ppatActive && (ppatRatio >= 1 || rng.random() < ppatRatio);
       const idx = usePolicy ? ppatMove(game2, _ppatState, _model)
                             : game2.randomLegalMove(rng);
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
@@ -145,8 +145,8 @@ function create() {
     let movesArr = getLegalMoves(game2);
     // Top-K pruning at interior nodes only: at the root it would constrain the
     // actual decision, and the root gets enough visits to search full width.
-    if (TOP_K > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, npatState, TOP_K, N);
+    if (topK > 0 && parent !== null) {
+      movesArr = _pruneToTopK(movesArr, npatState, topK, N);
     }
     const M = movesArr.length;
     const area = N * N;
@@ -155,10 +155,10 @@ function create() {
     for (let i = 0; i < M; i++) legalMoves[i] = movesArr[i];
 
     const children   = new Array(M).fill(null);
-    const wins       = new Float32Array(M).fill(PRIOR_WINS);
-    const visits     = new Float32Array(M).fill(PRIOR_VISITS);
-    const raveWins   = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_WINS)   : null;
-    const raveVisits = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_VISITS) : null;
+    const wins       = new Float32Array(M).fill(priorWins);
+    const visits     = new Float32Array(M).fill(priorVisits);
+    const raveWins   = raveK > 0 ? new Float32Array(area).fill(priorWins)   : null;
+    const raveVisits = raveK > 0 ? new Float32Array(area).fill(priorVisits) : null;
 
     // PUCT priors per move (renormalised to sum to 1).  PASS gets a 1/area floor;
     // all other entries take the softmax probability directly; then renormalise.
@@ -209,16 +209,16 @@ function create() {
     // Q: mean backpropagated value for this move.
     let Q = node.wins[moveIdx] / node.visits[moveIdx];
 
-    if (RAVE_K > 0) {
+    if (raveK > 0) {
       const move   = node.legalMoves[moveIdx];
       const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
-      const beta   = RAVE_K / (RAVE_K + node.visits[moveIdx]);
+      const beta   = raveK / (raveK + node.visits[moveIdx]);
       Q = (1 - beta) * Q + beta * raveWR;
     }
 
-    // PUCT exploration term.  C_PUCT · P(s,a) · √N_total / (1 + N_a).
+    // PUCT exploration term.  cPuct · P(s,a) · √N_total / (1 + N_a).
     const P = node.priors[moveIdx];
-    const U = C_PUCT * P * Math.sqrt(node.totalVisits) / (1 + node.visits[moveIdx]);
+    const U = cPuct * P * Math.sqrt(node.totalVisits) / (1 + node.visits[moveIdx]);
 
     return Q + U + 0.001 * rng.random();
   }
@@ -321,7 +321,7 @@ function create() {
       node.visits[leafIdx]++;
       node.wins[leafIdx] += won;
       node.totalVisits++;
-      if (RAVE_K > 0) updateRave(node, d, won, chooser);
+      if (raveK > 0) updateRave(node, d, won, chooser);
     } else {
       d = path.length;
     }
@@ -334,7 +334,7 @@ function create() {
       node.parent.visits[ci]++;
       node.parent.wins[ci] += won;
       node.parent.totalVisits++;
-      if (RAVE_K > 0) updateRave(node.parent, d, won, chooser);
+      if (raveK > 0) updateRave(node.parent, d, won, chooser);
       node = node.parent;
     }
   }
@@ -385,7 +385,7 @@ function create() {
     }
 
     const rng = options.rng || makeRng();
-    const playoutLimit = options.playoutLimit || PLAYOUTS;
+    const playoutLimit = options.playoutLimit || fixedPlayouts;
     const { root, playouts } = runSearch(game2, N, rng, playoutLimit, timeBudgetMs);
 
     const M = root.legalMoves.length;
@@ -414,7 +414,7 @@ function create() {
     for (let i = 0; i < M; i++) totalChildWins += root.wins[i];
     const rootWinRatio = totalChildWins / root.totalVisits;
 
-    if (playouts >= RESIGN_MIN_PLAYOUTS && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] <= PRIOR_WINS) {
+    if (playouts >= resignMinPlayouts && game2.emptyCount <= N * N / 2 && root.wins[bestIdx] <= priorWins) {
       return { type: 'pass', move: PASS, info: 'no winning line found', children, rootWinRatio };
     }
 
@@ -430,7 +430,7 @@ function create() {
 
   // Search value of a Game2 position as P(BLACK wins) in [0,1], for use as an SB
   // value oracle (matches ref-vlibpat.valueB / mc-vlib.valueB / puct-hybrid.valueB).
-  // Runs a full search (PLAYOUTS playouts, default 1000) and returns the root win
+  // Runs a full search (playouts playouts, default 1000) and returns the root win
   // ratio mapped from the side-to-move perspective to absolute P(BLACK wins).
   function valueB(game, options = {}) {
     const N     = game.cells ? game.N : game.boardSize;
@@ -438,7 +438,7 @@ function create() {
     if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
 
     const r = options.rng || makeRng();
-    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
+    const playoutLimit = fixedPlayouts > 0 ? fixedPlayouts : 1000;
     const { root } = runSearch(game2, N, r, playoutLimit, 0);
 
     let totalChildWins = 0;

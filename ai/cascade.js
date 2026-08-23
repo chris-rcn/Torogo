@@ -36,7 +36,7 @@ const FeaturePol = require('../featurepol-lib.js');
 const { extractFeatures: vExtract, evaluateFeatures: vEval, loadWeights: vLoadWeights } = require('../vlibpat.js');
 const PPat = require('../ppat-lib.js');
 
-const DITHER = 0.001;   // uniform noise on the vlibpat narrowing values
+const dither = 0.001;   // uniform noise on the vlibpat narrowing values
 
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -85,7 +85,7 @@ function create(cfg) {
       const f = vExtract(game3, vModel.preparedSpecs);
       vEval(f, vModel.weights);
       game3.undo();
-      const v = f.val + DITHER * rng.random();
+      const v = f.val + dither * rng.random();
       return { m, v: moverIsBlack ? v : -v };
     });
     scored.sort((a, b) => b.v - a.v);

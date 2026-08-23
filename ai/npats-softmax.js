@@ -18,14 +18,14 @@ const NPats = require('../npats-lib.js');
 const Util   = require('../util.js');
 const { PASS } = require('../game2.js');
 
-const TEMP = Util.envFloat('NPATS_TEMP', 1);
+const NPATS_TEMP = Util.envFloat('NPATS_TEMP', 1);
 
 const { weights, cfg, modelName } = NPats.loadModel({
   name: 'npats-softmax',
   path: process.env.NPATS_WEIGHTS,
 });
 const model = { weights, cfg };
-console.error(`npats-softmax: loaded ${weights.size} weights from ${modelName} [softmax T=${TEMP}]`);
+console.error(`npats-softmax: loaded ${weights.size} weights from ${modelName} [softmax T=${NPATS_TEMP}]`);
 
 const stateByN = new Map();
 
@@ -33,7 +33,7 @@ function getMove(game) {
   if (game.gameOver) return { move: PASS };
   let state = stateByN.get(game.N);
   if (!state) { state = NPats.createState(game.N); stateByN.set(game.N, state); }
-  const n = NPats.computeProbs(game, state, undefined, model, TEMP);
+  const n = NPats.computeProbs(game, state, undefined, model, NPATS_TEMP);
   if (n === 0) return { move: PASS };
   let r = Math.random(), chosen = n - 1;
   for (let i = 0; i < n; i++) {

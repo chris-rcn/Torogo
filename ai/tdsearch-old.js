@@ -13,10 +13,10 @@ const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 const Playout = require('./playout.js');
 
 const TD_SIMS       = Util.envInt  ('TD_SIMS', 0);
-const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
-const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
-const LR            = Util.envFloat('TD_LR', 0.3);
-const EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
+const TD_WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
+const TD_NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
+const TD_LR            = Util.envFloat('TD_LR', 0.3);
+const TD_EPSILON       = Util.envFloat('TD_EPSILON', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
 
@@ -100,11 +100,11 @@ function evaluate(buf, weightsArr) {
   buf.val = 1 / (1 + Math.exp(-z));
 }
 
-// Δw_k = (LR / n) · (target − buf.val)
+// Δw_k = (TD_LR / n) · (target − buf.val)
 function tdUpdate(buf, target, weightsArr) {
   const { idxs, n } = buf;
   if (n === 0) return;
-  const step = LR * (target - buf.val) / n;
+  const step = TD_LR * (target - buf.val) / n;
   
   for (let i = 0; i < n; i++) {
     weightsArr[idxs[i]] += step;
@@ -143,10 +143,10 @@ function search1ply(game, ctx, width = 0, rng) {
 }
 
 function selectTrainingMove(game, step, ctx, rng) {
-  if (rng.random() < EPSILON)
+  if (rng.random() < TD_EPSILON)
     return { move: game.randomLegalMove() };
 
-  if (step < WIDE_DEPTH) {
+  if (step < TD_WIDE_DEPTH) {
     if (false && rng.random() < ctx.lastSearchMoveSame[step]) {
       return { move: ctx.lastSearchMove[step] };
     } else {
@@ -158,7 +158,7 @@ function selectTrainingMove(game, step, ctx, rng) {
     }
   }
 
-  if (step < NARROW_DEPTH)
+  if (step < TD_NARROW_DEPTH)
     return search1ply(game, ctx, 2, rng);
 
 //  return { move: game.randomLegalMove() };
@@ -179,8 +179,8 @@ function getMove(game, budgetMs = 1000, options = {}) {
 
   const keyToIdx = new Map();
   const weightsArr = [];
-  const lastSearchMove = new Int32Array(WIDE_DEPTH); // indexed by step
-  const lastSearchMoveSame = new Float32Array(WIDE_DEPTH); // indexed by step
+  const lastSearchMove = new Int32Array(TD_WIDE_DEPTH); // indexed by step
+  const lastSearchMoveSame = new Float32Array(TD_WIDE_DEPTH); // indexed by step
   const ctx = { keyToIdx, weightsArr, lastSearchMove, lastSearchMoveSame, searchFeats: makeBuf(area) };
 
   let prev2 = makeBuf(area);

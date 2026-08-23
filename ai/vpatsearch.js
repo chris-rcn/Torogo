@@ -24,7 +24,7 @@ const Util = _isNode ? require('../util.js') : window.Util;
 
 const MIN_LIBS = Util.envInt  ('MIN_LIBS',     1);
 const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
-const DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
+const SEARCH_DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
 const DITHER   = Util.envFloat('DITHER',       0.002);
 const PAT_DATA = Util.envStr  ('PAT_DATA',     'out/ref13.js');
 
@@ -45,7 +45,7 @@ function search(game, m, depth = 1, dither = 0) {
 }
 
 function getMove(game) {
-  return { move: search(game, model, DEPTH, DITHER) };
+  return { move: search(game, model, SEARCH_DEPTH, DITHER) };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

@@ -22,20 +22,20 @@ const { PASS, BLACK, WHITE } = _isNode ? require('../game2.js') : window.Game2;
 const Util = _isNode ? require('../util.js') : window.Util;
 const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
-const EXPLORATION_C = Util.envFloat('EXPLORATION_C_B', 0.4);
+const EXPLORATION_C_B = Util.envFloat('EXPLORATION_C_B', 0.4);
 
-const RAVE_K = Util.envFloat('RAVE_K_B', 1200);
+const RAVE_K_B = Util.envFloat('RAVE_K_B', 1200);
 
-// Falls back to the shared PLAYOUTS so A and B use the same budget by default;
+// Falls back to the shared PLAYOUTS_B so A and B use the same budget by default;
 // set PLAYOUTS_B only when the anchor should run a different effort.
-const PLAYOUTS = Util.envInt('PLAYOUTS_B', Util.envInt('PLAYOUTS', 0));
+const PLAYOUTS_B = Util.envInt('PLAYOUTS_B', Util.envInt('PLAYOUTS', 0));
 
 // Minimum playout visits before a child node is promoted (allocated).
-const N_EXPAND = Util.envInt('N_EXPAND_B', 4);
+const N_EXPAND_B = Util.envInt('N_EXPAND_B', 4);
 
 // Fraction of parent RAVE stats inherited by a newly created child node.
 // Must be < 1 to prevent unbounded growth down the tree.
-const RAVE_INHERIT = Util.envFloat('RAVE_INHERIT_B', 0.2);
+const RAVE_INHERIT_B = Util.envFloat('RAVE_INHERIT_B', 0.2);
 
 // Prior pseudo-counts seeded into wins/visits for new children (50% win rate).
 const PRIOR_WINS   = 0.001;
@@ -125,8 +125,8 @@ function makeNode(move, parent, ci, game2, N) {
   } else {
     const gparent = parent.parent;
     for (let m = 0; m < area; m++) {
-      raveWins[m]   = RAVE_INHERIT * gparent.raveWins[m];
-      raveVisits[m] = RAVE_INHERIT * gparent.raveVisits[m];
+      raveWins[m]   = RAVE_INHERIT_B * gparent.raveWins[m];
+      raveVisits[m] = RAVE_INHERIT_B * gparent.raveVisits[m];
     }
   }
 
@@ -169,14 +169,14 @@ function ucbScore(moveIdx, node, rng) {
   const realV = node.visits[moveIdx];
   const realWR = realW / realV;
 
-  const raveWeight = RAVE_K / (RAVE_K + realV);
+  const raveWeight = RAVE_K_B / (RAVE_K_B + realV);
   const realWeight = 1 - raveWeight;
 
   // Combined win ratio
   const wr = realWeight * realWR + raveWeight * raveWR;
 
   const scoreBase = wr + 0.001 * rng.random();
-  return scoreBase + EXPLORATION_C * Math.sqrt(Math.log(node.totalVisits) / realV);
+  return scoreBase + EXPLORATION_C_B * Math.sqrt(Math.log(node.totalVisits) / realV);
 }
 
 // ── RAVE-MCTS core ────────────────────────────────────────────────────────────
@@ -200,9 +200,9 @@ function selectAndExpand(root, rootGame2, N, rng) {
 
     // Promote child to a full node once it has accumulated enough visits.
     // Fall through to the descent check so the loop continues into the new node;
-    // its children all have cv=0 < N_EXPAND, so the leaf case fires next iteration
+    // its children all have cv=0 < N_EXPAND_B, so the leaf case fires next iteration
     // (exactly one makeNode per playout, same as rave2's one-expansion-per-playout).
-    if (node.children[best] === null && node.visits[best] >= N_EXPAND) {
+    if (node.children[best] === null && node.visits[best] >= N_EXPAND_B) {
       node.children[best] = makeNode(node.legalMoves[best], node, best, game2, N);
     }
 
@@ -264,7 +264,7 @@ function backpropagate(node, winner, played, rootPlayer) {
 
   // Update the unpromoted leaf child stats (if we stopped before descending).
   // Also update RAVE at this node so root's RAVE is populated even when no
-  // deeper promoted nodes exist (e.g. N_EXPAND=9999).
+  // deeper promoted nodes exist (e.g. N_EXPAND_B=9999).
   const leafIdx = node.selectedChild;
   if (leafIdx !== -1) {
     const chooser = childMover(node);
@@ -308,7 +308,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   // Pre-allocate played buffer — reused across all playouts.
   const played = new Float32Array(N * N);
 
-  const playoutLimit = options.playoutLimit || PLAYOUTS;
+  const playoutLimit = options.playoutLimit || PLAYOUTS_B;
   const deadline = performance.now() + timeBudgetMs;
   let playouts = 0;
 

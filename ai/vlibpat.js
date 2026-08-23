@@ -23,9 +23,9 @@ const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
 const { search: abSearch } = _isNode ? require('../ab-search3.js') : window.ABSearch3;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
+const SEARCH_DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
 const DITHER   = Util.envFloat('DITHER',       0.002);
-const PAT_DATA = Util.envStr  ('VLIBPAT_DATA', '');
+const VLIBPAT_DATA = Util.envStr  ('VLIBPAT_DATA', '');
 
 // ── Agent state ───────────────────────────────────────────────────────────────
 
@@ -43,14 +43,14 @@ function search(game, m, depth = 1, dither = 0) {
 }
 
 function getMove(game) {
-  return { move: search(game, model, DEPTH, DITHER) };
+  return { move: search(game, model, SEARCH_DEPTH, DITHER) };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 // Auto-load weights and specs if VLIBPAT_DATA env var is set.
-if (_isNode && PAT_DATA) {
-  model = loadWeights(PAT_DATA);
+if (_isNode && VLIBPAT_DATA) {
+  model = loadWeights(VLIBPAT_DATA);
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────

@@ -30,9 +30,9 @@ const PLAYOUTS = Util.envInt('PLAYOUTS', 0);
 // Minimum playout visits before a child node is promoted (allocated).
 const N_EXPAND = Util.envInt('N_EXPAND', 2);
 
-// TD learning rates: LR0 at start of budget, LR1 at end.
-const LR0 = Util.envFloat('TD_LR0', 0.6);
-const LR1 = Util.envFloat('TD_LR1', 0.3);
+// TD learning rates: TD_LR0 at start of budget, TD_LR1 at end.
+const TD_LR0 = Util.envFloat('TD_LR0', 0.6);
+const TD_LR1 = Util.envFloat('TD_LR1', 0.3);
 
 const EXPLORATION_C = Util.envFloat('EXPLORATION_C', 0.4);
 
@@ -497,7 +497,7 @@ function getMove(game, timeBudgetMs, options = {}) {
   const tdPrev1   = makeBuf(area);
   const tdFeats   = makeBuf(area);
   const td = { primary: tdPrimary, prev2: tdPrev2, prev1: tdPrev1, feats: tdFeats,
-               ctx, weightsArr, lr: LR1 };
+               ctx, weightsArr, lr: TD_LR1 };
   const played = new Float32Array(area);
 
   findFeaturesInit(game2, rootBuf, ctx);
@@ -509,10 +509,10 @@ function getMove(game, timeBudgetMs, options = {}) {
   do {
     playouts++;
 
-    // Ramp LR from LR1 down toward 0 over the playout budget.
+    // Ramp LR from TD_LR1 down toward 0 over the playout budget.
     const progress = PLAYOUTS > 0 ? playouts / PLAYOUTS
                                   : (performance.now() - tStart) / timeBudgetMs;
-    td.lr = LR1 - progress * (LR0 - LR1);
+    td.lr = TD_LR1 - progress * (TD_LR0 - TD_LR1);
 
     // Reset TD rotation state for this playout.
     copyBuf(rootBuf, td.primary, area);

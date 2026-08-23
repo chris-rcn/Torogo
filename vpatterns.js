@@ -56,6 +56,50 @@ function rawState(game, maxLibs, idx) {
   return color * libs;
 }
 
+// Per-stone group liberty counts computed from `cells` alone (flood fill over
+// game._nbr).  extractFeatures MUST use this instead of the game's _gid/_ls:
+// the speculative doSetNext path mutates cells only, so the incremental group
+// structures are stale there — under them the speculative stone read as gid
+// -1 → NaN → 0 (invisible) and neighbour liberties were pre-move, which
+// corrupted every maxLibs>=2 candidate evaluation (found 2026-08-22).
+function _cellLibCounts(game, out) {
+  const cells = game.cells, nbr = game._nbr, cap = game.N * game.N;
+  const stack = _libStack.length >= cap ? _libStack : (_libStack = new Int32Array(cap));
+  const seen  = _libSeen.length  >= cap ? _libSeen  : (_libSeen  = new Int32Array(cap));
+  const mark  = _libMark.length  >= cap ? _libMark  : (_libMark  = new Int32Array(cap));
+  const group = _libGroup.length >= cap ? _libGroup : (_libGroup = new Int32Array(cap));
+  const seenStamp = ++_libStampVal;   // per call: which stones are flooded
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] === 0) { out[i] = 0; continue; }
+    if (seen[i] === seenStamp) continue;
+    // Flood this group from i: collect members, count distinct empty nbrs.
+    // mark[] dedupes liberties with a per-GROUP stamp, so an empty cell
+    // shared by two groups counts for both.
+    const markStamp = ++_libStampVal;
+    const color = cells[i];
+    let top = 0, size = 0, libs = 0;
+    stack[top++] = i; seen[i] = seenStamp;
+    while (top > 0) {
+      const c = stack[--top];
+      group[size++] = c;
+      const b = c * 4;
+      for (let k = 0; k < 4; k++) {
+        const nb = nbr[b + k];
+        if (cells[nb] === 0) {
+          if (mark[nb] !== markStamp) { mark[nb] = markStamp; libs++; }
+        } else if (cells[nb] === color && seen[nb] !== seenStamp) {
+          seen[nb] = seenStamp; stack[top++] = nb;
+        }
+      }
+    }
+    for (let s = 0; s < size; s++) out[group[s]] = libs;
+  }
+}
+let _libStack = new Int32Array(0), _libSeen = new Int32Array(0),
+    _libMark = new Int32Array(0), _libGroup = new Int32Array(0);
+let _libCounts = new Int32Array(0);
+let _libStampVal = 0;
+
 // Given an array of raw cell states and a set of D4 permutation arrays,
 // returns { key, polarity } where key is the minimum 
 // over all 16 transforms (8 D4 × 2 color-flips), and polarity is +1 or -1
@@ -174,6 +218,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const maxF   = cap * prepSpecs.totalSizes;
   const outKeys = new Int32Array(maxF);
   const outPols = new Int8Array(maxF);
+  const outTags = new Int8Array(maxF);   // spec tag: (maxLibs << 2) | size
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
@@ -194,7 +239,19 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   for (const maxLibs of sortedMaxLibs) {
     if (raw === null) {
       raw = new Int8Array(cap);
-      for (let i = 0; i < cap; i++) raw[i] = rawState(game, maxLibs, i);
+      if (maxLibs === 1) {
+        for (let i = 0; i < cap; i++) raw[i] = cells[i];
+      } else {
+        // Liberty counts from cells alone (NOT the game's _gid/_ls): under
+        // doSetNext the cells are speculatively mutated and the incremental
+        // structures are stale — see _cellLibCounts.
+        const libs = _libCounts.length >= cap ? _libCounts : (_libCounts = new Int32Array(cap));
+        _cellLibCounts(game, libs);
+        for (let i = 0; i < cap; i++) {
+          const c = cells[i];
+          raw[i] = c === 0 ? 0 : (libs[i] < maxLibs ? c * libs[i] : c * maxLibs);
+        }
+      }
     } else {
       // Clamp in-place: rawState(maxLibs) = sign * min(|rawState(prevMaxLibs)|, maxLibs).
       for (let i = 0; i < cap; i++) {
@@ -215,6 +272,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           const libs = s > 0 ? s : -s;
           outKeys[count] = libs + k1base;
           outPols[count] = s > 0 ? 1 : -1;
+          outTags[count] = (maxLibs << 2) | 1;
           count++;
         }
       }
@@ -231,7 +289,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
             const x1 = x + 1 < N ? x + 1 : 0;
             const li = (raw[r0+x]+ml) + base*(raw[r0+x1]+ml) + b2*(raw[r1+x]+ml) + b3*(raw[r1+x1]+ml);
             const pol = pols[li];
-            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; outTags[count] = (maxLibs << 2) | 2; count++; }
           }
         }
       } else {
@@ -243,7 +301,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
             buf[0] = raw[r0+x]; buf[1] = raw[r0+x1];
             buf[2] = raw[r1+x]; buf[3] = raw[r1+x1];
             const r = canonicalize(buf, PERMS_2x2, mix2);
-            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; outTags[count] = (maxLibs << 2) | 2; count++; }
           }
         }
       }
@@ -269,7 +327,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
               b7  *(raw[r2+x1] +ml) +
               b8  *(raw[r2+x2] +ml);
             const pol = pols[li];
-            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; count++; }
+            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; outTags[count] = (maxLibs << 2) | 3; count++; }
           }
         }
       } else {
@@ -283,7 +341,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
             buf[3] = raw[r1+x]; buf[4] = raw[r1+x1]; buf[5] = raw[r1+x2];
             buf[6] = raw[r2+x]; buf[7] = raw[r2+x1]; buf[8] = raw[r2+x2];
             const r = canonicalize(buf, PERMS_3x3, mix3);
-            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; count++; }
+            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; outTags[count] = (maxLibs << 2) | 3; count++; }
           }
         }
       }
@@ -296,7 +354,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     }
     cells[nextMove] = EMPTY;
   }
-  return { keys: outKeys, pols: outPols, count, val: 0.5 };
+  return { keys: outKeys, pols: outPols, tags: outTags, count, val: 0.5 };
 }
 
 // ── Value function (pure) ─────────────────────────────────────────────────────

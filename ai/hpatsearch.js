@@ -12,7 +12,7 @@
  * Value function: V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
  * Move selection: full-width alpha-beta, BLACK maximises V, WHITE minimises V.
  *
- * Weights are loaded from a JS file specified by the DATA_FILE environment
+ * Weights are loaded from a JS file specified by the HP_DATA environment
  * variable (Node) or by calling loadModel() directly.
  */
 
@@ -22,9 +22,9 @@ const { createModel, extractFeatures, evaluateFeatures, weightsMap } = _isNode ?
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const Util = _isNode ? require('../util.js') : window.Util;
 
-const DEPTH     = Util.envInt  ('HP_SEARCH_DEPTH', 1);
-const DITHER    = Util.envFloat('HP_DITHER',       0.002);
-const DATA_FILE = Util.envStr  ('HP_DATA',    '');
+const HP_SEARCH_DEPTH     = Util.envInt  ('HP_SEARCH_DEPTH', 1);
+const HP_DITHER    = Util.envFloat('HP_DITHER',       0.002);
+const HP_DATA = Util.envStr  ('HP_DATA',    '');
 
 // ── Agent state ───────────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ function search(game, m, depth = 1, dither = 0) {
 }
 
 function getMove(game) {
-  return { move: search(game, model, DEPTH, DITHER) };
+  return { move: search(game, model, HP_SEARCH_DEPTH, HP_DITHER) };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -50,9 +50,9 @@ function loadModel(filePath) {
   return m;
 }
 
-// Auto-load weights if DATA_FILE env var is set.
-if (_isNode && DATA_FILE) {
-  model = loadModel(DATA_FILE);
+// Auto-load weights if HP_DATA env var is set.
+if (_isNode && HP_DATA) {
+  model = loadModel(HP_DATA);
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────

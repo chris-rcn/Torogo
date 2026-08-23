@@ -14,24 +14,24 @@ const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSea
 const { evaluate: vpEvaluate, loadWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 const { makeIntMap } = _isNode ? require('../int-map.js') : window.IntMap;
 
-const SIMS          = Util.envInt  ('TD_SIMS', 0);
-const WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
-const NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
-const EPSILON0      = Util.envFloat('TD_EPSILON0', 0.1);
-const EPSILON1      = Util.envFloat('TD_EPSILON1', 0.1);
+const TD_SIMS          = Util.envInt  ('TD_SIMS', 0);
+const TD_WIDE_DEPTH    = Util.envInt  ('TD_WIDE_DEPTH', 0);
+const TD_NARROW_DEPTH  = Util.envInt  ('TD_NARROW_DEPTH', 0);
+const TD_EPSILON0      = Util.envFloat('TD_EPSILON0', 0.1);
+const TD_EPSILON1      = Util.envFloat('TD_EPSILON1', 0.1);
 const USE_1x2       = Util.envInt  ('TD_USE_1x2', 0);
 const USE_2x2       = Util.envInt  ('TD_USE_2x2', 1);
-const LR0           = Util.envFloat('TD_LR0', 0.6);
-const LR1           = Util.envFloat('TD_LR1', 0.3);
-const AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 1);
-const EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
-const EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
-const USE_PPAT      = Util.envInt  ('TD_USE_PPAT', '0');
+const TD_LR0           = Util.envFloat('TD_LR0', 0.6);
+const TD_LR1           = Util.envFloat('TD_LR1', 0.3);
+const TD_AB_DEPTH      = Util.envInt  ('TD_AB_DEPTH', 1);
+const TD_EVAL_DEPTH    = Util.envInt  ('TD_EVAL_DEPTH', 0);
+const TD_EVAL_DATA     = Util.envStr  ('TD_EVAL_DATA', '');
+const TD_USE_PPAT      = Util.envInt  ('TD_USE_PPAT', '0');
 
-const ppatAgent = USE_PPAT ? (_isNode ? require('./ppat.js') : window.PPatAgent) : null;
+const ppatAgent = TD_USE_PPAT ? (_isNode ? require('./ppat.js') : window.PPatAgent) : null;
 
 let evalModel = null;
-if (_isNode && EVAL_DATA) evalModel = loadWeights(EVAL_DATA);
+if (_isNode && TD_EVAL_DATA) evalModel = loadWeights(TD_EVAL_DATA);
 
 // Reusable container storing weight indices (resolved from feature keys).
 // maxLen upper bound: one 1×1 + one 2×2 + one 1×2 entry per cell = 3 * cap.
@@ -509,14 +509,14 @@ function selectTrainingMove(game, step, ctx, epsilon, rng) {
   if (rng.random() < epsilon)
     return { move: game.randomLegalMove() };
 
-  if (step < WIDE_DEPTH) {
+  if (step < TD_WIDE_DEPTH) {
     return search1ply(game, ctx, 0, rng);
   }
 
-  if (step < NARROW_DEPTH)
+  if (step < TD_NARROW_DEPTH)
     return search1ply(game, ctx, 2, rng);
 
-  if (USE_PPAT) {
+  if (TD_USE_PPAT) {
     return ppatAgent.getMove(game);
   }
   return { move: game.randomLegalMove() };
@@ -547,26 +547,26 @@ function ponder(game, budgetMs, ctx, rng) {
   let primary = makeBuf(area);  // always tracks the current sim board state
 
   // Initialize to the stable values, maybe update later.
-  let lr = LR1;
-  let epsilon = EPSILON1;
+  let lr = TD_LR1;
+  let epsilon = TD_EPSILON1;
 
   while (true) {
     let progress;
-    if (SIMS > 0) {
-      progress = sims / SIMS;
+    if (TD_SIMS > 0) {
+      progress = sims / TD_SIMS;
     } else {
       progress = (Date.now() - tStart) / budgetMs;
     }
     if (progress >= 1) break;
     if (game.moveCount > 1) {
       // We are not operating on the preserved game-start model, so ramp these.
-      lr = LR1 - progress * (LR0 - LR1);
-      epsilon = EPSILON1 - progress * (EPSILON0 - EPSILON1);
+      lr = TD_LR1 - progress * (TD_LR0 - TD_LR1);
+      epsilon = TD_EPSILON1 - progress * (TD_EPSILON0 - TD_EPSILON1);
     }
 
     sims++;
     const g = game.clone();
-    const evalDepth = (EVAL_DEPTH > 0 && evalModel) ? EVAL_DEPTH + (sims % 2) : 10000;
+    const evalDepth = (TD_EVAL_DEPTH > 0 && evalModel) ? TD_EVAL_DEPTH + (sims % 2) : 10000;
     let step = 0;
     let outcome;
 
@@ -653,7 +653,7 @@ function getMove(game, budgetMs = 1000, options = {}) {
   }
 
   const evalFn = g => { findFeatures(g, ctx.searchFeats, ctx); evaluate(ctx.searchFeats, ctx.weightsArr); return ctx.searchFeats.val; };
-  const searchResult = { move: abSearch(game, AB_DEPTH, evalFn), moveScore: evalFn(game) };
+  const searchResult = { move: abSearch(game, TD_AB_DEPTH, evalFn), moveScore: evalFn(game) };
 
   const myScore = game.current === BLACK ? searchResult.moveScore : 1 - searchResult.moveScore;
   const move = myScore < 0.01 ? PASS : searchResult.move;

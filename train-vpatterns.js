@@ -66,19 +66,25 @@ const BUDGET     = parseFloat(opts['budget']   || '1');
 
 // ── Features ───────────────────────────
 
-// --spec: comma list of "size:maxLibs" tokens (e.g. "1:6,2:6,3:6").  size is
-// 1-3; maxLibs caps the per-cell liberty count (1 = presence only).  Default:
-// sizes 1/2/3 at maxLibs 6.  Overridden by --load (the checkpoint's specs win).
+// --spec: comma list of "size:maxLibs[f]" tokens (e.g. "1:6,2:6,3:6").  size is
+// 1-3; maxLibs caps the per-cell liberty count (1 = presence only).  A trailing
+// 'f' freezes that spec's weights (loaded values stay fixed; gradient updates
+// skipped).  Default: sizes 1/2/3 at maxLibs 6.  With --load, --spec overrides
+// the checkpoint's specs: shared specs keep their trained weights (freeze the
+// carried-over ones with 'f' for a curriculum), new specs start at zero.
 let specs;
+const FROZEN = new Set();   // spec tags ((maxLibs << 2) | size) excluded from updates
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
-    const [s, m] = tok.split(':');
+    const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
-    const maxLibs = parseInt(m, 10);
+    const frozen = /f$/.test(mRaw);
+    const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
     if (!(size >= 1 && size <= 3) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs, size 1-3, maxLibs >= 1)`);
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-3, maxLibs >= 1)`);
       process.exit(1);
     }
+    if (frozen) FROZEN.add((maxLibs << 2) | size);
     return { size, maxLibs };
   });
 } else {
@@ -109,9 +115,17 @@ function absoluteOutcome(game) {
 function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
-  const step = lr * (target - features.val) / n;
-  const { keys, pols } = features;
+  const { keys, pols, tags } = features;
+  const hasFrozen = FROZEN.size > 0;
+  let nActive = n;
+  if (hasFrozen) {
+    nActive = 0;
+    for (let i = 0; i < n; i++) if (!FROZEN.has(tags[i])) nActive++;
+    if (nActive === 0) return;
+  }
+  const step = lr * (target - features.val) / nActive;
   for (let i = 0; i < n; i++) {
+    if (hasFrozen && FROZEN.has(tags[i])) continue;
     const k = keys[i];
     const w = (weights.get(k) ?? 0) + pols[i] * step;
     weights.set(k, w);
@@ -291,14 +305,20 @@ if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length
 
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
-    // Warn only when --spec actually disagrees with the checkpoint.  Compare
-    // canonical fields, not whole objects (spec objects can carry derived
-    // properties that would false-positive the comparison).
+    // Compare canonical fields, not whole objects (spec objects can carry
+    // derived properties that would false-positive the comparison).
     const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs}`).join(',');
-    const cliSpecKey = opts.spec ? specKey(specs) : null;
+    const cliSpecs = opts.spec ? specs : null;
     ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
-    if (cliSpecKey !== null && cliSpecKey !== specKey(specs)) {
-      console.warn('Warning: --spec ignored — using the specs from the --load checkpoint.');
+    if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
+      // --spec overrides the checkpoint's specs.  Loaded weights are kept —
+      // each spec hashes patterns with its own mixer (same collision
+      // assumption as any multi-spec run), so shared specs continue from
+      // their trained values (typically frozen with 'f'), new specs start at
+      // zero, and dropped specs' weights stay in the table, never extracted.
+      console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
+      specs = cliSpecs;
+      prepSpecs = prepareSpecs(specs);
     }
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
@@ -309,7 +329,7 @@ if (LOAD_PATH) {
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
-console.log(`Specs: ${JSON.stringify(specs)}`);
+console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 2) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}`);
 console.log();
 
 // Print header.

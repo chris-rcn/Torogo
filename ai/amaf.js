@@ -30,7 +30,7 @@ const { makeRng } = _isNode ? require('../xorshift.js') : window.XorShift;
 
 const PLAYOUTS        = Util.envInt  ('PLAYOUTS', 0);
 // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
-const OPP_MOVE_WEIGHT = Util.envFloat('AMAF_OPP_WEIGHT', 0);
+const AMAF_OPP_WEIGHT = Util.envFloat('AMAF_OPP_WEIGHT', 0);
 
 // Random playout.  Returns { winner, played } where played is a Float32Array
 // of length cap: positive value = played by BLACK, negative = played by WHITE,
@@ -113,8 +113,8 @@ function getMove(game, timeBudgetMs, options = {}) {
           const wt = Math.abs(w);
           plays[k] += wt;
           wins[k]  += won * wt;
-        } else if (OPP_MOVE_WEIGHT > 0) {
-          const wt = Math.abs(w) * OPP_MOVE_WEIGHT;
+        } else if (AMAF_OPP_WEIGHT > 0) {
+          const wt = Math.abs(w) * AMAF_OPP_WEIGHT;
           plays[k] += wt;
           wins[k]  += (1 - won) * wt;
         }
