@@ -40,15 +40,14 @@ function _defenderCaptureMoves(game, idx) {
 // pathological probe, read cost was heavy-tailed in the (random) candidate
 // ordering — but the openness move-ordering heuristic (see _emptyNbrs)
 // collapsed that variance, so retry-with-reshuffle stopped paying and the
-// budget is now SINGLE-SHOT: NODE_START === NODE_MAX = 5000 — with the
-// depth limit killing capture-cycles at the source, every observed hard
-// read finishes in a few hundred to ~2.3k nodes, so 5k covers them with
-// margin while bounding the unknown worst case tightly.  Ordinary reads (a handful of nodes)
-// never notice.  A read still capped reports ok (= "not proven capturable
-// within budget"), the same truncation semantics as any depth-limited
-// reader; the doubling machinery remains for _setBudgets experiments.
-let NODE_START = 5000;
-let NODE_MAX   = 5000;
+// budget is SINGLE-SHOT: NODE_CAP = 5000 — with the period-6 cycle prune
+// killing capture-cycles at the source, corpus reads finish well under it;
+// the rare honestly-wide monster (a ~12k-node 13x13 tangle, corpus #98)
+// truncates with the correct verdict anyway.  Ordinary reads (a handful of
+// nodes) never notice.  A read still capped reports ok (= "not proven
+// capturable within budget"), the same truncation semantics as any
+// depth-limited reader.
+let NODE_CAP = 2000;
 
 // Fisher-Yates with Math.random.  Candidate iteration order is randomized so
 // no systematic correlation (e.g. liberty-enumeration order tracking the
@@ -126,50 +125,7 @@ function _cycleUndo(game) {
   game.undo();
 }
 
-let _budget = NODE_START;
-let _capTripped = false;   // dump forensics once per process
-// Probe-root snapshot, stashed at each budget reset.  The cap can expire deep
-// in an already-boring line, so dumping the state at trip time captures the
-// wrong frame — the root that actually spent the budget is what a repro needs.
-let _probeRoot = null;
-
-function _onCapTrip(game, idx) {
-  if (_capTripped) return;
-  _capTripped = true;
-  console.error(`ladder2: read still capped at NODE_MAX (${NODE_MAX}) after retries for group at idx ${idx} — returning unproven-ok (further reports silent)`);
-  const root = _probeRoot;
-  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    try {
-      const fs = require('fs');
-      // Internal structures too: a rebuilt game3 on identical cells reads tiny
-      // trees (ordering-hypothesis sweep, 2026-08-20), so if the live read
-      // explodes, the divergence must be in structure, not cells.
-      const groups = {};
-      if (game._gid) {
-        for (let i = 0; i < game.cells.length; i++) {
-          if (game.cells[i] === 0) continue;
-          const gid = game._gid[i];
-          if (!(gid in groups)) {
-            let size = null, libs = null;
-            try { size = game.groupSize(gid); } catch {}
-            try { libs = game.groupLibs2(i).count; } catch {}
-            groups[gid] = { anchor: i, size, libs };
-          }
-        }
-      }
-      fs.writeFileSync(`out/ladder2-cap-dump-${process.pid}.json`, JSON.stringify({
-        when: new Date().toISOString(), idx, N: game.N, current: game.current,
-        // The probe root: state at budget reset — replay THIS to reproduce.
-        root,
-        // Trip-time state (mid-read, wherever the counter expired) for context.
-        cells: Array.from(game.cells),
-        gid: game._gid ? Array.from(game._gid) : null,
-        groups,
-        opStack: game._opStack ? game._opStack.length : null,
-      }));
-    } catch {}   // forensics only — never let the dump break the read
-  }
-}
+let _budget = NODE_CAP;
 
 // Reads whether the group at stoneIdx can reach 3+ liberties despite best
 // attacker play. Uses play/undo instead of clone.  Returns the search effort
@@ -310,17 +266,11 @@ function getLadderStatus(game, stoneIdx) {
   // node count, and the deepest recursion reached by any probe.
   let readNodes = 0, readDepth = 0;
   const probe = () => {
-    _probeRoot = { cells: Array.from(game.cells), current: game.current, stoneIdx };
-    // Restart with reshuffle: budget expiry means this ordering drew a huge
-    // subtree; a fresh shuffle at double the budget usually finds a short one.
-    for (let budget = NODE_START; ; budget *= 2) {
-      _budget = budget;
-      const r = _canReach3Libs(game, stoneIdx, 1);
-      readNodes += r.nodes;
-      if (r.maxDepth > readDepth) readDepth = r.maxDepth;
-      if (!r.capped) return r.ok;
-      if (budget >= NODE_MAX) { _onCapTrip(game, stoneIdx); return r.ok; }
-    }
+    _budget = NODE_CAP;
+    const r = _canReach3Libs(game, stoneIdx, 1);
+    readNodes += r.nodes;
+    if (r.maxDepth > readDepth) readDepth = r.maxDepth;
+    return r.ok;
   };
 
   let escape;
@@ -360,15 +310,14 @@ function getLadderStatus(game, stoneIdx) {
   return { libs, moverSucceeds, urgentLibs, readNodes, readDepth };
 }
 
-// _setBudgets: test/measurement hook (e.g. emulate a fixed single budget
-// with start === max); returns the previous values.
-function _setBudgets(start, max) {
-  const prev = [NODE_START, NODE_MAX];
-  NODE_START = start; NODE_MAX = max;
+// _setCap: test/measurement hook; returns the previous cap.
+function _setCap(cap) {
+  const prev = NODE_CAP;
+  NODE_CAP = cap;
   return prev;
 }
 
-const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs, _setBudgets };
+const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs, _setCap };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Ladder2 = _exports;
 

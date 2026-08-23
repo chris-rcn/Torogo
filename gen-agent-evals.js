@@ -3,7 +3,7 @@
 // gen-agent-evals.js — generate (position, value) training data for Simulation
 // Balancing (train_ppat), using any agent's valueB() method as the value oracle.
 //
-// Positions come from ref-npat-softmax self-play (fast, stochastic), with 4
+// Positions come from ref-featurepol-softmax self-play (fast, stochastic), with 4
 // random opening moves per game for diversity.  Each game is sampled once, and
 // only positions with --min-phase <= board phase <= --max-phase are eligible
 // (board fullness 1-empty/area, e.g. to target the range where the oracle is
@@ -30,7 +30,7 @@ const Util = require('./util.js');
 // '#' comment lines; the data itself is written via process.stdout.write.
 console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
-const RefNpat = require('./ai/ref-npat-softmax.js');
+const RefFpol = require('./ai/ref-featurepol-softmax.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'size', 'min-phase', 'max-phase', 'limit']);
 if (opts.help || !opts.agent) {
@@ -70,7 +70,7 @@ while (emitted < limit) {
     moves.push(m);
   }
 
-  // ref-npat-softmax self-play, reservoir-sampling one eligible position
+  // ref-featurepol-softmax self-play, reservoir-sampling one eligible position
   // (minPhase <= phase <= maxPhase); stop once the board passes the max cap
   // (board only fills, so no eligible positions remain past it).
   let chosenPos = -1, seen = 0;
@@ -83,7 +83,7 @@ while (emitted < limit) {
       seen++;
       if (rng.random() < 1 / seen) chosenPos = pos;
     }
-    const m = RefNpat.getMove(game).move;
+    const m = RefFpol.getMove(game).move;
     if (!game.play(m)) break;
     moves.push(m);
   }

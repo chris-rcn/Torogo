@@ -1,8 +1,12 @@
 'use strict';
 
-// puct-ppat-fp: puct-ppat with featurepol as the prior/pruning policy in
-// place of npat (featurepol-softmax rated ~+150 over npat-softmax on the
-// CGOS ladder, so its priors and top-K candidate sets should be sharper).
+// Fixed-config reference agent: puct-ppat-fp (featurepol priors/pruning,
+// ppat playouts) with exactly 1000 playouts per move, uniform playout moves below board fullness 0.6 (PPAT_UNIFORM_BELOW_PHASE), and N_EXPAND=2 lazy
+// expansion — an edge needs 2 visits before its child (featurepol
+// extraction + priors) is built, converting extraction time into playouts.
+// Self-contained copy, frozen 2026-08-23 as a ladder rung; frozen names
+// must never track live files.  All parameters are hardcoded; this script
+// reads no environment variables.
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
 // nodes (the root searches full width unless ROOT_TOP_K caps it), RAVE, and
@@ -23,11 +27,9 @@
 // > 0) and P(s,a) is the policy softmax probability for the move.
 //
 // ── Factory ──
-// The module exports create(cfg) → { getMove, valueB }.  cfg is a
-// Util.makeCfg reader (slot-aware env): each instance resolves its own config
-// and loads its own weights at construction, so two instances in one process
-// (e.g. selfplay p1 vs p2) never collide.  A lazy default instance backs the
-// direct module.getMove / module.valueB exports for single-agent callers.
+// The module exports create() → { getMove, valueB }.  All parameters are
+// hardcoded — no env vars are read, so every instance is identical.  A lazy
+// default instance backs the direct module.getMove / module.valueB exports.
 
 (function () {
 
@@ -55,57 +57,30 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 // Build an independent agent instance whose config and state are bound at
 // construction.  cfg is a Util.makeCfg reader (slot-aware env); all per-instance
 // state lives in this closure.
-function create(cfg) {
-  cfg = cfg || Util.makeCfg();
+function create() {
+  // ── Hardcoded configuration ─────────────────────────────────────────────────
+  const C_PUCT     = 0.5;
+  const RAVE_K     = 400;
+  const TOP_K      = 40;
+  const ROOT_TOP_K = 0;
+  const N_EXPAND   = 2;
+  const PLAYOUTS   = 1000;
+  const PPAT_MOVES = -1;
+  const PPAT_RATIO = 1;
 
-  // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
-  const C_PUCT     = cfg.float('C_PUCT', 0.5);
-  // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
-  const RAVE_K     = cfg.float('RAVE_K', 400);
-  // Top-K kept move count (applies only below root).
-  const TOP_K     = cfg.int('TOP_K', 40);
-  // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
-  // the classic full-width root).
-  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 0);
-  // Lazy expansion: an edge must accumulate this many visits before its child
-  // node (featurepol extraction + priors) is created; playouts before that
-  // run from the unexpanded position.  1 = expand on first contact (the
-  // original economics, tuned for cheap npat extraction).  Featurepol
-  // extraction is pricier, so 2 skips the extraction for the many leaves
-  // that are only ever visited once.
-  const N_EXPAND   = cfg.int('N_EXPAND', 2);
-  // Fixed playout count per decision; when non-zero, overrides the time budget.
-  const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
-  // Playout moves to use the ppat policy before switching to uniform (-1 = all).
-  const PPAT_MOVES = cfg.int('PPAT_MOVES', -1);
-  // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
-  const PPAT_RATIO = cfg.float('PPAT_RATIO', 1);
-
-  // ppat playout policy weights (PPAT_DATA, or window.PPATWeights in browser).
-  // When absent, playouts fall back to uniform-random — same trace/scoring path.
-  // ppat model { phaseCount, weights }; null when no PPAT_DATA (uniform playouts).
   const _model = _isNode
-    ? loadWeights(cfg.str('PPAT_DATA', ''))
+    ? loadWeights(require('path').join(__dirname, '..', 'ref', 'ppat-3374337.js'))
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
-
-  // Use uniform-random playout moves while board fullness < this fraction [0,1]
-  // (0 = off).  Skips ppat feature extraction in the early game, where the
-  // policy is ≈ uniform.
-  if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0.6);
-  if (!_model) {
-    console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no PPAT_DATA` +
-      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' env var') +
-      ' — playouts will be uniform random, not the ppat policy');
-  }
+  if (_model) _model.uniformBelowPhase = 0.6;
 
   // featurepol policy model (priors + top-K pruning).  FP_WEIGHTS overrides
   // the default checkpoint (browser: window.featurepolModel).
   const _isBrowser  = typeof window !== 'undefined';
-  const fpModel     = FeaturePol.loadModel({ name: 'puct-ppat-fp',
+  const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-ppat-fp-e2-u6-1k',
     path: _isBrowser ? undefined
-                     : cfg.str('FP_WEIGHTS', require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
+                     : require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js') });
   const fpWeights   = fpModel.weights;
-  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model ? _model.weights.length : 0} ppat weights, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
+  console.log(`ref-puct-ppat-fp-e2-u6-1k: ${_model ? _model.weights.length : 0} ppat weights, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
@@ -516,11 +491,9 @@ function _pruneToTopK(allMoves, state, K, N) {
 }
 
 // ── Default instance (lazy) for direct-require / browser callers ───────────────
-// Built from plain env on first use, so single-agent callers (gen-agent-evals,
-// bench, record-npats) keep working unchanged.  Two-agent callers (selfplay)
-// use create(cfg) directly and never build this default.
+// create() takes no config, so every instance is identical.
 let _default = null;
-function _def() { return _default || (_default = create(Util.makeCfg())); }
+function _def() { return _default || (_default = create()); }
 
 if (typeof module !== 'undefined') {
   module.exports = {

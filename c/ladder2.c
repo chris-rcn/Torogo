@@ -3,12 +3,79 @@
  *
  * Mirrors the JS branch-for-branch.  All exploration uses g3_play / g3_undo
  * so no Game3 clones are needed.
+ *
+ * Hardening (ported from ladder2.js, 2026-08-23):
+ *   - Period-6 move-cycle prune: game3 has no superko, so on the edgeless
+ *     torus capture-recapture chases repeat positions forever; every real
+ *     repeat observed had period exactly 6.  A move whose last 6 move
+ *     indexes equal the 6 before them is an exact position repeat and is
+ *     treated as illegal (undo + skip).  Pre-hardening the C reader
+ *     SEGFAULTED (stack overflow) on all 5 cycle positions in the corpus.
+ *   - NODE_CAP single-shot budget per probe: a capped read returns ok
+ *     (= "not proven capturable within budget") silently.
+ *   - Depth limit 2x area as a pure backstop.
+ *   - Openness move ordering (empty-neighbour count desc, deterministic
+ *     index tiebreak): resolver-first ordering collapses read effort.
  */
 #include "ladder2.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Higher than the JS cap (2000): the C ordering is deterministic (no dither),
+ * which needs more headroom to keep corpus verdicts truncation-free — and C
+ * nodes are ~10x cheaper, so 4000 still bounds a monster read under ~7ms. */
+#define LADDER2_NODE_CAP 4000
+
+/* Move-path for the cycle prune; plays in get_status also participate.
+ * Depth is bounded by the 2x-area limit plus the get_status prefix. */
+static int32_t l2_path[2 * MAX_CAP + 64];
+static int32_t l2_path_len = 0;
+static int32_t l2_budget   = LADDER2_NODE_CAP;
+
+/* Play with the period-6 cycle check: returns false (state unchanged) when
+ * the move is illegal OR completes a 6-move repeat. */
+static bool l2_cycle_play(Game3 *g, int32_t idx) {
+    if (!g3_play(g, idx)) return false;
+    l2_path[l2_path_len++] = idx;
+    const int32_t d = l2_path_len;
+    if (d >= 12 &&
+        l2_path[d-1] == l2_path[d-7]  && l2_path[d-2] == l2_path[d-8]  &&
+        l2_path[d-3] == l2_path[d-9]  && l2_path[d-4] == l2_path[d-10] &&
+        l2_path[d-5] == l2_path[d-11] && l2_path[d-6] == l2_path[d-12]) {
+        l2_path_len--;
+        g3_undo(g);
+        return false;
+    }
+    return true;
+}
+
+static void l2_cycle_undo(Game3 *g) {
+    l2_path_len--;
+    g3_undo(g);
+}
+
+/* Empty (wrapped) neighbours of a cell — the move-ordering key. */
+static int l2_empty_nbrs(const Game3 *g, int32_t c) {
+    const int32_t *nbr = g->nbr;
+    const int8_t *cells = g->cells;
+    const int32_t b = c * 4;
+    int n = 0;
+    for (int d = 0; d < 4; d++) if (cells[nbr[b + d]] == G3_EMPTY) n++;
+    return n;
+}
+
+/* Order candidates by openness (desc); stable index tiebreak.  Verdicts are
+ * order-independent — ordering only shapes effort under the node cap. */
+static void l2_order_open(const Game3 *g, int32_t *a, int32_t n) {
+    for (int32_t i = 1; i < n; i++) {
+        const int32_t mv = a[i], kv = l2_empty_nbrs(g, mv);
+        int32_t j = i - 1;
+        while (j >= 0 && l2_empty_nbrs(g, a[j]) < kv) { a[j + 1] = a[j]; j--; }
+        a[j + 1] = mv;
+    }
+}
 
 /* ── defender capture moves ────────────────────────────────────────────────── */
 
@@ -52,7 +119,9 @@ static int32_t ladder2_defender_capture_moves(Game3 *g, int32_t idx,
 
 /* ── _canReach3Libs ────────────────────────────────────────────────────────── */
 
-bool ladder2_can_reach_3libs(Game3 *g, int32_t idx) {
+static bool l2_reach3(Game3 *g, int32_t idx, int32_t depth) {
+    if (--l2_budget <= 0) return true;            /* capped: unproven-ok */
+    if (depth > 2 * g->cap) return true;          /* backstop: cycling/unresolved-ok */
     G3GroupLibs2 gl = g3_group_libs2(g, idx);
     const int32_t lc = gl.count;
     if (lc >= 3) return true;
@@ -75,43 +144,56 @@ bool ladder2_can_reach_3libs(Game3 *g, int32_t idx) {
             for (int32_t k = 0; k < nmoves; k++) if (moves[k] == caps[c]) { dup = true; break; }
             if (!dup) moves[nmoves++] = caps[c];
         }
+        l2_order_open(g, moves, nmoves);
         for (int32_t i = 0; i < nmoves; i++) {
             const int32_t move_idx = moves[i];
-            if (!g3_play(g, move_idx)) continue;          /* suicide/illegal → skip */
+            if (!l2_cycle_play(g, move_idx)) continue;    /* suicide/illegal/cycle → skip */
             bool captured = (g->cells[idx] == G3_EMPTY);
-            bool result   = !captured && ladder2_can_reach_3libs(g, idx);
-            g3_undo(g);
+            bool result   = !captured && l2_reach3(g, idx, depth + 1);
+            l2_cycle_undo(g);
             if (result) return true;
         }
         return false;
     }
 
-    /* Attacker's turn (1 or 2 libs): try each liberty; succeed if any kills. */
+    /* Attacker's turn (1 or 2 libs): try each liberty; succeed if any kills.
+     * Openness-ordered like the defender branch. */
+    int32_t alibs[2] = { libs[0], libs[1] };
+    if (n_libs == 2 && l2_empty_nbrs(g, alibs[1]) > l2_empty_nbrs(g, alibs[0])) {
+        const int32_t t = alibs[0]; alibs[0] = alibs[1]; alibs[1] = t;
+    }
     for (int i = 0; i < n_libs; i++) {
-        const int32_t lib_idx = libs[i];
-        if (!g3_play(g, lib_idx)) continue;              /* illegal → skip */
+        const int32_t lib_idx = alibs[i];
+        if (!l2_cycle_play(g, lib_idx)) continue;        /* illegal/cycle → skip */
 
         if (g->cells[idx] == G3_EMPTY) {
             /* Attacker captured the defender outright. */
-            g3_undo(g);
+            l2_cycle_undo(g);
             return false;
         }
 
         const int32_t after_lc = g3_group_libs2(g, idx).count;
         if (after_lc == 0) {
             /* Shouldn't really happen (0 libs == captured) but matches JS. */
-            g3_undo(g);
+            l2_cycle_undo(g);
             return false;
         }
         if (after_lc == 1) {
-            bool result = !ladder2_can_reach_3libs(g, idx);
-            g3_undo(g);
+            bool result = !l2_reach3(g, idx, depth + 1);
+            l2_cycle_undo(g);
             if (result) return false;
         } else {
-            g3_undo(g);
+            l2_cycle_undo(g);
         }
     }
     return true;
+}
+
+/* Public wrapper: fresh budget, depth 1.  (get_status resets the cycle path;
+ * direct callers get whatever path context exists — callers start clean.) */
+bool ladder2_can_reach_3libs(Game3 *g, int32_t idx) {
+    l2_budget = LADDER2_NODE_CAP;
+    return l2_reach3(g, idx, 1);
 }
 
 /* ── getLadderStatus ───────────────────────────────────────────────────────── */
@@ -140,6 +222,8 @@ Ladder2Status ladder2_get_status(Game3 *g, int32_t stone_idx) {
     const int8_t  mover     = g->current;
     const bool    defending = (g_color == mover);
 
+    l2_path_len = 0;   /* cycle-prune path: fresh per read */
+
     /* Try opponent playing first (i.e., mover passes). */
     bool escape;
     if (defending && atari) {
@@ -147,9 +231,10 @@ Ladder2Status ladder2_get_status(Game3 *g, int32_t stone_idx) {
          * escape via passing.  Skip the play(PASS) and short-circuit. */
         escape = false;
     } else {
-        g3_play(g, G3_PASS);
-        escape = ladder2_can_reach_3libs(g, stone_idx);
-        g3_undo(g);
+        l2_cycle_play(g, G3_PASS);
+        l2_budget = LADDER2_NODE_CAP;
+        escape = l2_reach3(g, stone_idx, 1);
+        l2_cycle_undo(g);
     }
     if (defending == escape) {
         /* Group is not urgent — mover can leave it alone and still be OK. */
@@ -179,9 +264,10 @@ Ladder2Status ladder2_get_status(Game3 *g, int32_t stone_idx) {
              * captures, so defender doesn't escape.  Skip play-undo. */
             escape = false;
         } else {
-            if (!g3_play(g, move_idx)) continue;
-            escape = ladder2_can_reach_3libs(g, stone_idx);
-            g3_undo(g);
+            if (!l2_cycle_play(g, move_idx)) continue;
+            l2_budget = LADDER2_NODE_CAP;
+            escape = l2_reach3(g, stone_idx, 1);
+            l2_cycle_undo(g);
         }
         if (defending == escape) {
             r.mover_succeeds = true;
