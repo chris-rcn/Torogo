@@ -17,6 +17,10 @@
  *     --N <n>               rollouts for gradient (default M)
  *     --batch <n>           batch size (default 10)
  *     --test-pos <n>        test positions (default 100)
+ *     --test-file <path>    take the test set from THIS file instead of the head
+ *                           of <file>; the whole of <file> is then training data.
+ *                           Use a fixed high-playout set as a permanent yardstick:
+ *                           teMSE then compares across runs and datasets.
  *     --train-pos <n>       train positions (default 0 = all)
  *     --test-playouts <n>   playouts per test position (default --playouts)
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
@@ -44,6 +48,7 @@
 #include <sys/stat.h>   /* mkdir */
 
 #define SYNC_POLL_US 2000   /* parameter-averaging barrier poll: 2 ms base (jittered) */
+#define MAX_PRINT_CYCLE_S 3600.0   /* cap the geometric print/test gap at 1 h (inline + monitor) */
 
 /* ── Configuration ───────────────────────────────────────────────────────────
  * Defaults live ONLY at the get_*_arg() call sites in main() (single source of
@@ -71,6 +76,8 @@ static int    cfg_worker_id;
 static int    cfg_sync_every;          /* 0 = no sync (single process) */
 static const char *cfg_sync_dir;
 static const char *cfg_file;
+static const char *cfg_test_file;      /* NULL = carve the test set from cfg_file's head */
+static int    cfg_test_pos_given;      /* was --test-pos passed explicitly? */
 static const char *cfg_load;           /* path to weights file to load */
 static const char *cfg_save;           /* fixed checkpoint path (else a random out/ name) */
 static const char *cfg_monitor;        /* if set: run as a test-only monitor of this checkpoint */
@@ -188,15 +195,22 @@ static int parse_position(const char *line, Position *pos) {
 
 static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx);
 
-static void load_positions(void) {
-    FILE *f = fopen(cfg_file, "r");
-    if (!f) { fprintf(stderr, "cannot open %s\n", cfg_file); exit(1); }
+/* Load records from `path` into all_positions[].  `test_head` is how many of the
+ * FIRST kept records are test (filters never apply to them); with --test-file the
+ * caller loads the test file first with test_head = its whole length, then the
+ * train file with test_head = 0. */
+static void load_positions_from(const char *path, int test_head) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(1); }
+    const int base = n_all;
     char buf[8192];
     int lineno = 0;
     int skipped = 0;       /* unparseable lines */
     int filtered = 0;      /* valid positions dropped by --no-extreme / --phase */
-    int topo_init = 0;
-    int topo_size = 0;
+    /* Topology is global and must agree across BOTH files (--test-file), so these
+     * persist between calls rather than resetting per file. */
+    static int topo_init = 0;
+    static int topo_size = 0;
     float extreme_threshold = 1.0f - 2.0f * cfg_no_extreme;
 
     while (fgets(buf, sizeof(buf), f) && n_all < MAX_LINES) {
@@ -220,7 +234,7 @@ static void load_positions(void) {
         if (!topo_init) { g2_init_topology(pos.board_size); topo_size = pos.board_size; topo_init = 1; }
         else if (pos.board_size != topo_size) {
             fprintf(stderr, "error: mixed board sizes in %s (line %d: size %d, expected %d; train one size per file)\n",
-                    cfg_file, lineno, pos.board_size, topo_size);
+                    path, lineno, pos.board_size, topo_size);
             exit(1);
         }
 
@@ -229,7 +243,7 @@ static void load_positions(void) {
          * across all filter/mask configs and teMSE is always end-to-end.
          * (--overfit shares records between train and test, so it keeps the
          * filters everywhere.) */
-        int in_test_head = !cfg_overfit && n_all < cfg_test_pos;
+        int in_test_head = !cfg_overfit && (n_all - base) < test_head;
 
         /* Value filter (train pool only) */
         if (!in_test_head && cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
@@ -248,10 +262,28 @@ static void load_positions(void) {
     fclose(f);
     if (skipped > 5)
         fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
-    if (n_all == 0) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", cfg_file, skipped); exit(1); }
+    if (n_all == base) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", path, skipped); exit(1); }
     if (cfg_worker_id == 0)
         printf("records: %d kept of %d in %s (%d train-filtered, %d skipped)\n",
-               n_all, n_all + filtered, cfg_file, filtered, skipped);
+               n_all - base, n_all - base + filtered, path, filtered, skipped);
+}
+
+/* n_test_file: how many leading records came from --test-file (0 when unset).
+ * This is the SIZE OF THE TEST BLOCK, which is where training data starts — it
+ * stays separate from how many of those records we actually test on, so that
+ * capping the test count with --test-pos can never leak the remainder into the
+ * training pool. */
+static int n_test_file = 0;
+
+static void load_positions(void) {
+    if (cfg_test_file) {
+        /* Test file first: every one of its records is test, filters excluded. */
+        load_positions_from(cfg_test_file, MAX_LINES);
+        n_test_file = n_all;
+        load_positions_from(cfg_file, 0);   /* all of it is training data */
+    } else {
+        load_positions_from(cfg_file, cfg_test_pos);
+    }
 }
 
 static void split_data(void) {
@@ -270,9 +302,16 @@ static void split_data(void) {
          * new training samples can be appended to the end of the file without
          * disturbing the (known, reproducible) test set.  --train-pos unset → train
          * uses all data after the test head. */
-        int test_n  = cfg_test_pos > 0 ? cfg_test_pos : 0;
-        if (test_n > n_all) test_n = n_all;
-        int avail   = n_all - test_n;                                     /* data after the test head */
+        /* With --test-file the leading n_test_file records are the test BLOCK and
+         * all of the train file follows them; --test-pos then optionally caps how
+         * many of the block we test on (default: all of it), without moving where
+         * training starts.  Otherwise the block is the head of the single file. */
+        int block_n = cfg_test_file ? n_test_file : (cfg_test_pos > 0 ? cfg_test_pos : 0);
+        if (block_n > n_all) block_n = n_all;
+        int test_n  = block_n;
+        if (cfg_test_file && cfg_test_pos_given && cfg_test_pos > 0 && cfg_test_pos < block_n)
+            test_n = cfg_test_pos;
+        int avail   = n_all - block_n;                                    /* data after the test block */
         int train_n = cfg_train_pos > 0 ? cfg_train_pos : avail;
         if (train_n > avail) {
             fprintf(stderr, "WARNING: train (%d) exceeds data after the test head (%d) in %d total; clamping\n",
@@ -280,7 +319,7 @@ static void split_data(void) {
             train_n = avail;
         }
 
-        int train_start = test_n;                                         /* train begins right after test */
+        int train_start = block_n;                                        /* train begins after the whole test block */
         n_train_total = train_n;
         /* Partition the train tail into disjoint contiguous slices: worker w trains
          * on [w·n/K, (w+1)·n/K) within the train region, so one epoch is a single pass
@@ -851,14 +890,44 @@ static void run_monitor(void) {
     }
 
     double mon_last_full = -1;   /* latches the last full-epoch trMSE shown */
+    struct stat mon_last_st; memset(&mon_last_st, 0, sizeof mon_last_st);
+    /* Geometric test cadence, same shape as single-process: after a row at
+     * elapsed E the next test is due at E + clamp(0.5·E, last_test_s,
+     * MAX_PRINT_CYCLE_S).  Workers save every --sync-every positions, so
+     * without this the monitor would test back-to-back forever (one row per
+     * test duration) and burn a core on redundant tests deep into a run. */
+    double mon_next_test = 0;
+    double mon_last_test_s = 0;
 
     for (;;) {
-        if (access(cfg_monitor, R_OK) != 0) { usleep(200000); continue; }  /* wait for first checkpoint */
+        double el_now = wall_now() - wall_start;
+        if (el_now < mon_next_test) { usleep(500000); continue; }   /* not due yet */
+
+        /* Sleepy loop: only test + print when the checkpoint actually changed
+         * (saves are tmp+rename, so inode/mtime/size move atomically). */
+        struct stat st;
+        if (stat(cfg_monitor, &st) != 0) { usleep(200000); continue; }  /* wait for first checkpoint */
+        if (st.st_ino == mon_last_st.st_ino &&
+            st.st_mtim.tv_sec == mon_last_st.st_mtim.tv_sec &&
+            st.st_mtim.tv_nsec == mon_last_st.st_mtim.tv_nsec &&
+            st.st_size == mon_last_st.st_size) {
+            usleep(500000);
+            continue;
+        }
         float *w = ppat_load_weights(cfg_monitor);
         if (!w) { usleep(200000); continue; }
+        mon_last_st = st;
         free(theta); theta = w; TOTAL = ppat_total_weights();
 
+        /* Row time = when this test STARTED (relative to wall_start): scheduling
+         * from here rather than from the post-test elapsed keeps the printed rows
+         * geometric.  Scheduling from the finish time would add one test duration
+         * to every gap, so the observed row ratio would be 1.5 + T/E — visibly
+         * above 1.5 until E >> T. */
+        double test_t0 = wall_now();
+        double row_el = test_t0 - wall_start;
         TestResult tr = measure_test(0, n_test);     /* policy (full) test */
+        mon_last_test_s = wall_now() - test_t0;
 
         /* Read the position count AFTER the test so positions and wall are both
          * current — otherwise pos/s is understated by the (long) test duration. */
@@ -885,6 +954,14 @@ static void run_monitor(void) {
             save_best(cfg_monitor, bc);
         }
         fflush(stdout);
+
+        /* Schedule the next test geometrically from THIS test's start, so the
+         * gap between printed rows is ~1.5x regardless of test cost.  The floor
+         * is still one test duration, so back-to-back testing is the worst case. */
+        double cycle = 0.5 * (row_el > 0 ? row_el : 1.0);
+        if (cycle > MAX_PRINT_CYCLE_S) cycle = MAX_PRINT_CYCLE_S;
+        if (cycle < mon_last_test_s) cycle = mon_last_test_s;
+        mon_next_test = row_el + cycle;
         usleep(200000);   /* small floor so tiny test sets don't spin */
     }
 }
@@ -912,7 +989,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
 
     /* positions column = aggregate across workers (≈ workers × this process's count,
      * barrier-locked); posMs stays per-process (worker 0's CPU time / its own count).
-     * tPos = how many test positions this row actually used (capped early). */
+     * tPos = how many test positions this row used (always the full test set). */
     static double last_full = -1;
     static float best_te = 1e30f;
     char trbuf[24], tebuf[16];
@@ -934,8 +1011,11 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
     }
     /* Exponential cadence (½·elapsed of training between tests), but never let the
      * train cycle be shorter than the test that just ran — otherwise an expensive
-     * test would dominate wall time. */
+     * test would dominate wall time.  Capped at 1 hour so a long run keeps
+     * reporting (and checkpointing) instead of drifting to multi-hour gaps;
+     * the floor still wins if a single test costs more than that. */
     double cycle = 0.5 * (elapsed_s > 0 ? elapsed_s : 1.0);
+    if (cycle > MAX_PRINT_CYCLE_S) cycle = MAX_PRINT_CYCLE_S;
     if (cycle < last_test_s) cycle = last_test_s;
     next_print = elapsed_s + cycle;
 }
@@ -945,7 +1025,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
 int main(int argc, char **argv) {
     if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
-        fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>]\n");
+        fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--overfit]\n");
         return 1;
@@ -967,6 +1047,8 @@ int main(int argc, char **argv) {
     cfg_init         = get_int_arg(argc, argv, "--init", 0);
     cfg_train_moves = get_int_arg(argc, argv, "--train-moves", -1);
     ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
+    cfg_test_file = get_str_arg(argc, argv, "--test-file", NULL);
+    cfg_test_pos_given = has_flag(argc, argv, "--test-pos");
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
@@ -1051,8 +1133,9 @@ int main(int argc, char **argv) {
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
-    printf("test: %d positions  test-playouts: %d  output: %s  best: %s\n",
-           n_test, cfg_test_playouts, weights_file, best_file);
+    printf("test: %d positions%s%s  test-playouts: %d  output: %s  best: %s\n",
+           n_test, cfg_test_file ? " from " : "", cfg_test_file ? cfg_test_file : "",
+           cfg_test_playouts, weights_file, best_file);
     printf("%9s  %7s  %7s  %7s  %5s  %5s  %6s  %6s  %8s  %6s  %7s",
            "positions", "trMSE", "teMSE", "avgW", "move%", "tPos", "testS", "syncS", "elapsedS", "posMs", "pos/s");
     print_weights_header();
@@ -1069,13 +1152,11 @@ int main(int argc, char **argv) {
      * done by a separate --monitor process so the training workers never stall on the
      * barrier; worker 0 just saves the averaged checkpoint after each sync. */
     const int do_inline = (cfg_workers == 1);
-    int last_print_positions = 0;   /* for the per-cycle test-size cap */
 
     /* baseline: fresh run shows the uniform no-skill reference; --load shows the
      * loaded model's actual test + weights.  --baseline-only stops here. */
     if (do_inline || baseline_only) {
         print_stats(iterations, total_positions, cfg_load ? 0 : 1, cfg_load ? 1 : 0, n_test);
-        last_print_positions = total_positions;
         if (baseline_only) return 0;
     }
 
@@ -1084,10 +1165,10 @@ int main(int argc, char **argv) {
             if (do_inline) {
                 double elapsed = (double)(clock() - start_time) / CLOCKS_PER_SEC;
                 if (elapsed > next_print) {
-                    /* Cap test positions at half this cycle's training positions, so early
-                     * (short) cycles test cheaply and the size grows toward --test-pos. */
-                    print_stats(iterations, total_positions, 0, 1, (total_positions - last_print_positions) / 2);
-                    last_print_positions = total_positions;
+                    /* Always test the FULL --test-pos set: rows (and the best-*
+                     * star) stay statistically comparable.  The exponential print
+                     * cadence bounds the amortized test cost instead. */
+                    print_stats(iterations, total_positions, 0, 1, 0);
                 }
             }
 
@@ -1116,7 +1197,7 @@ int main(int argc, char **argv) {
         shuffle_train();
 
         if (cfg_iter_limit > 0 && iterations >= cfg_iter_limit) {
-            if (do_inline) print_stats(iterations, total_positions, 0, 1, (total_positions - last_print_positions) / 2);
+            if (do_inline) print_stats(iterations, total_positions, 0, 1, 0);
             break;
         }
     }

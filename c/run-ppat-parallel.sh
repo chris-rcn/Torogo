@@ -32,9 +32,9 @@ for a in "$@"; do
     prev="$a"
 done
 if [ -n "$TRAIN_POS" ]; then
-    TP_MSG="train-pos/worker: $TRAIN_POS"
+    TP_MSG="train-pos (total, split across workers): $TRAIN_POS"
 else
-    TP_MSG="train-pos/worker: (train_ppat default)"
+    TP_MSG="train-pos (total): (train_ppat default = all after test head)"
 fi
 
 # Fresh sync dir (avoid stale round files from a previous run).

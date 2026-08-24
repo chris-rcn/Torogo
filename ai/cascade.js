@@ -25,7 +25,7 @@
 //   VLIB_TOP    finalists kept by vlibpat value      (default 2)
 //   PPAT_SIMS   total ppat playouts, split across finalists (default 100)
 //   SIM_PHASE   below this phase, VLIB_TOP acts as 1 (no sims) (default 0.5)
-//   FP_WEIGHTS / VLIB_WEIGHTS / PPAT_DATA  weight-file overrides
+//   FPOL_DATA / VLIB_WEIGHTS / PPAT_DATA  weight-file overrides
 
 const path = require('path');
 const Util = require('../util.js');
@@ -47,7 +47,7 @@ function create(cfg) {
   const SIM_PHASE = cfg.float('SIM_PHASE', 0.5);
 
   const fpModel = FeaturePol.loadModel({ name: 'cascade',
-    path: cfg.str('FP_WEIGHTS', path.join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
+    path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
   const fpWeights = fpModel.weights;
   const vModel  = vLoadWeights(cfg.str('VLIB_WEIGHTS', path.join(__dirname, '..', 'ref', 'vlibpat-4074.js')));
   const ppatModel = PPat.loadWeights(cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js')));

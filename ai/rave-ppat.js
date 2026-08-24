@@ -31,9 +31,19 @@ const { createState, ppatMove, loadWeights } = _ppat;
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
+  // Defaults to the root ppat-data.js (the current single-phase model), as
+  // puct-ppat/puct-ppat-fp/cascade do; window.PPATWeights in the browser.
+  const _ppatPath = _isNode
+    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'ppat-data.js'))
+    : null;
   const _model = _isNode
-    ? loadWeights(cfg.str('PPAT_DATA', ''))
+    ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+  // Banner names the ppat file: two slots (P1_/P2_PPAT_DATA) are otherwise
+  // indistinguishable in a selfplay log.
+  console.log(`rave-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${_model ? _model.weights.length : 0} ppat weights from ` +
+    (!_isNode ? 'window.PPATWeights'
+              : (_ppatPath ? require('path').basename(_ppatPath) : '(none — uniform playouts)')));
 
   // Use uniform-random playout moves while board fullness < this fraction [0,1] (0 = off).
   if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);

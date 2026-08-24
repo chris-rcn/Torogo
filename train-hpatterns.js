@@ -26,7 +26,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['ema-alpha', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -39,7 +39,9 @@ const EPSILON    = Math.min(parseFloat(opts.epsilon   || '0.1'),  1);
 const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '1'), 1);  // share of non-random moves from own search1ply (vs --ext)
 const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
-const EMA_ALPHA  = parseFloat(opts['ema-alpha']     || '0.999');  // Polyak per-game EMA
+const EMA_ALPHA  = parseFloat(opts['smooth-weights']     || '0.9');  // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
+                                                              // Window ≈ EMA_PERIOD/(1-alpha) games: 0.9 ≈ 1k, 0.99 ≈ 10k.
+const EMA_PERIOD = 100;
 // spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not extracted.
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
@@ -137,8 +139,10 @@ function loadModel(filePath) {
 function createModelWithWeights(maxStones, maxSize, weights) {
   const m = createModel(maxStones, maxSize);
   m.weights = weights;
-  m.weightsEMA = new Map(weights);
-  m.weightsEMAInit = true;
+  if (EMA_ALPHA > 0) {          // shadow only exists when EMA is enabled
+    m.weightsEMA = new Map(weights);
+    m.weightsEMAInit = true;
+  }
   return m;
 }
 
@@ -193,7 +197,7 @@ const SHALLOW_DEPTH = 3;
 // The best shallow move always has p=1 and is always fully evaluated.
 const SHALLOW_TEMP  = 0.05;
 
-function search1ply(game, maxSearch) {
+function search1ply(game, maxSearch, w = model.weights) {
   const area    = game.N * game.N;
   const isBlack = game.current === BLACK;
 
@@ -217,7 +221,7 @@ function search1ply(game, maxSearch) {
   let   bestMove = coords[0];
 
   for (let i = 0; i < coords.length; i++) {
-    const val = evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), model.weights);
+    const val = evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), w);
     vals1[i]  = val;
     if (isBlack ? val > best1 : val < best1) { best1 = val; bestMove = coords[i]; }
   }
@@ -232,7 +236,7 @@ function search1ply(game, maxSearch) {
   for (let i = 0; i < coords.length; i++) {
     const diff = isBlack ? vals1[i] - best1 : best1 - vals1[i];
     if (Math.random() >= Math.exp(diff / SHALLOW_TEMP)) continue;
-    const val = evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), model.weights);
+    const val = evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), w);
     if (isBlack ? val > bestVal : val < bestVal) { bestVal = val; bestMove = coords[i]; }
   }
 
@@ -292,6 +296,9 @@ function trainGame(N) {
 
 function evalVsReference(N, refGetMove, nGames) {
   const results = [];
+  // Eval ≡ save: matches and acc measure the model save would write — the
+  // EMA shadow when enabled (and initialized), else the live weights.
+  const evalW = (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
   let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -304,10 +311,10 @@ function evalVsReference(N, refGetMove, nGames) {
 
     const gameVals = [];
     while (!game.gameOver && moves++ < maxMoves) {
-      gameVals.push(evaluateFeatures(extractFeatures(game, model, MAX_SIZE), model.weights));
+      gameVals.push(evaluateFeatures(extractFeatures(game, model, MAX_SIZE), evalW));
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
-        idx = search1ply(game);
+        idx = search1ply(game, undefined, evalW);
       } else {
         const mv = refGetMove(game);
         idx = mv.move !== undefined ? mv.move : PASS;
@@ -347,7 +354,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
@@ -399,8 +406,8 @@ const evalHistory = [];
 while (true) {
   g++;
   const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
-  // Polyak / SWA: nudge EMA toward updated weights once per game.
-  applyEMA(model, EMA_ALPHA);
+  // Polyak / SWA: fold live weights into the shadow every EMA_PERIOD games.
+  if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(model, EMA_ALPHA);
   totalMoves      += moves;
   intervalGames++;
   intervalMoves   += moves;

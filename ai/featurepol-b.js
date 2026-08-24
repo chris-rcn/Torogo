@@ -16,7 +16,7 @@ const { PASS } = require('../game2.js');
 const { game3FromGame2 } = require('../game3.js');
 
 const FPOL_TEMP_B = process.env.FPOL_TEMP_B !== undefined ? parseFloat(process.env.FPOL_TEMP_B) : 0;
-const FPOL_DATA_B = process.env.FPOL_DATA_B || path.join(__dirname, '..', 'featurepol-data.js');
+const FPOL_DATA_B = process.env.FPOL_DATA_B || path.join(__dirname, '..', 'ref', 'featurepol-6082.js');
 
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol-b', path: FPOL_DATA_B });
 const _stateByN = new Map();

@@ -42,7 +42,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'ema-alpha', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'lambda', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'tactics', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'lambda', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'tactics', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vlibpat-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -59,7 +59,7 @@ const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
-const EMA_ALPHA  = parseFloat(opts['ema-alpha'] || '0.95');  // per-call decay (period=50, ≈hpatterns per-game 0.999)
+const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');  // Polyak EMA every EMA_PERIOD games; 0 = off
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite for the ladr column
@@ -68,17 +68,24 @@ const EVAL_DITHER = 0.002;
 // ── Features ───────────────────────────
 
 // --spec selects the component list: comma tokens, "1"/"2"/"3" = ladder-aware
-// of that size, "1p"/"3p" = plain (no ladder).  Default: full 3-component spec.
+// of that size, "1p"/"3p" = plain (no ladder), "2F"/"3F" = ladder-aware with
+// the alive state split by liberty count (alive4 at 4+ libs; 9-state),
+// "2V"/"3V" = the same split at 5+ libs (alive5).
+// Default: full 3-component spec.
 let specs;
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
     if (tok === '1p') return { size: 1, ladder: false };
     if (tok === '2p') return { size: 2, ladder: false };
     if (tok === '3p') return { size: 3, ladder: false };
+    if (tok === '2F') return { size: 2, four: true };
+    if (tok === '3F') return { size: 3, four: true };
+    if (tok === '2V') return { size: 2, five: true };
+    if (tok === '3V') return { size: 3, five: true };
     if (tok === '1')  return { size: 1 };
     if (tok === '2')  return { size: 2 };
     if (tok === '3')  return { size: 3 };
-    console.error(`--spec: unknown token '${tok}' (use: 1p/2p/3p/1/2/3)`);
+    console.error(`--spec: unknown token '${tok}' (use: 1p/2p/3p/2F/3F/2V/3V/1/2/3)`);
     process.exit(1);
   });
 } else {
@@ -250,9 +257,11 @@ function trainGame(N) {
 // ── Evaluation against a reference agent ─────────────────────────────────────
 
 // Trainee value of a position (leaf evaluator for the eval search).
+// Eval ≡ save: the eval matches and acc measure the model save would write —
+// the EMA shadow when enabled (and initialized), else the live weights.
 function _evalEvaluate(g3) {
   const f = extractFeatures(g3, prepSpecs);
-  evaluateFeatures(f, weights);
+  evaluateFeatures(f, (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights);
   return f.val;
 }
 
@@ -342,9 +351,11 @@ if (LOAD_PATH) {
     }
     tacticsOpts = loadedOpts || tacticsOpts;
     // Seed EMA shadow from the loaded weights so subsequent applyEMA continues
-    // averaging on top of the persisted (already-EMA) values.
-    weightsEMA = new Map(weights);
-    weightsEMAInit = true;
+    // averaging on top of the persisted values (only when EMA is enabled).
+    if (EMA_ALPHA > 0) {
+      weightsEMA = new Map(weights);
+      weightsEMAInit = true;
+    }
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -352,7 +363,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  ema-alpha=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}  lambda=${LAMBDA}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${JSON.stringify(specs)}`);
 console.log(`Tactics: ${tacticsOpts.tactics}`);
@@ -399,16 +410,13 @@ const evalHistory = [];   // per-interval game results (1/0.5/0)
 const rmsHistory  = [];   // per-interval rmsErr values
 
 // Apply EMA every EMA_PERIOD games to amortize the O(weight_count) cost.
-// Default alpha=0.95 with period=50 ⇒ time constant ≈ 1 000 games — matches
-// hpatterns per-game alpha=0.999.  Use --ema-alpha to tune (per-call):
-//   alpha=0.99  → 5 000-game tc
-//   alpha=0.9975→ 20 000-game tc
-const EMA_PERIOD = 50;
+// Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
+const EMA_PERIOD = 100;
 
 while (true) {
   g++;
   const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
-  if (g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
+  if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
@@ -506,7 +514,7 @@ while (true) {
     ].join('  '));
     // Persist Polyak-averaged weights for eval (slight rewind on resume).
     // Falls back to live weights before the first applyEMA.
-    const saveSrc = weightsEMAInit ? weightsEMA : weights;
+    const saveSrc = (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
     saveWeights(SAVE_PATH, { weights: saveSrc, specs, opts: tacticsOpts, preparedSpecs: prepSpecs });
     nextPrintAt = t0 + Math.round(nextMs * 1.4);
   }

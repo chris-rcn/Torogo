@@ -17,7 +17,9 @@ for (let g = 0; g < GAMES; g++) {
   const game = new Game2(N);
   while (!game.gameOver) {
     extractFeatures(game, st);
-    for (let i = 0; i < st.count; i++) seen[st.patIds[i]] = 1;
+    // Flat layout: the pattern key is the FIRST key of each candidate's run
+    // (prev-move features follow it); with phaseCount 1 the key IS the canon ID.
+    for (let i = 0; i < st.count; i++) seen[st.feat[st.featStart[i]]] = 1;
     totalMoves += st.count;
     const m = game.randomLegalMove();
     game.play(m >= 0 ? m : -1);

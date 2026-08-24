@@ -175,9 +175,13 @@ function canonicalize(cells, perms, mixer) {
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
 // Ladder-aware code range: |c| ≤ 3 (7 states).  No-ladder (presence-only):
-// |c| ≤ 1 (3 states, just sign of game.cells[]).
-const ML       = 3, BASE    = 2 * ML + 1;        // ladder:    7
-const ML_NL    = 1, BASE_NL = 2 * ML_NL + 1;     // no-ladder: 3
+// |c| ≤ 1 (3 states, just sign of game.cells[]).  Ladder+four ("F"): the
+// alive state splits on liberty count — ±4 = alive with 4+ liberties, ±1 =
+// alive with fewer (read-proven or 3-lib unread) — 9 states.  Ladder+five
+// ("V") is the same split at 5+ liberties.
+const ML       = 3, BASE    = 2 * ML + 1;        // ladder:           7
+const ML_NL    = 1, BASE_NL = 2 * ML_NL + 1;     // no-ladder:        3
+const ML_F     = 4, BASE_F  = 2 * ML_F + 1;      // ladder+four/five: 9
 
 // All LUTs are sparse Map-based caches, populated on first lookup of each
 // distinct raw pattern.  Storage scales with patterns actually encountered,
@@ -195,9 +199,14 @@ function _makeSparseLUT(cellCount, perms, ml, mix) {
   return lut;
 }
 
-// Spec = { size: 1|2|3, ladder?: boolean }.  ladder defaults to true.
+// Spec = { size: 1|2|3, ladder?: boolean, four?: boolean }.  ladder defaults
+// to true.
 //   ladder:true  → 7-state tactics-aware encoding (alive/dead/unsettled/+sign)
 //   ladder:false → 3-state presence-only encoding (empty/black/white)
+//   four:true    → 9-state: ladder encoding with the alive state split into
+//                  alive4 (±4, group has 4+ liberties) vs alive (±1).
+//                  Sizes 2 and 3 only; requires ladder (throws otherwise).
+//   five:true    → as four, but the split is at 5+ liberties (alive5).
 // Different mixer constants ensure no key collisions across variants.
 //
 // opts (optional): tactical backend selection.
@@ -212,14 +221,24 @@ function prepareSpecs(specs, opts) {
   const nodeLimit  = opts?.nodeLimit;
   const depthLimit = opts?.depthLimit;
   const need = { s1L:false, s2L:false, s3L:false,
-                 s1NL:false, s2NL:false, s3NL:false };
+                 s1NL:false, s2NL:false, s3NL:false,
+                 s2F:false, s3F:false, s2V:false, s3V:false };
   for (const spec of specs) {
     if (spec.size === 4) throw new Error('vlibpat: size 4 is not supported');
     const ladder = spec.ladder !== false;  // default true
+    const four   = spec.four === true;
+    const five   = spec.five === true;
+    if (four && five) throw new Error('vlibpat: four and five are mutually exclusive');
+    if ((four || five) && !ladder) throw new Error('vlibpat: four/five requires ladder');
+    if ((four || five) && spec.size === 1) throw new Error('vlibpat: four/five supports sizes 2 and 3 only');
     if      (spec.size === 1 && ladder)  need.s1L  = true;
     else if (spec.size === 1 && !ladder) need.s1NL = true;
+    else if (spec.size === 2 && four)    need.s2F  = true;
+    else if (spec.size === 2 && five)    need.s2V  = true;
     else if (spec.size === 2 && ladder)  need.s2L  = true;
     else if (spec.size === 2 && !ladder) need.s2NL = true;
+    else if (spec.size === 3 && four)    need.s3F  = true;
+    else if (spec.size === 3 && five)    need.s3V  = true;
     else if (spec.size === 3 && ladder)  need.s3L  = true;
     else if (spec.size === 3 && !ladder) need.s3NL = true;
   }
@@ -229,17 +248,25 @@ function prepareSpecs(specs, opts) {
   const mixL3  = 537 * ML;     // size 3 ladder
   const mixNL2 = 1093;         // size 2 no-ladder
   const mixNL3 = 2741;         // size 3 no-ladder
+  const mixF2  = 4391;         // size 2 ladder+four
+  const mixF3  = 6053;         // size 3 ladder+four
+  const mixV2  = 7817;         // size 2 ladder+five
+  const mixV3  = 9241;         // size 3 ladder+five
 
   const lut2L  = need.s2L  ? _makeSparseLUT(4, PERMS_2x2, ML,    mixL2)  : null;
   const lut3L  = need.s3L  ? _makeSparseLUT(9, PERMS_3x3, ML,    mixL3)  : null;
   const lut2NL = need.s2NL ? _makeSparseLUT(4, PERMS_2x2, ML_NL, mixNL2) : null;
   const lut3NL = need.s3NL ? _makeSparseLUT(9, PERMS_3x3, ML_NL, mixNL3) : null;
+  const lut2F  = need.s2F  ? _makeSparseLUT(4, PERMS_2x2, ML_F,  mixF2)  : null;
+  const lut3F  = need.s3F  ? _makeSparseLUT(9, PERMS_3x3, ML_F,  mixF3)  : null;
+  const lut2V  = need.s2V  ? _makeSparseLUT(4, PERMS_2x2, ML_F,  mixV2)  : null;
+  const lut3V  = need.s3V  ? _makeSparseLUT(9, PERMS_3x3, ML_F,  mixV3)  : null;
 
   let totalSizes = 0;
   for (const k of Object.keys(need)) if (need[k]) totalSizes++;
 
-  return { need, lut2L, lut3L, lut2NL, lut3NL, totalSizes,
-           tactics, nodeLimit, depthLimit };
+  return { need, lut2L, lut3L, lut2NL, lut3NL, lut2F, lut3F, lut2V, lut3V,
+           totalSizes, tactics, nodeLimit, depthLimit };
 }
 
 // Sparse-LUT-driven size-2 extraction.  raw is a per-cell code array (Int8/Uint8);
@@ -346,15 +373,37 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3, la
     movePlayed = game3.play(nextMove);
   }
 
-  const { need, lut2L, lut3L, lut2NL, lut3NL, mixL2, mixL3, mixNL2, mixNL3 } = prepSpecs;
+  const { need, lut2L, lut3L, lut2NL, lut3NL, lut2F, lut3F, lut2V, lut3V } = prepSpecs;
 
   // Compute tactical codes only if any ladder spec is requested.  The tactics
   // backend (ladder2 vs tactics3) is pinned in prepSpecs.
-  const rawL  = (need.s1L || need.s2L || need.s3L)
+  const rawL  = (need.s1L || need.s2L || need.s3L || need.s2F || need.s3F || need.s2V || need.s3V)
     ? computeLadderCodes(game3, prepSpecs, movePlayed ? null : ladderStatuses)
     : null;
   // No-ladder codes = sign-only cell values (-1, 0, +1) — i.e. game3.cells.
   const rawNL = (need.s1NL || need.s2NL || need.s3NL) ? game3.cells : null;
+  // Four codes: ladder codes with alive (±1) promoted to alive4 (±4) when the
+  // group holds 4+ liberties.  Dead/unsettled and read-proven-alive 1-2-lib
+  // groups keep their codes (they can't have 4 libs).
+  let rawF = null;
+  if (need.s2F || need.s3F) {
+    rawF = _rawFBuf.length >= cap ? _rawFBuf : (_rawFBuf = new Int8Array(cap));
+    const ls = game3._ls, gid = game3._gid;
+    for (let i = 0; i < cap; i++) {
+      const c = rawL[i];
+      rawF[i] = (c === 1 || c === -1) && ls[gid[i]] >= 4 ? c * 4 : c;
+    }
+  }
+  // Five codes: same promotion at 5+ liberties.
+  let rawV = null;
+  if (need.s2V || need.s3V) {
+    rawV = _rawVBuf.length >= cap ? _rawVBuf : (_rawVBuf = new Int8Array(cap));
+    const ls = game3._ls, gid = game3._gid;
+    for (let i = 0; i < cap; i++) {
+      const c = rawL[i];
+      rawV[i] = (c === 1 || c === -1) && ls[gid[i]] >= 5 ? c * 4 : c;
+    }
+  }
 
   const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for size-3 canonicalize fallback
 
@@ -385,14 +434,20 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, externalGame3, la
   // ── size 2 ─────────────────────────────────────────────────────────────────
   if (need.s2L)  count = _extractSize2(rawL,  cap, N, lut2L,  outKeys, outPols, count, buf);
   if (need.s2NL) count = _extractSize2(rawNL, cap, N, lut2NL, outKeys, outPols, count, buf);
+  if (need.s2F)  count = _extractSize2(rawF,  cap, N, lut2F,  outKeys, outPols, count, buf);
+  if (need.s2V)  count = _extractSize2(rawV,  cap, N, lut2V,  outKeys, outPols, count, buf);
 
   // ── size 3 ─────────────────────────────────────────────────────────────────
   if (need.s3L)  count = _extractSize3(rawL,  cap, N, lut3L,  outKeys, outPols, count, buf);
   if (need.s3NL) count = _extractSize3(rawNL, cap, N, lut3NL, outKeys, outPols, count, buf);
+  if (need.s3F)  count = _extractSize3(rawF,  cap, N, lut3F,  outKeys, outPols, count, buf);
+  if (need.s3V)  count = _extractSize3(rawV,  cap, N, lut3V,  outKeys, outPols, count, buf);
 
   if (movePlayed) game3.undo();
   return { keys: outKeys, pols: outPols, count, val: 0.5 };
 }
+let _rawFBuf = new Int8Array(0);
+let _rawVBuf = new Int8Array(0);
 
 // ── Value function (pure) ─────────────────────────────────────────────────────
 

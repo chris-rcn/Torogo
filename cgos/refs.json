@@ -26,6 +26,7 @@
     { "name": "ref-vlibpat-or-fp",  "agent": "ref-vlibpat-or-fp",  "budget": 1 },
     { "name": "ref-puct-ppat-fp-e2-1k", "agent": "ref-puct-ppat-fp-e2-1k", "budget": 1 },
     { "name": "ref-puct-ppat-fp-e2-3k", "agent": "ref-puct-ppat-fp-e2-3k", "budget": 1 },
-    { "name": "ref-puct-ppat-fp-e2-u6-1k", "agent": "ref-puct-ppat-fp-e2-u6-1k", "budget": 1 }
+    { "name": "ref-puct-ppat-fp-e2-u6-1k", "agent": "ref-puct-ppat-fp-e2-u6-1k", "budget": 1 },
+    { "name": "ref-puct-ppat-fp-e2-u6-6k", "agent": "ref-puct-ppat-fp-e2-u6-6k", "budget": 1 }
   ]
 }

@@ -81,31 +81,38 @@ function create(cfg) {
   // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
   const PPAT_RATIO = cfg.float('PPAT_RATIO', 1);
 
-  // ppat playout policy weights (PPAT_DATA, or window.PPATWeights in browser).
-  // When absent, playouts fall back to uniform-random — same trace/scoring path.
-  // ppat model { phaseCount, weights }; null when no PPAT_DATA (uniform playouts).
+  // ppat playout policy weights: PPAT_DATA, defaulting to the root ppat-data.js
+  // (the current single-phase model, as cascade.js does); window.PPATWeights in
+  // the browser.  A missing/unreadable file leaves _model null, and playouts
+  // fall back to uniform-random — same trace/scoring path — with a warning.
+  const _ppatPath = _isNode
+    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'ppat-data.js'))
+    : null;
   const _model = _isNode
-    ? loadWeights(cfg.str('PPAT_DATA', ''))
+    ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+  // Name the ppat file in the banner: two slots (P1_/P2_PPAT_DATA) otherwise
+  // print identical lines, hiding which model each side is actually running.
+  const _ppatName = _isNode ? require('path').basename(_ppatPath) : 'window.PPATWeights';
 
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
   if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0.6);
   if (!_model) {
-    console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no PPAT_DATA` +
-      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' env var') +
+    console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no ppat weights` +
+      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' (PPAT_DATA / default ppat-data.js unreadable)') +
       ' — playouts will be uniform random, not the ppat policy');
   }
 
-  // featurepol policy model (priors + top-K pruning).  FP_WEIGHTS overrides
+  // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'puct-ppat-fp',
     path: _isBrowser ? undefined
-                     : cfg.str('FP_WEIGHTS', require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
+                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
   const fpWeights   = fpModel.weights;
-  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model ? _model.weights.length : 0} ppat weights, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
+  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model ? _model.weights.length : 0} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
