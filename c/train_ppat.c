@@ -146,8 +146,10 @@ static const char *cfg_ref_weights;    /* reference model for both match columns
  * is meaningful (after a barrier, since between barriers each worker has its own),
  * but it WEIGHTS by elapsed positions, so the window is invariant to --sync-every
  * and --workers; those only change the sampling density. */
-#define EMA_WINDOW       30000   /* aggregate positions; ~one report row's spacing */
-#define EMA_SAMPLE_POS     100   /* standalone-run sampling cadence (no barriers there) */ /* both columns play/roll out uniform below this fullness, as the u6 rungs do */
+#define EMA_SAMPLE_POS     100   /* standalone sampling cadence (no barriers there).
+                                  * Not a tuning knob: --ema-window weights by elapsed
+                                  * positions, so sampling density cannot move the
+                                  * window, only how finely it is resolved. */
 
 /* Parameter-averaging across processes: K workers each run batch-1 SB with their
  * own seed; every --sync-every positions they file-barrier all-reduce (average) θ. */
@@ -210,6 +212,7 @@ static float *theta;
  * a checkpoint resumes from the average, not from the raw state that produced it. */
 static float *theta_ema = NULL;
 static long   ema_last_pos = 0;
+static int    cfg_ema_window;          /* --ema-window, aggregate positions; 0 = off */
 
 /* Scratch buffers */
 static PpatState rollout_feat_st;
@@ -862,6 +865,7 @@ static const char *temse_col(float v, float *best, char *buf, size_t n) {
 
 /* Seed the average with the starting weights (after --load / warm-start). */
 static void ema_init(void) {
+    if (cfg_ema_window <= 0) return;        /* leave theta_ema NULL: save/report raw */
     theta_ema = malloc((size_t)TOTAL * sizeof(float));
     memcpy(theta_ema, theta, (size_t)TOTAL * sizeof(float));
     ema_last_pos = 0;
@@ -871,9 +875,10 @@ static void ema_init(void) {
  * makes the decay depend only on how much training elapsed, so irregular or
  * changing sampling intervals give the same window. */
 static void ema_update(long agg_pos) {
+    if (!theta_ema) return;                 /* EMA_WINDOW 0: averaging disabled */
     long dpos = agg_pos - ema_last_pos;
     if (dpos <= 0) return;
-    const float w = expf(-(float)dpos / (float)EMA_WINDOW);
+    const float w = expf(-(float)dpos / (float)cfg_ema_window);
     for (int k = 0; k < TOTAL; k++) theta_ema[k] = w * theta_ema[k] + (1.0f - w) * theta[k];
     ema_last_pos = agg_pos;
 }
@@ -1204,15 +1209,6 @@ static double match_scale = 1.0;
 
 static int match_games(int base) { return (int)(base * match_scale + 0.5); }
 
-/* Calibrated anchors for the blend: 0 = uniform-rollout floor, 1 = as good as
- * the reference.  Measured at 6000 games each with colour-swap seed pairing.
- * directWR's par is EXACT (identical weights make each swapped pair score one win
- * and one loss); WR's is empirical and must be re-measured if the regime changes. */
-#define DIRECT_FLOOR  27.3
-#define DIRECT_PAR    50.0
-#define MCWR_FLOOR      48.0
-#define MCWR_PAR        60.5
-
 /* One column: the value, with '*' on a new high (the counterpart of temse_col's
  * new-low star) and ' ' otherwise so the columns stay aligned. */
 static void peak_col(double v, double *best, const char *fmt, char *buf, size_t n) {
@@ -1227,11 +1223,17 @@ static void peak_col(double v, double *best, const char *fmt, char *buf, size_t 
  * next.  Single entry point so the scale advances exactly once per row, whichever
  * of the three print paths produced it.
  *
- * score normalises each column to its own calibrated range before averaging —
- * they have different floors and different spans, so a raw mean would silently
- * weight directWR (22.7pp of range) nearly twice WR (12.5pp).  Averaging two
- * independent measurements also roughly halves the noise, which matters because
- * a single column has produced multi-sigma excursions in both directions. */
+ * score is the plain mean of the two win rates.  No normalising constants, so
+ * nothing in it drifts when the match regime changes — and it happens to be very
+ * near the signal-to-noise optimum anyway: weighting by signal/variance gives
+ * directWR 22.7pp/0.9pp^2 = 28.0 against mcWR 12.5pp/0.7pp^2 = 25.5, i.e. within
+ * 10% of equal.  Normalising each to its own range instead would weight the
+ * NOISIER column nearly twice as heavily, which is backwards.
+ *
+ * Averaging two independent measurements roughly halves the noise, which matters
+ * because a single column has produced multi-sigma excursions in both directions.
+ * For reading it: uniform rollouts sit near 37.7 (27.3 + 48.0)/2 and par with the
+ * reference near 55.3 (50.0 + 60.5)/2. */
 static void match_cols(char *dw, size_t dwn, char *wr, size_t wrn, char *sc, size_t scn) {
     static double best_d = -1e9, best_w = -1e9, best_s = -1e9;
     match_truncated = 0;
@@ -1241,11 +1243,10 @@ static void match_cols(char *dw, size_t dwn, char *wr, size_t wrn, char *sc, siz
     }
     const double d = 100.0 * direct_match_wr(match_games(DIRECT_GAMES));
     const double w = 100.0 * mcwr_match(match_games(MCWR_GAMES));
-    const double s = 0.5 * ((d - DIRECT_FLOOR) / (DIRECT_PAR - DIRECT_FLOOR)
-                          + (w - MCWR_FLOOR)     / (MCWR_PAR     - MCWR_FLOOR));
+    const double s = 0.5 * (d + w);
     peak_col(d, &best_d, "%.1f", dw, dwn);
     peak_col(w, &best_w, "%.1f", wr, wrn);
-    peak_col(s, &best_s, "%.3f", sc, scn);
+    peak_col(s, &best_s, "%.1f", sc, scn);
     /* Once a match is being cut short at MATCH_MAX_S, raising the effort only
      * grows a game count that will never be reached — so stop growing. */
     if (!match_truncated) match_scale *= MATCH_GROWTH;
@@ -1540,7 +1541,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--no-local] [--overfit]\n");
-        fprintf(stderr, "       [--ref-weights <path>|none]\n");
+        fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>]\n");
         return 1;
     }
 
@@ -1580,6 +1581,11 @@ int main(int argc, char **argv) {
      * 100 -> 36 pos/s, 30 -> 37, 25 -> 34, 20 -> 35, 5 -> 28.  Down to ~25 the
      * barrier is nearly free; it only bites below that. */
     cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 30);
+    /* Polyak averaging window in AGGREGATE POSITIONS; 0 = off (save the raw
+     * iterate).  Off by default until swept: a window is a real hyperparameter,
+     * and an untuned one silently lags every column for its first window's worth
+     * of training.  ~30000 (about one report row) is where to start a sweep. */
+    cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 0);
     cfg_sync_dir   = get_str_arg(argc, argv, "--sync-dir", "out/ppat-sync");
     /* Barrier sync is only meaningful with something to average against; with a
      * single worker there is no peer, but it must still SAVE on the same cadence
@@ -1684,6 +1690,8 @@ int main(int argc, char **argv) {
      * actually reached is the nWts column, not something knowable up front. */
     printf("model: libCap %d  pattern table: %d%s\n", ppat_lib_cap, ppat_num_patterns,
            cfg_no_local ? "  local features: FROZEN at 0 (--no-local)" : "");
+    if (cfg_ema_window > 0)
+        printf("weights: Polyak average over %d aggregate positions (--ema-window)\n", cfg_ema_window);
     if (parallel)
         printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
