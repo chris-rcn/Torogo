@@ -572,7 +572,7 @@ function _fastExp(x) {
   return _expBuf[0];
 }
 
-function ppatMove(game, state, model) {
+function ppatMove(game, state, model, rng = Math) {
   // Uniform fast-path: in the early game the trained policy is ≈ uniform while
   // feature extraction is the dominant per-step cost, so below a board-fullness
   // threshold skip extraction and pick a uniform random legal move.
@@ -582,7 +582,7 @@ function ppatMove(game, state, model) {
   if (ubp > 0) {
     const cap = game.N * game.N;
     const fullness = (cap - game.emptyCount) / cap;
-    if (fullness < ubp) return game.randomLegalMove();
+    if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
   extractFeatures(game, state, model.phaseCount, model.libCap);
@@ -612,7 +612,7 @@ function ppatMove(game, state, model) {
     sum += e;
   }
 
-  let r = Math.random() * sum, chosen = n - 1;
+  let r = rng.random() * sum, chosen = n - 1;
   for (let i = 0; i < n; i++) { r -= _logits[i]; if (r <= 0) { chosen = i; break; } }
   return state.moves[chosen];
 }

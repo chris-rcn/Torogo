@@ -49,13 +49,13 @@ function create(cfg) {
       _ppatState = createState(N);
   }
 
-  function getMove(game, timeBudgetMs) {
+  function getMove(game, timeBudgetMs, options = {}) {
     if (game.gameOver) return { type: 'pass', move: PASS, info: 'game already over' };
 
     const game2 = game.cells ? game.clone() : game.toGame2();
     const N = game2.N;
     _ensureState(N);
-    const m = ppatMove(game2, _ppatState, _model);
+    const m = ppatMove(game2, _ppatState, _model, options.rng);
     const result = m === PASS ? { type: 'pass', move: PASS }
                               : { type: 'place', move: m, x: m % N, y: (m / N) | 0 };
     return result;

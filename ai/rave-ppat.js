@@ -85,7 +85,7 @@ function create(cfg) {
 
   // Returns { winner, played }.
   // played: reused Float32Array(cap) — caller zeroes it each call.
-  function playTracked(game2, node, played) {
+  function playTracked(game2, node, played, rng) {
     const wasAlreadyOver = game2.gameOver;
     const N   = game2.N;
     const cap = N * N;
@@ -104,8 +104,8 @@ function create(cfg) {
       // usePolicy: use the ppat policy this move — within the PPAT_MOVES window and
       // (subject to PPAT_RATIO) not a randomly-mixed uniform move.
       const ppatActive = _model && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
-      const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || Math.random() < PPAT_RATIO);
-      const idx = usePolicy ? ppatMove(game2, _ppatState, _model) : game2.randomLegalMove();
+      const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
+      const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng) : game2.randomLegalMove(rng);
 
       if (idx === PASS) {
         game2.play(PASS);
@@ -362,7 +362,7 @@ function create(cfg) {
     do {
       playouts++;
       const { node, game2: simGame2 } = selectAndExpand(root, game2, N, rng);
-      const { winner, played: p } = playTracked(simGame2, node, played);
+      const { winner, played: p } = playTracked(simGame2, node, played, rng);
       backpropagate(node, winner, p, rootPlayer);
     } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 

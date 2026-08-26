@@ -71,7 +71,7 @@ function create(cfg) {
     const moveLimit = 3 * game2.emptyCount + 20;
     let moves = 0;
     while (!game2.gameOver && moves < moveLimit) {
-      game2.play(PPat.ppatMove(game2, ppatState, model));
+      game2.play(PPat.ppatMove(game2, ppatState, model, rng));
       moves++;
     }
     return game2.estimateWinner() === BLACK ? 1 : 0;

@@ -104,7 +104,7 @@ function create(cfg) {
       const moveLimit = 3 * sim.emptyCount + 20;
       let moves = 0;
       while (!sim.gameOver && moves++ < moveLimit) {
-        sim.play(PPat.ppatMove(sim, ppatState, ppatModel));
+        sim.play(PPat.ppatMove(sim, ppatState, ppatModel, rng));
       }
       if (sim.estimateWinner() === mover) wins++;
     }

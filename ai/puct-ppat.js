@@ -139,7 +139,7 @@ function create(cfg) {
       // and (subject to PPAT_RATIO) not a randomly-mixed uniform move.
       const ppatActive = _model && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
       const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
-      const idx = usePolicy ? ppatMove(game2, _ppatState, _model)
+      const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng)
                             : game2.randomLegalMove(rng);
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
