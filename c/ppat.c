@@ -4,11 +4,19 @@
 #include "ppat.h"
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 /* ── Canon table ───────────────────────────────────────────────────────────── */
 
-int16_t ppat_canon_id[PPAT_RAW_SIZE];
+/* Active canonical-ID table, plus the per-cap cache behind it (see ppat.h). */
+const int32_t *ppat_canon_id = NULL;
+static int32_t *canon_by_cap[PPAT_MAX_LIB_CAP + 1];
+static int32_t  np_by_cap   [PPAT_MAX_LIB_CAP + 1];
+static int32_t  raw_by_cap  [PPAT_MAX_LIB_CAP + 1];
 int32_t ppat_num_patterns = 0;
+int32_t ppat_lib_cap = 0;      /* 0 = not yet initialised */
+int32_t ppat_raw_size = 0;
 int     ppat_phase_count = 1;
 float   ppat_uniform_below_phase = 0.0f;
 int     ppat_load_quiet = 0;
@@ -25,25 +33,49 @@ static const int D4[8][8] = {
     {1,0,3,2,4,7,6,5},  /* TransposeAD */
 };
 
-static int encode8(const int *v) {
-    return v[0] + 5*(v[1] + 5*(v[2] + 5*(v[3] + 5*(v[4] + 3*(v[5] + 3*(v[6] + 3*v[7]))))));
+/* Pack the 8 cells: orthogonals (0-3) in radix R = 2*cap+1, diagonals (4-7) in
+ * radix 3.  R is passed rather than hardcoded so the same packing serves any cap. */
+static int encode8(const int *v, int R) {
+    return v[0] + R*(v[1] + R*(v[2] + R*(v[3] + R*(v[4] + 3*(v[5] + 3*(v[6] + 3*v[7]))))));
 }
 
-void ppat_init(void) {
-    /* Map: minVariant → assigned dense ID.
-     * Use a simple scan: for each raw, compute min variant.  Track assigned IDs
-     * in a flat array indexed by minVariant (only 50625 entries, fast enough). */
-    int16_t id_of[PPAT_RAW_SIZE];
-    memset(id_of, -1, sizeof(id_of));
+void ppat_init(int lib_cap) {
+    if (lib_cap < PPAT_MIN_LIB_CAP || lib_cap > PPAT_MAX_LIB_CAP) {
+        fprintf(stderr, "ppat_init: lib_cap %d out of range [%d,%d]\n",
+                lib_cap, PPAT_MIN_LIB_CAP, PPAT_MAX_LIB_CAP);
+        exit(1);
+    }
+    if (ppat_lib_cap == lib_cap) return;      /* already active */
+
+    if (canon_by_cap[lib_cap]) {              /* built earlier: just swap it in */
+        ppat_canon_id     = canon_by_cap[lib_cap];
+        ppat_num_patterns = np_by_cap[lib_cap];
+        ppat_raw_size     = raw_by_cap[lib_cap];
+        ppat_lib_cap      = lib_cap;
+        return;
+    }
+
+    const int R = 2 * lib_cap + 1;            /* orthogonal radix */
+    const int raw_size = R * R * R * R * 81;  /* R^4 * 3^4 */
+    int32_t *table = malloc((size_t)raw_size * sizeof(int32_t));
+    if (!table) {
+        fprintf(stderr, "ppat_init: out of memory for libCap %d (%d entries)\n", lib_cap, raw_size);
+        exit(1);
+    }
+
+    /* Map: minVariant → assigned dense ID.  Static (not stack): at cap 4 this is
+     * 531441 int32 = 2.1 MB, far past any sane stack. */
+    static int32_t id_of[PPAT_RAW_SIZE];
+    for (int i = 0; i < raw_size; i++) id_of[i] = -1;
     int next_id = 0;
 
     int v[8], tv[8];
-    for (int raw = 0; raw < PPAT_RAW_SIZE; raw++) {
+    for (int raw = 0; raw < raw_size; raw++) {
         int r = raw;
-        v[0] = r % 5; r /= 5;
-        v[1] = r % 5; r /= 5;
-        v[2] = r % 5; r /= 5;
-        v[3] = r % 5; r /= 5;
+        v[0] = r % R; r /= R;
+        v[1] = r % R; r /= R;
+        v[2] = r % R; r /= R;
+        v[3] = r % R; r /= R;
         v[4] = r % 3; r /= 3;
         v[5] = r % 3; r /= 3;
         v[6] = r % 3;
@@ -53,23 +85,39 @@ void ppat_init(void) {
         for (int di = 0; di < 8; di++) {
             const int *p = D4[di];
             for (int i = 0; i < 8; i++) tv[p[i]] = v[i];
-            int enc = encode8(tv);
+            int enc = encode8(tv, R);
             if (enc < min_v) min_v = enc;
         }
 
         if (id_of[min_v] == -1) id_of[min_v] = next_id++;
-        ppat_canon_id[raw] = id_of[min_v];
+        table[raw] = id_of[min_v];
     }
+    canon_by_cap[lib_cap] = table;
+    np_by_cap[lib_cap]    = next_id;
+    raw_by_cap[lib_cap]   = raw_size;
+    ppat_canon_id     = table;
     ppat_num_patterns = next_id;
+    ppat_lib_cap      = lib_cap;
+    ppat_raw_size     = raw_size;
 }
 
 /* ── Internal helpers ──────────────────────────────────────────────────────── */
 
+/* Orthogonal cell value in radix 2*cap+1: 0 empty, 1..cap own with that many
+ * liberties (capped), cap+1..2*cap enemy likewise.  At cap 2 this reproduces the
+ * historical encoding exactly (own 1/2 = not-atari/atari, enemy 3/4), since a
+ * capped count of 1 IS atari.  Note ls[gid[ni]] was already read for the atari
+ * test, so raising the cap costs no extra memory traffic. */
 static inline int adj_val(int32_t ni, const Game2 *g, int8_t cur) {
     int8_t c = g->cells[ni];
     if (c == EMPTY) return 0;
-    int atari = (g->ls[g->gid[ni]] == 1);
-    return (c == cur) ? (atari ? 2 : 1) : (atari ? 4 : 3);
+    const int cap = ppat_lib_cap;
+    int lib = g->ls[g->gid[ni]];
+    if (lib > cap) lib = cap;
+    /* cap 2: lib 1 -> own 2 / enemy 4 (atari), lib 2 -> own 1 / enemy 3.
+     * The historical order put not-atari first, so invert the count. */
+    int slot = cap + 1 - lib;                 /* 1..cap, ascending in liberties */
+    return (c == cur) ? slot : cap + slot;
 }
 
 static inline int diag_val(int32_t ni, const Game2 *g, int8_t cur) {
@@ -343,20 +391,24 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         {
             int friend_count = 0, empty_count_e = 0;
             int32_t first_gid = -2, same_group = 0;
+            /* Mirrors adj_val() exactly (slot = cap+1-lib, ascending in liberties)
+             * but reads gid/ls once per neighbour and folds in the true-eye counts. */
+            const int _cap = ppat_lib_cap;
             #define CHECK_AND_ADJ(c, ni, vout) do { \
                 if ((c) == EMPTY) { \
                     empty_count_e++; \
                     vout = 0; \
                 } else { \
                     int32_t _gid = g->gid[(ni)]; \
-                    int _atari = (g->ls[_gid] == 1); \
+                    int _lib = g->ls[_gid]; if (_lib > _cap) _lib = _cap; \
+                    int _slot = _cap + 1 - _lib; \
                     if ((c) == cur) { \
                         friend_count++; \
                         if (first_gid == -2) { first_gid = _gid; same_group = 1; } \
                         else if (_gid == first_gid) same_group++; \
-                        vout = _atari ? 2 : 1; \
+                        vout = _slot; \
                     } else { \
-                        vout = _atari ? 4 : 3; \
+                        vout = _cap + _slot; \
                     } \
                 } \
             } while(0)
@@ -380,7 +432,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         int vSW = diag_val(g2_dnbr[b4 + 2], g, cur);
         int vNW = diag_val(g2_dnbr[b4],     g, cur);
 
-        int raw = vN + 5*(vE + 5*(vS + 5*(vW + 5*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+        const int _R = 2 * ppat_lib_cap + 1;
+        int raw = vN + _R*(vE + _R*(vS + _R*(vW + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
 
         st->moves[count] = idx;
         st->feat_start[count] = nf;
@@ -533,8 +586,8 @@ void ppat_save_weights(const char *path, const float *weights, int total,
         if (i > 0) fputc(',', f);
         fprintf(f, "%.9g", weights[i]);
     }
-    fprintf(f, "]), phases: %d, numPatterns: %d };\n",
-            ppat_phase_count, ppat_num_patterns);
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d };\n",
+            ppat_phase_count, ppat_num_patterns, ppat_lib_cap);
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -561,8 +614,15 @@ float *ppat_load_weights(const char *path) {
     }
     int file_phases = atoi(pp + 7);
     int file_np = atoi(np + 12);
+    /* libCap travels with the model; files predating the field are cap 2.  Build
+     * the canon table for the file's cap BEFORE checking numPatterns, so the
+     * check compares like with like (and catches a genuine mismatch). */
+    const char *lc = strstr(buf, "libCap:");
+    int file_cap = lc ? atoi(lc + 7) : PPAT_LEGACY_LIB_CAP;
+    ppat_init(file_cap);
     if (file_np != ppat_num_patterns) {
-        fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected\n", file_np, ppat_num_patterns);
+        fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected (libCap %d)\n",
+                file_np, ppat_num_patterns, file_cap);
         free(buf); return NULL;
     }
     ppat_phase_count = file_phases;

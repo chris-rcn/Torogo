@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     Rng rng;
     rng_seed_entropy(&rng);
     g2_init_topology(9);
-    ppat_init();
+    ppat_init(2);
 
     int bits[7] = {0};
     int total = 0;

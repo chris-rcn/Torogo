@@ -26,29 +26,44 @@ const _D4 = [
 
 // ── Load-time canonicalisation ────────────────────────────────────────────────
 //
-// Raw pattern index (positions in encoding order: N, E, S, W, NE, SE, SW, NW):
-//   rawIdx = vN + 5*(vE + 5*(vS + 5*(vW + 5*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))))
-// Range: [0, 5^4 × 3^4) = [0, 50625).
+// Raw pattern index (positions in encoding order: N, E, S, W, NE, SE, SW, NW),
+// with R = 2*libCap + 1 the orthogonal radix and 3 the diagonal radix:
+//   rawIdx = vN + R*(vE + R*(vS + R*(vW + R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))))
+// Range: [0, R^4 × 3^4).  libCap 2 (R = 5, 50625 configurations) is the
+// historical encoding and the SB paper's: an orthogonal is atari or not.
+// Higher caps resolve more liberty levels — the cap is a property of a trained
+// model and travels in its weights file as `libCap`; files without the field
+// are cap 2.  MUST stay bit-identical to c/ppat.c (encode8 / adj_val).
 //
 // The encoding is already relative to the current mover (FRIEND/FOE), so color
 // swap is NOT a symmetry.  Only the 8 D4 spatial transforms are applied.
-// CANON_ID maps raw → dense canonical ID (0-based).
+// canonId maps raw → dense canonical ID (0-based); Int32Array because cap 4
+// canonicalises to ~71k patterns, past Int16's range.
 
-const _CANON_ID = new Int16Array(50625);
+const MIN_LIB_CAP = 1, MAX_LIB_CAP = 4;   // cap 1 = presence-only (pure shape)
+const _tablesByCap = new Map();   // libCap → { canonId, numPatterns, rawSize }
 
-const NUM_PATTERNS = (function _buildTables() {
+function _buildTables(libCap) {
+  if (!(libCap >= MIN_LIB_CAP && libCap <= MAX_LIB_CAP))
+    throw new Error(`ppat: libCap ${libCap} out of range [${MIN_LIB_CAP},${MAX_LIB_CAP}]`);
+  const cached = _tablesByCap.get(libCap);
+  if (cached) return cached;
+
+  const R = 2 * libCap + 1;
+  const rawSize = R * R * R * R * 81;
+  const canonId = new Int32Array(rawSize);
   const v  = new Int32Array(8);
   const tv = new Int32Array(8);
   const idMap = new Map(); // minVariant rawIdx → assigned canonId
   let nextId = 0;
 
-  for (let raw = 0; raw < 50625; raw++) {
-    // Decode: positions 0-3 have base 5, positions 4-7 have base 3.
+  for (let raw = 0; raw < rawSize; raw++) {
+    // Decode: positions 0-3 have base R, positions 4-7 have base 3.
     let r = raw;
-    v[0] = r % 5; r = (r / 5) | 0;
-    v[1] = r % 5; r = (r / 5) | 0;
-    v[2] = r % 5; r = (r / 5) | 0;
-    v[3] = r % 5; r = (r / 5) | 0;
+    v[0] = r % R; r = (r / R) | 0;
+    v[1] = r % R; r = (r / R) | 0;
+    v[2] = r % R; r = (r / R) | 0;
+    v[3] = r % R; r = (r / R) | 0;
     v[4] = r % 3; r = (r / 3) | 0;
     v[5] = r % 3; r = (r / 3) | 0;
     v[6] = r % 3;
@@ -59,15 +74,22 @@ const NUM_PATTERNS = (function _buildTables() {
     for (let di = 0; di < 8; di++) {
       const p = _D4[di];
       for (let i = 0; i < 8; i++) tv[p[i]] = v[i];
-      const enc = tv[0] + 5*(tv[1] + 5*(tv[2] + 5*(tv[3] + 5*(tv[4] + 3*(tv[5] + 3*(tv[6] + 3*tv[7]))))));
+      const enc = tv[0] + R*(tv[1] + R*(tv[2] + R*(tv[3] + R*(tv[4] + 3*(tv[5] + 3*(tv[6] + 3*tv[7]))))));
       if (enc < minV) minV = enc;
     }
 
     if (!idMap.has(minV)) idMap.set(minV, nextId++);
-    _CANON_ID[raw] = idMap.get(minV);
+    canonId[raw] = idMap.get(minV);
   }
-  return nextId;
-}());
+  const t = { canonId, numPatterns: nextId, rawSize, R, libCap };
+  _tablesByCap.set(libCap, t);
+  return t;
+}
+
+// Default tables (cap 2) — the historical encoding, built eagerly so callers that
+// never load a model (tests, counters) work unchanged.
+const _T2 = _buildTables(2);
+const NUM_PATTERNS = _T2.numPatterns;
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -221,8 +243,8 @@ function createState(N) {
   };
 }
 
-function totalWeights(phaseCount) {
-  return phaseCount * (NUM_PATTERNS + 7);
+function totalWeights(phaseCount, libCap = 2) {
+  return phaseCount * (_buildTables(libCap).numPatterns + 7);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -237,9 +259,13 @@ function totalWeights(phaseCount) {
 //   bit 4 — Feature 5: save string in new atari by extension (is self-atari)
 //   bit 5 — Feature 6: solve a new ko by capturing
 //   bit 6 — Feature 7: 2-point semeai (give atari to adjacent enemy)
-function extractFeatures(game, state, phaseCount = 1) {
+function extractFeatures(game, state, phaseCount = 1, libCap = 2) {
   const N      = game.N;
   const cap    = N * N;
+  // Per-cap canonical tables.  _T2 is the common case (historical encoding).
+  const _tab   = libCap === 2 ? _T2 : _buildTables(libCap);
+  const _CANON = _tab.canonId, _NPAT = _tab.numPatterns, _R = _tab.R;
+  const _LC    = libCap;
   if (_sbcCells.length < cap) {
     _sbcCells = new Int32Array(cap);
     _semCells = new Int32Array(cap);
@@ -253,8 +279,8 @@ function extractFeatures(game, state, phaseCount = 1) {
   const W      = game._W;
 
   const phase = phaseCount * (cap - game.emptyCount) / cap | 0;
-  const patOffset = phase * NUM_PATTERNS;
-  const prevOffset = phaseCount * NUM_PATTERNS + phase * 7;
+  const patOffset = phase * _NPAT;
+  const prevOffset = phaseCount * _NPAT + phase * 7;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -404,21 +430,21 @@ function extractFeatures(game, state, phaseCount = 1) {
     let friendCount = 0, emptyNbr = 0, firstGid = -2, sameGroup = 0;
     let vN, vS2, vW2, vE2;
     if (cN === 0) { emptyNbr++; vN = 0; }
-    else { const g_ = gidArr[niN]; const a_ = lsArr[g_] === 1;
-      if (cN === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vN = a_ ? 2 : 1; }
-      else vN = a_ ? 4 : 3; }
+    else { const g_ = gidArr[niN]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+      if (cN === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vN = s_; }
+      else vN = _LC + s_; }
     if (cS === 0) { emptyNbr++; vS2 = 0; }
-    else { const g_ = gidArr[niS]; const a_ = lsArr[g_] === 1;
-      if (cS === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vS2 = a_ ? 2 : 1; }
-      else vS2 = a_ ? 4 : 3; }
+    else { const g_ = gidArr[niS]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+      if (cS === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vS2 = s_; }
+      else vS2 = _LC + s_; }
     if (cW === 0) { emptyNbr++; vW2 = 0; }
-    else { const g_ = gidArr[niW]; const a_ = lsArr[g_] === 1;
-      if (cW === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vW2 = a_ ? 2 : 1; }
-      else vW2 = a_ ? 4 : 3; }
+    else { const g_ = gidArr[niW]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+      if (cW === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vW2 = s_; }
+      else vW2 = _LC + s_; }
     if (cE === 0) { emptyNbr++; vE2 = 0; }
-    else { const g_ = gidArr[niE]; const a_ = lsArr[g_] === 1;
-      if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = a_ ? 2 : 1; }
-      else vE2 = a_ ? 4 : 3; }
+    else { const g_ = gidArr[niE]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+      if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = s_; }
+      else vE2 = _LC + s_; }
 
     if (friendCount === 3 && emptyNbr === 1 && sameGroup === 3) continue;
     if (friendCount === 4) {
@@ -437,13 +463,13 @@ function extractFeatures(game, state, phaseCount = 1) {
     const cSW2 = cells[dnbr[b4 + 2]], vSW = cSW2 === 0 ? 0 : (cSW2 === cur ? 1 : 2);
     const cNW2 = cells[dnbr[b4]],     vNW = cNW2 === 0 ? 0 : (cNW2 === cur ? 1 : 2);
 
-    const rawIdx = vN + 5*(vE2 + 5*(vS2 + 5*(vW2 + 5*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+    const rawIdx = vN + _R*(vE2 + _R*(vS2 + _R*(vW2 + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
 
     state.moves[count] = idx;
     state.featStart[count] = nf;
 
     // Pattern feature
-    state.feat[nf++] = patOffset + _CANON_ID[rawIdx];
+    state.feat[nf++] = patOffset + _CANON[rawIdx];
 
     // ── Previous-move features ────────────────────────────────────────────────
     let mask = 0;
@@ -513,7 +539,7 @@ function extractFeatures(game, state, phaseCount = 1) {
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount);
+  extractFeatures(game, state, model.phaseCount, model.libCap);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -559,7 +585,7 @@ function ppatMove(game, state, model) {
     if (fullness < ubp) return game.randomLegalMove();
   }
 
-  extractFeatures(game, state, model.phaseCount);
+  extractFeatures(game, state, model.phaseCount, model.libCap);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -600,15 +626,23 @@ function loadWeights(pathOrObj) {
     try { raw = require(_path.resolve(raw)); } catch (e) { return null; }
   }
   if (!raw || !raw.weights) return null;
-  if (raw.numPatterns != null && raw.numPatterns !== NUM_PATTERNS) {
-    console.error(`ppat loadWeights: numPatterns=${raw.numPatterns} in file but ${NUM_PATTERNS} expected`);
+  // libCap travels with the model; files predating the field are the historical
+  // cap 2.  Build that cap's tables first so numPatterns is checked like-for-like.
+  const libCap = raw.libCap != null ? raw.libCap : 2;   // pre-libCap files are cap 2
+  if (!(libCap >= MIN_LIB_CAP && libCap <= MAX_LIB_CAP)) {
+    console.error(`ppat loadWeights: libCap=${libCap} out of range [${MIN_LIB_CAP},${MAX_LIB_CAP}]`);
+    return null;
+  }
+  const nPat = _buildTables(libCap).numPatterns;
+  if (raw.numPatterns != null && raw.numPatterns !== nPat) {
+    console.error(`ppat loadWeights: numPatterns=${raw.numPatterns} in file but ${nPat} expected (libCap ${libCap})`);
     return null;
   }
   if (raw.ladder === true) {
     console.error('ppat loadWeights: ladder models are no longer supported (ladder features removed)');
     return null;
   }
-  return { phaseCount: raw.phases || 1, weights: raw.weights };
+  return { phaseCount: raw.phases || 1, weights: raw.weights, libCap };
 }
 
 const PPatterns = {

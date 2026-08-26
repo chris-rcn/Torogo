@@ -516,7 +516,7 @@ static void bench_extract(void) {
 int main(void) {
     rng_seed_entropy(&rng);
     g2_init_topology(9);
-    ppat_init();
+    ppat_init(2);
 
     test_pattern_count();
     test_extract_basic();

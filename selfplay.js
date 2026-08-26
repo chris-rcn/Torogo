@@ -12,7 +12,31 @@ const { performance } = require('perf_hooks');
  *   --size    <n>        Board size: 9, 13, or 19    (default 13)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
- *   --rand-moves <n>     Play n random moves at the start of each position (default 3)
+ *   --rand-moves <n>     Play n random moves at the start of each position (default 4).
+ *                        A randomised opening (this or --rand-mirror-pairs) starts
+ *                        from an EMPTY board — the free centre stone is a
+ *                        first-move time-saver, and the random opening supplies
+ *                        that move itself.  --rand-moves 0 keeps the free stone.
+ *                        Defaults to 0 when --rand-mirror-pairs is set, so a
+ *                        balanced opening stays balanced; pass it explicitly to
+ *                        add symmetry-breaking moves on top.
+ *                        The default of 4 reproduces the old opening exactly: the
+ *                        free centre stone plus 3 random moves was 4 stones with
+ *                        black to move, and 4 random moves is the same position
+ *                        distribution up to a translation (the torus is
+ *                        vertex-transitive, so black's first move is arbitrary)
+ *   --rand-mirror-pairs <n>  Before --rand-moves, play n random MIRROR PAIRS: each
+ *                        random move is answered by its 180-degree rotation.  On a
+ *                        toroidal board that rotation is an exact automorphism, so
+ *                        the result is invariant under (rotate 180 + swap colours)
+ *                        — an exactly balanced position, no side favoured.  Plain
+ *                        random openings are fair (the pair shares one opening) but
+ *                        a lopsided one is decided before either agent moves, and
+ *                        the colour-swapped pair then splits 1-1 and carries no
+ *                        information.  Balancing converts those wasted pairs into
+ *                        informative ones.  Starts from an empty board (see
+ *                        --rand-moves): the free centre stone is unpaired and
+ *                        would break the antisymmetry outright        (default 0)
  *   --min-phase <f>      p1/p2 only play once board phase (1−empty/area) ≥ f; the
  *                        fallback plays the opening up to it       (default 0)
  *   --max-phase <f>      p1/p2 stop once phase > f; the fallback completes the
@@ -47,7 +71,7 @@ const Util = require('./util.js');
 const VERBOSE = Util.envInt('VERBOSE', 0);
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'stop-tol', 'stop-min',
+  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'rand-mirror-pairs', 'stop-tol', 'stop-min',
    'min-phase', 'max-phase', 'fallback']);
 
 if (opts.help) {
@@ -66,7 +90,12 @@ const p1Name    = opts.p1   || 'prod';
 const p2Name    = opts.p2   || p1Name;
 const boardSize = parseInt(opts.size || '13', 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
-const randMoves = parseInt(opts['rand-moves'] || '3', 10);
+const randMirrorPairs = parseInt(opts['rand-mirror-pairs'] || '0', 10);
+// --rand-moves defaults to 0 once mirror pairs are requested: those extra stones
+// are unbalanced and would undo the antisymmetry the pairs just established (and
+// silently deepen the opening, which is not what "balanced opening" should mean).
+// Pass --rand-moves explicitly to compose the two deliberately.
+const randMoves = parseInt(opts['rand-moves'] ?? (randMirrorPairs > 0 ? '0' : '4'), 10);
 
 // Phase window: p1/p2 only play moves with phase (= 1 − empty/area) in
 // [min-phase, max-phase]; the fallback agent plays both sides outside it.  The
@@ -369,12 +398,66 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
 }
 
 // Run games until the limit (or forever if no limit).
+// 180-degree rotation of a board index.  The torus has no edges, so the point
+// reflection (x,y) -> (-x, -y) mod N is an exact automorphism of the board.
+function mirror180(idx, N) {
+  const x = idx % N, y = (idx - x) / N;
+  return ((N - y) % N) * N + ((N - x) % N);
+}
+
+// True when the position is invariant under (rotate 180 + swap colours), i.e.
+// exactly balanced: every stone has an opposite-coloured counterpart at its
+// rotation, so neither side can hold an advantage.
+function isAntisymmetric(game) {
+  const N = game.N, area = N * N;
+  for (let i = 0; i < area; i++)
+    if (game.cells[i] !== -game.cells[mirror180(i, N)]) return false;
+  return true;
+}
+
+// Play a random move and its 180-degree rotation, leaving the position invariant
+// under (rotate 180 + swap colours) — exactly balanced, neither side favoured.
+// Returns false when no pair can be placed.  Two ways a draw fails: the move is a
+// fixed point of the involution (one such point on odd N, four on even N), or the
+// mirror is illegal once the first stone is down (ko).  Validated on a clone
+// because Game2 has no undo.
+function playMirrorPair(game) {
+  for (let tries = 0; tries < 32; tries++) {
+    const idx = game.randomLegalMove();
+    if (idx === PASS) return false;
+    const m = mirror180(idx, game.N);
+    if (m === idx) continue;
+    const trial = game.clone();
+    if (!trial.play(idx) || !trial.play(m)) continue;
+    // Captures can interact when the two moves land close together on the torus:
+    // the first stone's capture changes the board before its mirror is played, so
+    // the mirrored capture need not match.  Rare (~1 in 400 openings), and cheap
+    // to exclude outright by checking the invariant rather than assuming it.
+    if (!isAntisymmetric(trial)) continue;
+    game.play(idx);
+    game.play(m);
+    return true;
+  }
+  return false;
+}
+
 // Each opening is played twice with swapped colors.
 let gamesPlayed = 0;
 let decided = false;
 while (gamesPlayed < gameLimit && !decided) {
   // Generate a random opening position.
-  const opening = new Game2(boardSize);
+  // Any randomised opening starts from an EMPTY board.  Game2's free centre stone
+  // is only a time-saver — the torus is vertex-transitive, so black's first move
+  // is arbitrary and may as well be placed for free — but once the opening is
+  // randomised the first random move already IS that move, and keeping the centre
+  // stone would just prepend a fixed stone to a random opening.  With mirror pairs
+  // it also breaks the antisymmetry outright, being unpaired (and on even N it
+  // sits on a fixed point of the involution, where it cannot be mirrored at all).
+  const opening = new Game2(boardSize, randMirrorPairs === 0 && randMoves === 0);
+  // Mirror pairs first (balanced), then plain random moves (which break the
+  // symmetry), then the fallback up to --min-phase.
+  for (let i = 0; i < randMirrorPairs && !opening.gameOver; i++)
+    if (!playMirrorPair(opening)) break;
   for (let i = 0; i < randMoves && !opening.gameOver; i++)
     opening.play(opening.randomLegalMove());
 

@@ -21,9 +21,30 @@
 #include "game2.h"
 
 /* ── Constants ─────────────────────────────────────────────────────────────── */
-#define PPAT_RAW_SIZE  50625           /* 5^4 * 3^4 */
+/* Orthogonal-neighbour liberty cap.  Each orthogonal is encoded in radix
+ * 2*cap+1 (0 empty, 1..cap own with that many liberties, cap+1..2*cap enemy);
+ * diagonals are always shape-only (radix 3).  cap 2 is the historical encoding
+ * (atari vs not) and the SB paper's; files without a `libCap` field are cap 2.
+ * cap 1 degenerates to presence-only (every stone caps to 1 liberty, so the
+ * orthogonals encode 0/1/2 like the diagonals) — the whole 3x3 becomes pure
+ * shape, useful as an ablation isolating what the atari bit is worth.
+ * The cap is a property of a trained model and travels in its weights file.
+ * Raw space = (2*cap+1)^4 * 3^4: 6561 (cap 1), 50625 (2), 194481 (3), 531441 (4). */
+#define PPAT_MIN_LIB_CAP  1
+#define PPAT_MAX_LIB_CAP  4
+/* Weight files predating the libCap field are the historical encoding, cap 2.
+ * NOT PPAT_MIN_LIB_CAP: that floor dropped to 1 when cap-1 support landed, and
+ * tying the legacy default to it silently reinterpreted every old file. */
+#define PPAT_LEGACY_LIB_CAP  2
+#define PPAT_RAW_SIZE  531441          /* 9^4 * 3^4 — the cap-4 (max) raw space */
 
-extern int16_t ppat_canon_id[PPAT_RAW_SIZE];
+/* Widened to 32-bit: cap 4 canonicalises to ~71k patterns, past int16's range.
+ * A POINTER, not an array: one table per libCap is built on first use and kept,
+ * so alternating caps (a match between models built at different caps) costs a
+ * pointer swap instead of a multi-megabyte rebuild. */
+extern const int32_t *ppat_canon_id;
+extern int32_t ppat_lib_cap;           /* active cap (set by ppat_init) */
+extern int32_t ppat_raw_size;          /* (2*cap+1)^4 * 81 for the active cap */
 extern int32_t ppat_num_patterns;      /* set by ppat_init() */
 extern int     ppat_phase_count;       /* number of game phases (default 1 = no phase splitting) */
 extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_move plays uniform random while board fullness (cap-empty)/cap < this fraction [0,1] */
@@ -43,7 +64,10 @@ typedef struct {
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
 
-void     ppat_init(void);              /* call once at startup (builds canon table) */
+/* Build the canonical-ID table for `lib_cap` (PPAT_MIN_LIB_CAP..PPAT_MAX_LIB_CAP).
+ * Idempotent per cap: a repeat call with the same cap is a no-op.  Must be called
+ * before any extraction, and again if a loaded model uses a different cap. */
+void     ppat_init(int lib_cap);
 
 /* Total weight count: phase_count * (num_patterns + 7) */
 static inline int ppat_total_weights(void) {
