@@ -1,6 +1,6 @@
 'use strict';
 
-// rand-ppat: a deliberately minimal agent whose ONLY decision input is the
+// mc-ppat: a deliberately minimal agent whose ONLY decision input is the
 // ppat playout policy — built to measure playout quality directly.
 //
 // Each move: sample CANDIDATES legal non-eye moves uniformly at random, split
@@ -21,7 +21,7 @@
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (slot-aware env),
 // so P1_/P2_ prefixes select a different model per side in selfplay:
-//   P1_PPAT_DATA=a.js P2_PPAT_DATA=b.js node selfplay.js --p1 rand-ppat --p2 rand-ppat
+//   P1_PPAT_DATA=a.js P2_PPAT_DATA=b.js node selfplay.js --p1 mc-ppat --p2 mc-ppat
 //
 // Config:
 //   CANDIDATES    moves sampled per decision                     (default 2)
@@ -53,9 +53,9 @@ function create(cfg) {
   const model    = PPat.loadWeights(ppatPath);
   // Hard failure, not a fallback: this agent exists to measure a ppat model, so
   // silently running uniform playouts would produce a meaningless comparison.
-  if (!model) throw new Error(`rand-ppat: cannot load ppat weights from ${ppatPath}`);
+  if (!model) throw new Error(`mc-ppat: cannot load ppat weights from ${ppatPath}`);
   model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
-  console.log(`rand-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
+  console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
               (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : `${PLAYOUTS} playouts/move`) +
               ` over ${CANDIDATES} candidates`);

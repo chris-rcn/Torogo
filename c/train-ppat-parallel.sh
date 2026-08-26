@@ -1,9 +1,9 @@
 #!/bin/sh
-# run-ppat-parallel.sh — launch K train_ppat workers that parameter-average θ,
+# train-ppat-parallel.sh — launch K train_ppat workers that parameter-average θ,
 # plus one dedicated monitor that tests the averaged checkpoint without stalling
 # the trainers.
 #
-#   ./run-ppat-parallel.sh <K> <data> [extra train_ppat args...]
+#   ./train-ppat-parallel.sh <K> <data> [extra train_ppat args...]
 #
 # The K trainers run silently in the background; every --sync-every positions they
 # file-barrier all-reduce (mean) their weights, and worker 0 writes the averaged
@@ -12,7 +12,7 @@
 # off the training critical path, the trainers never wait on it.
 #
 # Example (10 trainers, sync every 2000 positions):
-#   ./run-ppat-parallel.sh 10 out/evals-s9-500k.txt --M 100 --N 100 --lr 5 \
+#   ./train-ppat-parallel.sh 10 out/evals-s9-500k.txt --M 100 --N 100 --lr 5 \
 #       --train-pos 24000 --test-pos 2000 --sync-every 2000
 set -e
 # Locate the binary by absolute path but keep the caller's cwd, so relative
@@ -37,15 +37,35 @@ else
     TP_MSG="train-pos (total): (train_ppat default = all after test head)"
 fi
 
+# The trainers' stdout goes to /dev/null (the monitor owns the terminal), so a
+# seed chosen inside train_ppat would never be seen.  Choose it here instead, so
+# a single-worker run can be replayed.  Honour an explicit --seed in the passed
+# args rather than overriding it.
+SEED=""; prev=""
+for a in "$@"; do
+    [ "$prev" = "--seed" ] && { SEED="$a"; break; }
+    prev="$a"
+done
+if [ -n "$SEED" ]; then
+    SEED_ARGS=""                                   # already in "$@"
+else
+    SEED=$(( ($(date +%s) + $$ * 7919) % 2147483647 ))
+    SEED_ARGS="--seed $SEED"
+fi
+
 # Fresh sync dir (avoid stale round files from a previous run).
 rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 
 echo "launching $K trainers + 1 monitor;  $TP_MSG"
 echo "sync-dir: $SYNC_DIR  checkpoint: $CKPT  best: $BEST"
+# Only worth reporting at K=1.  Above that the sync barrier's poll loop draws from
+# the training RNG, so wall-clock timing perturbs the stream and the seed replays
+# nothing — printing it would just be noise.
+[ "$K" -eq 1 ] && echo "seed: $SEED  (replay with --seed $SEED)"
 PIDS=""
 i=0
 while [ "$i" -lt "$K" ]; do
-    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" --save "$CKPT" "$@" >/dev/null 2>&1 &
+    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" --save "$CKPT" $SEED_ARGS "$@" >/dev/null 2>&1 &
     PIDS="$PIDS $!"
     i=$((i + 1))
 done
