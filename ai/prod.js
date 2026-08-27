@@ -8,7 +8,7 @@
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
 // nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
 // evaluation.  Playout policy: single-phase SB-trained ppat checkpoint
-// ppat-data.js (= ppat-3374337, teMSE 0.0213 on eval-s9-mega); in the
+// ppat-data.js (= ppat-data-287076-best, band-trained, score 65.35); in the
 // browser, load ppat-lib.js and ppat-data.js (sets window.PPATWeights) first.
 //
 // Each unexpanded edge is expanded on first contact: a leaf node is created

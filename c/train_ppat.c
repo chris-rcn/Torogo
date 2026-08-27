@@ -47,8 +47,8 @@
  *                           local features are worth, alongside --lib-cap 1, which
  *                           ablates liberty information from the 3x3 pattern.
  *     --ref-weights <path>  reference model for the directWR column (default
- *                           ref/ppat-3374337.js, the model ref-ppat plays;
- *                           "none" disables the column).  Each row plays
+ *                           ref/ppat-data-287076-best.js, the band-trained
+ *                           standard; "none" disables the column).  Each row plays
  *                           --ref-games policy-only games (no search, no tree)
  *                           between the current model and the reference and
  *                           reports the current model's win rate, so it reads
@@ -105,7 +105,7 @@ static int    cfg_no_local;            /* 1 = freeze the 7 previous-move ("local
 /* Board size of the training positions; global because topology is (g2_init_topology). */
 static int    topo_init = 0;
 static int    topo_size = 0;
-static const char *cfg_ref_weights;    /* reference model for both match columns (NULL = off) */
+static const char *cfg_ref_weights;    /* reference model for the directWR column (NULL = off) */
 
 /* Match-column calibration.  Constants rather than CLI flags: these are
  * instrument settings, not per-run choices — pick good ones once.
@@ -114,30 +114,11 @@ static const char *cfg_ref_weights;    /* reference model for both match columns
  *   directWR  27.3 = uniform, 50.0 = as good as the reference.  The neutral
  *             point is EXACT, not estimated: with identical weights both seats
  *             play the same game, so each colour-swapped pair scores one win and
- *             one loss by construction and the self-match cannot drift off 50.
- *   WR        48.0 = uniform rollouts, 60.5 = as good as the reference. */
+ *             one loss by construction and the self-match cannot drift off 50. */
 #define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp, ~3s at size 10 */
-#define MCWR_GAMES          5000   /* mcWR, FIRST row: ~9ms/game, SE ~0.7pp */
-#define MATCH_GROWTH       1.1   /* both match efforts grow this much per printed row */
+#define MATCH_GROWTH       1.1   /* match effort grows this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */
-#define MCWR_SIZE              8   /* mcWR board size; cost grows as size^4 */
-#define MCWR_CANDIDATES        0   /* 0 = every legal non-eye move; >0 samples that many */
-/* Playouts PER CANDIDATE — not a total, unlike mc-ppat's PLAYOUTS.
- *
- * 1 is right, but not for the reason first recorded.  The original sweep judged
- * it by a wider spread between calibration arms; re-running the ladder against a
- * known-good model in a live regime (size 8, mc-ppat, 1000 games/arm) shows
- * the signal is FLAT — 54.6 / 55.3 / 54.6 % at 1/2/4 per candidate — while cost
- * scales linearly (0.29 / 0.76 / 1.11 s/game).  Flat signal over linear cost
- * means the cheapest setting wins by default, and nothing above 1 earns its
- * keep.  (RAVE behaves oppositely here: it needs 300+ playouts before a better
- * playout policy helps it at all.  Without a tree, depth buys nothing.)  The underlying separation does grow
- * with playouts (0.62 -> 1.21 logits), but it all goes into raising the neutral
- * point (61.5 -> 93.9) rather than widening the readable range, so the pp
- * spread stalls and then shrinks against the ceiling.  Cost-adjusted
- * signal-to-noise falls monotonically: 30.7 / 23.2 / 18.8 / 13.5. */
-#define MCWR_CAND_PLAYOUTS     1
-#define MATCH_UNIFORM_BELOW 0.6f /* both columns play/roll out uniform below this fullness, as the u6 rungs do */
+#define MATCH_UNIFORM_BELOW 0.6f /* both sides play uniform below this fullness, as the u6 rungs do */
 
 /* Polyak-Ruppert weight averaging.  The window is in AGGREGATE POSITIONS, not in
  * sync rounds: --sync-every is a comms/round-error knob that should scale with lr
@@ -1100,135 +1081,9 @@ static float direct_match_wr(int games) {
     return played > 0 ? (float)wins / (float)played : 0.0f;
 }
 
-/* ── mcWR: the mc-ppat instrument, current model vs the same reference ───────
- * The current model plays as mc-ppat: each decision runs one playout per
- * candidate move and plays (uniformly) one of the candidates whose playout won.
- * The reference plays as ref-ppat — its raw policy, one sample per move, no
- * playouts.  So mcWR measures the playout policy the way an agent actually
- * consumes it, against a fixed opponent; directWR measures the policy's own
- * move choices; teMSE measures its value error.
- *
- * WHY ASYMMETRIC, not a head-to-head of two mc-ppat players: the fixed weak
- * opponent is an amplifier.  On the same contrast (uniform rollouts vs the
- * reference) this design spans 14.0pp while head-to-head spans 3.3pp over 33
- * repeat runs — 4.2x the range, so ~18x the signal per game before counting
- * cost, and head-to-head runs the search on BOTH sides.  Playouts cannot close
- * it: signal grows as cost^0.70, so efficiency goes as cost^0.4 and an 18x gap
- * would need ~1400x the budget.  Head-to-head's one real advantage is a neutral
- * point of exactly 50 rather than an empirical one.
- *
- * Both sides play uniform below MATCH_UNIFORM_BELOW and only then take over, so
- * the model is measured where it was trained and the opening repeats exactly
- * from row to row.  Skipping the opening left the span intact while cutting the
- * cost ~5x, so the whole saving is free noise reduction.
- *
- * Breadth is what makes it work: an argmax over N one-sample estimates lets the
- * rollout policy's bias steer the move choice.  Few candidates with many
- * playouts each evaluates precisely, but the choice between two random moves
- * rarely decides a game — 2 x 50 gave 51% for trained-vs-uniform where
- * wide-and-shallow gives a 13.6pp spread.
- *
- * Cost is ~sum(e^2) policy calls per game (e = empties), i.e. it grows as the
- * FOURTH power of board size — hence MCWR_SIZE well below the training data's. */
-static PpatState mcwr_sel_st, mcwr_roll_st;
-static int32_t   mcwr_cand[MAX_CAP];
-
-/* One mcWR decision for the side holding `w`. */
-static int32_t mcwr_move(const Game2 *g, const float *w, Rng *rng) {
-    /* Below the threshold, play uniform instead of searching — mirroring
-     * selfplay's --min-phase.  The model was never trained there, and skipping
-     * it removes ~85% of the match's playouts: the candidate list is longest in
-     * the opening, so that is where nearly all the search cost sits.
-     * g2_random_legal_move only reorders the empty list, hence the const cast
-     * (same as ppat_policy_move's uniform fast path). */
-    if ((float)(g->cap - g->empty_count) / g->cap < MATCH_UNIFORM_BELOW)
-        return g2_random_legal_move((Game2 *)g, rng);
-
-    ppat_extract(g, &mcwr_sel_st);
-    const int n = mcwr_sel_st.count;
-    if (n == 0) return PASS;
-
-    /* Every legal non-eye move, or a uniform sample of MCWR_CANDIDATES of them. */
-    int k = n;
-    if (MCWR_CANDIDATES > 0 && MCWR_CANDIDATES < n) {
-        k = MCWR_CANDIDATES;
-        for (int i = 0; i < n; i++) {
-            if (i < k) mcwr_cand[i] = mcwr_sel_st.moves[i];
-            else {
-                int j = (int)(rng_float(rng) * (i + 1));
-                if (j < k) mcwr_cand[j] = mcwr_sel_st.moves[i];
-            }
-        }
-    } else {
-        for (int i = 0; i < n; i++) mcwr_cand[i] = mcwr_sel_st.moves[i];
-    }
-
-    const int mover = g->current;
-    int32_t best = mcwr_cand[0];
-    double  bestv = -1.0;
-    for (int c = 0; c < k; c++) {
-        int cw = 0;
-        for (int pl = 0; pl < MCWR_CAND_PLAYOUTS; pl++) {
-            Game2 sim;
-            g2_clone(&sim, g);
-            g2_play(&sim, mcwr_cand[c]);
-            while (!sim.game_over) g2_play(&sim, ppat_policy_move(&sim, &mcwr_roll_st, w, rng));
-            if (g2_estimate_winner(&sim) == mover) cw++;
-        }
-        /* Values are multiples of 1/MCWR_CAND_PLAYOUTS, so the dither breaks exact
-         * ties without ever reordering distinct means.  DOUBLE, not float: at one
-         * playout 1.0f + 1e-9f rounds back to 1.0f and the tie-break vanishes. */
-        double v = (double)cw / MCWR_CAND_PLAYOUTS + rng_float(rng) * 1e-9;
-        if (v > bestv) { bestv = v; best = mcwr_cand[c]; }
-    }
-    return best;
-}
-
-/* Play `games` games at MCWR_SIZE, alternating seats; returns the current model's
- * win rate. */
-static float mcwr_match(int games) {
-    /* Topology is a global keyed on board size; borrow it for the board and put
-     * the training data's size back before returning.  The uniform-below regime
-     * covers BOTH sides and the rollouts: below the threshold neither player
-     * reads any weights, so with a per-pair seed every game's opening is
-     * identical from row to row (see direct_match_wr). */
-    g2_init_topology(MCWR_SIZE);
-    const float saved_ubp = ppat_uniform_below_phase;
-    ppat_uniform_below_phase = MATCH_UNIFORM_BELOW;
-
-    static PpatState ref_st;
-    Rng rng;
-    const double t0 = wall_now();
-    int wins = 0, played = 0;
-    for (int i = 0; i < games; i++) {
-        if (wall_now() - t0 >= MATCH_MAX_S) { match_truncated = 1; break; }
-        rng_seed(&rng, 0x5eed4321L + (i >> 1));   /* shared opening per colour-swapped pair */
-        const int cur_is_black = (i & 1) == 0;
-        Game2 game;
-        g2_new(&game, MCWR_SIZE);
-        while (!game.game_over) {
-            const int black_to_move = (game.current == BLACK);
-            if (black_to_move == cur_is_black) {
-                use_run_model();
-                g2_play(&game, mcwr_move(&game, theta, &rng));                       /* mc-ppat */
-            } else {
-                use_ref_model();
-                g2_play(&game, ppat_policy_move(&game, &ref_st, ref_theta, &rng)); /* ref-ppat  */
-            }
-        }
-        if ((g2_estimate_winner(&game) == BLACK) == cur_is_black) wins++;
-        played++;
-    }
-
-    g2_init_topology(topo_size);
-    use_run_model();
-    ppat_uniform_below_phase = saved_ubp;
-    return played > 0 ? (float)wins / (float)played : 0.0f;
-}
-
-/* Both matches step their game count up MATCH_GROWTH per printed row.  Rows are
+/* The match steps its game count up MATCH_GROWTH per printed row.  Rows are
  * already geometric (1.3 in the monitor, 1.5 inline), so a slower 1.1 keeps the
- * matches a SHRINKING fraction of each row interval while the columns get
+ * match a SHRINKING fraction of each row interval while the columns get
  * quieter exactly when the differences being judged get smaller.  The early
  * rows stay cheap, which is when they are closest together. */
 static double match_scale = 1.0;
@@ -1246,46 +1101,32 @@ static int peak_col(double v, double *best, const char *fmt, char *buf, size_t n
     return is_peak;
 }
 
-/* Last row's blended score and whether it set a new high — what -best keys on.
- * teMSE cannot drive it: it is off by default, it went flat for 5x more training
- * while directWR climbed 3.4pp, and on the one pair where the two disagreed a
- * live strength match backed directWR.  score also halves the noise of either
- * column alone, which matters for an argmax that would otherwise fire on upward
- * excursions. */
+/* Last row's directWR and whether it set a new high — what -best keys on.
+ * directWR is the one indicator that cannot be gamed by anything except playing
+ * better (no oracle, no estimator layer, out-of-sample by construction) and it
+ * sided with live play every time another metric disagreed.  Its retired
+ * companions measured the estimator/calibration axis, which saturates almost
+ * immediately under band training: teMSE went flat for 5x more training while
+ * directWR climbed, and mcWR spent a million positions inside a 0.4pp band
+ * while directWR gained 5pp. */
 static double match_score = 0;
 static int    match_score_peak = 0;
 
-/* Fill directWR, WR and their blend for one row, then step the effort up for the
- * next.  Single entry point so the scale advances exactly once per row, whichever
- * of the three print paths produced it.
- *
- * score is the plain mean of the two win rates.  No normalising constants, so
- * nothing in it drifts when the match regime changes — and it happens to be very
- * near the signal-to-noise optimum anyway: weighting by signal/variance gives
- * directWR 22.7pp/0.9pp^2 = 28.0 against mcWR 12.5pp/0.7pp^2 = 25.5, i.e. within
- * 10% of equal.  Normalising each to its own range instead would weight the
- * NOISIER column nearly twice as heavily, which is backwards.
- *
- * Averaging two independent measurements roughly halves the noise, which matters
- * because a single column has produced multi-sigma excursions in both directions.
- * For reading it: uniform rollouts sit near 37.7 (27.3 + 48.0)/2 and par with the
- * reference near 55.3 (50.0 + 60.5)/2. */
-static void match_cols(char *dw, size_t dwn, char *wr, size_t wrn, char *sc, size_t scn) {
-    static double best_d = -1e9, best_w = -1e9, best_s = -1e9;
+/* Fill directWR for one row, then step the effort up for the next.  Single
+ * entry point so the scale advances exactly once per row, whichever print path
+ * produced it. */
+static void match_cols(char *dw, size_t dwn) {
+    static double best_d = -1e9;
     match_truncated = 0;
     if (!ref_theta) {
-        snprintf(dw, dwn, "-"); snprintf(wr, wrn, "-"); snprintf(sc, scn, "-");
+        snprintf(dw, dwn, "-");
         match_score = 0; match_score_peak = 0;
         return;
     }
     const double d = 100.0 * direct_match_wr(match_games(DIRECT_GAMES));
-    const double w = 100.0 * mcwr_match(match_games(MCWR_GAMES));
-    const double s = 0.5 * (d + w);
-    peak_col(d, &best_d, "%.1f", dw, dwn);
-    peak_col(w, &best_w, "%.1f", wr, wrn);
-    match_score      = s;
-    match_score_peak = peak_col(s, &best_s, "%.1f", sc, scn);
-    /* Once a match is being cut short at MATCH_MAX_S, raising the effort only
+    match_score      = d;
+    match_score_peak = peak_col(d, &best_d, "%.1f", dw, dwn);
+    /* Once the match is being cut short at MATCH_MAX_S, raising the effort only
      * grows a game count that will never be reached — so stop growing. */
     if (!match_truncated) match_scale *= MATCH_GROWTH;
 }
@@ -1349,14 +1190,14 @@ static void run_monitor(void) {
     if (cfg_phase >= 0) printf(", phase %d only (others frozen)", cfg_phase);
     printf("\n");
     if (ref_theta)
-        printf("matches: directWR %d + WR %d games on the first row, +%.0f%%/row capped at %.0f min each, "
+        printf("match: directWR %d games on the first row, +%.0f%%/row capped at %.0f min, "
                "vs %s (libCap %d, %d phase(s))\n",
-               DIRECT_GAMES, MCWR_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
+               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
                cfg_ref_weights, ref_lib_cap, ref_phases);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s", "nWts", "avgW");
-    if (ref_theta) printf("  %8s  %6s  %6s", "directWR", "mcWR", "score");
+    if (ref_theta) printf("  %8s", "directWR");
     printf("  %8s  %7s", "elapsedS", "pos/s");
     print_weights_header();
     printf("\n");
@@ -1372,8 +1213,8 @@ static void run_monitor(void) {
         int loaded = (cfg_load != NULL);
         TestResult tr = measure_test(loaded ? 0 : 1, n_test);
         char tebuf[16];
-        char dwbuf[16], wrbuf[16], scbuf[16];
-        match_cols(dwbuf, sizeof dwbuf, wrbuf, sizeof wrbuf, scbuf, sizeof scbuf);
+        char dwbuf[16];
+        match_cols(dwbuf, sizeof dwbuf);
         /* elapsed AFTER the match columns, as every later row does — otherwise
          * the baseline row under-reports its own cost by the match time. */
         double el = wall_now() - wall_start;
@@ -1383,7 +1224,7 @@ static void run_monitor(void) {
             if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                    tr.move_match * 100.0f);
             printf("  %6d  %7s", live_weights(), "-");
-            if (ref_theta) printf("  %8s  %6s  %6s", dwbuf, wrbuf, scbuf);
+            if (ref_theta) printf("  %8s", dwbuf);
             printf("  %8s  %7s", eb, "-");
             print_weights();
             printf("\n");
@@ -1392,7 +1233,7 @@ static void run_monitor(void) {
             if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                    tr.move_match * 100.0f);
             printf("  %6s  %7s", "-", "-");
-            if (ref_theta) printf("  %8s  %6s  %6s", dwbuf, wrbuf, scbuf);
+            if (ref_theta) printf("  %8s", dwbuf);
             printf("  %8s  %7s\n", eb, "-");
         }
         fflush(stdout);
@@ -1448,8 +1289,8 @@ static void run_monitor(void) {
         double test_t0 = wall_now();
         double row_el = test_t0 - wall_start;
         TestResult tr = measure_test(0, n_test);     /* policy (full) test */
-        char dwbuf[16], wrbuf[16], scbuf[16];
-        match_cols(dwbuf, sizeof dwbuf, wrbuf, sizeof wrbuf, scbuf, sizeof scbuf);
+        char dwbuf[16];
+        match_cols(dwbuf, sizeof dwbuf);
         mon_last_test_s = wall_now() - test_t0;
 
         /* Read the position count AFTER the test so positions and wall are both
@@ -1470,13 +1311,13 @@ static void run_monitor(void) {
         if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                tr.move_match * 100.0f);
         printf("  %6d  %7.4f", live_weights(), MON_AVGW(cfg_monitor));
-        if (ref_theta) printf("  %8s  %6s  %6s", dwbuf, wrbuf, scbuf);
+        if (ref_theta) printf("  %8s", dwbuf);
         printf("  %8s  %7.0f", eb, posps);
         print_weights();
         printf("\n");
         if (is_best) {
             char bc[256];
-            if (ref_theta) snprintf(bc, sizeof bc, "Best by score: %.2f, positions: %ld", match_score, agg);
+            if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %ld", match_score, agg);
             else           snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %ld", tr.mse, agg);
             save_best(cfg_monitor, bc);
         }
@@ -1515,12 +1356,12 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
      * whole run and the switch-on point is visible. */
     clock_t test_t0 = clock();
     TestResult tr = (TestResult){0, 0, 0};
-    char dwbuf[16] = "-", wrbuf[16] = "-", scbuf[16] = "-";
+    char dwbuf[16] = "-";
     if (run_tests) {
         tr = measure_test(use_uniform, test_n);
         /* Inside the test window: the match is part of the per-row cost, so testS
          * and the switch-on threshold both account for it. */
-        match_cols(dwbuf, sizeof dwbuf, wrbuf, sizeof wrbuf, scbuf, sizeof scbuf);
+        match_cols(dwbuf, sizeof dwbuf);
         last_print_test_s = (double)(clock() - test_t0) / CLOCKS_PER_SEC;
         cumulative_test_s += last_print_test_s;
     }
@@ -1553,7 +1394,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
         else           printf("  %7s  %5s", "-", "-");
     }
     printf("  %6d  %7.4f", live_weights(), avg_abs_weight());
-    if (ref_theta) printf("  %8s  %6s  %6s", dwbuf, wrbuf, scbuf);
+    if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.0f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
@@ -1569,7 +1410,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
      * one. */
     if (is_best) {
         char bc[256];
-        if (ref_theta) snprintf(bc, sizeof bc, "Best by score: %.2f, positions: %d", match_score, total_positions);
+        if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %d", match_score, total_positions);
         else           snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %d", mse, total_positions);
         save_best(weights_file, bc);
     }
@@ -1605,7 +1446,7 @@ int main(int argc, char **argv) {
     cfg_test_file = get_str_arg(argc, argv, "--test-file", NULL);
     cfg_test_pos_given = has_flag(argc, argv, "--test-pos");
     cfg_no_local       = has_flag(argc, argv, "--no-local");
-    cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "ref/ppat-3374337.js");
+    cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "ref/ppat-data-287076-best.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
@@ -1777,14 +1618,14 @@ int main(int argc, char **argv) {
            n_test, cfg_test_file ? " from " : "", cfg_test_file ? cfg_test_file : "",
            cfg_test_playouts, weights_file, best_file);
     if (ref_theta)
-        printf("matches: directWR %d + WR %d games on the first row, +%.0f%%/row capped at %.0f min each, "
+        printf("match: directWR %d games on the first row, +%.0f%%/row capped at %.0f min, "
                "vs %s (libCap %d, %d phase(s))\n",
-               DIRECT_GAMES, MCWR_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
+               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
                cfg_ref_weights, ref_lib_cap, ref_phases);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s", "nWts", "avgW");
-    if (ref_theta) printf("  %8s  %6s  %6s", "directWR", "mcWR", "score");
+    if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedS", "posMs", "pos/s");
     print_weights_header();
