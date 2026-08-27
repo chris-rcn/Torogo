@@ -116,7 +116,7 @@ static const char *cfg_ref_weights;    /* reference model for both match columns
  *             play the same game, so each colour-swapped pair scores one win and
  *             one loss by construction and the self-match cannot drift off 50.
  *   WR        48.0 = uniform rollouts, 60.5 = as good as the reference. */
-#define DIRECT_GAMES      3000   /* directWR, FIRST row: SE ~0.9pp, ~0.9s at size 10 */
+#define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp, ~3s at size 10 */
 #define MCWR_GAMES          5000   /* mcWR, FIRST row: ~9ms/game, SE ~0.7pp */
 #define MATCH_GROWTH       1.1   /* both match efforts grow this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */

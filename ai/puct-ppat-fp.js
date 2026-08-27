@@ -83,14 +83,19 @@ function create(cfg) {
 
   // ppat playout policy weights: PPAT_DATA, defaulting to the root ppat-data.js
   // (the current single-phase model, as cascade.js does); window.PPATWeights in
-  // the browser.  A missing/unreadable file leaves _model null, and playouts
-  // fall back to uniform-random — same trace/scoring path — with a warning.
+  // the browser.  Hard failure, not a fallback: this agent's strength IS its
+  // ppat playouts, so silently running uniform (e.g. a relative PPAT_DATA that
+  // misses under a different cwd) fields a wrong engine under the right name.
   const _ppatPath = _isNode
     ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'ppat-data.js'))
     : null;
   const _model = _isNode
     ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+  if (!_model) {
+    throw new Error(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: cannot load ppat weights from ` +
+      (_isNode ? _ppatPath : 'window.PPATWeights'));
+  }
   // Name the ppat file in the banner: two slots (P1_/P2_PPAT_DATA) otherwise
   // print identical lines, hiding which model each side is actually running.
   const _ppatName = _isNode ? require('path').basename(_ppatPath) : 'window.PPATWeights';
@@ -98,12 +103,7 @@ function create(cfg) {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  if (_model) _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
-  if (!_model) {
-    console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no ppat weights` +
-      (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' (PPAT_DATA / default ppat-data.js unreadable)') +
-      ' — playouts will be uniform random, not the ppat policy');
-  }
+  _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).
@@ -112,7 +112,7 @@ function create(cfg) {
     path: _isBrowser ? undefined
                      : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
   const fpWeights   = fpModel.weights;
-  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model ? _model.weights.length : 0} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
+  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
@@ -155,7 +155,7 @@ function create(cfg) {
       const current = game2.current;
       // usePolicy: use the ppat policy this move — within the PPAT_MOVES window
       // and (subject to PPAT_RATIO) not a randomly-mixed uniform move.
-      const ppatActive = _model && (PPAT_MOVES < 0 || moves < PPAT_MOVES);
+      const ppatActive = PPAT_MOVES < 0 || moves < PPAT_MOVES;
       const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
       const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng)
                             : game2.randomLegalMove(rng);
