@@ -212,7 +212,7 @@ static float *theta;
  * a checkpoint resumes from the average, not from the raw state that produced it. */
 static float *theta_ema = NULL;
 static long   ema_last_pos = 0;
-static int    cfg_ema_window;          /* --ema-window, aggregate positions; 0 = off */
+static int    cfg_ema_window;          /* --ema-window, aggregate positions; default 2000, 0 = off */
 static int    cfg_seed;                /* --seed; 0 = seed from the clock (non-reproducible) */
 static long   cfg_test_from;           /* --test-from: pin the position where testing starts */
 
@@ -236,28 +236,44 @@ static float    rollout_probs[MAX_CAP];
 
 /* ── Parse command line ────────────────────────────────────────────────────── */
 
+/* Every argv index consumed by a parser below is marked here; after all
+ * parsing, check_unknown_args rejects anything unmarked (a typo like
+ * --train-games would otherwise be silently ignored). */
+#define MAX_ARGS 256
+static char arg_used[MAX_ARGS];
+
 static int get_int_arg(int argc, char **argv, const char *flag, int def) {
     for (int i = 1; i < argc - 1; i++)
-        if (strcmp(argv[i], flag) == 0) return atoi(argv[i+1]);
+        if (strcmp(argv[i], flag) == 0) { arg_used[i] = arg_used[i+1] = 1; return atoi(argv[i+1]); }
     return def;
 }
 
 static float get_float_arg(int argc, char **argv, const char *flag, float def) {
     for (int i = 1; i < argc - 1; i++)
-        if (strcmp(argv[i], flag) == 0) return (float)atof(argv[i+1]);
+        if (strcmp(argv[i], flag) == 0) { arg_used[i] = arg_used[i+1] = 1; return (float)atof(argv[i+1]); }
     return def;
 }
 
 static const char *get_str_arg(int argc, char **argv, const char *flag, const char *def) {
     for (int i = 1; i < argc - 1; i++)
-        if (strcmp(argv[i], flag) == 0) return argv[i+1];
+        if (strcmp(argv[i], flag) == 0) { arg_used[i] = arg_used[i+1] = 1; return argv[i+1]; }
     return def;
 }
 
 static int has_flag(int argc, char **argv, const char *flag) {
     for (int i = 1; i < argc; i++)
-        if (strcmp(argv[i], flag) == 0) return 1;
+        if (strcmp(argv[i], flag) == 0) { arg_used[i] = 1; return 1; }
     return 0;
+}
+
+/* Call after the last get_*_arg/has_flag: argv[1] is the <file> positional;
+ * everything else must have been consumed by a parser. */
+static void check_unknown_args(int argc, char **argv) {
+    if (argc > MAX_ARGS) { fprintf(stderr, "error: too many arguments (%d)\n", argc); exit(1); }
+    int bad = 0;
+    for (int i = 2; i < argc; i++)
+        if (!arg_used[i]) { fprintf(stderr, "error: unknown argument '%s'\n", argv[i]); bad = 1; }
+    if (bad) exit(1);
 }
 
 /* ── Parse concise format ──────────────────────────────────────────────────── */
@@ -1611,7 +1627,7 @@ int main(int argc, char **argv) {
      * iterate).  Off by default until swept: a window is a real hyperparameter,
      * and an untuned one silently lags every column for its first window's worth
      * of training.  ~30000 (about one report row) is where to start a sweep. */
-    cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 0);
+    cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 2000);
     cfg_seed       = get_int_arg(argc, argv, "--seed", 0);
     /* Pin the position where the expensive columns switch on.  Without it the
      * switch is timing-derived (first cycle whose TRAINING time exceeds a test),
@@ -1652,6 +1668,7 @@ int main(int argc, char **argv) {
     /* --load resolves the cap from the file (ppat_load_weights calls ppat_init);
      * a fresh run takes it from --lib-cap. */
     int cfg_lib_cap = get_int_arg(argc, argv, "--lib-cap", 2);   /* default: historical encoding */
+    check_unknown_args(argc, argv);
     ppat_init(cfg_lib_cap);
 
     load_positions();

@@ -98,7 +98,7 @@ function create(cfg) {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  if (_model) _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0.6);
+  if (_model) _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
   if (!_model) {
     console.warn(`WARNING: puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: no ppat weights` +
       (typeof window !== 'undefined' ? ' (window.PPATWeights not set)' : ' (PPAT_DATA / default ppat-data.js unreadable)') +

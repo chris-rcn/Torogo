@@ -24,8 +24,8 @@
 //   P1_PPAT_DATA=a.js P2_PPAT_DATA=b.js node selfplay.js --p1 mc-ppat --p2 mc-ppat
 //
 // Config:
-//   CANDIDATES    moves sampled per decision                     (default 2)
-//   PLAYOUTS      TOTAL playouts per decision, split evenly     (default 100)
+//   CANDIDATES    moves sampled per decision; 0 = all legal moves (default 0)
+//   PLAYOUTS      TOTAL playouts per decision, split evenly       (default 1)
 //   CAND_PLAYOUTS playouts PER CANDIDATE; overrides PLAYOUTS when > 0 (default 0)
 //                 The two conventions allocate to opposite ends of the game: a
 //                 fixed total gives each candidate more playouts as the move
@@ -33,7 +33,7 @@
 //                 count spends more total playouts while the list is long
 //                 (midgame-weighted).
 //   PPAT_DATA     ppat weight file                 (default root ppat-data.js)
-//   PPAT_UNIFORM_BELOW_PHASE  uniform playout moves below this board fullness
+//   PPAT_MIN_PHASE  uniform playout moves below this board fullness
 //                 (default 0 = ppat everywhere)
 
 const path = require('path');
@@ -45,8 +45,8 @@ const PPat = require('../ppat-lib.js');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const CANDIDATES = Math.max(1, cfg.int('CANDIDATES', 2));
-  const PLAYOUTS   = Math.max(1, cfg.int('PLAYOUTS', 100));
+  const CANDIDATES = Math.max(0, cfg.int('CANDIDATES', 0));   // 0 = all legal non-eye moves
+  const PLAYOUTS   = Math.max(1, cfg.int('PLAYOUTS', 1));
   const CAND_PLAYOUTS = Math.max(0, cfg.int('CAND_PLAYOUTS', 0));
 
   const ppatPath = cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js'));
@@ -54,24 +54,24 @@ function create(cfg) {
   // Hard failure, not a fallback: this agent exists to measure a ppat model, so
   // silently running uniform playouts would produce a meaningless comparison.
   if (!model) throw new Error(`mc-ppat: cannot load ppat weights from ${ppatPath}`);
-  model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
   console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
               (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : `${PLAYOUTS} playouts/move`) +
-              ` over ${CANDIDATES} candidates`);
+              ` over ${CANDIDATES > 0 ? CANDIDATES : 'all'} candidates`);
 
   const rng = makeRng();
   let ppatState = null;
 
   // ppat playout to the end of the game (mutates game2).  Returns 1 if BLACK
   // wins, else 0.
-  function playout(game2) {
+  function playout(game2, r) {
     if (ppatState === null || ppatState.moves.length < game2.N * game2.N)
       ppatState = PPat.createState(game2.N);
     const moveLimit = 3 * game2.emptyCount + 20;
     let moves = 0;
     while (!game2.gameOver && moves < moveLimit) {
-      game2.play(PPat.ppatMove(game2, ppatState, model, rng));
+      game2.play(PPat.ppatMove(game2, ppatState, model, r));
       moves++;
     }
     return game2.estimateWinner() === BLACK ? 1 : 0;
@@ -79,23 +79,29 @@ function create(cfg) {
 
   // Reservoir-sample k legal non-eye moves without building the full list:
   // one pass over the empty cells, O(area) with no allocation beyond `out`.
-  function sampleMoves(game, k, out) {
+  function sampleMoves(game, k, out, r) {
     const area = game.N * game.N;
     let seen = 0;
     for (let i = 0; i < area; i++) {
       if (game.cells[i] !== EMPTY || game.isTrueEye(i) || !game.isLegal(i)) continue;
       if (seen < k) out[seen] = i;
-      else { const j = rng.int(seen + 1); if (j < k) out[j] = i; }
+      else { const j = r.int(seen + 1); if (j < k) out[j] = i; }
       seen++;
     }
     return seen < k ? seen : k;
   }
 
-  const _cand = new Int32Array(64);
+  let _cand = new Int32Array(64);
 
-  function getMove(game) {
+  // options.rng (when provided) drives candidate sampling, playouts and the
+  // dither, making the decision reproducible (e.g. evalmovedetails' per-
+  // position seed schedule); otherwise the unseeded closure rng is used.
+  function getMove(game, timeBudgetMs, options = {}) {
     if (game.gameOver) return { move: PASS };
-    const n = sampleMoves(game, Math.min(CANDIDATES, _cand.length), _cand);
+    const r = options.rng || rng;
+    const want = CANDIDATES > 0 ? CANDIDATES : game.N * game.N;   // 0 = every legal move
+    if (_cand.length < want) _cand = new Int32Array(want);
+    const n = sampleMoves(game, want, _cand, r);
     if (n === 0) return { move: PASS };
 
     // CAND_PLAYOUTS fixes the per-candidate count (total then scales with n);
@@ -109,12 +115,12 @@ function create(cfg) {
       for (let p = 0; p < per; p++) {
         const g = game.clone();
         g.play(_cand[c]);
-        const r = playout(g);
-        wins += mover === BLACK ? r : 1 - r;
+        const res = playout(g, r);
+        wins += mover === BLACK ? res : 1 - res;
       }
       // Fractional dither breaks exact ties randomly; it can never reorder
       // distinct means, which are multiples of 1/per.
-      const v = wins / per + rng.random() * 1e-9;
+      const v = wins / per + r.random() * 1e-9;
       if (v > bestV) { bestV = v; best = _cand[c]; }
     }
     return { move: best, info: `wr=${bestV.toFixed(3)} of ${n}x${per}` };

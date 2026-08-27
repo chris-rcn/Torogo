@@ -18,7 +18,7 @@
 // reader (slot-aware env).  Config:
 //   PLAYOUTS   total playout budget per decision            (default 1000)
 //   PPAT_DATA  ppat weight file                (default root ppat-data.js)
-//   PPAT_UNIFORM_BELOW_PHASE  uniform playout moves below this board
+//   PPAT_MIN_PHASE  uniform playout moves below this board
 //              fullness — skips ppat extraction in the early game (default 0)
 
 const path = require('path');
@@ -33,7 +33,7 @@ function create(cfg) {
   const PLAYOUTS = cfg.int('PLAYOUTS', 1000);
 
   const model = PPat.loadWeights(cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js')));
-  model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
 
   console.log(`sh-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights, ` +
               `${PLAYOUTS} playouts/decision, halving over all legal moves`);

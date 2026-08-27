@@ -37,7 +37,7 @@ function create(cfg) {
   if (!_model) throw new Error(`ppat: cannot load ppat weights from ${_isNode ? _ppatPath : 'window.PPATWeights'}`);
 
   // Play uniform-random moves while board fullness < this fraction [0,1] (0 = off).
-  _model.uniformBelowPhase = cfg.float('PPAT_UNIFORM_BELOW_PHASE', 0);
+  _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
 
   console.log(`ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} weights ` +
               `(${_model.phaseCount} phase(s), libCap ${_model.libCap}) from ` +
