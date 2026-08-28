@@ -25,155 +25,51 @@
   const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
   const { EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 
-  // ── D4 permutations ────────────────────────────────────────────────────────
-  // perm[dest] = src: applying perm gives rotated[dest] = cells[perm[dest]].
-
-  const d4PermsCache = new Map();
-
-  function makeD4Perms(M) {
-    const transforms = [
-      (r, c) => [r,       c      ],  // Identity
-      (r, c) => [c,       M-1-r  ],  // Rot90CW
-      (r, c) => [M-1-r,   M-1-c  ],  // Rot180
-      (r, c) => [M-1-c,   r      ],  // Rot270CW
-      (r, c) => [r,       M-1-c  ],  // FlipH
-      (r, c) => [M-1-r,   c      ],  // FlipV
-      (r, c) => [c,       r      ],  // TransposeMD
-      (r, c) => [M-1-c,   M-1-r  ],  // TransposeAD
-    ];
-    return transforms.map(t => {
-      const perm = new Int32Array(M * M);
-      for (let r = 0; r < M; r++)
-        for (let c = 0; c < M; c++) {
-          const [nr, nc] = t(r, c);
-          perm[nr * M + nc] = r * M + c;
-        }
-      return perm;
-    });
-  }
-
-  function getD4Perms(M) {
-    if (!d4PermsCache.has(M)) d4PermsCache.set(M, makeD4Perms(M));
-    return d4PermsCache.get(M);
-  }
-
   // ── Hash ───────────────────────────────────────────────────────────────────
-  // FNV-1a style, 32-bit via Math.imul. +2 shifts {-1,0,1} → {1,2,3}.
+  // Symmetry-invariant hierarchical "X" hash.  No D4 enumeration, no canonical-
+  // form memo: the hash is invariant by construction, so the value it returns
+  // IS the canonical key.
+  //
+  // uh(a,b) is an unordered (commutative) combiner.  A window's hash pairs its
+  // two diagonals and combines them unordered:
+  //
+  //     p0 p1        xh4 = uh( uh(p0,p3), uh(p1,p2) )
+  //     p2 p3
+  //
+  // That is invariant exactly to the group preserving the partition
+  // {{p0,p3},{p1,p2}} — order 8, which on a square is precisely D4.  So at 2×2
+  // it collapses the D4 orbits and nothing else: 21 distinct values for the 21
+  // orbits of a 3-state 2×2, lossless.
+  //
+  // Larger sizes recurse on the four (M−1)×(M−1) sub-windows at the corners of
+  // the M×M window, in the same X arrangement.  Each sub-hash is itself
+  // D4-invariant, so the four permute exactly as the cells of a 2×2 do and the
+  // combiner's invariance carries up — every level is D4-invariant.
+  //
+  // This is deliberately lossy above 2×2: a sub-hash has already discarded its
+  // own orientation, so a parent cannot tell a sub-window's stone at top-left
+  // from top-right.  Measured fidelity at 3×3 is 2379 distinct values against
+  // 2862 true D4 orbits (83%).  Distinct shapes therefore share weights — the
+  // trade bought for O(1) memory and no per-window canonicalisation.
 
-  function hash4(a, b, c, d) {
-    let h = 2166136261;
-    h = Math.imul(h ^ (a + 2), 16777619);
-    h = Math.imul(h ^ (b + 2), 16777619);
-    h = Math.imul(h ^ (c + 2), 16777619);
-    h = Math.imul(h ^ (d + 2), 16777619);
-    return h;
+  function mix32(x) {
+    x |= 0;
+    x ^= x >>> 16; x = Math.imul(x, 0x7feb352d);
+    x ^= x >>> 15; x = Math.imul(x, 0x846ca68b);
+    x ^= x >>> 16;
+    return x | 0;
   }
 
-  // Iterative hierarchical hash of a flat M×M cell array (stride = M).
-  // Builds level by level: each pass reduces the side length by 1, combining
-  // four adjacent values into one hash4. O(M³) total — vs O(4^(M−2)) recursive.
-  // Used only during canon computation (amortised — once per unique pattern).
-
-  function hierHash(cells, M) {
-    let buf = cells;
-    let sz  = M;
-    while (sz > 2) {
-      sz--;
-      const stride = sz + 1;  // stride of current buf
-      const next = new Array(sz * sz);
-      for (let r = 0; r < sz; r++)
-        for (let c = 0; c < sz; c++)
-          next[r * sz + c] = hash4(
-            buf[ r      * stride + c],
-            buf[ r      * stride + c + 1],
-            buf[(r + 1) * stride + c],
-            buf[(r + 1) * stride + c + 1]
-          );
-      buf = next;
-    }
-    return hash4(buf[0], buf[1], buf[2], buf[3]);
+  // Unordered: uh(a,b) === uh(b,a).  Operands are mixed before the commutative
+  // combine so that structurally different pairs with equal sums don't alias.
+  function uh(a, b) {
+    return mix32((mix32(a) + mix32(b)) | 0);
   }
 
-  // ── Canonicalisation ───────────────────────────────────────────────────────
-  // Generates 16 variants (8 D4 rotations × 2 color flips), finds the minimum
-  // hash as the canonical key, detects color-twin patterns, and stores all 16
-  // rawKey → encoded mappings in canonMap for future O(1) lookups.
-  //
-  // canonMap === null selects lut-less mode: nothing is memoised and the
-  // encoding for the identity variant is computed and returned directly.  This
-  // trades ~16 hashes per window per extraction for O(1) memory, and is the
-  // only way to run boards whose variant count exceeds V8's ~2^24 Map cap.
-  // Note lut-less results can differ from memoised ones: the store path keeps
-  // the first entry written for a hash ("earlier entry (smaller M) wins"), so
-  // cross-size hash collisions alias there but not here.
-  //
-  // Encoding: a single integer per rawKey, always a V8 Smi (fast path, no heap boxing).
-  //   twin              → 0
-  //   polarity +1       → abs(canonKey) + 1   (positive)
-  //   polarity -1       → -(abs(canonKey) + 1) (negative)
-  // Decoding (hot path — comparisons only, no division or modulo):
-  //   isTwin   = enc === 0
-  //   polarity = enc > 0 ? 1 : -1
-  //   outKey   = (enc > 0 ? enc : -enc) - 1   i.e. abs(enc) - 1
-
-  function computeCanon(winCells, M, canonMap) {
-    const perms = getD4Perms(M);
-    const n2 = M * M;
-    const rotated   = new Array(n2);
-    const vHashes   = new Array(16);
-    const vParities = new Array(16);  // +1 = non-inverted, -1 = color-inverted
-    const hashFn    = hierHash;
-
-    for (let pi = 0; pi < 8; pi++) {
-      const perm = perms[pi];
-
-      // Non-inverted rotation
-      for (let i = 0; i < n2; i++) rotated[i] =  winCells[perm[i]];
-      vHashes[pi * 2]     = hashFn(rotated, M);
-      vParities[pi * 2]   = 1;
-
-      // Color-inverted rotation
-      for (let i = 0; i < n2; i++) rotated[i] = -winCells[perm[i]];
-      vHashes[pi * 2 + 1]   = hashFn(rotated, M);
-      vParities[pi * 2 + 1] = -1;
-    }
-
-    // Canonical key = minimum signed int32 across all 16 variants.
-    let canonKey    = vHashes[0];
-    let canonParity = vParities[0];
-    for (let i = 1; i < 16; i++) {
-      if (vHashes[i] < canonKey) {
-        canonKey    = vHashes[i];
-        canonParity = vParities[i];
-      }
-    }
-
-    // Color-twin: any non-inverted hash equals any inverted hash →
-    // pattern is symmetric under color-inversion + some D4 rotation,
-    // so it contributes zero to the value function.
-    let isTwin = false;
-    outer: for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        if (vHashes[i * 2] === vHashes[j * 2 + 1]) { isTwin = true; break outer; }
-      }
-    }
-
-    // Polarity formula: polarity[i] = colorParity[i] * canonParity
-    // Guarantees polarity[canonVariant] === +1.
-    const absKey = canonKey < 0 ? -canonKey : canonKey;
-
-    // Lut-less: encode the identity variant (vParities[0] === 1, so its
-    // polarity is canonParity) without touching a map.
-    if (canonMap === null)
-      return isTwin ? 0 : (canonParity === 1 ? absKey + 1 : -(absKey + 1));
-
-    for (let i = 0; i < 16; i++) {
-      if (canonMap.has(vHashes[i])) continue;  // earlier entry (smaller M) wins
-      const pol    = vParities[i] * canonParity;
-      canonMap.set(vHashes[i], isTwin ? 0 : (pol === 1 ? absKey + 1 : -(absKey + 1)));
-    }
-
-    return canonMap.get(vHashes[0]);
+  // X-hash of a 2×2 arrangement: diagonals {tl,br} and {tr,bl}, both unordered,
+  // then combined unordered.
+  function xh4(tl, tr, bl, br) {
+    return uh(uh(tl, br), uh(tr, bl));
   }
 
   // ── Feature extraction ─────────────────────────────────────────────────────
@@ -182,7 +78,7 @@
   // nextMove:  if >= 0, speculatively place game.current at nextMove before extracting
   //            (captures handled), then restore.
   function extractFeatures(game, model, maxSearch, nextMove) {
-    const { canonMap, maxStones } = model;
+    const { maxStones } = model;
     const N   = game.N;
     const cap = N * N;
     const cells = game.cells;  // Int8Array: +1=BLACK, -1=WHITE, 0=EMPTY
@@ -198,26 +94,34 @@
       for (let i = 0; i < captures.length; i++) cells[captures[i]] = EMPTY;
       cells[nextMove] = game.current;
 
-      const result = _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize);
+      const result = _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize);
 
       cells[nextMove] = EMPTY;
       for (let i = 0; i < captures.length; i++) cells[captures[i]] = -game.current;
       return result;
     }
 
-    return _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize);
+    return _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize);
   }
 
-  function _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize) {
+  function _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize) {
     if (searchMaxSize === undefined) searchMaxSize = effMaxSize;
     // Per-level hash arrays (reused across calls for the same board/size config).
+    // Two parallel stacks: the board as-is, and colour-inverted.  Comparing the
+    // two gives the colour canonicalisation the D4 enumeration used to provide,
+    // for one extra tree build instead of 16 variant hashes.
     if (!model._hBufs || model._hCap !== cap || model._hMaxSize !== effMaxSize) {
-      model._hBufs = new Array(effMaxSize - 1);
-      for (let m = 0; m < effMaxSize - 1; m++) model._hBufs[m] = new Int32Array(cap);
+      model._hBufs    = new Array(effMaxSize - 1);
+      model._hBufsInv = new Array(effMaxSize - 1);
+      for (let m = 0; m < effMaxSize - 1; m++) {
+        model._hBufs[m]    = new Int32Array(cap);
+        model._hBufsInv[m] = new Int32Array(cap);
+      }
       model._hCap     = cap;
       model._hMaxSize = effMaxSize;
     }
-    const hBufs = model._hBufs;
+    const hBufs    = model._hBufs;
+    const hBufsInv = model._hBufsInv;
 
     const maxFeatures = cap * (effMaxSize - 1);
     if (!model._outKeys || model._outKeys.length < maxFeatures) {
@@ -250,11 +154,12 @@
       }
     }
 
-    const winCells = new Array(effMaxSize * effMaxSize);  // scratch for canon
     let topActive = 1;  // highest M where anyEligible was true
     for (let M = 2; M <= searchMaxSize; M++) {
-      const hM    = hBufs[M - 2];
-      const hPrev = M > 2 ? hBufs[M - 3] : null;
+      const hM     = hBufs[M - 2];
+      const hPrev  = M > 2 ? hBufs[M - 3] : null;
+      const hMI    = hBufsInv[M - 2];
+      const hPrevI = M > 2 ? hBufsInv[M - 3] : null;
       const limit = maxStones[M] ?? 0;
       let anyEligible = false;
 
@@ -269,14 +174,16 @@
           const tr = rowStart + col1;                         // right neighbor (same row)
           const bl = downStart + col;                         // down neighbor
           const br = downStart + col1;                         // down-right neighbor
-          // Standard hash: always stored in hBufs so higher levels can use it.
-          const stdKey = M === 2
-            ? hash4(cells[idx], cells[tr], cells[bl], cells[br])
-            : hash4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
-          hM[idx] = stdKey;
+          // X-hash for both colourings; always stored so higher levels can use them.
+          const kN = M === 2
+            ? xh4(cells[idx], cells[tr], cells[bl], cells[br])
+            : xh4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
+          const kI = M === 2
+            ? xh4(-cells[idx], -cells[tr], -cells[bl], -cells[br])
+            : xh4(hPrevI[idx], hPrevI[tr], hPrevI[bl], hPrevI[br]);
+          hM[idx]  = kN;
+          hMI[idx] = kI;
           if (limit === 0) continue;
-
-          const rawKey = stdKey;
 
           // Stone count over the full M×M window.  O(1) via prefix sum for
           // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
@@ -296,28 +203,13 @@
           if (stones === 0 || stones > limit) continue;
           anyEligible = true;
 
-          // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
-          // Lut-less (canonMap === null) has no memo, so it always recomputes.
-          let enc;
-          if (canonMap !== null) {
-            enc = canonMap.get(rawKey);
-            if (enc !== undefined) {
-              if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
-              continue;
-            }
-          }
+          // Colour-twin: the pattern equals its own inverse, so it contributes
+          // nothing to an antisymmetric value function.  Eligible, but no feature.
+          if (kN === kI) continue;
 
-          // First encounter (always, when lut-less): compute the canonical form.
-          for (let dr = 0; dr < M; dr++) {
-            const rr = (row + dr) % N;
-            for (let dc = 0; dc < M; dc++)
-              winCells[dr * M + dc] = cells[rr * N + (col + dc) % N];
-          }
-          enc = computeCanon(winCells, M, canonMap);
-          if (enc === 0) continue;
-
-          outKeys[count] = (enc > 0 ? enc : -enc) - 1;
-          outPols[count] = enc > 0 ? 1 : -1;
+          // Canonical key = the smaller of the two colourings; polarity says which.
+          outKeys[count]  = kN < kI ? kN : kI;
+          outPols[count]  = kN < kI ? 1 : -1;
           outSizes[count] = M;
           count++;
         }
@@ -352,15 +244,11 @@
 
   // maxStones: plain object {2: n, 3: m, …} — per-size stone limit.
   // maxSize:   largest window size to extract (defaults to board size).
-  // noLut:     skip the canonical-form memo entirely (canonMap = null).  Costs
-  //            ~16 hashes per window per extraction, but the memo cannot then
-  //            hit V8's ~2^24 Map cap, which bounds board size in lut mode.
-  function createModel(maxStones, maxSize, noLut) {
+  function createModel(maxStones, maxSize) {
     return {
       weights:    new Map(),                  // live TD-updated weights
       weightsEMA: new Map(),                  // Polyak-averaged shadow (eval-quality)
       weightsEMAInit: false,                  // first applyEMA seeds EMA = weights
-      canonMap:   noLut ? null : new Map(),
       maxStones:  maxStones !== undefined ? maxStones : {},
       maxSize:    maxSize   !== undefined ? maxSize   : Infinity,
     };
