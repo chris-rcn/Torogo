@@ -26,7 +26,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['no-lut'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -45,6 +45,10 @@ const EMA_PERIOD = 100;
 // spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not extracted.
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+// Lut-less: drop the canonical-form memo.  Slower per move, but the memo is
+// what caps board size (V8 Maps die at ~2^24 entries), so this is required
+// once the variant count outgrows that.
+const NO_LUT      = !!opts['no-lut'];
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
 // (loaded values stay fixed; gradient updates skipped).
 const SPEC = {};
@@ -62,7 +66,7 @@ let MAX_STONES = SPEC;
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
-let model = createModel(MAX_STONES, MAX_SIZE);
+let model = createModel(MAX_STONES, MAX_SIZE, NO_LUT);
 const velocity = new Map();  // SGD momentum
 let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over weight updates (avgW; reset each print)
 
@@ -137,7 +141,7 @@ function loadModel(filePath) {
 // the EMA shadow from the loaded values so subsequent applyEMA continues to
 // average on top of the persisted (already-EMA) weights.
 function createModelWithWeights(maxStones, maxSize, weights) {
-  const m = createModel(maxStones, maxSize);
+  const m = createModel(maxStones, maxSize, NO_LUT);
   m.weights = weights;
   if (EMA_ALPHA > 0) {          // shadow only exists when EMA is enabled
     m.weightsEMA = new Map(weights);
@@ -354,7 +358,7 @@ if (LOAD_PATH) {
   }
 }
 
-console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${NO_LUT ? '  no-lut' : ''}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
@@ -472,7 +476,7 @@ while (true) {
       Util.fmt4i(g),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
-      Util.fmt4i(model.canonMap.size),
+      model.canonMap === null ? '   -' : Util.fmt4i(model.canonMap.size),
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),

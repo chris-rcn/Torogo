@@ -99,6 +99,14 @@
   // hash as the canonical key, detects color-twin patterns, and stores all 16
   // rawKey → encoded mappings in canonMap for future O(1) lookups.
   //
+  // canonMap === null selects lut-less mode: nothing is memoised and the
+  // encoding for the identity variant is computed and returned directly.  This
+  // trades ~16 hashes per window per extraction for O(1) memory, and is the
+  // only way to run boards whose variant count exceeds V8's ~2^24 Map cap.
+  // Note lut-less results can differ from memoised ones: the store path keeps
+  // the first entry written for a hash ("earlier entry (smaller M) wins"), so
+  // cross-size hash collisions alias there but not here.
+  //
   // Encoding: a single integer per rawKey, always a V8 Smi (fast path, no heap boxing).
   //   twin              → 0
   //   polarity +1       → abs(canonKey) + 1   (positive)
@@ -108,7 +116,7 @@
   //   polarity = enc > 0 ? 1 : -1
   //   outKey   = (enc > 0 ? enc : -enc) - 1   i.e. abs(enc) - 1
 
-  function computeAndStoreCanon(winCells, M, canonMap) {
+  function computeCanon(winCells, M, canonMap) {
     const perms = getD4Perms(M);
     const n2 = M * M;
     const rotated   = new Array(n2);
@@ -152,10 +160,16 @@
 
     // Polarity formula: polarity[i] = colorParity[i] * canonParity
     // Guarantees polarity[canonVariant] === +1.
+    const absKey = canonKey < 0 ? -canonKey : canonKey;
+
+    // Lut-less: encode the identity variant (vParities[0] === 1, so its
+    // polarity is canonParity) without touching a map.
+    if (canonMap === null)
+      return isTwin ? 0 : (canonParity === 1 ? absKey + 1 : -(absKey + 1));
+
     for (let i = 0; i < 16; i++) {
       if (canonMap.has(vHashes[i])) continue;  // earlier entry (smaller M) wins
       const pol    = vParities[i] * canonParity;
-      const absKey = canonKey < 0 ? -canonKey : canonKey;
       canonMap.set(vHashes[i], isTwin ? 0 : (pol === 1 ? absKey + 1 : -(absKey + 1)));
     }
 
@@ -283,19 +297,23 @@
           anyEligible = true;
 
           // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
-          let enc = canonMap.get(rawKey);
-          if (enc !== undefined) {
-            if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
-            continue;
+          // Lut-less (canonMap === null) has no memo, so it always recomputes.
+          let enc;
+          if (canonMap !== null) {
+            enc = canonMap.get(rawKey);
+            if (enc !== undefined) {
+              if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
+              continue;
+            }
           }
 
-          // First encounter: compute and store canonical form for all 16 variants.
+          // First encounter (always, when lut-less): compute the canonical form.
           for (let dr = 0; dr < M; dr++) {
             const rr = (row + dr) % N;
             for (let dc = 0; dc < M; dc++)
               winCells[dr * M + dc] = cells[rr * N + (col + dc) % N];
           }
-          enc = computeAndStoreCanon(winCells, M, canonMap);
+          enc = computeCanon(winCells, M, canonMap);
           if (enc === 0) continue;
 
           outKeys[count] = (enc > 0 ? enc : -enc) - 1;
@@ -334,12 +352,15 @@
 
   // maxStones: plain object {2: n, 3: m, …} — per-size stone limit.
   // maxSize:   largest window size to extract (defaults to board size).
-  function createModel(maxStones, maxSize) {
+  // noLut:     skip the canonical-form memo entirely (canonMap = null).  Costs
+  //            ~16 hashes per window per extraction, but the memo cannot then
+  //            hit V8's ~2^24 Map cap, which bounds board size in lut mode.
+  function createModel(maxStones, maxSize, noLut) {
     return {
       weights:    new Map(),                  // live TD-updated weights
       weightsEMA: new Map(),                  // Polyak-averaged shadow (eval-quality)
       weightsEMAInit: false,                  // first applyEMA seeds EMA = weights
-      canonMap:   new Map(),
+      canonMap:   noLut ? null : new Map(),
       maxStones:  maxStones !== undefined ? maxStones : {},
       maxSize:    maxSize   !== undefined ? maxSize   : Infinity,
     };
