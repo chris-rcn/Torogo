@@ -72,6 +72,15 @@
     return uh(uh(tl, br), uh(tr, bl));
   }
 
+  // Hash of the all-empty M×M window, per level: every level of an empty
+  // window's tree is uniform, so the value is a per-size constant.  Used to
+  // drop empty windows without counting stones.
+  const emptyHash = [0, 0];            // [0],[1] unused
+  for (let m = 2, h = 0; m <= 32; m++) {
+    h = m === 2 ? xh4(0, 0, 0, 0) : xh4(h, h, h, h);
+    emptyHash.push(h);
+  }
+
   // ── Feature extraction ─────────────────────────────────────────────────────
 
   // maxSearch: optional upper bound on pattern size to extract (caller-managed optimisation).
@@ -142,15 +151,23 @@
     // board size changes — a grow-only reuse would leave a smaller board reading
     // stale borders from a larger previous board, corrupting stone counts.
     const Np1 = N + 1;
+    // Only needed by sizes with a binding (0 < limit < M²) stone cap.
+    let needCounts = false;
+    for (let M = 2; M <= searchMaxSize; M++) {
+      const lim = maxStones[M] ?? 0;
+      if (lim > 0 && lim < M * M) { needCounts = true; break; }
+    }
     if (!model._prefixBuf || model._prefixBuf.length !== Np1 * Np1) {
       model._prefixBuf = new Int32Array(Np1 * Np1);
     }
     const P = model._prefixBuf;
-    for (let r = 0; r < N; r++) {
-      let rowSum = 0;
-      for (let c = 0; c < N; c++) {
-        rowSum += cells[r * N + c] !== 0 ? 1 : 0;
-        P[(r + 1) * Np1 + (c + 1)] = rowSum + P[r * Np1 + (c + 1)];
+    if (needCounts) {
+      for (let r = 0; r < N; r++) {
+        let rowSum = 0;
+        for (let c = 0; c < N; c++) {
+          rowSum += cells[r * N + c] !== 0 ? 1 : 0;
+          P[(r + 1) * Np1 + (c + 1)] = rowSum + P[r * Np1 + (c + 1)];
+        }
       }
     }
 
@@ -161,6 +178,7 @@
       const hMI    = hBufsInv[M - 2];
       const hPrevI = M > 2 ? hBufsInv[M - 3] : null;
       const limit = maxStones[M] ?? 0;
+      const uncapped = limit >= M * M;   // limit can't exclude any non-empty window
       let anyEligible = false;
 
       // Toroidal windows: wrap row and column independently.  Flat (idx+1)%cap
@@ -185,22 +203,30 @@
           hMI[idx] = kI;
           if (limit === 0) continue;
 
-          // Stone count over the full M×M window.  O(1) via prefix sum for
-          // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
-          let stones;
-          if (col + M <= N && row + M <= N) {
-            stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
-                   - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
+          if (uncapped) {
+            // A saturated limit (limit ≥ M²) can only exclude the empty
+            // window, and empty hashes to a per-size constant — no stone
+            // count needed.  (A non-empty window colliding with emptyHash[M]
+            // is dropped; same accepted risk as any other hash collision.)
+            if (kN === emptyHash[M]) continue;
           } else {
-            stones = 0;
-            for (let dr = 0; dr < M; dr++) {
-              const rr = (row + dr) % N;
-              for (let dc = 0; dc < M; dc++) {
-                if (cells[rr * N + (col + dc) % N]) stones++;
+            // Stone count over the full M×M window.  O(1) via prefix sum for
+            // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
+            let stones;
+            if (col + M <= N && row + M <= N) {
+              stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
+                     - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
+            } else {
+              stones = 0;
+              for (let dr = 0; dr < M; dr++) {
+                const rr = (row + dr) % N;
+                for (let dc = 0; dc < M; dc++) {
+                  if (cells[rr * N + (col + dc) % N]) stones++;
+                }
               }
             }
+            if (stones === 0 || stones > limit) continue;
           }
-          if (stones === 0 || stones > limit) continue;
           anyEligible = true;
 
           // Colour-twin: the pattern equals its own inverse, so it contributes
