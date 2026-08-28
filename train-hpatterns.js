@@ -389,16 +389,14 @@ const headerCols = [
   'nWts'.padStart(4),
   'avgL'.padStart(4),
   'avgW'.padStart(6),
-  'tTran'.padStart(5),
   'tTurn'.padStart(5),
 ];
 // Test / eval columns (right).
 // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
 // interval's, and the rolling-half window).  Fixed 21 chars wide.
-if (evalGetMove) headerCols.push('winRatio'.padStart(21), ' acc'.padStart(4));
+if (evalGetMove) headerCols.push('winRatio'.padStart(21));
 if (ladderCases) headerCols.push('ladr'.padStart(4));
 if (mdPositions) headerCols.push('mdRms'.padStart(5));
-headerCols.push('tTest'.padStart(5));
 console.log(headerCols.join('  '));
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -457,7 +455,6 @@ while (true) {
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
     wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
 
-    const trainMs   = intervalTrainMs;
     intervalTrainMs = 0;
 
     // Ladder suite score (trainee's own 1-ply argmax vs --ladder-file).
@@ -484,16 +481,13 @@ while (true) {
       Util.fmt4i(ws),
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
-      Util.fmtMs(trainMs),
       Util.fmtMs(tpMove),
     ];
     // Test / eval columns (right).
     if (evalGetMove) cols.push((`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
-                                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21),
-                               Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0));
+                                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21));
     if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
     if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms).padStart(5));
-    cols.push(Util.fmtMs(tTestMs));
     console.log(cols.join('  '));
 
     saveModel(SAVE_PATH, model);
