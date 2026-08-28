@@ -18,7 +18,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const { Game2, BLACK, PASS } = require('./game2.js');
+const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
 const { createModel, extractFeatures, evaluateFeatures, applyEMA, weightsMap } = require('./hpatterns.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
@@ -26,7 +26,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -46,6 +46,11 @@ const EMA_PERIOD = 100;
 // extracted; a bare size ("4" or "4:") means unlimited (maxStones = size²).
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+// Override game2's per-size komi (both train and eval boards).
+if (opts.komi !== undefined) {
+  setKomi(TRAIN_SIZE, parseFloat(opts.komi));
+  setKomi(EVAL_SIZE,  parseFloat(opts.komi));
+}
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
 // (loaded values stay fixed; gradient updates skipped).
 const SPEC = {};
@@ -358,6 +363,7 @@ if (LOAD_PATH) {
 }
 
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`komi=${KOMI(TRAIN_SIZE)}${EVAL_SIZE !== TRAIN_SIZE ? '/' + KOMI(EVAL_SIZE) : ''}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
