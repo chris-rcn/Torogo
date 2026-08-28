@@ -383,6 +383,7 @@ console.log();
 
 // Training columns (left).
 const headerCols = [
+  'T'.padStart(5),
   'game'.padStart(4),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
@@ -477,6 +478,7 @@ while (true) {
 
     // Training columns (left).
     const cols = [
+      Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
