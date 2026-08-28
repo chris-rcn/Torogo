@@ -42,7 +42,8 @@ const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights']     || '0.9');  // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
                                                               // Window ≈ EMA_PERIOD/(1-alpha) games: 0.9 ≈ 1k, 0.99 ≈ 10k.
 const EMA_PERIOD = 100;
-// spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not extracted.
+// spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not
+// extracted; a bare size ("4" or "4:") means unlimited (maxStones = size²).
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
@@ -52,8 +53,10 @@ const FROZEN = new Set();
 for (const part of SPEC_RAW.split(',')) {
   const [k, vRaw] = part.split(':');
   const sz = parseInt(k, 10);
-  const frozen = /f$/.test(vRaw);
-  const v = parseInt(frozen ? vRaw.slice(0, -1) : vRaw, 10);
+  const frozen = vRaw !== undefined && /f$/.test(vRaw);
+  // Bare size ("--spec 4") means no stone limit: saturate at sz², the whole window.
+  const digits = frozen ? vRaw.slice(0, -1) : vRaw;
+  const v = digits ? parseInt(digits, 10) : sz * sz;
   SPEC[sz] = v;
   if (frozen) FROZEN.add(sz);
 }
