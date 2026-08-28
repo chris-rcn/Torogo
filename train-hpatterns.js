@@ -387,7 +387,6 @@ const headerCols = [
   'game'.padStart(4),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
-  'avgL'.padStart(4),
   'avgW'.padStart(6),
   'tTurn'.padStart(5),
 ];
@@ -479,7 +478,6 @@ while (true) {
       Util.fmt4i(g),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
-      Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(tpMove),
     ];
