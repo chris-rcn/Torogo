@@ -73,11 +73,15 @@
     return x | 0;
   }
 
-  // Unordered: uh(a,b) === uh(b,a).  Operands are mixed before the commutative
-  // combine so that structurally different pairs with equal sums don't alias.
+  // Unordered: uh(a,b) === uh(b,a).  1+a+b+ab = (1+a)(1+b) — commutative with
+  // no per-operand mixing, so leaf cell values must be pre-mixed via LEAF (raw
+  // -1 would make 1+a = 0 absorb its whole diagonal).
   function uh(a, b) {
-    return mix32((mix32(a) + mix32(b)) | 0);
+    return (1 + a + b + Math.imul(a, b)) | 0;
   }
+
+  // Leaf hash per cell value, indexed by cell+1 (WHITE, EMPTY, BLACK).
+  const LEAF = new Int32Array([mix32(-1), mix32(7777), mix32(1)]);
 
   // X-hash of a 2×2 arrangement: diagonals {tl,br} and {tr,bl}, both unordered,
   // then combined unordered.
@@ -90,7 +94,7 @@
   // drop empty windows without counting stones.
   const emptyHash = [0, 0];            // [0],[1] unused
   for (let m = 2, h = 0; m <= 32; m++) {
-    h = m === 2 ? xh4(0, 0, 0, 0) : xh4(h, h, h, h);
+    h = m === 2 ? xh4(LEAF[1], LEAF[1], LEAF[1], LEAF[1]) : xh4(h, h, h, h);
     emptyHash.push(h);
   }
 
@@ -207,10 +211,10 @@
           const br = downStart + col1;                         // down-right neighbor
           // X-hash for both colourings; always stored so higher levels can use them.
           const kN = M === 2
-            ? xh4(cells[idx], cells[tr], cells[bl], cells[br])
+            ? xh4(LEAF[cells[idx] + 1], LEAF[cells[tr] + 1], LEAF[cells[bl] + 1], LEAF[cells[br] + 1])
             : xh4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
           const kI = M === 2
-            ? xh4(-cells[idx], -cells[tr], -cells[bl], -cells[br])
+            ? xh4(LEAF[1 - cells[idx]], LEAF[1 - cells[tr]], LEAF[1 - cells[bl]], LEAF[1 - cells[br]])
             : xh4(hPrevI[idx], hPrevI[tr], hPrevI[bl], hPrevI[br]);
           hM[idx]  = kN;
           hMI[idx] = kI;
@@ -343,7 +347,8 @@
           if (M === 2) {
             const v1 = i1 === move ? cur : cells[i1], v2 = i2 === move ? cur : cells[i2];
             const v3 = i3 === move ? cur : cells[i3], v4 = i4 === move ? cur : cells[i4];
-            kN = xh4(v1, v2, v3, v4); kI = xh4(-v1, -v2, -v3, -v4);
+            kN = xh4(LEAF[v1 + 1], LEAF[v2 + 1], LEAF[v3 + 1], LEAF[v4 + 1]);
+            kI = xh4(LEAF[1 - v1], LEAF[1 - v2], LEAF[1 - v3], LEAF[1 - v4]);
           } else {
             let a = pbN[i1], b = pbN[i2], d = pbN[i3], e = pbN[i4];
             let ai = pbI[i1], bi = pbI[i2], di = pbI[i3], ei = pbI[i4];
