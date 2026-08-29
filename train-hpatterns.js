@@ -47,20 +47,21 @@ const EMA_PERIOD = 100;
 // extracted; a bare size ("4" or "4:") means unlimited (maxStones = size²).
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
-// Override game2's per-size komi (both train and eval boards).
-// --komi auto[:start] enables the auto-adjusting controller: every
-// KOMI_WINDOW self-play games, if black's win share leaves the
-// [45%, 55%] band, komi steps by ±1 point to rebalance (fractional .5
-// is preserved, so no draws).  The current komi is persisted in the
-// checkpoint and restored on --load.  Eval games share the board size,
-// so they play at the current komi too.
-let AUTO_KOMI = false;
+// Komi (both train and eval boards).  Default: auto — a controller that,
+// every KOMI_WINDOW self-play games, steps komi by ±1 point when black's
+// win share leaves the [45%, 55%] band (fractional .5 is preserved, so no
+// draws).  The current komi is persisted in the checkpoint and restored on
+// --load.  Eval games share the board size, so they play at the current
+// komi too.  --komi auto:<start> seeds the starting value (checkpoints
+// without a saved komi only); --komi <number> fixes komi and disables the
+// controller.
+let AUTO_KOMI = true;
 if (opts.komi !== undefined) {
   const m = /^auto(?::(-?[0-9.]+))?$/.exec(opts.komi);
   if (m) {
-    AUTO_KOMI = true;
     if (m[1] !== undefined) { setKomi(TRAIN_SIZE, parseFloat(m[1])); setKomi(EVAL_SIZE, parseFloat(m[1])); }
   } else {
+    AUTO_KOMI = false;
     setKomi(TRAIN_SIZE, parseFloat(opts.komi));
     setKomi(EVAL_SIZE,  parseFloat(opts.komi));
   }
