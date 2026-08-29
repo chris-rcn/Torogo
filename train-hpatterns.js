@@ -67,6 +67,7 @@ if (opts.komi !== undefined) {
 }
 const KOMI_WINDOW = 100;
 let komiGames = 0, komiBlackWins = 0;
+let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column; reset each print)
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
 // (loaded values stay fixed; gradient updates skipped).
 const SPEC = {};
@@ -451,6 +452,7 @@ const headerCols = [
   'T'.padStart(5),
   'game'.padStart(4),
   'komi'.padStart(5),
+  'avgK'.padStart(6),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
   'avgW'.padStart(6),
@@ -478,6 +480,7 @@ const evalHistory = [];
 while (true) {
   g++;
   const { moves, elapsedMs, outcome } = trainGame(TRAIN_SIZE);
+  komiSum += KOMI(TRAIN_SIZE); komiSumGames++;
   if (AUTO_KOMI) {
     komiGames++; komiBlackWins += outcome;
     if (komiGames >= KOMI_WINDOW) {
@@ -531,6 +534,8 @@ while (true) {
     // active weights), not the mean over all stored weights.
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
     wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
+    const kAvg = komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE);
+    komiSum = 0; komiSumGames = 0;   // per-interval avgK: reset at each print
 
     intervalTrainMs = 0;
 
@@ -555,6 +560,7 @@ while (true) {
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
       KOMI(TRAIN_SIZE).toFixed(1).padStart(5),
+      kAvg.toFixed(2).padStart(6),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
       wAvg.toFixed(4).padStart(6),
