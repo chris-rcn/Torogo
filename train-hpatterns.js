@@ -48,10 +48,25 @@ const EMA_PERIOD = 100;
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 // Override game2's per-size komi (both train and eval boards).
+// --komi auto[:start] enables the auto-adjusting controller: every
+// KOMI_WINDOW self-play games, if black's win share leaves the
+// [45%, 55%] band, komi steps by ±1 point to rebalance (fractional .5
+// is preserved, so no draws).  The current komi is persisted in the
+// checkpoint and restored on --load.  Eval games share the board size,
+// so they play at the current komi too.
+let AUTO_KOMI = false;
 if (opts.komi !== undefined) {
-  setKomi(TRAIN_SIZE, parseFloat(opts.komi));
-  setKomi(EVAL_SIZE,  parseFloat(opts.komi));
+  const m = /^auto(?::(-?[0-9.]+))?$/.exec(opts.komi);
+  if (m) {
+    AUTO_KOMI = true;
+    if (m[1] !== undefined) { setKomi(TRAIN_SIZE, parseFloat(m[1])); setKomi(EVAL_SIZE, parseFloat(m[1])); }
+  } else {
+    setKomi(TRAIN_SIZE, parseFloat(opts.komi));
+    setKomi(EVAL_SIZE,  parseFloat(opts.komi));
+  }
 }
+const KOMI_WINDOW = 100;
+let komiGames = 0, komiBlackWins = 0;
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
 // (loaded values stay fixed; gradient updates skipped).
 const SPEC = {};
@@ -119,6 +134,7 @@ function saveModel(filePath, m) {
     `  const scale = ${scale};`,
     `  const maxStones = ${maxStonesStr};`,
     `  const maxSize = ${maxSizeStr};`,
+    `  const komi = ${KOMI(TRAIN_SIZE)};`,
     `  const weightsAreEMA = ${useEMA};`,
     `  const b64 = '${b64}';`,
     "  const bytes = typeof Buffer !== 'undefined'",
@@ -127,7 +143,7 @@ function saveModel(filePath, m) {
     "  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + count * 6);",
     "  const keys  = new Int32Array(buf, 0, count);",
     "  const qvals = new Int16Array(buf, count * 4, count);",
-    "  return { maxStones, maxSize, weightsAreEMA, count, scale, keys, qvals };",
+    "  return { maxStones, maxSize, komi, weightsAreEMA, count, scale, keys, qvals };",
     "})();",
     "if (typeof module !== 'undefined') module.exports = hpatternsModel;",
     "else window.hpatternsModel = hpatternsModel;",
@@ -338,7 +354,7 @@ function trainGame(N) {
   if (prev2 !== null) tdUpdate(prev2, outcome, LR);
   if (prev1 !== null) tdUpdate(prev1, outcome, LR);
 
-  return { elapsedMs: Date.now() - tStartMs, moves };
+  return { elapsedMs: Date.now() - tStartMs, moves, outcome };
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -397,6 +413,12 @@ if (LOAD_PATH) {
       MAX_STONES[k] = Math.max(MAX_STONES[k] ?? 0, v);
     MAX_SIZE = Math.max(...Object.keys(MAX_STONES).map(Number));
     model = createModelWithWeights(MAX_STONES, MAX_SIZE, weightsMap(raw));
+    // Saved komi wins over any auto:<start> seed — the seed only applies to
+    // checkpoints from before komi was persisted.
+    if (AUTO_KOMI && raw.komi !== undefined) {
+      setKomi(TRAIN_SIZE, raw.komi);
+      if (EVAL_SIZE === TRAIN_SIZE) setKomi(EVAL_SIZE, raw.komi);
+    }
     console.log(`Loaded ${model.weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -406,7 +428,7 @@ if (LOAD_PATH) {
 INCREMENTAL = saturatedOnly(model.maxStones);
 
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
-console.log(`komi=${KOMI(TRAIN_SIZE)}${EVAL_SIZE !== TRAIN_SIZE ? '/' + KOMI(EVAL_SIZE) : ''}`);
+console.log(`komi=${KOMI(TRAIN_SIZE)}${EVAL_SIZE !== TRAIN_SIZE ? '/' + KOMI(EVAL_SIZE) : ''}${AUTO_KOMI ? ' (auto)' : ''}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
@@ -428,6 +450,7 @@ console.log();
 const headerCols = [
   'T'.padStart(5),
   'game'.padStart(4),
+  'komi'.padStart(5),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
   'avgW'.padStart(6),
@@ -454,7 +477,19 @@ const evalHistory = [];
 
 while (true) {
   g++;
-  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
+  const { moves, elapsedMs, outcome } = trainGame(TRAIN_SIZE);
+  if (AUTO_KOMI) {
+    komiGames++; komiBlackWins += outcome;
+    if (komiGames >= KOMI_WINDOW) {
+      const bw = komiBlackWins / komiGames;
+      if (bw > 0.55 || bw < 0.45) {
+        const k = KOMI(TRAIN_SIZE) + (bw > 0.55 ? 1 : -1);
+        setKomi(TRAIN_SIZE, k);
+        if (EVAL_SIZE === TRAIN_SIZE) setKomi(EVAL_SIZE, k);
+      }
+      komiGames = 0; komiBlackWins = 0;
+    }
+  }
   // Polyak / SWA: fold live weights into the shadow every EMA_PERIOD games.
   if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(model, EMA_ALPHA);
   totalMoves      += moves;
@@ -519,6 +554,7 @@ while (true) {
     const cols = [
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
+      KOMI(TRAIN_SIZE).toFixed(1).padStart(5),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
       wAvg.toFixed(4).padStart(6),
