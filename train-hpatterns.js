@@ -42,7 +42,11 @@ const LR         = parseFloat(opts.lr               || '0.3');
 const MOMENTUM   = parseFloat(opts.momentum         || '0.0');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights']     || '0.9');  // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
                                                               // Window ≈ EMA_PERIOD/(1-alpha) games: 0.9 ≈ 1k, 0.99 ≈ 10k.
-const EMA_PERIOD = 100;
+// applyEMA scans the full weight table, which at multi-million weights is
+// ~18% of training time at period 100; period 1000 makes it negligible.
+// Window ≈ EMA_PERIOD/(1-alpha) games: at the default alpha 0.9 that is
+// now ~10k games (was ~1k at period 100).
+const EMA_PERIOD = 1000;
 // spec: "size:maxStones" pairs, e.g. "2:4,3:8,4:16". Sizes absent from spec are not
 // extracted; a bare size ("4" or "4:") means unlimited (maxStones = size²).
 const SPEC_RAW = opts.spec || '2:4';
