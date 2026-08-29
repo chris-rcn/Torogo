@@ -451,7 +451,6 @@ console.log();
 const headerCols = [
   'T'.padStart(5),
   'game'.padStart(4),
-  'komi'.padStart(5),
   'avgK'.padStart(6),
   'tGm '.padStart(5),
   'nWts'.padStart(4),
@@ -559,7 +558,6 @@ while (true) {
     const cols = [
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
-      KOMI(TRAIN_SIZE).toFixed(1).padStart(5),
       kAvg.toFixed(2).padStart(6),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
