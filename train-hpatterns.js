@@ -141,6 +141,7 @@ function saveModel(filePath, m) {
     `  const maxStones = ${maxStonesStr};`,
     `  const maxSize = ${maxSizeStr};`,
     `  const komi = ${KOMI(TRAIN_SIZE)};`,
+    `  const trainMs = ${PRIOR_TRAIN_MS + (Date.now() - t0)};`,
     `  const weightsAreEMA = ${useEMA};`,
     `  const b64 = '${b64}';`,
     "  const bytes = typeof Buffer !== 'undefined'",
@@ -149,7 +150,7 @@ function saveModel(filePath, m) {
     "  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + count * 6);",
     "  const keys  = new Int32Array(buf, 0, count);",
     "  const qvals = new Int16Array(buf, count * 4, count);",
-    "  return { maxStones, maxSize, komi, weightsAreEMA, count, scale, keys, qvals };",
+    "  return { maxStones, maxSize, komi, trainMs, weightsAreEMA, count, scale, keys, qvals };",
     "})();",
     "if (typeof module !== 'undefined') module.exports = hpatternsModel;",
     "else window.hpatternsModel = hpatternsModel;",
@@ -410,6 +411,9 @@ const extGetMove = EXT_AGENT
   ? require(path.join(__dirname, 'ai', EXT_AGENT + '.js')).getMove
   : null;
 
+// Cumulative training wall time across all legs (restored from checkpoint).
+let PRIOR_TRAIN_MS = 0;
+
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     const raw = require(path.resolve(LOAD_PATH));
@@ -425,6 +429,7 @@ if (LOAD_PATH) {
       setKomi(TRAIN_SIZE, raw.komi);
       if (EVAL_SIZE === TRAIN_SIZE) setKomi(EVAL_SIZE, raw.komi);
     }
+    PRIOR_TRAIN_MS = raw.trainMs ?? 0;
     console.log(`Loaded ${model.weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
@@ -455,6 +460,7 @@ console.log();
 // Training columns (left).
 const headerCols = [
   'T'.padStart(5),
+  'TT'.padStart(5),
   'game'.padStart(4),
   'avgK'.padStart(6),
   'tGm '.padStart(5),
@@ -562,6 +568,7 @@ while (true) {
     // Training columns (left).
     const cols = [
       Util.fmtMs(Date.now() - t0),
+      Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
       Util.fmt4i(g),
       kAvg.toFixed(2).padStart(6),
       Util.fmtMs(tGameMs),
