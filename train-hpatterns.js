@@ -584,7 +584,7 @@ while (true) {
     // game per print.  tTestMs is measured after the full test, so it captures
     // the ref/ladder/md eval cost the premature schedule used to miss.
     const nowMs = Date.now();
-    const geometricAt = t0 + Math.round((nowMs - t0) * 1.4);
+    const geometricAt = t0 + Math.round((nowMs - t0) * 1.3);
     nextPrintAt = Math.max(geometricAt, nowMs + tTestMs);
   }
 
