@@ -108,19 +108,19 @@ function saveModel(filePath, m) {
 
   const count = source.size;
   let maxAbs = 0;
-  for (const v of source.values()) { const a = v < 0 ? -v : v; if (a > maxAbs) maxAbs = a; }
+  source.forEach((k, v) => { const a = v < 0 ? -v : v; if (a > maxAbs) maxAbs = a; });
   const scale = maxAbs > 0 ? 32767 / maxAbs : 1;
 
   const keys  = new Int32Array(count);
   const qvals = new Int16Array(count);
   let i = 0;
-  for (const [k, v] of source) {
+  source.forEach((k, v) => {
     keys[i] = k;
     let q = Math.round(v * scale);
     if (q > 32767) q = 32767; else if (q < -32768) q = -32768;
     qvals[i] = q;
     i++;
-  }
+  });
   // Int32 keys (count*4 bytes) then Int16 qvals (count*2); count*4 is 2-aligned.
   const buf = Buffer.alloc(count * 6);
   Buffer.from(keys.buffer,  keys.byteOffset,  count * 4).copy(buf, 0);
@@ -167,7 +167,7 @@ function createModelWithWeights(maxStones, maxSize, weights) {
   const m = createModel(maxStones, maxSize);
   m.weights = weights;
   if (EMA_ALPHA > 0) {          // shadow only exists when EMA is enabled
-    m.weightsEMA = new Map(weights);
+    m.weightsEMA = weights.clone();
     m.weightsEMAInit = true;
   }
   return m;

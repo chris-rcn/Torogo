@@ -24,6 +24,19 @@
 (function () {
   const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
   const { EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
+  const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+
+  // Weight tables are open-addressing int32→float64 maps (int-map.js): far
+  // cheaper get/set than a V8 Map at millions of entries, same get/set/size
+  // surface, plus forEach(k, v) and clone().  Key 0 is the empty-slot
+  // sentinel; a canonical key of exactly 0 (a ~2^-31 hash coincidence) is
+  // silently dropped — the same class of accepted risk as any collision.
+  function makeWeights(minCap) {
+    const m = makeIntFloatMap(minCap);
+    m.suppressZeroWarning();
+    return m;
+  }
+
 
   // ── Hash ───────────────────────────────────────────────────────────────────
   // Symmetry-invariant hierarchical "X" hash.  No D4 enumeration, no canonical-
@@ -386,8 +399,8 @@
   // maxSize:   largest window size to extract (defaults to board size).
   function createModel(maxStones, maxSize) {
     return {
-      weights:    new Map(),                  // live TD-updated weights
-      weightsEMA: new Map(),                  // Polyak-averaged shadow (eval-quality)
+      weights:    makeWeights(1024),          // live TD-updated weights
+      weightsEMA: makeWeights(1024),          // Polyak-averaged shadow (eval-quality)
       weightsEMAInit: false,                  // first applyEMA seeds EMA = weights
       maxStones:  maxStones !== undefined ? maxStones : {},
       maxSize:    maxSize   !== undefined ? maxSize   : Infinity,
@@ -403,17 +416,17 @@
   function applyEMA(m, alpha) {
     const w = m.weights, e = m.weightsEMA;
     if (!m.weightsEMAInit) {
-      for (const [k, v] of w) e.set(k, v);
+      w.forEach((k, v) => e.set(k, v));
       m.weightsEMAInit = true;
       return;
     }
     const beta = 1 - alpha;
     // Track keys that exist only in weights but not yet in EMA (newly interned
     // since the last applyEMA — they get seeded from current weights value).
-    for (const [k, v] of w) {
+    w.forEach((k, v) => {
       const eOld = e.get(k);
       e.set(k, eOld === undefined ? v : alpha * eOld + beta * v);
-    }
+    });
   }
 
   // ── Persistence helpers ──────────────────────────────────────────────────────
@@ -436,14 +449,15 @@
       const count = raw.count != null ? raw.count : keys.length;
       return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], vals[i]); } };
     }
-    const m = raw.weights;
+    const m = raw.weights;   // legacy literal Map
     return { count: m.size, forEach(cb) { for (const [k, v] of m) cb(k, v); } };
   }
 
-  // Build a Map<key, float> from a raw model in any supported form.
+  // Build a weight table (int-map) from a raw model in any supported form.
   function weightsMap(raw) {
-    const w = new Map();
-    modelWeights(raw).forEach((k, v) => w.set(k, v));
+    const mw = modelWeights(raw);
+    const w = makeWeights(mw.count * 2);
+    mw.forEach((k, v) => w.set(k, v));
     return w;
   }
 
