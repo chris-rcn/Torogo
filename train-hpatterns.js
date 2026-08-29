@@ -566,8 +566,14 @@ while (true) {
       Util.fmtMs(tpMove),
     ];
     // Test / eval columns (right).
-    if (evalGetMove) cols.push((`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
-                                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21));
+    // A batch below the full 998 games is too noisy to report; its games
+    // still enter the running average.
+    if (evalGetMove) {
+      const batchStr = batch.length >= 998
+        ? `${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})`
+        : '';
+      cols.push((batchStr + `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21));
+    }
     if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
     if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms).padStart(5));
     console.log(cols.join('  '));
