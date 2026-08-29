@@ -248,6 +248,120 @@
     return { keys: outKeys, pols: outPols, sizes: outSizes, count, topLevel: topActive, val: 0.5 };
   }
 
+  // ── Incremental 1-ply evaluation ───────────────────────────────────────────
+  // Speculatively placing a stone at p only changes the windows containing p:
+  // M² per level instead of N².  These helpers evaluate a candidate move as
+  // z_base + Δz over just the changed windows, reading the CURRENT position's
+  // hash buffers (the caller must have run extractFeatures on the current
+  // position immediately before, and must not let anything overwrite the
+  // buffers between calls).
+  //
+  // Valid only when every active size is saturated (limit ≥ M²): then a
+  // window's contribution is decided by its hashes alone (kN === kI drops
+  // twins and empties), with no stone-count gate to re-check.  Callers use
+  // saturatedOnly() to decide, and fall back to full extraction otherwise.
+  // Capture moves change windows around every captured stone too — deltaZ
+  // returns NaN for those and the caller falls back.
+
+  function saturatedOnly(maxStones) {
+    for (const k of Object.keys(maxStones)) {
+      const m = +k, lim = maxStones[k] ?? 0;
+      if (lim > 0 && lim < m * m) return false;
+    }
+    return true;
+  }
+
+  // z summed from the current buffers, cumulative by level: zCum[M] = z over
+  // active levels ≤ M.  Index with min(depth, top).
+  function zFromBuffers(model, weights, N, searchMaxSize) {
+    const effMaxSize = Math.min(model.maxSize === Infinity ? N : model.maxSize, N);
+    const top = searchMaxSize !== undefined ? Math.min(searchMaxSize, effMaxSize) : effMaxSize;
+    const cap = N * N;
+    const zCum = new Float64Array(Math.max(top + 1, 3));
+    let z = 0;
+    for (let M = 2; M <= top; M++) {
+      if ((model.maxStones[M] ?? 0) > 0) {
+        const bufN = model._hBufs[M - 2], bufI = model._hBufsInv[M - 2];
+        for (let i = 0; i < cap; i++) {
+          const kN = bufN[i], kI = bufI[i];
+          if (kN === kI) continue;
+          const wv = weights.get(kN < kI ? kN : kI);
+          if (wv !== undefined) z += (kN < kI ? 1 : -1) * wv;
+        }
+      }
+      zCum[M] = z;
+    }
+    return zCum;
+  }
+
+  // Δz for placing game.current at `move` (PASS → 0).  NaN = captures, caller
+  // must fall back to full extraction.
+  function deltaZ(game, model, weights, move, searchMaxSize) {
+    if (move < 0) return 0;                                   // PASS
+    if (game.captureList(move).length > 0) return NaN;
+    const N = game.N, cells = game.cells, cur = game.current;
+    const effMaxSize = Math.min(model.maxSize === Infinity ? N : model.maxSize, N);
+    const top = searchMaxSize !== undefined ? Math.min(searchMaxSize, effMaxSize) : effMaxSize;
+    if (top < 2) return 0;
+    const hB = model._hBufs, hBI = model._hBufsInv;
+    // per-level scratch for the changed windows (reused across calls)
+    if (!model._dScratch || model._dScratch.length < top - 1) {
+      model._dScratch = [];
+      for (let M = 2; M <= (model.maxSize === Infinity ? 32 : model.maxSize); M++)
+        model._dScratch.push({ idx: new Int32Array(M * M), kN: new Int32Array(M * M), kI: new Int32Array(M * M) });
+    }
+    const pr = (move / N) | 0, pc = move % N;
+    let delta = 0;
+    let prevIdx = null, prevKN = null, prevKI = null, prevCount = 0;
+    for (let M = 2; M <= top; M++) {
+      const sc = model._dScratch[M - 2];
+      const idxA = sc.idx, knA = sc.kN, kiA = sc.kI;
+      let n = 0;
+      const active = (model.maxStones[M] ?? 0) > 0;
+      const bufN = hB[M - 2], bufI = hBI[M - 2];
+      const pbN = M > 2 ? hB[M - 3] : null, pbI = M > 2 ? hBI[M - 3] : null;
+      for (let dr = 0; dr < M; dr++) {
+        const r = (pr - dr + N) % N, r1 = (r + 1) % N;
+        for (let dc = 0; dc < M; dc++) {
+          const c = (pc - dc + N) % N, c1 = (c + 1) % N;
+          const o = r * N + c;
+          const i1 = o, i2 = r * N + c1, i3 = r1 * N + c, i4 = r1 * N + c1;
+          let kN, kI;
+          if (M === 2) {
+            const v1 = i1 === move ? cur : cells[i1], v2 = i2 === move ? cur : cells[i2];
+            const v3 = i3 === move ? cur : cells[i3], v4 = i4 === move ? cur : cells[i4];
+            kN = xh4(v1, v2, v3, v4); kI = xh4(-v1, -v2, -v3, -v4);
+          } else {
+            let a = pbN[i1], b = pbN[i2], d = pbN[i3], e = pbN[i4];
+            let ai = pbI[i1], bi = pbI[i2], di = pbI[i3], ei = pbI[i4];
+            for (let j = 0; j < prevCount; j++) {
+              const pi = prevIdx[j];
+              if      (pi === i1) { a = prevKN[j]; ai = prevKI[j]; }
+              else if (pi === i2) { b = prevKN[j]; bi = prevKI[j]; }
+              else if (pi === i3) { d = prevKN[j]; di = prevKI[j]; }
+              else if (pi === i4) { e = prevKN[j]; ei = prevKI[j]; }
+            }
+            kN = xh4(a, b, d, e); kI = xh4(ai, bi, di, ei);
+          }
+          idxA[n] = o; knA[n] = kN; kiA[n] = kI; n++;
+          if (active) {
+            const kNo = bufN[o], kIo = bufI[o];
+            if (kNo !== kIo) {
+              const wv = weights.get(kNo < kIo ? kNo : kIo);
+              if (wv !== undefined) delta -= (kNo < kIo ? 1 : -1) * wv;
+            }
+            if (kN !== kI) {
+              const wv = weights.get(kN < kI ? kN : kI);
+              if (wv !== undefined) delta += (kN < kI ? 1 : -1) * wv;
+            }
+          }
+        }
+      }
+      prevIdx = idxA; prevKN = knA; prevKI = kiA; prevCount = n;
+    }
+    return delta;
+  }
+
   // ── Evaluation ─────────────────────────────────────────────────────────────
 
   function evaluateFeatures(features, weights) {
@@ -335,7 +449,11 @@
 
   // ── Exports ────────────────────────────────────────────────────────────────
 
-  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA, modelWeights, weightsMap };
+  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA, modelWeights, weightsMap,
+    saturatedOnly,
+    zFromBuffers,
+    deltaZ,
+  };
   if (typeof module !== 'undefined') module.exports = HPatterns;
   else window.HPatterns = HPatterns;
 })();

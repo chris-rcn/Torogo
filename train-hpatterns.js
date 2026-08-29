@@ -19,7 +19,8 @@
 const path = require('path');
 const fs   = require('fs');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
-const { createModel, extractFeatures, evaluateFeatures, applyEMA, weightsMap } = require('./hpatterns.js');
+const { createModel, extractFeatures, evaluateFeatures, applyEMA, weightsMap,
+        saturatedOnly, zFromBuffers, deltaZ } = require('./hpatterns.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
@@ -205,6 +206,31 @@ const SHALLOW_DEPTH = 3;
 // The best shallow move always has p=1 and is always fully evaluated.
 const SHALLOW_TEMP  = 0.05;
 
+// Incremental candidate evaluation is valid only when every active size is
+// saturated (see hpatterns.js deltaZ); decided once the final spec is known.
+let INCREMENTAL = false;
+
+// Fallback buffers for capture moves: full speculative extraction would
+// clobber the base position's hash buffers, so swap in a second set.
+function _withFallbackBufs(fn) {
+  if (!model._fbBufs) {
+    model._fbBufs  = model._hBufs.map(b => new Int32Array(b.length));
+    model._fbBufsI = model._hBufsInv.map(b => new Int32Array(b.length));
+  }
+  const sN = model._hBufs, sI = model._hBufsInv;
+  model._hBufs = model._fbBufs; model._hBufsInv = model._fbBufsI;
+  const r = fn();
+  model._hBufs = sN; model._hBufsInv = sI;
+  return r;
+}
+
+function _specVal(game, coord, depth, zBase, w) {
+  const d = deltaZ(game, model, w, coord, depth);
+  if (!Number.isNaN(d)) return 1 / (1 + Math.exp(-(zBase + d)));
+  return _withFallbackBufs(() =>
+    evaluateFeatures(extractFeatures(game, model, depth, coord), w));
+}
+
 function search1ply(game, maxSearch, w = model.weights) {
   const area    = game.N * game.N;
   const isBlack = game.current === BLACK;
@@ -223,13 +249,26 @@ function search1ply(game, maxSearch, w = model.weights) {
   const doTwoPass = maxSearch === undefined || maxSearch > SHALLOW_DEPTH;
   const depth1    = doTwoPass ? SHALLOW_DEPTH : maxSearch;
 
+  // Base z for incremental evaluation: extract the CURRENT position (fills
+  // the hash buffers deltaZ reads) and sum z per level.
+  let zCum = null, zShallow = 0, zFull = 0;
+  if (INCREMENTAL) {
+    extractFeatures(game, model, maxSearch);
+    zCum = zFromBuffers(model, w, game.N, maxSearch);
+    const top = zCum.length - 1;
+    zShallow = zCum[Math.min(Math.max(depth1, 2), top)];
+    zFull    = zCum[top];
+  }
+
   // ── Pass 1: shallow evaluation ─────────────────────────────────────────────
   const vals1  = new Float64Array(coords.length);
   let   best1  = isBlack ? -Infinity : Infinity;
   let   bestMove = coords[0];
 
   for (let i = 0; i < coords.length; i++) {
-    const val = evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), w);
+    const val = INCREMENTAL
+      ? _specVal(game, coords[i], depth1, zShallow, w)
+      : evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), w);
     vals1[i]  = val;
     if (isBlack ? val > best1 : val < best1) { best1 = val; bestMove = coords[i]; }
   }
@@ -244,7 +283,9 @@ function search1ply(game, maxSearch, w = model.weights) {
   for (let i = 0; i < coords.length; i++) {
     const diff = isBlack ? vals1[i] - best1 : best1 - vals1[i];
     if (Math.random() >= Math.exp(diff / SHALLOW_TEMP)) continue;
-    const val = evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), w);
+    const val = INCREMENTAL
+      ? _specVal(game, coords[i], maxSearch, zFull, w)
+      : evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), w);
     if (isBlack ? val > bestVal : val < bestVal) { bestVal = val; bestMove = coords[i]; }
   }
 
@@ -361,6 +402,8 @@ if (LOAD_PATH) {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
   }
 }
+
+INCREMENTAL = saturatedOnly(model.maxStones);
 
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`komi=${KOMI(TRAIN_SIZE)}${EVAL_SIZE !== TRAIN_SIZE ? '/' + KOMI(EVAL_SIZE) : ''}`);
