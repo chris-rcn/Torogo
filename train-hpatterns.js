@@ -70,6 +70,13 @@ if (opts.komi !== undefined) {
     setKomi(EVAL_SIZE,  parseFloat(opts.komi));
   }
 }
+// Eval games ALWAYS use a fixed komi -- the one in effect for EVAL_SIZE after
+// the --komi parsing above, before the auto controller has moved anything.
+// (So: the game2 per-size default, or the explicit --komi value, or an
+// auto:<start> seed.)  The controller only ever moves the TRAIN_SIZE komi;
+// pinning eval keeps winRatio comparable across a whole run, and across runs.
+const EVAL_KOMI = KOMI(EVAL_SIZE);
+
 const KOMI_WINDOW = 100;
 let komiGames = 0, komiBlackWins = 0;
 let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column; reset each print)
@@ -426,8 +433,7 @@ if (LOAD_PATH) {
     // Saved komi wins over any auto:<start> seed — the seed only applies to
     // checkpoints from before komi was persisted.
     if (AUTO_KOMI && raw.komi !== undefined) {
-      setKomi(TRAIN_SIZE, raw.komi);
-      if (EVAL_SIZE === TRAIN_SIZE) setKomi(EVAL_SIZE, raw.komi);
+      setKomi(TRAIN_SIZE, raw.komi);   // eval komi stays pinned at EVAL_KOMI
     }
     PRIOR_TRAIN_MS = raw.trainMs ?? 0;
     console.log(`Loaded ${model.weights.size} weights from ${LOAD_PATH}`);
@@ -439,7 +445,7 @@ if (LOAD_PATH) {
 INCREMENTAL = saturatedOnly(model.maxStones);
 
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
-console.log(`komi=${KOMI(TRAIN_SIZE)}${EVAL_SIZE !== TRAIN_SIZE ? '/' + KOMI(EVAL_SIZE) : ''}${AUTO_KOMI ? ' (auto)' : ''}`);
+console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ''}  eval-komi=${EVAL_KOMI} (fixed)`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
@@ -497,8 +503,7 @@ while (true) {
       const bw = komiBlackWins / komiGames;
       if (bw > 0.55 || bw < 0.45) {
         const k = KOMI(TRAIN_SIZE) + (bw > 0.55 ? 1 : -1);
-        setKomi(TRAIN_SIZE, k);
-        if (EVAL_SIZE === TRAIN_SIZE) setKomi(EVAL_SIZE, k);
+        setKomi(TRAIN_SIZE, k);   // eval komi is pinned (EVAL_KOMI); never moved here
       }
       komiGames = 0; komiBlackWins = 0;
     }
@@ -519,6 +524,8 @@ while (true) {
     const tTestStart = Date.now();
     let batch = null, latestWR = 0, avgWR = 0, evalHalf = 0, evalAccC = 0, evalAccN = 0;
     if (evalGetMove) {
+      const trainKomi = KOMI(TRAIN_SIZE);
+      setKomi(EVAL_SIZE, EVAL_KOMI);
       batch = [];
       while (true) {
         const { results, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2);
@@ -527,6 +534,7 @@ while (true) {
         const tMs = Date.now() - tTestStart;
         if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
       }
+      setKomi(TRAIN_SIZE, trainKomi);   // restore (same entry when sizes match)
       for (const r of batch) evalHistory.push(r);
       latestWR  = batch.reduce((s, r) => s + r, 0) / batch.length;
       evalHalf  = Math.max(1, Math.floor(evalHistory.length / 2));
