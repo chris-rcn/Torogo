@@ -20,7 +20,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'hpat-topn', 'hpat-topn-eval', 'hpat-pos-ratio', 'ladder-file', 'md-file', 'load', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-hpat-topn', 'hpat-pos-ratio', 'ladder-file', 'md-file', 'load', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -33,21 +33,18 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --reward-ema F    EMA decay for the reward baseline; 0 disables (default 0.99)
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
-  --hpat-topn N     rank the hpat feature over only the best N moves by the
-                    OTHER feature spaces, instead of every candidate (default 0
-                    = whole board).  Much cheaper -- the ranking is most of the
-                    cost of an hpat spec -- but the ranks are then relative to a
-                    shortlist chosen by the weights being learned, so the
-                    feature's meaning moves as the policy does.
-  --hpat-topn-eval N  the same, for EVAL games only (default: whatever
-                    --hpat-topn is).  Lets a run train under one shortlist width
-                    and be scored under another -- e.g. train at 3, play at 2.
+  --eval-hpat-topn N  in EVAL games, rank the hpat feature over only the best N
+                    moves by the OTHER feature spaces rather than every
+                    candidate (default 0 = every candidate).  This is the
+                    deployment setting: ~2x cheaper per move with no measurable
+                    strength cost.  Self-play always ranks every candidate --
+                    restricting it there makes rank mean "best among moves this
+                    policy already likes", which collapses training.
   --hpat-pos-ratio R  compute the hpat feature in only this fraction of SELF-PLAY
-                    positions (default 1 = all).  Unlike --hpat-topn this keeps
-                    the feature's whole-board meaning when it does fire -- rank 1
-                    is still the best move on the board -- and only drops how
-                    OFTEN it fires, so it buys time without making the ranking
-                    depend on the weights being learned.  Eval always uses 1.
+                    positions (default 1 = all).  Cuts self-play cost without
+                    touching what the feature MEANS: in a position where it
+                    fires every candidate is still ranked, so rank 1 is still the
+                    best move on the board.  Eval always uses 1.
   --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
                     komi by +/-1 every 500 games while black's win share sits
                     outside [0.45, 0.55], keeping the training signal balanced;
@@ -75,9 +72,8 @@ const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored 
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdRms column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH   = opts.load || null;
-const HPAT_TOPN   = parseInt(opts['hpat-topn'] || '0', 10);
-// Eval may use a different shortlist width than self-play; defaults to the same.
-const HPAT_TOPN_EVAL = opts['hpat-topn-eval'] !== undefined ? parseInt(opts['hpat-topn-eval'], 10) : HPAT_TOPN;
+// Eval may shortlist the hpat ranking; self-play never does (see the usage note).
+const EVAL_HPAT_TOPN = parseInt(opts['eval-hpat-topn'] || '0', 10);
 // Self-play may compute hpat in only a fraction of positions; eval always uses
 // the feature, since that is how the policy would be deployed.
 const HPAT_POS_RATIO = opts['hpat-pos-ratio'] !== undefined ? parseFloat(opts['hpat-pos-ratio']) : 1;
@@ -275,10 +271,7 @@ console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
-if (HPAT_TOPN > 0 || HPAT_TOPN_EVAL > 0) {
-  FeaturePol.setHpatTopN(HPAT_TOPN);
-  console.log(`hpat-topn=${HPAT_TOPN || 'all'} (self-play)  hpat-topn-eval=${HPAT_TOPN_EVAL || 'all'} (eval)`);
-}
+if (EVAL_HPAT_TOPN > 0) console.log(`eval-hpat-topn=${EVAL_HPAT_TOPN} (eval ranks the best ${EVAL_HPAT_TOPN} moves; self-play ranks every candidate)`);
 if (HPAT_POS_RATIO < 1) {
   FeaturePol.setHpatPositionRatio(HPAT_POS_RATIO);
   console.log(`hpat-pos-ratio=${HPAT_POS_RATIO} (self-play positions using hpat; eval uses 1)`);
@@ -339,7 +332,7 @@ while (true) {
       // same game2 entry, so save and restore around the batch.
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
-      if (HPAT_TOPN_EVAL !== HPAT_TOPN) FeaturePol.setHpatTopN(HPAT_TOPN_EVAL);
+      if (EVAL_HPAT_TOPN > 0) FeaturePol.setHpatTopN(EVAL_HPAT_TOPN);
       if (HPAT_POS_RATIO < 1) FeaturePol.setHpatPositionRatio(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
@@ -347,7 +340,7 @@ while (true) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
-      if (HPAT_TOPN_EVAL !== HPAT_TOPN) FeaturePol.setHpatTopN(HPAT_TOPN);
+      if (EVAL_HPAT_TOPN > 0) FeaturePol.setHpatTopN(0);
       if (HPAT_POS_RATIO < 1) FeaturePol.setHpatPositionRatio(HPAT_POS_RATIO);
       setKomi(TRAIN_SIZE, trainKomi);
       // avg: rolling win ratio over the most recent half of all eval games.
