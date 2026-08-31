@@ -20,7 +20,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'ladder-file', 'md-file', 'load', 'save']);
+   'eval', 'eval-agent', 'komi', 'hpat-topn', 'ladder-file', 'md-file', 'load', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -33,6 +33,12 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --reward-ema F    EMA decay for the reward baseline; 0 disables (default 0.99)
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
+  --hpat-topn N     rank the hpat feature over only the best N moves by the
+                    OTHER feature spaces, instead of every candidate (default 0
+                    = whole board).  Much cheaper -- the ranking is most of the
+                    cost of an hpat spec -- but the ranks are then relative to a
+                    shortlist chosen by the weights being learned, so the
+                    feature's meaning moves as the policy does.
   --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
                     komi by +/-1 every 500 games while black's win share sits
                     outside [0.45, 0.55], keeping the training signal balanced;
@@ -60,6 +66,7 @@ const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored 
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdRms column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH   = opts.load || null;
+const HPAT_TOPN   = parseInt(opts['hpat-topn'] || '0', 10);
 
 // Komi.  Default: auto — a controller that steps the TRAIN_SIZE komi by +/-1
 // every KOMI_WINDOW (500) self-play games while black's win share sits outside
@@ -254,6 +261,7 @@ console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
+if (HPAT_TOPN > 0) { FeaturePol.setHpatTopN(HPAT_TOPN); console.log(`hpat-topn=${HPAT_TOPN} (hpat ranked over the top ${HPAT_TOPN} moves by the other spaces, not the whole board)`); }
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
