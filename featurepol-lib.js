@@ -441,9 +441,25 @@ function _hpatFallback(model, fn) {
 let _hpatAllow = null;     // Set of board indices, or null -- external tooling
 let _hpatMask  = null;     // Uint8Array board mask, or null -- the top-N path
 let _hpatTopN = 0;         // 0 = rank the whole board (the default)
+// Fraction of positions in which the hpat feature is computed at all.  1 = every
+// position (the default).  Below 1, the ranking is skipped on the rest and the
+// hpat spaces emit nothing there, so the feature keeps its whole-board meaning
+// -- rank 1 is still "best on the board" -- and only its FREQUENCY drops.  That
+// is the difference from _hpatTopN, which narrows what rank means.
+let _hpatPosRate = 1;
 let _hpatRank = null;      // _hpatRank[boardIdx] = 1-based rank, 0 = not a candidate
 let _hpatOrder = null;     // scratch: candidate board indices, sorted best-first
 let _hpatScore = null;     // scratch: _hpatScore[boardIdx] = mover-relative score
+
+// Zero the ranking so the hpat spaces stay dark for this position.
+function _hpatBlank(cap) {
+  if (!_hpatRank || _hpatRank.length < cap) {
+    _hpatRank  = new Int32Array(cap);
+    _hpatOrder = new Int32Array(cap);
+    _hpatScore = new Float64Array(cap);
+  }
+  _hpatRank.fill(0, 0, cap);
+}
 
 // Fill _hpatRank for every legal non-true-eye move of ctx.game.  Runs once per
 // position; each hpat<n> evalFn then just reads and clamps.
@@ -1001,7 +1017,7 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
 // of candidates instead of the whole board.  Ranks are then 1..N within that
 // shortlist, so this is an APPROXIMATION of the whole-board feature: a move the
 // plain spaces dislike can never be ranked, however good hpat thinks it is.
-function _extractTopN(game, state, weights, ctx, spec) {
+function _extractTopN(game, state, weights, ctx, spec, useHpat) {
   const computers = spec.computers, memo = state.memo, vals = weights.vals;
   const plainSlots = spec.plainSlots, plainSpaces = spec.plainSpaces, hpatSpaces = spec.hpatSpaces;
   const emC = game._emptyCells, ec = game.emptyCount;
@@ -1024,6 +1040,7 @@ function _extractTopN(game, state, weights, ctx, spec) {
   }
   state.count = count;
   if (count === 0) return;
+  if (useHpat === false) { _hpatBlank(game.N * game.N); return; }   // hpat sits out this position
   // Phase B — rank hpat over the top-N by plain score, then emit their keys.
   // Partial selection, not a sort: n is 2-6 against ~30 candidates, so a few
   // linear max passes beat a comparator sort and allocate nothing.
@@ -1077,12 +1094,17 @@ function extractFeatures(game, state, weights, game3) {
     const g3 = game3 || game3FromGame2(game);
     ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);
   }
+  // Is the hpat feature live for this position at all?
+  const useHpat = _hpatPosRate >= 1 || Math.random() < _hpatPosRate;
   // Top-N: rank hpat over a shortlist instead of the whole board.
-  if (_hpatTopN > 0 && spec.hpatSpaces && spec.hpatSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec);
+  if (_hpatTopN > 0 && spec.hpatSpaces && spec.hpatSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useHpat);
   // Whole-position precomputes (e.g. hpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
-  if (preps) for (let i = 0; i < preps.length; i++) preps[i](ctx);
+  if (preps && preps.length) {
+    if (useHpat) for (let i = 0; i < preps.length; i++) preps[i](ctx);
+    else _hpatBlank(game.N * game.N);
+  }
   const computers = spec.computers, numSlots = spec.numSlots;
   const emC = game._emptyCells, ec = game.emptyCount;
   const moves = state.moves, keys = state.keys, keyOff = state.keyOff;
@@ -1401,6 +1423,8 @@ const FeaturePol = {
   _hpatRanks: () => _hpatRank,
   _setHpatAllow: (set) => { _hpatAllow = set; },
   setHpatTopN: (n) => { _hpatTopN = n | 0; },
+  setHpatPositionRate: (p) => { _hpatPosRate = p; },
+  getHpatPositionRate: () => _hpatPosRate,
   getHpatTopN: () => _hpatTopN,
 };
 

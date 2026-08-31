@@ -20,7 +20,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'hpat-topn', 'hpat-topn-eval', 'ladder-file', 'md-file', 'load', 'save']);
+   'eval', 'eval-agent', 'komi', 'hpat-topn', 'hpat-topn-eval', 'hpat-pos-rate', 'ladder-file', 'md-file', 'load', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -42,6 +42,12 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --hpat-topn-eval N  the same, for EVAL games only (default: whatever
                     --hpat-topn is).  Lets a run train under one shortlist width
                     and be scored under another -- e.g. train at 3, play at 2.
+  --hpat-pos-rate P  compute the hpat feature in only this fraction of SELF-PLAY
+                    positions (default 1 = all).  Unlike --hpat-topn this keeps
+                    the feature's whole-board meaning when it does fire -- rank 1
+                    is still the best move on the board -- and only drops how
+                    OFTEN it fires, so it buys time without making the ranking
+                    depend on the weights being learned.  Eval always uses 1.
   --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
                     komi by +/-1 every 500 games while black's win share sits
                     outside [0.45, 0.55], keeping the training signal balanced;
@@ -72,6 +78,9 @@ const LOAD_PATH   = opts.load || null;
 const HPAT_TOPN   = parseInt(opts['hpat-topn'] || '0', 10);
 // Eval may use a different shortlist width than self-play; defaults to the same.
 const HPAT_TOPN_EVAL = opts['hpat-topn-eval'] !== undefined ? parseInt(opts['hpat-topn-eval'], 10) : HPAT_TOPN;
+// Self-play may compute hpat in only a fraction of positions; eval always uses
+// the feature, since that is how the policy would be deployed.
+const HPAT_POS_RATE = opts['hpat-pos-rate'] !== undefined ? parseFloat(opts['hpat-pos-rate']) : 1;
 
 // Komi.  Default: auto — a controller that steps the TRAIN_SIZE komi by +/-1
 // every KOMI_WINDOW (500) self-play games while black's win share sits outside
@@ -270,6 +279,10 @@ if (HPAT_TOPN > 0 || HPAT_TOPN_EVAL > 0) {
   FeaturePol.setHpatTopN(HPAT_TOPN);
   console.log(`hpat-topn=${HPAT_TOPN || 'all'} (self-play)  hpat-topn-eval=${HPAT_TOPN_EVAL || 'all'} (eval)`);
 }
+if (HPAT_POS_RATE < 1) {
+  FeaturePol.setHpatPositionRate(HPAT_POS_RATE);
+  console.log(`hpat-pos-rate=${HPAT_POS_RATE} (self-play positions using hpat; eval uses 1)`);
+}
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
@@ -327,6 +340,7 @@ while (true) {
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
       if (HPAT_TOPN_EVAL !== HPAT_TOPN) FeaturePol.setHpatTopN(HPAT_TOPN_EVAL);
+      if (HPAT_POS_RATE < 1) FeaturePol.setHpatPositionRate(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
       while (evalGames < 1000 && Date.now() - evalStart < evalBudget) {
@@ -334,6 +348,7 @@ while (true) {
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
       if (HPAT_TOPN_EVAL !== HPAT_TOPN) FeaturePol.setHpatTopN(HPAT_TOPN);
+      if (HPAT_POS_RATE < 1) FeaturePol.setHpatPositionRate(HPAT_POS_RATE);
       setKomi(TRAIN_SIZE, trainKomi);
       // avg: rolling win ratio over the most recent half of all eval games.
       const avgHalf = Math.max(1, Math.floor(evalHistory.length / 2));
