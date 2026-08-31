@@ -438,7 +438,9 @@ function _hpatFallback(model, fn) {
 // evaluate "rank only the top-N moves by the cheap features" -- ranks then run
 // 1..N within that shortlist rather than over the whole board.  null = rank
 // every legal non-true-eye move, which is the normal behaviour.
-let _hpatAllow = null;
+let _hpatAllow = null;     // Set of board indices, or null -- external tooling
+let _hpatMask  = null;     // Uint8Array board mask, or null -- the top-N path
+let _hpatTopN = 0;         // 0 = rank the whole board (the default)
 let _hpatRank = null;      // _hpatRank[boardIdx] = 1-based rank, 0 = not a candidate
 let _hpatOrder = null;     // scratch: candidate board indices, sorted best-first
 let _hpatScore = null;     // scratch: _hpatScore[boardIdx] = mover-relative score
@@ -456,17 +458,27 @@ function _hpatPrepare(ctx) {
   _hpatRank.fill(0, 0, cap);
   const black = ctx.cur === BLACK;   // hpat z is the BLACK-wins logit
 
-  let zBase = 0;
-  if (_hpatIncremental) {
-    HPatterns.extractFeatures(game, model);        // primes the buffers deltaZ reads
-    const zCum = HPatterns.zFromBuffers(model, w, N);
-    zBase = zCum[zCum.length - 1];
-  }
+  // zBase is the position's own logit.  It is the SAME constant for every
+  // candidate, so it cancels out of the ranking -- the only consumer is the
+  // capture fallback below, which produces an absolute z and so has to be put
+  // on the same footing.  Captures are ~0.7% of candidates, so compute it
+  // lazily: most positions never touch it, and zFromBuffers walks every window.
+  let zBase = 0, haveZBase = false;
+  if (_hpatIncremental) HPatterns.extractFeatures(game, model);   // primes the buffers deltaZ reads
+  const getZBase = () => {
+    if (!haveZBase) {
+      const zCum = HPatterns.zFromBuffers(model, w, N);
+      zBase = zCum[zCum.length - 1];
+      haveZBase = true;
+    }
+    return zBase;
+  };
 
   const emC = game._emptyCells, ec = game.emptyCount;
   let n = 0;
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
+    if (_hpatMask  !== null && _hpatMask[idx] === 0) continue;
     if (_hpatAllow !== null && !_hpatAllow.has(idx)) continue;
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
     let z;
@@ -476,8 +488,8 @@ function _hpatPrepare(ctx) {
       // capture moves are exactly where this model disagrees most usefully, so
       // pay for a full extraction rather than dropping them.
       z = Number.isNaN(d)
-        ? _hpatFallback(model, () => _zOf(HPatterns.extractFeatures(game, model, undefined, idx), w))
-        : zBase + d;
+        ? _hpatFallback(model, () => _zOf(HPatterns.extractFeatures(game, model, undefined, idx), w)) - getZBase()
+        : d;
     } else {
       z = _zOf(HPatterns.extractFeatures(game, model, undefined, idx), w);
     }
@@ -852,12 +864,23 @@ function parseSpec(specStr) {
     }
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= c.maxLevel;
-    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys });
+    const usesHpat = terms.some(t => t.prepare === _hpatPrepare);
+    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesHpat });
   }
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
   for (const sp of spaces) maxKeysPerMove += sp.maxKeys;
-  return { str, spaces, computers, numSlots: computers.length, prepares, maxKeysPerMove, needsLadder, nearMax };
+  // Split for the top-N path: which spaces need the hpat ranking, and which memo
+  // slots the remaining ("plain") spaces read.  Plain spaces can be scored
+  // before the ranking exists, which is what makes the shortlist possible.
+  const hpatSpaces  = spaces.filter(sp => sp.usesHpat);
+  const plainSpaces = spaces.filter(sp => !sp.usesHpat);
+  const plainSlots = [];
+  for (const sp of plainSpaces)
+    for (const t of [...sp.baseTerms, ...sp.cumTerms]) if (!plainSlots.includes(t.slot)) plainSlots.push(t.slot);
+  const hpatMaxKeys = hpatSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
+  return { str, spaces, plainSpaces, hpatSpaces, plainSlots, hpatMaxKeys,
+           computers, numSlots: computers.length, prepares, maxKeysPerMove, needsLadder, nearMax };
 }
 
 // ── Weights store (hash → dense idx → Float32 weight) ─────────────────────────
@@ -921,6 +944,12 @@ function createState(N, spec) {
     moves:    new Int32Array(cap),
     keys:     new Int32Array(cap * maxK),       // variable: move i's keys are keys[keyOff[i]..keyOff[i+1])
     keyOff:   new Int32Array(cap + 1),
+    keys2:    new Int32Array(cap * maxK),       // top-N path: rebuild target
+    hKeys:    new Int32Array(cap * Math.max(1, spec.hpatMaxKeys)),   // shortlisted moves' hpat keys
+    hCount:   new Int32Array(cap),
+    hMask:    new Uint8Array(cap),              // top-N path: shortlist membership
+    pScore:   new Float64Array(cap),            // plain-space score, drives the shortlist
+    pOrder:   new Int32Array(cap),
     memo:     new Float64Array(spec.numSlots),  // per-move scratch: one value per distinct fixed-space term
     ladderSizes: new Uint16Array(cap * 4),
     logits:   new Float64Array(cap),
@@ -935,6 +964,110 @@ function createState(N, spec) {
 // ── Feature extraction ────────────────────────────────────────────────────────
 
 // Fill state.keys (interned dense indices) for every legal non-true-eye move.
+// Emit one space's keys for the move whose term values are in `memo`.  Same
+// logic as the main loop below; factored out because the top-N path emits the
+// plain spaces and the hpat spaces in two separate phases.
+function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
+  const gate = sp.gate;
+  for (let gi = 0; gi < gate.length; gi++) if (memo[gate[gi]] < 1) return pos;   // space stays dark
+  let base = sp.salt;
+  const bt = sp.baseTerms;
+  for (let bi = 0; bi < bt.length; bi++) {
+    const t = bt[bi];
+    base = _hashCombine(base, _hashCombine(t.salt, t.bin ? 1 : (memo[t.slot] >>> 0)));
+  }
+  const ct = sp.cumTerms;
+  if (ct.length === 0) {
+    out[pos++] = _intern(weights, base >>> 0);
+  } else if (ct.length === 1) {
+    const t = ct[0]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
+    for (let k = 1; k <= sz; k++) out[pos++] = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0);
+  } else {
+    let acc = accA, nxt = accB, nAcc = 1; acc[0] = base;
+    for (let ci = 0; ci < ct.length; ci++) {
+      const t = ct[ci]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
+      let on = 0;
+      for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
+      const tmp = acc; acc = nxt; nxt = tmp; nAcc = on;
+    }
+    for (let a = 0; a < nAcc; a++) out[pos++] = _intern(weights, acc[a] >>> 0);
+  }
+  return pos;
+}
+
+// Top-N extraction: score every candidate on the spaces that do NOT need the
+// hpat ranking, then rank hpat within the best `_hpatTopN` of them only.  The
+// whole point is that the ranking -- the expensive part -- runs over a handful
+// of candidates instead of the whole board.  Ranks are then 1..N within that
+// shortlist, so this is an APPROXIMATION of the whole-board feature: a move the
+// plain spaces dislike can never be ranked, however good hpat thinks it is.
+function _extractTopN(game, state, weights, ctx, spec) {
+  const computers = spec.computers, memo = state.memo, vals = weights.vals;
+  const plainSlots = spec.plainSlots, plainSpaces = spec.plainSpaces, hpatSpaces = spec.hpatSpaces;
+  const emC = game._emptyCells, ec = game.emptyCount;
+  const moves = state.moves, keyOff = state.keyOff, pScore = state.pScore;
+  const accA = state.accA, accB = state.accB;
+  let keys = state.keys;
+  let count = 0, pos = 0;
+  keyOff[0] = 0;
+  // Phase A — plain spaces, and the score that picks the shortlist.
+  for (let ei = 0; ei < ec; ei++) {
+    const idx = emC[ei];
+    if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
+    for (let si = 0; si < plainSlots.length; si++) { const sl = plainSlots[si]; memo[sl] = computers[sl](ctx, idx); }
+    const start = pos;
+    for (let s = 0; s < plainSpaces.length; s++) pos = _emitSpace(plainSpaces[s], memo, weights, keys, pos, accA, accB);
+    let sc = 0;
+    for (let k = start; k < pos; k++) sc += vals[keys[k]];
+    pScore[count] = sc;
+    moves[count] = idx; count++; keyOff[count] = pos;
+  }
+  state.count = count;
+  if (count === 0) return;
+  // Phase B — rank hpat over the top-N by plain score, then emit their keys.
+  // Partial selection, not a sort: n is 2-6 against ~30 candidates, so a few
+  // linear max passes beat a comparator sort and allocate nothing.
+  const n = Math.min(_hpatTopN, count), rank = state.pOrder, mask = state.hMask;
+  for (let i = 0; i < n; i++) {
+    let best = -1, bestS = -Infinity;
+    for (let j = 0; j < count; j++) {
+      if (mask[moves[j]] !== 0) continue;                 // already taken
+      if (best < 0 || pScore[j] > bestS) { best = j; bestS = pScore[j]; }
+    }
+    rank[i] = best; mask[moves[best]] = 1;
+  }
+  _hpatMask = mask;
+  const preps = spec.prepares;
+  for (let i = 0; i < preps.length; i++) preps[i](ctx);
+  _hpatMask = null;
+  for (let i = 0; i < n; i++) mask[moves[rank[i]]] = 0;   // O(n) clear, not O(board)
+  const hKeys = state.hKeys, hCount = state.hCount, stride = spec.hpatMaxKeys, numSlots = spec.numSlots;
+  hCount.fill(0, 0, count);
+  for (let ii = 0; ii < n; ii++) {
+    const ci = rank[ii], idx = moves[ci];
+    // The hpat spaces may read terms the plain spaces never used (stones4 in
+    // stones4+hpat6, say), so recompute every slot for these few moves.
+    for (let sl = 0; sl < numSlots; sl++) memo[sl] = computers[sl](ctx, idx);
+    const base = ci * stride;
+    let hp = base;
+    for (let s = 0; s < hpatSpaces.length; s++) hp = _emitSpace(hpatSpaces[s], memo, weights, hKeys, hp, accA, accB);
+    hCount[ci] = hp - base;
+  }
+  // Splice the hpat keys into each move's range, keeping the flat layout every
+  // downstream consumer (_score, the gradient paths) expects.
+  const keys2 = state.keys2;
+  let p2 = 0;
+  for (let i = 0; i < count; i++) {
+    const a = keyOff[i], b = keyOff[i + 1], startNew = p2;
+    for (let k = a; k < b; k++) keys2[p2++] = keys[k];
+    const hc = hCount[i], hb = i * stride;
+    for (let k = 0; k < hc; k++) keys2[p2++] = hKeys[hb + k];
+    keyOff[i] = startNew;
+  }
+  keyOff[count] = p2;
+  state.keys = keys2; state.keys2 = keys;
+}
+
 function extractFeatures(game, state, weights, game3) {
   const spec = weights.spec;
   const spaces = spec.spaces, nSpaces = spaces.length;
@@ -944,6 +1077,8 @@ function extractFeatures(game, state, weights, game3) {
     const g3 = game3 || game3FromGame2(game);
     ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);
   }
+  // Top-N: rank hpat over a shortlist instead of the whole board.
+  if (_hpatTopN > 0 && spec.hpatSpaces && spec.hpatSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec);
   // Whole-position precomputes (e.g. hpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
@@ -1265,6 +1400,8 @@ const FeaturePol = {
   _hashStr, _captureCount, _atariStones,
   _hpatRanks: () => _hpatRank,
   _setHpatAllow: (set) => { _hpatAllow = set; },
+  setHpatTopN: (n) => { _hpatTopN = n | 0; },
+  getHpatTopN: () => _hpatTopN,
 };
 
 if (typeof module !== 'undefined') module.exports = FeaturePol;
