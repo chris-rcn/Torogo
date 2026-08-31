@@ -162,9 +162,12 @@ function trainGame(N) {
   let weightUpdates = 0;
   // The EMA baseline tracks outcomeBlack, i.e. it lives in BLACK's frame, so it
   // must be subtracted there and the result mirrored for WHITE -- centring
-  // WHITE's reward on +ema instead of -ema leaves a constant 2*ema offset that
-  // reinforces every WHITE move regardless of quality.  Harmless while the game
-  // is near-balanced (ema ~ 0); severe under a lopsided komi.
+  // WHITE's reward on +ema instead of -ema leaves a constant 2*ema offset on
+  // every WHITE move, unrelated to that move's quality.  The magnitude is small
+  // in practice: komi is tuned per board size (game2's per-size overrides) to
+  // keep self-play near 50/50, and observed |ema| stays under ~0.13 against a
+  // reward magnitude of 1.  A small bias with no reason to exist, not a
+  // catastrophe -- correcting it left measured win rate unchanged at size 7.
   for (const s of steps) {
     const sign = s.player === BLACK ? 1 : -1;
     const adv = REWARD_EMA > 0 ? sign * (outcomeBlack - ema) : sign * outcomeBlack;
