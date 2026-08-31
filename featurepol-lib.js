@@ -1203,6 +1203,7 @@ function serialize(weights, meta = {}) {
     `  const spec = ${JSON.stringify(meta.spec || weights.spec.str)};`,
     `  const ema = ${+(meta.ema || 0).toFixed(6)};`,
     `  const totalUpdates = ${Math.round(meta.totalUpdates || 0)};`,
+    `  const komi = ${meta.komi === undefined ? 'null' : +meta.komi};`,
     `  const b64 = '${b64}';`,
     "  const bytes = typeof Buffer !== 'undefined'",
     "    ? Buffer.from(b64, 'base64')",
@@ -1210,7 +1211,7 @@ function serialize(weights, meta = {}) {
     "  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + count * 6);",
     "  const keys  = new Int32Array(buf, 0, count);",
     "  const qvals = new Int16Array(buf, count * 4, count);",
-    "  return { spec, ema, totalUpdates, count, scale, keys, qvals };",
+    "  return { spec, ema, totalUpdates, komi, count, scale, keys, qvals };",
     "})();",
     "if (typeof module !== 'undefined') module.exports = featurepolModel;",
     "else window.featurepolModel = featurepolModel;",
@@ -1232,7 +1233,8 @@ function loadModel({ name = 'featurepol', path: pathOverride } = {}) {
   const mw = modelWeights(raw);
   const weights = createWeights({ spec: raw.spec, initialCapacity: Math.max(1024, mw.count | 0) });
   mw.forEach((key, val) => { weights.vals[_intern(weights, key)] = val; });
-  return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0 };
+  return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0,
+           komi: raw.komi === undefined ? null : raw.komi };
 }
 
 const FeaturePol = {
