@@ -584,7 +584,7 @@ while (true) {
       Util.fmtMs(Date.now() - t0),
       Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
       Util.fmt4i(g),
-      kAvg.toFixed(2).padStart(6),
+      Util.fmt4(kAvg).padStart(6),
       Util.fmtMs(tGameMs),
       Util.fmt4i(ws),
       wAvg.toFixed(4).padStart(6),

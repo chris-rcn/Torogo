@@ -302,7 +302,7 @@ while (true) {
       Util.fmt4i(wNz),
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
-      (komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)).toFixed(1),
+      Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),
     ];
     if (EVAL_AGENT) {
       // Eval always runs at EVAL_KOMI so the column stays comparable while the
