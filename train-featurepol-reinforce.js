@@ -160,9 +160,14 @@ function trainGame(N) {
   const outcomeBlack = winner === BLACK ? 1 : (winner === 0 ? 0 : -1);
 
   let weightUpdates = 0;
+  // The EMA baseline tracks outcomeBlack, i.e. it lives in BLACK's frame, so it
+  // must be subtracted there and the result mirrored for WHITE -- centring
+  // WHITE's reward on +ema instead of -ema leaves a constant 2*ema offset that
+  // reinforces every WHITE move regardless of quality.  Harmless while the game
+  // is near-balanced (ema ~ 0); severe under a lopsided komi.
   for (const s of steps) {
-    const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
-    const adv = REWARD_EMA > 0 ? (R - ema) : R;
+    const sign = s.player === BLACK ? 1 : -1;
+    const adv = REWARD_EMA > 0 ? sign * (outcomeBlack - ema) : sign * outcomeBlack;
     weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY, wStats) || 0;
   }
   if (REWARD_EMA > 0 && steps.length > 0) ema = REWARD_EMA * ema + (1 - REWARD_EMA) * outcomeBlack;
