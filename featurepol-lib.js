@@ -433,6 +433,12 @@ function _hpatFallback(model, fn) {
   return r;
 }
 
+// Optional candidate restriction: when set, only these board indices are ranked
+// (everything else gets rank 0, i.e. the space stays dark for them).  Used to
+// evaluate "rank only the top-N moves by the cheap features" -- ranks then run
+// 1..N within that shortlist rather than over the whole board.  null = rank
+// every legal non-true-eye move, which is the normal behaviour.
+let _hpatAllow = null;
 let _hpatRank = null;      // _hpatRank[boardIdx] = 1-based rank, 0 = not a candidate
 let _hpatOrder = null;     // scratch: candidate board indices, sorted best-first
 let _hpatScore = null;     // scratch: _hpatScore[boardIdx] = mover-relative score
@@ -461,6 +467,7 @@ function _hpatPrepare(ctx) {
   let n = 0;
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
+    if (_hpatAllow !== null && !_hpatAllow.has(idx)) continue;
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
     let z;
     if (_hpatIncremental) {
@@ -1257,6 +1264,7 @@ const FeaturePol = {
   // exposed for tests
   _hashStr, _captureCount, _atariStones,
   _hpatRanks: () => _hpatRank,
+  _setHpatAllow: (set) => { _hpatAllow = set; },
 };
 
 if (typeof module !== 'undefined') module.exports = FeaturePol;
