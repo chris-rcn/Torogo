@@ -34,7 +34,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
   --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
-                    komi by +/-1 every 100 games while black's win share sits
+                    komi by +/-1 every 500 games while black's win share sits
                     outside [0.45, 0.55], keeping the training signal balanced;
                     'auto:<start>' seeds its starting value; a bare number fixes
                     komi and disables the controller.  Eval komi is ALWAYS the
@@ -62,7 +62,7 @@ const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).sl
 const LOAD_PATH   = opts.load || null;
 
 // Komi.  Default: auto — a controller that steps the TRAIN_SIZE komi by +/-1
-// every KOMI_WINDOW self-play games while black's win share sits outside
+// every KOMI_WINDOW (500) self-play games while black's win share sits outside
 // [0.45, 0.55].  Self-play with a lopsided komi is a poor teacher: the outcome
 // stops depending on the moves, so the REINFORCE advantage carries no signal.
 // The current komi is persisted in the checkpoint and restored on --load.
@@ -82,7 +82,13 @@ if (opts.komi !== undefined) {
 // before the controller has moved anything — so the winRatio column measures
 // the same game throughout the run.  The controller only moves TRAIN_SIZE komi.
 const EVAL_KOMI = KOMI(EVAL_SIZE);
-const KOMI_WINDOW = 100;
+// The window is 500 games, not 100: black's win share over N games has standard
+// error sqrt(0.25/N), so a 100-game window gives 5pp -- exactly the half-width
+// of the [0.45, 0.55] dead zone.  A perfectly balanced komi would then step on
+// noise ~32% of the time and random-walk several points every 10k games, which
+// is what the avgK column showed.  500 games puts the SE at 2.2pp, so the dead
+// zone is ~2.2 SE and noise-stepping is rare.
+const KOMI_WINDOW = 500;
 let komiGames = 0, komiBlackWins = 0;
 let komiSum = 0, komiSumGames = 0;   // per-interval mean komi (avgK column)
 

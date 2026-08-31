@@ -52,7 +52,7 @@ const EMA_PERIOD = 1000;
 const SPEC_RAW = opts.spec || '2:4';
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 // Komi (both train and eval boards).  Default: auto — a controller that,
-// every KOMI_WINDOW self-play games, steps komi by ±1 point when black's
+// every KOMI_WINDOW (500) self-play games, steps komi by ±1 point when black's
 // win share leaves the [45%, 55%] band (fractional .5 is preserved, so no
 // draws).  The current komi is persisted in the checkpoint and restored on
 // --load.  Eval games share the board size, so they play at the current
@@ -77,7 +77,13 @@ if (opts.komi !== undefined) {
 // pinning eval keeps winRatio comparable across a whole run, and across runs.
 const EVAL_KOMI = KOMI(EVAL_SIZE);
 
-const KOMI_WINDOW = 100;
+// The window is 500 games, not 100: black's win share over N games has standard
+// error sqrt(0.25/N), so a 100-game window gives 5pp -- exactly the half-width
+// of the [0.45, 0.55] dead zone.  A perfectly balanced komi would then step on
+// noise ~32% of the time and random-walk several points every 10k games, which
+// is what the avgK column showed.  500 games puts the SE at 2.2pp, so the dead
+// zone is ~2.2 SE and noise-stepping is rare.
+const KOMI_WINDOW = 500;
 let komiGames = 0, komiBlackWins = 0;
 let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column; reset each print)
 // Spec format: "size:max[f],..." — trailing 'f' freezes weights at that size
