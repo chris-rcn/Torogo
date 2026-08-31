@@ -27,11 +27,17 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['no-add'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
+// --no-add: fine-tune ONLY the patterns already in the loaded model.  A
+// feature whose key is absent from the weight table is skipped entirely --
+// no weight is created for it, and it does not share in the TD error.  This
+// keeps a pruned/filtered checkpoint at its filtered size while its surviving
+// weights keep training.  Meaningless without --load, so that is an error.
+const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext  || '';   // off-policy move source: 80% of moves come from this agent
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite for the ladr column
@@ -202,17 +208,24 @@ function tdUpdate(features, target, lr) {
   if (n === 0) return;
   const { keys, pols, sizes } = features;
   const hasFrozen = FROZEN.size > 0;
+  // A feature is skipped when its size is frozen, or -- under --no-add -- when
+  // its key is not already in the weight table.  Skipped features are excluded
+  // from nActive too: the TD error is shared only among the weights that will
+  // actually move, so suppressing new patterns does not shrink the step the
+  // surviving ones get.
+  const skip = (i) => (hasFrozen && FROZEN.has(sizes[i])) ||
+                      (NO_ADD && model.weights.get(keys[i]) === undefined);
   let nActive = n;
-  if (hasFrozen) {
+  if (hasFrozen || NO_ADD) {
     nActive = 0;
-    for (let i = 0; i < n; i++) if (!FROZEN.has(sizes[i])) nActive++;
+    for (let i = 0; i < n; i++) if (!skip(i)) nActive++;
     if (nActive === 0) return;
   }
   const perFeature = (target - features.val) / nActive;
   if (MOMENTUM === 0) {
     const step = lr * perFeature;
     for (let i = 0; i < n; i++) {
-      if (hasFrozen && FROZEN.has(sizes[i])) continue;
+      if (skip(i)) continue;
       const k = keys[i];
       const w = (model.weights.get(k) ?? 0) + pols[i] * step;
       model.weights.set(k, w);
@@ -220,7 +233,7 @@ function tdUpdate(features, target, lr) {
     }
   } else {
     for (let i = 0; i < n; i++) {
-      if (hasFrozen && FROZEN.has(sizes[i])) continue;
+      if (skip(i)) continue;
       const k   = keys[i];
       const g   = pols[i] * perFeature;
       const vel = MOMENTUM * (velocity.get(k) ?? 0) + g;
@@ -450,9 +463,16 @@ if (LOAD_PATH) {
 
 INCREMENTAL = saturatedOnly(model.maxStones);
 
+// --no-add only makes sense against an existing weight table: with an empty one
+// every feature would be skipped and nothing would ever learn.
+if (NO_ADD && model.weights.size === 0) {
+  console.error('error: --no-add needs a loaded model to fine-tune (pass --load with a non-empty checkpoint)');
+  process.exit(1);
+}
+
 console.log(`LR=${LR}  momentum=${MOMENTUM}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ''}  eval-komi=${EVAL_KOMI} (fixed)`);
-console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}`);
+console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}${NO_ADD ? `  no-add (fine-tuning the loaded ${model.weights.size} patterns only)` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax against
