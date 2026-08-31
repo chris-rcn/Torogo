@@ -446,7 +446,7 @@ let _hpatTopN = 0;         // 0 = rank the whole board (the default)
 // hpat spaces emit nothing there, so the feature keeps its whole-board meaning
 // -- rank 1 is still "best on the board" -- and only its FREQUENCY drops.  That
 // is the difference from _hpatTopN, which narrows what rank means.
-let _hpatPosRate = 1;
+let _hpatPosRatio = 1;
 let _hpatRank = null;      // _hpatRank[boardIdx] = 1-based rank, 0 = not a candidate
 let _hpatOrder = null;     // scratch: candidate board indices, sorted best-first
 let _hpatScore = null;     // scratch: _hpatScore[boardIdx] = mover-relative score
@@ -1095,7 +1095,7 @@ function extractFeatures(game, state, weights, game3) {
     ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);
   }
   // Is the hpat feature live for this position at all?
-  const useHpat = _hpatPosRate >= 1 || Math.random() < _hpatPosRate;
+  const useHpat = _hpatPosRatio >= 1 || Math.random() < _hpatPosRatio;
   // Top-N: rank hpat over a shortlist instead of the whole board.
   if (_hpatTopN > 0 && spec.hpatSpaces && spec.hpatSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useHpat);
   // Whole-position precomputes (e.g. hpat ranking) -- once per position, before
@@ -1423,8 +1423,8 @@ const FeaturePol = {
   _hpatRanks: () => _hpatRank,
   _setHpatAllow: (set) => { _hpatAllow = set; },
   setHpatTopN: (n) => { _hpatTopN = n | 0; },
-  setHpatPositionRate: (p) => { _hpatPosRate = p; },
-  getHpatPositionRate: () => _hpatPosRate,
+  setHpatPositionRatio: (p) => { _hpatPosRatio = p; },
+  getHpatPositionRatio: () => _hpatPosRatio,
   getHpatTopN: () => _hpatTopN,
 };
 
