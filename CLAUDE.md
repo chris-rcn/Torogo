@@ -15,6 +15,17 @@
   happens, the "position" was never reachable by legal play, or the replay
   order/colour is wrong.
 
+## Terminology
+
+- **"Ratio", never "rate", for a fraction of a whole.** A rate is a quantity per
+  unit time; a fraction of some total is a ratio. Name flags, variables and prose
+  accordingly (`--hpat-pos-ratio`, not `--hpat-pos-rate`).
+- **Name the unit a knob counts.** The two hpat knobs are easy to confuse, so
+  always say which one is meant: `--hpat-pos-ratio R` is the fraction of
+  POSITIONS in which the hpat feature is computed at all; `--hpat-topn N` is how
+  many MOVES get ranked within such a position (0 = every candidate). Never
+  write a bare "rate", "ratio" or "N" where either could be meant.
+
 ## Workflow
 
 - **Never use `pkill`.** To stop a process, kill specific PIDs (e.g. track
