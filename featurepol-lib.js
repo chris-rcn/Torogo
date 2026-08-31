@@ -59,12 +59,15 @@
 //               (urgent-kill/urgent-save/wasted-extend/wasted-attack)
 //   urgentKill<n> / urgentSave<n> / wastedExtend<n> / wastedAttack<n>
 //               one ladder flag's summed chain stone-count (cumulative, up to n)
-//   hpat<n>     EXACT rank of the move under a fixed hierarchical-pattern
-//               (hpatterns) model, mover-relative: 1 = that model's top choice,
-//               2 = its second, up to n.  Rank past n emits nothing, so the term
-//               is worth exactly n weights per space combination and the tail
-//               shares the implicit zero baseline.  Gated descriptor.  The model
-//               file comes from FP_HPAT_DATA and is never trained here.
+//   hpat<n>     rank of the move under a fixed hierarchical-pattern (hpatterns)
+//               model, mover-relative: 1 = that model's top choice, 2 = its
+//               second, up to n.  CUMULATIVE in rank quality: rank r contributes
+//               levels 1..n+1-r, so the top choice lights every level and rank n
+//               only level 1; rank past n emits nothing and shares the implicit
+//               zero baseline.  Still exactly n weights per space combination,
+//               but level k is estimated from every move ranked <= n+1-k rather
+//               than from one rank alone.  The model file comes from FP_HPAT_DATA
+//               and is never trained here.
 //
 // BROWSER-COMPATIBLE: no Node-only APIs at top level.
 
@@ -373,11 +376,19 @@ function _canonStones(cv, n) { return _canonRadix(cv, n, 3); }
 // ── hpat: rank under a hierarchical-pattern model ────────────────────────────
 //
 // hpat<n> ranks every candidate of the CURRENT position by the hpatterns model's
-// Delta-z (mover-relative: higher = better for the side to move) and uses the
-// EXACT rank as the feature value -- 1 for the model's top choice, 2 for its
-// second, and so on.  Rank > n yields 0, which gates the space off, so the term
-// costs exactly n weights per space combination and everything past n shares the
-// implicit zero baseline.
+// Delta-z (mover-relative: higher = better for the side to move) and feeds that
+// rank in as a CUMULATIVE (thermometer) size, exactly like capture<n> and the
+// other size terms: rank r maps to size n+1-r, so the model's top choice
+// contributes levels 1..n, its second levels 1..n-1, and rank n only level 1.
+// Rank > n maps to size 0, which gates the space off, so everything past n
+// shares the implicit zero baseline.
+//
+// The term still costs exactly n weights per space combination, but they now
+// partition by THRESHOLD rather than by exact rank: level k fires for every move
+// ranked <= n+1-k, so level 1 ("in the top n") is estimated from n times more
+// data than level n ("is the top choice").  The measured rank-quality curve is
+// smooth and monotone through the first several ranks, which is precisely where
+// sharing statistics across adjacent ranks pays and one-hot ranks waste data.
 //
 // The model is a FIXED external evaluator; featurepol never trains it.  It comes
 // from the file named by FP_HPAT_DATA (a train-hpatterns save) -- or, in a
@@ -500,16 +511,17 @@ function _makeTerm(str) {
   // maxNear: how many of the nearest cells this term reads from the nearNbr table
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
   let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
-  let gated = false, prepare = null;
+  let prepare = null;
   switch (kind) {
     case 'hpat': {
-      // Exact rank under the hpatterns model: 1 = its top choice, up to n.
-      // Rank > n gives 0, which gates the space off.  n weights per space.
+      // Rank under the hpatterns model as a cumulative size: rank r -> n+1-r, so
+      // the top choice lights levels 1..n and rank n only level 1.  Rank > n
+      // gives 0, which gates the space off.  n weights per space.
       if (param === null || param < 1) throw new Error(`featurepol: hpat<n> needs a rank count n >= 1, got "${str}"`);
       const n = param;
-      gated = true;                       // 0 (rank past n) suppresses the space
       prepare = _hpatPrepare;
-      evalFn = (ctx, idx) => { const r = _hpatRank[idx]; return r <= n ? r : 0; };
+      cumulative = true;
+      sizeFn = (ctx, idx) => { const r = _hpatRank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
       break;
     }
     case 'stones': {
@@ -780,7 +792,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, gated, prepare, maxNear };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -829,9 +841,6 @@ function parseSpec(specStr) {
       if (t.prepare && !prepares.includes(t.prepare)) prepares.push(t.prepare);
       if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel }); }
       else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
-      // A gated descriptor folds its VALUE like a plain descriptor but 0 means
-      // "absent" and suppresses the whole space.
-      else if (t.gated)       { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: false }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
     }
     let maxKeys = 1;
