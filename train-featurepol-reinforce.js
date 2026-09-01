@@ -184,6 +184,34 @@ function saveWeights() {
   fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }));
 }
 
+// ── Mirror-pair openings (ported from selfplay.js) ────────────────────────────
+function mirror180(idx, N) {
+  const x = idx % N, y = (idx - x) / N;
+  return ((N - y) % N) * N + ((N - x) % N);
+}
+function isAntisymmetric(game) {
+  const N = game.N, area = N * N;
+  for (let i = 0; i < area; i++)
+    if (game.cells[i] !== -game.cells[mirror180(i, N)]) return false;
+  return true;
+}
+// Play a random move and its 180-degree rotation; validated on a clone (no
+// undo), rejecting fixed points and pairs whose captures interact.
+function playMirrorPair(game) {
+  for (let tries = 0; tries < 32; tries++) {
+    const idx = game.randomLegalMove();
+    if (idx === PASS) return false;
+    const m = mirror180(idx, game.N);
+    if (m === idx) continue;
+    const trial = game.clone();
+    if (!trial.play(idx) || !trial.play(m)) continue;
+    if (!isAntisymmetric(trial)) continue;
+    game.play(idx);
+    game.play(m);
+    return true;
+  }
+  return false;
+}
 // ── One self-play game + REINFORCE update ─────────────────────────────────────
 function trainGame(N) {
   const game  = new Game2(N);
@@ -247,9 +275,12 @@ function evalVsReference(N, nGames) {
   let wins = 0;
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game = new Game2(N);
+    // 2 mirror pairs from an EMPTY board: the opening is invariant under
+    // rotate-180 + colour-swap, so neither side is favoured — measured ~2.25x
+    // variance reduction on win-rate stats vs random openings (selfplay.js).
+    const game = new Game2(N, false);
+    for (let p = 0; p < 2; p++) playMirrorPair(game);
     const game3 = game3FromGame2(game);
-    for (let r = 0; r < 3 && !game.gameOver; r++) { const mv = game.randomLegalMove(); game.play(mv); game3.play(mv); }
     let m = 0;
     while (!game.gameOver && m++ < N * N * 4) {
       let idx;
