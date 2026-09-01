@@ -1,20 +1,23 @@
 'use strict';
 
-// Production agent (self-contained copy of ai/puct-ppat.js, hardcoded
-// config — promoted 2026-08-19, beating the previous prod (rave-npat-prune,
-// now ai/prodOldC.js) at equal time: 9×9 83%/100g @100ms, 87%/100g @300ms;
-// 13×13 78%/37g @1s, margin growing with budget).
+// Production agent (self-contained copy of ai/puct-ppat-fp.js, hardcoded
+// config — promoted 2026-08-27, replacing puct-ppat/npat priors, now
+// ai/prodOldD.js).  featurepol priors rate ~65-90 Elo over npat priors at
+// matched playouts on the 13x13 ladder (ref-puct-ppat-fp-e2-3k 2079 vs
+// ref-puct-ppat-3k 1993; -e2-1k 1791 vs -1k 1726).
+//
+// Data files, both loaded from the repo root (in the browser, load
+// ppat-lib.js + ppat-data.js and featurepol-data.js first, which set
+// window.PPATWeights / window.featurepolModel):
+//   ppat-data.js       playout policy — band-trained ppat-data-287076-best
+//   featurepol-data.js priors/pruning policy — featurepol-6082
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes (the root searches full width), RAVE, and ppat-policy full-playout leaf
-// evaluation.  Playout policy: single-phase SB-trained ppat checkpoint
-// ppat-data.js (= ppat-data-287076-best, band-trained, score 65.35); in the
-// browser, load ppat-lib.js and ppat-data.js (sets window.PPATWeights) first.
+// nodes (the root searches full width unless rootTopK caps it), RAVE, and
+// ppat-policy full-playout leaf evaluation.
 //
-// Each unexpanded edge is expanded on first contact: a leaf node is created
-// (policy extraction + priors) and one playout is run from it.  A ppat playout
-// is expensive enough that the node-creation cost is always worth paying, so
-// there is no lazy-expansion threshold.
+// Lazy expansion: an edge needs nExpand visits before its child (featurepol
+// extraction + priors) is built, converting extraction time into playouts.
 //
 // Terminal positions are scored exactly.  Values are backpropagated
 // fractionally: each chooser is credited value (BLACK) or 1 − value (WHITE).
@@ -34,7 +37,7 @@
 const Util = (typeof require === 'function') ? require('../util.js') : window.Util;
 const { PASS, BLACK } = Util.load('./game2.js', 'Game2');
 const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
-const NPat                  = Util.load('./npat-lib.js', 'NPatterns');
+const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
 const { createState, ppatMove, loadWeights } = _ppat;
@@ -62,6 +65,14 @@ function create() {
   const raveK     = 400;
   // Top-K kept move count (applies only below root).
   const topK     = 40;
+  // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
+  // the classic full-width root).
+  const rootTopK = 0;
+  // Lazy expansion: an edge must accumulate this many visits before its child
+  // node (featurepol extraction + priors) is created; playouts before that run
+  // from the unexpanded position.  Featurepol extraction is pricey, so 2 skips
+  // it for the many leaves that are only ever visited once.
+  const nExpand   = 2;
   // Fixed playout count per decision; 0 = follow the caller's time budget.
   const fixedPlayouts = 0;
   // Playout moves to use the ppat policy before switching to uniform (-1 = all).
@@ -70,19 +81,29 @@ function create() {
   const ppatRatio = 1;
 
   // ppat playout policy weights: the fixed prod checkpoint (window.PPATWeights
-  // in the browser).  ppat model { phaseCount, weights }.
+  // in the browser).  Hard failure, not a fallback: this agent's strength IS
+  // its ppat playouts, so silently running uniform would field a wrong engine.
+  const _ppatPath = _isNode ? require('path').join(__dirname, '..', 'ppat-data.js') : null;
   const _model = _isNode
-    ? loadWeights(require('path').join(__dirname, '..', 'ppat-data.js'))
+    ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+  if (!_model) {
+    throw new Error(`prod: cannot load ppat weights from ` +
+      (_isNode ? _ppatPath : 'window.PPATWeights'));
+  }
 
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  if (_model) _model.uniformBelowPhase = 0;
+  _model.uniformBelowPhase = 0.6;
 
-  // npat policy model (priors + top-K pruning), from the canonical npat-data.js.
-  const npatModel   = NPat.loadModel({ name: 'prod' });
-  const npatWeights = npatModel.weights;
+  // featurepol policy model (priors + top-K pruning): the fixed prod checkpoint
+  // (window.featurepolModel in the browser).  loadModel throws if it is missing.
+  const _isBrowser  = typeof window !== 'undefined';
+  const fpModel     = FeaturePol.loadModel({ name: 'prod',
+    path: _isBrowser ? undefined
+                     : require('path').join(__dirname, '..', 'featurepol-data.js') });
+  const fpWeights   = fpModel.weights;
 
   let _ppatState = null;
   function _ensurePpatState(N) {
@@ -92,17 +113,18 @@ function create() {
 
   const stateByN = new Map();
 
-  // Run npat policy extraction + softmax for `game2`.  `game3` is the lockstep
-  // mirror (maintained by the search, so extraction skips the game3FromGame2
-  // rebuild).  Returns the shared state (moves/probs populated) or null.
-  function _runNpat(game2, game3) {
-    if (!npatWeights || game2.gameOver) return null;
+  // Run featurepol policy extraction + softmax for `game2`.  `game3` is the
+  // lockstep mirror (maintained by the search, so extraction skips the
+  // game3FromGame2 rebuild).  Returns the shared state (moves/probs
+  // populated) or null.
+  function _runFp(game2, game3) {
+    if (!fpWeights || game2.gameOver) return null;
     const N = game2.N;
     let state = stateByN.get(N);
-    if (!state) { state = NPat.createState(N); stateByN.set(N, state); }
-    NPat.extractFeatures(game2, state, undefined, game3, npatWeights);
+    if (!state) { state = FeaturePol.createState(N, fpWeights.spec); stateByN.set(N, state); }
+    FeaturePol.extractFeatures(game2, state, fpWeights, game3);
     if (state.count === 0) return null;
-    NPat.computeSoftmax(state, npatWeights);
+    FeaturePol.computeSoftmax(state, fpWeights);
     return state;
   }
 
@@ -124,7 +146,7 @@ function create() {
       const current = game2.current;
       // usePolicy: use the ppat policy this move — within the ppatMoves window
       // and (subject to ppatRatio) not a randomly-mixed uniform move.
-      const ppatActive = _model && (ppatMoves < 0 || moves < ppatMoves);
+      const ppatActive = ppatMoves < 0 || moves < ppatMoves;
       const usePolicy  = ppatActive && (ppatRatio >= 1 || rng.random() < ppatRatio);
       const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng)
                             : game2.randomLegalMove(rng);
@@ -141,12 +163,13 @@ function create() {
 
   function makeNode(move, parent, ci, game2, N, game3) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
-    const npatState = _runNpat(game2, game3);
+    const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
-    // Top-K pruning at interior nodes only: at the root it would constrain the
-    // actual decision, and the root gets enough visits to search full width.
-    if (topK > 0 && parent !== null) {
-      movesArr = _pruneToTopK(movesArr, npatState, topK, N);
+    // Top-K pruning: topK below the root; at the root, full width unless
+    // rootTopK caps the actual decision's candidate set.
+    const k = parent !== null ? topK : rootTopK;
+    if (k > 0) {
+      movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
     const M = movesArr.length;
     const area = N * N;
@@ -163,9 +186,9 @@ function create() {
     // PUCT priors per move (renormalised to sum to 1).  PASS gets a 1/area floor;
     // all other entries take the softmax probability directly; then renormalise.
     const priors = new Float32Array(M);
-    if (npatState) {
+    if (fpState) {
       const probByMove = new Float64Array(area);
-      for (let i = 0; i < npatState.count; i++) probByMove[npatState.moves[i]] = npatState.probs[i];
+      for (let i = 0; i < fpState.count; i++) probByMove[fpState.moves[i]] = fpState.probs[i];
       const floor = 1 / area;
       let sum = 0;
       for (let i = 0; i < M; i++) {
@@ -260,13 +283,18 @@ function create() {
         break;
       }
 
-      // Expand on first contact: create the leaf node, descend into it, and run
-      // one playout from it.  No lazy-expansion threshold — a ppat playout costs
-      // far more than node creation, so a new node is always worthwhile.
+      // Expansion: create the child (featurepol extraction + priors) once its
+      // edge has nExpand visits; before that, run the playout from the
+      // unexpanded position with stats accumulating on the parent's edge
+      // (same backprop shape as the pass-break case above).
       if (node.children[best] === null) {
-        node.children[best] = makeNode(move, node, best, game2, N, game3);
-        node = node.children[best];
-        node.selectedChild = -1;
+        if (node.visits[best] >= nExpand - 1 + priorVisits - 1e-9) {
+          node.children[best] = makeNode(move, node, best, game2, N, game3);
+          node = node.children[best];
+          node.selectedChild = -1;
+        } else {
+          node.selectedChild = best;
+        }
         doPlayout = true;
         break;
       }
@@ -342,7 +370,7 @@ function create() {
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
-    // Lockstep Game3 mirror for npat feature extraction — built once per
+    // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
     const game3 = game3FromGame2(game2);
@@ -430,7 +458,7 @@ function create() {
 
   // Search value of a Game2 position as P(BLACK wins) in [0,1], for use as an SB
   // value oracle (matches ref-vlibpat.valueB / mc-vlib.valueB / puct-hybrid.valueB).
-  // Runs a full search (playouts playouts, default 1000) and returns the root win
+  // Runs a full search (fixedPlayouts, or 1000 when unset) and returns the root win
   // ratio mapped from the side-to-move perspective to absolute P(BLACK wins).
   function valueB(game, options = {}) {
     const N     = game.cells ? game.N : game.boardSize;
