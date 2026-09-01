@@ -27,9 +27,55 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['no-add'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+if (opts.help) {
+  console.log(`Usage: node train-hpatterns.js [options]
+
+Logistic TD(2) self-play trainer for hierarchical pattern weights.  Runs
+indefinitely unless --limit is given; the checkpoint is written at every print.
+
+  --spec S          sizes to extract, as "size:maxStones" pairs (default 2:4).
+                    A bare size ("4" or "4:") means no stone limit
+                    (maxStones = size^2); a trailing 'f' freezes that size's
+                    loaded weights, e.g. '2:4f,3:8'
+  --train-size N    self-play board size (default 9)
+  --eval-size N     evaluation board size (default 13)
+  --size N          sets both of the above
+  --komi K          auto | auto:<start> | <number>.  auto (default) steps komi
+                    by +/-1 every 500 self-play games while black's win share
+                    sits outside [45%, 55%]; a number fixes komi and disables
+                    the controller.  Eval games always use a fixed komi.
+  --limit N         stop after N games (default 0 = run indefinitely)
+
+  --lr F            step size for the TD update (default 0.3)
+  --momentum F      SGD momentum (default 0 = off)
+  --smooth-weights A  Polyak EMA decay, applied every 1000 games; 0 = off
+                    (default 0.9, a window of ~10k games).  The EMA weights
+                    are what gets saved once it has run.
+  --epsilon F       share of moves played uniformly at random (default 0.1)
+  --on-policy F     share of the NON-random moves taken from this model's own
+                    search1ply; the rest come from --ext (default 1 = fully
+                    on-policy)
+  --ext AGENT       ai/<name>.js supplying the off-policy moves; only consulted
+                    when --on-policy < 1
+
+  --load PATH       resume from a checkpoint.  Its spec is unioned with --spec
+                    (larger stone limit wins per size) and its saved komi is
+                    restored under auto-komi.
+  --no-add          fine-tune ONLY the patterns already in the loaded model:
+                    a feature whose key is absent is skipped entirely and takes
+                    no share of the TD error.  Needs a non-empty --load.
+  --save PATH       checkpoint path (default out/hpatterns-<random>.js)
+
+  --eval AGENT      ai/<name>.js played as the reference in test games
+                    (default: none, which disables the test games)
+  --ladder-file F   evalladders2 suite scored each print (ladr column)
+  --md-file F       evalmovedetails positions scored each print (mdRms column)
+  --help            show this message`);
+  process.exit(0);
+}
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
-const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || opts['train-size'] || '13', 10);
+const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/hpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 // --no-add: fine-tune ONLY the patterns already in the loaded model.  A
@@ -511,6 +557,13 @@ console.log(headerCols.join('  '));
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 const t0 = Date.now();
+// Ceiling on the gap between printed rows; see the schedule at the end of the
+// training loop.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
+// Ceiling on the reference games played per printed row.  The eval batch
+// normally stops at 30% of the interval's training time; this bounds it when
+// the interval is long enough for that budget to run away.
+const MAX_EVAL_GAMES = 2000;
 let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalMoves = 0;
@@ -558,7 +611,8 @@ while (true) {
         for (const r of results) batch.push(r);
         evalAccC += accCorrect; evalAccN += accN;
         const tMs = Date.now() - tTestStart;
-        if (tMs > 0.3 * intervalTrainMs || batch.length >= 998) break;
+        // Two games per call, so the length lands exactly on the cap.
+        if (tMs > 0.3 * intervalTrainMs || batch.length >= MAX_EVAL_GAMES) break;
       }
       setKomi(TRAIN_SIZE, trainKomi);   // restore (same entry when sizes match)
       for (const r of batch) evalHistory.push(r);
@@ -626,7 +680,12 @@ while (true) {
     // the ref/ladder/md eval cost the premature schedule used to miss.
     const nowMs = Date.now();
     const geometricAt = t0 + Math.round((nowMs - t0) * 1.3);
-    nextPrintAt = Math.max(geometricAt, nowMs + tTestMs);
+    // ...but cap the gap at MAX_PRINT_GAP_MS: 1.3x of TOTAL elapsed keeps
+    // growing forever, so a multi-day run ends up a day and a half between
+    // rows.  (train_ppat.c caps the same schedule, at 1 h.)  The tTestMs floor
+    // still wins over the cap when a test cycle is slower than the cap itself.
+    const cappedAt = Math.min(geometricAt, nowMs + MAX_PRINT_GAP_MS);
+    nextPrintAt = Math.max(cappedAt, nowMs + tTestMs);
   }
 
   if (limitReached) {
