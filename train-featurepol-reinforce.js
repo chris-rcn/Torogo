@@ -12,7 +12,7 @@ const fs   = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
 const FeaturePol = require('./featurepol-lib.js');
-const { Game2, BLACK, PASS } = require('./game2.js');
+const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
@@ -20,7 +20,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'ladder-file', 'md-file', 'load', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-hpat-topn', 'hpat-pos-ratio', 'ladder-file', 'md-file', 'load', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -33,6 +33,25 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --reward-ema F    EMA decay for the reward baseline; 0 disables (default 0.99)
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
+  --eval-hpat-topn N  in EVAL games, rank the hpat feature over only the best N
+                    moves by the OTHER feature spaces rather than every
+                    candidate (default 0 = every candidate).  This is the
+                    deployment setting: ~2x cheaper per move with no measurable
+                    strength cost.  Self-play always ranks every candidate --
+                    restricting it there makes rank mean "best among moves this
+                    policy already likes", which collapses training.
+  --hpat-pos-ratio R  compute the hpat feature in only this fraction of SELF-PLAY
+                    positions (default 1 = all).  Cuts self-play cost without
+                    touching what the feature MEANS: in a position where it
+                    fires every candidate is still ranked, so rank 1 is still the
+                    best move on the board.  Eval always uses 1.
+  --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
+                    komi by +/-1 every 500 games while black's win share sits
+                    outside [0.45, 0.55], keeping the training signal balanced;
+                    'auto:<start>' seeds its starting value; a bare number fixes
+                    komi and disables the controller.  Eval komi is ALWAYS the
+                    fixed pre-controller value, so the winRatio column stays
+                    comparable across a run.
   --eval-agent S    reference agent in ai/ for eval games; if omitted, eval is skipped
   --ladder-file P   evalladders2 suite scored each status print (ladr column)
   --md-file P       evalmovedetails positions scored each status print; greedy
@@ -53,6 +72,42 @@ const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored 
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdRms column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH   = opts.load || null;
+// Eval may shortlist the hpat ranking; self-play never does (see the usage note).
+const EVAL_HPAT_TOPN = parseInt(opts['eval-hpat-topn'] || '0', 10);
+// Self-play may compute hpat in only a fraction of positions; eval always uses
+// the feature, since that is how the policy would be deployed.
+const HPAT_POS_RATIO = opts['hpat-pos-ratio'] !== undefined ? parseFloat(opts['hpat-pos-ratio']) : 1;
+
+// Komi.  Default: auto — a controller that steps the TRAIN_SIZE komi by +/-1
+// every KOMI_WINDOW (500) self-play games while black's win share sits outside
+// [0.45, 0.55].  Self-play with a lopsided komi is a poor teacher: the outcome
+// stops depending on the moves, so the REINFORCE advantage carries no signal.
+// The current komi is persisted in the checkpoint and restored on --load.
+// --komi <number> pins komi and disables the controller.
+let AUTO_KOMI = true;
+if (opts.komi !== undefined) {
+  const m = /^auto(?::(-?[0-9.]+))?$/.exec(opts.komi);
+  if (m) {
+    if (m[1] !== undefined) { setKomi(TRAIN_SIZE, parseFloat(m[1])); setKomi(EVAL_SIZE, parseFloat(m[1])); }
+  } else {
+    AUTO_KOMI = false;
+    setKomi(TRAIN_SIZE, parseFloat(opts.komi));
+    setKomi(EVAL_SIZE,  parseFloat(opts.komi));
+  }
+}
+// Eval games ALWAYS use this fixed komi — the value in effect for EVAL_SIZE
+// before the controller has moved anything — so the winRatio column measures
+// the same game throughout the run.  The controller only moves TRAIN_SIZE komi.
+const EVAL_KOMI = KOMI(EVAL_SIZE);
+// The window is 500 games, not 100: black's win share over N games has standard
+// error sqrt(0.25/N), so a 100-game window gives 5pp -- exactly the half-width
+// of the [0.45, 0.55] dead zone.  A perfectly balanced komi would then step on
+// noise ~32% of the time and random-walk several points every 10k games, which
+// is what the avgK column showed.  500 games puts the SE at 2.2pp, so the dead
+// zone is ~2.2 SE and noise-stepping is rare.
+const KOMI_WINDOW = 500;
+let komiGames = 0, komiBlackWins = 0;
+let komiSum = 0, komiSumGames = 0;   // per-interval mean komi (avgK column)
 
 // Load the saved model up front (if present) so it can supply the spec when
 // --spec is omitted — i.e. just continue training the model as it stands.
@@ -83,6 +138,9 @@ const wStats = { absSum: 0, count: 0 };
 
 if (loaded) {
   ema = loaded.ema; totalUpdates = loaded.totalUpdates;
+  // A saved komi wins over an auto:<start> seed — the seed only applies to
+  // checkpoints written before komi was persisted.  Eval komi stays pinned.
+  if (AUTO_KOMI && loaded.komi !== null && loaded.komi !== undefined) setKomi(TRAIN_SIZE, loaded.komi);
   // Resume into the CLI-spec model (built above) rather than adopting the saved
   // spec.  A feature space's hashes depend only on its own spec substring, so
   // importing the loaded (hash → weight) table makes every space present in BOTH
@@ -123,7 +181,7 @@ const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 
 function saveWeights() {
   fs.mkdirSync(path.dirname(SAVE_PATH), { recursive: true });
-  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates }));
+  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }));
 }
 
 // ── One self-play game + REINFORCE update ─────────────────────────────────────
@@ -160,9 +218,17 @@ function trainGame(N) {
   const outcomeBlack = winner === BLACK ? 1 : (winner === 0 ? 0 : -1);
 
   let weightUpdates = 0;
+  // The EMA baseline tracks outcomeBlack, i.e. it lives in BLACK's frame, so it
+  // must be subtracted there and the result mirrored for WHITE -- centring
+  // WHITE's reward on +ema instead of -ema leaves a constant 2*ema offset on
+  // every WHITE move, unrelated to that move's quality.  The magnitude is small
+  // in practice: komi is tuned per board size (game2's per-size overrides) to
+  // keep self-play near 50/50, and observed |ema| stays under ~0.13 against a
+  // reward magnitude of 1.  A small bias with no reason to exist, not a
+  // catastrophe -- correcting it left measured win rate unchanged at size 7.
   for (const s of steps) {
-    const R = s.player === BLACK ? outcomeBlack : -outcomeBlack;
-    const adv = REWARD_EMA > 0 ? (R - ema) : R;
+    const sign = s.player === BLACK ? 1 : -1;
+    const adv = REWARD_EMA > 0 ? sign * (outcomeBlack - ema) : sign * outcomeBlack;
     weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY, wStats) || 0;
   }
   if (REWARD_EMA > 0 && steps.length > 0) ema = REWARD_EMA * ema + (1 - REWARD_EMA) * outcomeBlack;
@@ -170,7 +236,8 @@ function trainGame(N) {
   let maxProbSum = 0;
   for (const s of steps) { let mx = 0; for (let i = 0; i < s.count; i++) if (s.probs[i] > mx) mx = s.probs[i]; maxProbSum += mx; }
 
-  return { elapsedMs: Date.now() - tStart, weightUpdates, maxProbSum, maxProbN: steps.length };
+  return { elapsedMs: Date.now() - tStart, weightUpdates, maxProbSum, maxProbN: steps.length,
+           blackWon: outcomeBlack > 0 ? 1 : 0 };
 }
 
 // ── Eval vs reference ─────────────────────────────────────────────────────────
@@ -203,6 +270,12 @@ function evalVsReference(N, nGames) {
 console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}`);
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
+console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
+if (EVAL_HPAT_TOPN > 0) console.log(`eval-hpat-topn=${EVAL_HPAT_TOPN} (eval ranks the best ${EVAL_HPAT_TOPN} moves; self-play ranks every candidate)`);
+if (HPAT_POS_RATIO < 1) {
+  FeaturePol.setHpatPositionRatio(HPAT_POS_RATIO);
+  console.log(`hpat-pos-ratio=${HPAT_POS_RATIO} (self-play positions using hpat; eval uses 1)`);
+}
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
@@ -211,9 +284,9 @@ console.log();
 // line up regardless of the individual formatters' string lengths.
 // winRatio column: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game
 // counts (this interval's, and the rolling-half window).  Fixed 21 chars wide.
-const COLS = ['elapsed', 'game', 'tGm', 'nWts', 'avgW', 'maxP',
+const COLS = ['elapsed', 'game', 'tGm', 'nWts', 'avgW', 'maxP', 'avgK',
   ...(EVAL_AGENT ? ['winRatio'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
-const COLW = [7, 5, 6, 6, 7, 5,
+const COLW = [7, 5, 6, 6, 7, 5, 6,
   ...(EVAL_AGENT ? [21] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
 printRow(COLS);
@@ -229,6 +302,17 @@ while (true) {
   totalUpdates += r.weightUpdates;
   elapsedAcc += r.elapsedMs; maxPSum += r.maxProbSum; maxPN += r.maxProbN;
 
+  komiSum += KOMI(TRAIN_SIZE); komiSumGames++;
+  if (AUTO_KOMI) {
+    komiGames++; komiBlackWins += r.blackWon;
+    if (komiGames >= KOMI_WINDOW) {
+      const bw = komiBlackWins / komiGames;
+      // Black winning too often means komi is too small for white — raise it.
+      if (bw > 0.55 || bw < 0.45) setKomi(TRAIN_SIZE, KOMI(TRAIN_SIZE) + (bw > 0.55 ? 1 : -1));
+      komiGames = 0; komiBlackWins = 0;
+    }
+  }
+
   if (Date.now() >= nextPrintAt) {
     let wNz = 0;
     for (let i = 0; i < weights.size; i++) if (weights.vals[i] !== 0) wNz++;
@@ -240,14 +324,25 @@ while (true) {
       Util.fmt4i(wNz),
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
+      Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),
     ];
     if (EVAL_AGENT) {
+      // Eval always runs at EVAL_KOMI so the column stays comparable while the
+      // controller moves the self-play komi.  When the sizes match these are the
+      // same game2 entry, so save and restore around the batch.
+      const trainKomi = KOMI(TRAIN_SIZE);
+      setKomi(EVAL_SIZE, EVAL_KOMI);
+      if (EVAL_HPAT_TOPN > 0) FeaturePol.setHpatTopN(EVAL_HPAT_TOPN);
+      if (HPAT_POS_RATIO < 1) FeaturePol.setHpatPositionRatio(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
       while (evalGames < 1000 && Date.now() - evalStart < evalBudget) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
+      if (EVAL_HPAT_TOPN > 0) FeaturePol.setHpatTopN(0);
+      if (HPAT_POS_RATIO < 1) FeaturePol.setHpatPositionRatio(HPAT_POS_RATIO);
+      setKomi(TRAIN_SIZE, trainKomi);
       // avg: rolling win ratio over the most recent half of all eval games.
       const avgHalf = Math.max(1, Math.floor(evalHistory.length / 2));
       const avgWR = evalHistory.length > 0
@@ -266,6 +361,7 @@ while (true) {
     printRow(row);
     saveWeights();
     maxPSum = 0; maxPN = 0; elapsedAcc = 0; lastG = g;
+    komiSum = 0; komiSumGames = 0;
     nextPrintAt = t0 + Math.round((Date.now() - t0) * 1.4);
     lastPrintAt = Date.now();
   }

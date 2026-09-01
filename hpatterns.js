@@ -24,142 +24,68 @@
 (function () {
   const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
   const { EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
+  const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
 
-  // ── D4 permutations ────────────────────────────────────────────────────────
-  // perm[dest] = src: applying perm gives rotated[dest] = cells[perm[dest]].
-
-  const d4PermsCache = new Map();
-
-  function makeD4Perms(M) {
-    const transforms = [
-      (r, c) => [r,       c      ],  // Identity
-      (r, c) => [c,       M-1-r  ],  // Rot90CW
-      (r, c) => [M-1-r,   M-1-c  ],  // Rot180
-      (r, c) => [M-1-c,   r      ],  // Rot270CW
-      (r, c) => [r,       M-1-c  ],  // FlipH
-      (r, c) => [M-1-r,   c      ],  // FlipV
-      (r, c) => [c,       r      ],  // TransposeMD
-      (r, c) => [M-1-c,   M-1-r  ],  // TransposeAD
-    ];
-    return transforms.map(t => {
-      const perm = new Int32Array(M * M);
-      for (let r = 0; r < M; r++)
-        for (let c = 0; c < M; c++) {
-          const [nr, nc] = t(r, c);
-          perm[nr * M + nc] = r * M + c;
-        }
-      return perm;
-    });
+  // Weight tables are open-addressing int32→float64 maps (int-map.js): far
+  // cheaper get/set than a V8 Map at millions of entries, same get/set/size
+  // surface, plus forEach(k, v) and clone().  Key 0 is the empty-slot
+  // sentinel; a canonical key of exactly 0 (a ~2^-31 hash coincidence) is
+  // silently dropped — the same class of accepted risk as any collision.
+  function makeWeights(minCap) {
+    const m = makeIntFloatMap(minCap);
+    m.suppressZeroWarning();
+    return m;
   }
 
-  function getD4Perms(M) {
-    if (!d4PermsCache.has(M)) d4PermsCache.set(M, makeD4Perms(M));
-    return d4PermsCache.get(M);
-  }
 
   // ── Hash ───────────────────────────────────────────────────────────────────
-  // FNV-1a style, 32-bit via Math.imul. +2 shifts {-1,0,1} → {1,2,3}.
-
-  function hash4(a, b, c, d) {
-    let h = 2166136261;
-    h = Math.imul(h ^ (a + 2), 16777619);
-    h = Math.imul(h ^ (b + 2), 16777619);
-    h = Math.imul(h ^ (c + 2), 16777619);
-    h = Math.imul(h ^ (d + 2), 16777619);
-    return h;
-  }
-
-  // Iterative hierarchical hash of a flat M×M cell array (stride = M).
-  // Builds level by level: each pass reduces the side length by 1, combining
-  // four adjacent values into one hash4. O(M³) total — vs O(4^(M−2)) recursive.
-  // Used only during canon computation (amortised — once per unique pattern).
-
-  function hierHash(cells, M) {
-    let buf = cells;
-    let sz  = M;
-    while (sz > 2) {
-      sz--;
-      const stride = sz + 1;  // stride of current buf
-      const next = new Array(sz * sz);
-      for (let r = 0; r < sz; r++)
-        for (let c = 0; c < sz; c++)
-          next[r * sz + c] = hash4(
-            buf[ r      * stride + c],
-            buf[ r      * stride + c + 1],
-            buf[(r + 1) * stride + c],
-            buf[(r + 1) * stride + c + 1]
-          );
-      buf = next;
-    }
-    return hash4(buf[0], buf[1], buf[2], buf[3]);
-  }
-
-  // ── Canonicalisation ───────────────────────────────────────────────────────
-  // Generates 16 variants (8 D4 rotations × 2 color flips), finds the minimum
-  // hash as the canonical key, detects color-twin patterns, and stores all 16
-  // rawKey → encoded mappings in canonMap for future O(1) lookups.
+  // Symmetry-invariant hierarchical "X" hash.  No D4 enumeration, no canonical-
+  // form memo: the hash is invariant by construction, so the value it returns
+  // IS the canonical key.
   //
-  // Encoding: a single integer per rawKey, always a V8 Smi (fast path, no heap boxing).
-  //   twin              → 0
-  //   polarity +1       → abs(canonKey) + 1   (positive)
-  //   polarity -1       → -(abs(canonKey) + 1) (negative)
-  // Decoding (hot path — comparisons only, no division or modulo):
-  //   isTwin   = enc === 0
-  //   polarity = enc > 0 ? 1 : -1
-  //   outKey   = (enc > 0 ? enc : -enc) - 1   i.e. abs(enc) - 1
+  // uh(a,b) is an unordered (commutative) combiner.  A window's hash pairs its
+  // two diagonals and combines them unordered:
+  //
+  //     p0 p1        xh4 = uh( uh(p0,p3), uh(p1,p2) )
+  //     p2 p3
+  //
+  // That is invariant exactly to the group preserving the partition
+  // {{p0,p3},{p1,p2}} — order 8, which on a square is precisely D4.  So at 2×2
+  // it collapses the D4 orbits and nothing else: 21 distinct values for the 21
+  // orbits of a 3-state 2×2, lossless.
+  //
+  // Larger sizes recurse on the four (M−1)×(M−1) sub-windows at the corners of
+  // the M×M window, in the same X arrangement.  Each sub-hash is itself
+  // D4-invariant, so the four permute exactly as the cells of a 2×2 do and the
+  // combiner's invariance carries up — every level is D4-invariant.
+  //
+  // This is deliberately lossy above 2×2: a sub-hash has already discarded its
+  // own orientation, so a parent cannot tell a sub-window's stone at top-left
+  // from top-right.  Measured fidelity at 3×3 is 2379 distinct values against
+  // 2862 true D4 orbits (83%).  Distinct shapes therefore share weights — the
+  // trade bought for O(1) memory and no per-window canonicalisation.
 
-  function computeAndStoreCanon(winCells, M, canonMap) {
-    const perms = getD4Perms(M);
-    const n2 = M * M;
-    const rotated   = new Array(n2);
-    const vHashes   = new Array(16);
-    const vParities = new Array(16);  // +1 = non-inverted, -1 = color-inverted
-    const hashFn    = hierHash;
+  // Unordered: uh(a,b) === uh(b,a).  Commutative polynomial; the large
+  // constant makes combined values big immediately, so int32 wraparound in the
+  // imul does the mixing.  Leaf cell values enter as cell+2 (1..3): a leaf of
+  // exactly -1 would absorb its diagonal partner (uh(-1,y) = C-1 for all y).
+  function uh(a, b) {
+    return (1234567 + a + b + Math.imul(a, b)) | 0;
+  }
 
-    for (let pi = 0; pi < 8; pi++) {
-      const perm = perms[pi];
+  // X-hash of a 2×2 arrangement: diagonals {tl,br} and {tr,bl}, both unordered,
+  // then combined unordered.
+  function xh4(tl, tr, bl, br) {
+    return uh(uh(tl, br), uh(tr, bl));
+  }
 
-      // Non-inverted rotation
-      for (let i = 0; i < n2; i++) rotated[i] =  winCells[perm[i]];
-      vHashes[pi * 2]     = hashFn(rotated, M);
-      vParities[pi * 2]   = 1;
-
-      // Color-inverted rotation
-      for (let i = 0; i < n2; i++) rotated[i] = -winCells[perm[i]];
-      vHashes[pi * 2 + 1]   = hashFn(rotated, M);
-      vParities[pi * 2 + 1] = -1;
-    }
-
-    // Canonical key = minimum signed int32 across all 16 variants.
-    let canonKey    = vHashes[0];
-    let canonParity = vParities[0];
-    for (let i = 1; i < 16; i++) {
-      if (vHashes[i] < canonKey) {
-        canonKey    = vHashes[i];
-        canonParity = vParities[i];
-      }
-    }
-
-    // Color-twin: any non-inverted hash equals any inverted hash →
-    // pattern is symmetric under color-inversion + some D4 rotation,
-    // so it contributes zero to the value function.
-    let isTwin = false;
-    outer: for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        if (vHashes[i * 2] === vHashes[j * 2 + 1]) { isTwin = true; break outer; }
-      }
-    }
-
-    // Polarity formula: polarity[i] = colorParity[i] * canonParity
-    // Guarantees polarity[canonVariant] === +1.
-    for (let i = 0; i < 16; i++) {
-      if (canonMap.has(vHashes[i])) continue;  // earlier entry (smaller M) wins
-      const pol    = vParities[i] * canonParity;
-      const absKey = canonKey < 0 ? -canonKey : canonKey;
-      canonMap.set(vHashes[i], isTwin ? 0 : (pol === 1 ? absKey + 1 : -(absKey + 1)));
-    }
-
-    return canonMap.get(vHashes[0]);
+  // Hash of the all-empty M×M window, per level: every level of an empty
+  // window's tree is uniform, so the value is a per-size constant.  Used to
+  // drop empty windows without counting stones.
+  const emptyHash = [0, 0];            // [0],[1] unused
+  for (let m = 2, h = 0; m <= 32; m++) {
+    h = m === 2 ? xh4(2, 2, 2, 2) : xh4(h, h, h, h);
+    emptyHash.push(h);
   }
 
   // ── Feature extraction ─────────────────────────────────────────────────────
@@ -168,7 +94,7 @@
   // nextMove:  if >= 0, speculatively place game.current at nextMove before extracting
   //            (captures handled), then restore.
   function extractFeatures(game, model, maxSearch, nextMove) {
-    const { canonMap, maxStones } = model;
+    const { maxStones } = model;
     const N   = game.N;
     const cap = N * N;
     const cells = game.cells;  // Int8Array: +1=BLACK, -1=WHITE, 0=EMPTY
@@ -184,26 +110,34 @@
       for (let i = 0; i < captures.length; i++) cells[captures[i]] = EMPTY;
       cells[nextMove] = game.current;
 
-      const result = _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize);
+      const result = _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize);
 
       cells[nextMove] = EMPTY;
       for (let i = 0; i < captures.length; i++) cells[captures[i]] = -game.current;
       return result;
     }
 
-    return _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize);
+    return _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize);
   }
 
-  function _extractCore(game, model, effMaxSize, N, cap, cells, canonMap, maxStones, searchMaxSize) {
+  function _extractCore(game, model, effMaxSize, N, cap, cells, maxStones, searchMaxSize) {
     if (searchMaxSize === undefined) searchMaxSize = effMaxSize;
     // Per-level hash arrays (reused across calls for the same board/size config).
+    // Two parallel stacks: the board as-is, and colour-inverted.  Comparing the
+    // two gives the colour canonicalisation the D4 enumeration used to provide,
+    // for one extra tree build instead of 16 variant hashes.
     if (!model._hBufs || model._hCap !== cap || model._hMaxSize !== effMaxSize) {
-      model._hBufs = new Array(effMaxSize - 1);
-      for (let m = 0; m < effMaxSize - 1; m++) model._hBufs[m] = new Int32Array(cap);
+      model._hBufs    = new Array(effMaxSize - 1);
+      model._hBufsInv = new Array(effMaxSize - 1);
+      for (let m = 0; m < effMaxSize - 1; m++) {
+        model._hBufs[m]    = new Int32Array(cap);
+        model._hBufsInv[m] = new Int32Array(cap);
+      }
       model._hCap     = cap;
       model._hMaxSize = effMaxSize;
     }
-    const hBufs = model._hBufs;
+    const hBufs    = model._hBufs;
+    const hBufsInv = model._hBufsInv;
 
     const maxFeatures = cap * (effMaxSize - 1);
     if (!model._outKeys || model._outKeys.length < maxFeatures) {
@@ -224,24 +158,34 @@
     // board size changes — a grow-only reuse would leave a smaller board reading
     // stale borders from a larger previous board, corrupting stone counts.
     const Np1 = N + 1;
+    // Only needed by sizes with a binding (0 < limit < M²) stone cap.
+    let needCounts = false;
+    for (let M = 2; M <= searchMaxSize; M++) {
+      const lim = maxStones[M] ?? 0;
+      if (lim > 0 && lim < M * M) { needCounts = true; break; }
+    }
     if (!model._prefixBuf || model._prefixBuf.length !== Np1 * Np1) {
       model._prefixBuf = new Int32Array(Np1 * Np1);
     }
     const P = model._prefixBuf;
-    for (let r = 0; r < N; r++) {
-      let rowSum = 0;
-      for (let c = 0; c < N; c++) {
-        rowSum += cells[r * N + c] !== 0 ? 1 : 0;
-        P[(r + 1) * Np1 + (c + 1)] = rowSum + P[r * Np1 + (c + 1)];
+    if (needCounts) {
+      for (let r = 0; r < N; r++) {
+        let rowSum = 0;
+        for (let c = 0; c < N; c++) {
+          rowSum += cells[r * N + c] !== 0 ? 1 : 0;
+          P[(r + 1) * Np1 + (c + 1)] = rowSum + P[r * Np1 + (c + 1)];
+        }
       }
     }
 
-    const winCells = new Array(effMaxSize * effMaxSize);  // scratch for canon
     let topActive = 1;  // highest M where anyEligible was true
     for (let M = 2; M <= searchMaxSize; M++) {
-      const hM    = hBufs[M - 2];
-      const hPrev = M > 2 ? hBufs[M - 3] : null;
+      const hM     = hBufs[M - 2];
+      const hPrev  = M > 2 ? hBufs[M - 3] : null;
+      const hMI    = hBufsInv[M - 2];
+      const hPrevI = M > 2 ? hBufsInv[M - 3] : null;
       const limit = maxStones[M] ?? 0;
+      const uncapped = limit >= M * M;   // limit can't exclude any non-empty window
       let anyEligible = false;
 
       // Toroidal windows: wrap row and column independently.  Flat (idx+1)%cap
@@ -255,51 +199,50 @@
           const tr = rowStart + col1;                         // right neighbor (same row)
           const bl = downStart + col;                         // down neighbor
           const br = downStart + col1;                         // down-right neighbor
-          // Standard hash: always stored in hBufs so higher levels can use it.
-          const stdKey = M === 2
-            ? hash4(cells[idx], cells[tr], cells[bl], cells[br])
-            : hash4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
-          hM[idx] = stdKey;
+          // X-hash for both colourings; always stored so higher levels can use them.
+          const kN = M === 2
+            ? xh4(cells[idx] + 2, cells[tr] + 2, cells[bl] + 2, cells[br] + 2)
+            : xh4(hPrev[idx], hPrev[tr], hPrev[bl], hPrev[br]);
+          const kI = M === 2
+            ? xh4(2 - cells[idx], 2 - cells[tr], 2 - cells[bl], 2 - cells[br])
+            : xh4(hPrevI[idx], hPrevI[tr], hPrevI[bl], hPrevI[br]);
+          hM[idx]  = kN;
+          hMI[idx] = kI;
           if (limit === 0) continue;
 
-          const rawKey = stdKey;
-
-          // Stone count over the full M×M window.  O(1) via prefix sum for
-          // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
-          let stones;
-          if (col + M <= N && row + M <= N) {
-            stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
-                   - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
+          if (uncapped) {
+            // A saturated limit (limit ≥ M²) can only exclude the empty
+            // window, and empty hashes to a per-size constant — no stone
+            // count needed.  (A non-empty window colliding with emptyHash[M]
+            // is dropped; same accepted risk as any other hash collision.)
+            if (kN === emptyHash[M]) continue;
           } else {
-            stones = 0;
-            for (let dr = 0; dr < M; dr++) {
-              const rr = (row + dr) % N;
-              for (let dc = 0; dc < M; dc++) {
-                if (cells[rr * N + (col + dc) % N]) stones++;
+            // Stone count over the full M×M window.  O(1) via prefix sum for
+            // non-wrapping windows, O(M²) toroidal fallback (per-axis wrap).
+            let stones;
+            if (col + M <= N && row + M <= N) {
+              stones = P[(row + M) * Np1 + (col + M)] - P[row * Np1 + (col + M)]
+                     - P[(row + M) * Np1 + col]       + P[row * Np1 + col];
+            } else {
+              stones = 0;
+              for (let dr = 0; dr < M; dr++) {
+                const rr = (row + dr) % N;
+                for (let dc = 0; dc < M; dc++) {
+                  if (cells[rr * N + (col + dc) % N]) stones++;
+                }
               }
             }
+            if (stones === 0 || stones > limit) continue;
           }
-          if (stones === 0 || stones > limit) continue;
           anyEligible = true;
 
-          // Canon lookup — decode: 0=twin, positive=pol+1, negative=pol-1; outKey=abs(enc)-1.
-          let enc = canonMap.get(rawKey);
-          if (enc !== undefined) {
-            if (enc !== 0) { outKeys[count] = (enc > 0 ? enc : -enc) - 1; outPols[count] = enc > 0 ? 1 : -1; outSizes[count] = M; count++; }
-            continue;
-          }
+          // Colour-twin: the pattern equals its own inverse, so it contributes
+          // nothing to an antisymmetric value function.  Eligible, but no feature.
+          if (kN === kI) continue;
 
-          // First encounter: compute and store canonical form for all 16 variants.
-          for (let dr = 0; dr < M; dr++) {
-            const rr = (row + dr) % N;
-            for (let dc = 0; dc < M; dc++)
-              winCells[dr * M + dc] = cells[rr * N + (col + dc) % N];
-          }
-          enc = computeAndStoreCanon(winCells, M, canonMap);
-          if (enc === 0) continue;
-
-          outKeys[count] = (enc > 0 ? enc : -enc) - 1;
-          outPols[count] = enc > 0 ? 1 : -1;
+          // Canonical key = the smaller of the two colourings; polarity says which.
+          outKeys[count]  = kN < kI ? kN : kI;
+          outPols[count]  = kN < kI ? 1 : -1;
           outSizes[count] = M;
           count++;
         }
@@ -310,6 +253,121 @@
     }
 
     return { keys: outKeys, pols: outPols, sizes: outSizes, count, topLevel: topActive, val: 0.5 };
+  }
+
+  // ── Incremental 1-ply evaluation ───────────────────────────────────────────
+  // Speculatively placing a stone at p only changes the windows containing p:
+  // M² per level instead of N².  These helpers evaluate a candidate move as
+  // z_base + Δz over just the changed windows, reading the CURRENT position's
+  // hash buffers (the caller must have run extractFeatures on the current
+  // position immediately before, and must not let anything overwrite the
+  // buffers between calls).
+  //
+  // Valid only when every active size is saturated (limit ≥ M²): then a
+  // window's contribution is decided by its hashes alone (kN === kI drops
+  // twins and empties), with no stone-count gate to re-check.  Callers use
+  // saturatedOnly() to decide, and fall back to full extraction otherwise.
+  // Capture moves change windows around every captured stone too — deltaZ
+  // returns NaN for those and the caller falls back.
+
+  function saturatedOnly(maxStones) {
+    for (const k of Object.keys(maxStones)) {
+      const m = +k, lim = maxStones[k] ?? 0;
+      if (lim > 0 && lim < m * m) return false;
+    }
+    return true;
+  }
+
+  // z summed from the current buffers, cumulative by level: zCum[M] = z over
+  // active levels ≤ M.  Index with min(depth, top).
+  function zFromBuffers(model, weights, N, searchMaxSize) {
+    const effMaxSize = Math.min(model.maxSize === Infinity ? N : model.maxSize, N);
+    const top = searchMaxSize !== undefined ? Math.min(searchMaxSize, effMaxSize) : effMaxSize;
+    const cap = N * N;
+    const zCum = new Float64Array(Math.max(top + 1, 3));
+    let z = 0;
+    for (let M = 2; M <= top; M++) {
+      if ((model.maxStones[M] ?? 0) > 0) {
+        const bufN = model._hBufs[M - 2], bufI = model._hBufsInv[M - 2];
+        for (let i = 0; i < cap; i++) {
+          const kN = bufN[i], kI = bufI[i];
+          if (kN === kI) continue;
+          const wv = weights.get(kN < kI ? kN : kI);
+          if (wv !== undefined) z += (kN < kI ? 1 : -1) * wv;
+        }
+      }
+      zCum[M] = z;
+    }
+    return zCum;
+  }
+
+  // Δz for placing game.current at `move` (PASS → 0).  NaN = captures, caller
+  // must fall back to full extraction.
+  function deltaZ(game, model, weights, move, searchMaxSize) {
+    if (move < 0) return 0;                                   // PASS
+    if (game.captureList(move).length > 0) return NaN;
+    const N = game.N, cells = game.cells, cur = game.current;
+    const effMaxSize = Math.min(model.maxSize === Infinity ? N : model.maxSize, N);
+    const top = searchMaxSize !== undefined ? Math.min(searchMaxSize, effMaxSize) : effMaxSize;
+    if (top < 2) return 0;
+    const hB = model._hBufs, hBI = model._hBufsInv;
+    // per-level scratch for the changed windows (reused across calls)
+    if (!model._dScratch || model._dScratch.length < top - 1) {
+      model._dScratch = [];
+      for (let M = 2; M <= (model.maxSize === Infinity ? 32 : model.maxSize); M++)
+        model._dScratch.push({ idx: new Int32Array(M * M), kN: new Int32Array(M * M), kI: new Int32Array(M * M) });
+    }
+    const pr = (move / N) | 0, pc = move % N;
+    let delta = 0;
+    let prevIdx = null, prevKN = null, prevKI = null, prevCount = 0;
+    for (let M = 2; M <= top; M++) {
+      const sc = model._dScratch[M - 2];
+      const idxA = sc.idx, knA = sc.kN, kiA = sc.kI;
+      let n = 0;
+      const active = (model.maxStones[M] ?? 0) > 0;
+      const bufN = hB[M - 2], bufI = hBI[M - 2];
+      const pbN = M > 2 ? hB[M - 3] : null, pbI = M > 2 ? hBI[M - 3] : null;
+      for (let dr = 0; dr < M; dr++) {
+        const r = (pr - dr + N) % N, r1 = (r + 1) % N;
+        for (let dc = 0; dc < M; dc++) {
+          const c = (pc - dc + N) % N, c1 = (c + 1) % N;
+          const o = r * N + c;
+          const i1 = o, i2 = r * N + c1, i3 = r1 * N + c, i4 = r1 * N + c1;
+          let kN, kI;
+          if (M === 2) {
+            const v1 = i1 === move ? cur : cells[i1], v2 = i2 === move ? cur : cells[i2];
+            const v3 = i3 === move ? cur : cells[i3], v4 = i4 === move ? cur : cells[i4];
+            kN = xh4(v1 + 2, v2 + 2, v3 + 2, v4 + 2);
+            kI = xh4(2 - v1, 2 - v2, 2 - v3, 2 - v4);
+          } else {
+            let a = pbN[i1], b = pbN[i2], d = pbN[i3], e = pbN[i4];
+            let ai = pbI[i1], bi = pbI[i2], di = pbI[i3], ei = pbI[i4];
+            for (let j = 0; j < prevCount; j++) {
+              const pi = prevIdx[j];
+              if      (pi === i1) { a = prevKN[j]; ai = prevKI[j]; }
+              else if (pi === i2) { b = prevKN[j]; bi = prevKI[j]; }
+              else if (pi === i3) { d = prevKN[j]; di = prevKI[j]; }
+              else if (pi === i4) { e = prevKN[j]; ei = prevKI[j]; }
+            }
+            kN = xh4(a, b, d, e); kI = xh4(ai, bi, di, ei);
+          }
+          idxA[n] = o; knA[n] = kN; kiA[n] = kI; n++;
+          if (active) {
+            const kNo = bufN[o], kIo = bufI[o];
+            if (kNo !== kIo) {
+              const wv = weights.get(kNo < kIo ? kNo : kIo);
+              if (wv !== undefined) delta -= (kNo < kIo ? 1 : -1) * wv;
+            }
+            if (kN !== kI) {
+              const wv = weights.get(kN < kI ? kN : kI);
+              if (wv !== undefined) delta += (kN < kI ? 1 : -1) * wv;
+            }
+          }
+        }
+      }
+      prevIdx = idxA; prevKN = knA; prevKI = kiA; prevCount = n;
+    }
+    return delta;
   }
 
   // ── Evaluation ─────────────────────────────────────────────────────────────
@@ -336,10 +394,9 @@
   // maxSize:   largest window size to extract (defaults to board size).
   function createModel(maxStones, maxSize) {
     return {
-      weights:    new Map(),                  // live TD-updated weights
-      weightsEMA: new Map(),                  // Polyak-averaged shadow (eval-quality)
+      weights:    makeWeights(1024),          // live TD-updated weights
+      weightsEMA: makeWeights(1024),          // Polyak-averaged shadow (eval-quality)
       weightsEMAInit: false,                  // first applyEMA seeds EMA = weights
-      canonMap:   new Map(),
       maxStones:  maxStones !== undefined ? maxStones : {},
       maxSize:    maxSize   !== undefined ? maxSize   : Infinity,
     };
@@ -354,17 +411,17 @@
   function applyEMA(m, alpha) {
     const w = m.weights, e = m.weightsEMA;
     if (!m.weightsEMAInit) {
-      for (const [k, v] of w) e.set(k, v);
+      w.forEach((k, v) => e.set(k, v));
       m.weightsEMAInit = true;
       return;
     }
     const beta = 1 - alpha;
     // Track keys that exist only in weights but not yet in EMA (newly interned
     // since the last applyEMA — they get seeded from current weights value).
-    for (const [k, v] of w) {
+    w.forEach((k, v) => {
       const eOld = e.get(k);
       e.set(k, eOld === undefined ? v : alpha * eOld + beta * v);
-    }
+    });
   }
 
   // ── Persistence helpers ──────────────────────────────────────────────────────
@@ -387,20 +444,25 @@
       const count = raw.count != null ? raw.count : keys.length;
       return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i], vals[i]); } };
     }
-    const m = raw.weights;
+    const m = raw.weights;   // legacy literal Map
     return { count: m.size, forEach(cb) { for (const [k, v] of m) cb(k, v); } };
   }
 
-  // Build a Map<key, float> from a raw model in any supported form.
+  // Build a weight table (int-map) from a raw model in any supported form.
   function weightsMap(raw) {
-    const w = new Map();
-    modelWeights(raw).forEach((k, v) => w.set(k, v));
+    const mw = modelWeights(raw);
+    const w = makeWeights(mw.count * 2);
+    mw.forEach((k, v) => w.set(k, v));
     return w;
   }
 
   // ── Exports ────────────────────────────────────────────────────────────────
 
-  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA, modelWeights, weightsMap };
+  const HPatterns = { createModel, extractFeatures, evaluateFeatures, evaluate, applyEMA, modelWeights, weightsMap,
+    saturatedOnly,
+    zFromBuffers,
+    deltaZ,
+  };
   if (typeof module !== 'undefined') module.exports = HPatterns;
   else window.HPatterns = HPatterns;
 })();

@@ -70,12 +70,19 @@ section('single stone');
   check(pols.size === 1, 'all 4 features have the same polarity');
 }
 {
+  // Which colouring is "positive" is decided by hash order, so the absolute
+  // sign for a given pattern is arbitrary — but it must be consistent: every
+  // window of the same pattern agrees, and the colour-inverse negates it.
   const m = createModel({2:1}, 2);
-  const g = new Game2(9, false);
-  g.play(40);
-  const f = featureArr(extractFeatures(g, m));
-  // B stone features should contribute positively (polarity = +1).
-  check(f[0].pol === 1, `B@40 polarity should be +1, got ${f[0].pol}`);
+  const gB = new Game2(9, false);
+  gB.play(40);
+  const fB = featureArr(extractFeatures(gB, m));
+  const gW = new Game2(9, false);
+  gW.cells[40] = WHITE;
+  const fW = featureArr(extractFeatures(gW, m));
+  check(new Set(fB.map(x => x.pol)).size === 1, 'all windows of one pattern agree on polarity');
+  check(fB[0].pol === -fW[0].pol,
+    `B and W polarities are opposite: B=${fB[0].pol} W=${fW[0].pol}`);
 }
 
 // ── color symmetry ────────────────────────────────────────────────────────────
@@ -302,53 +309,41 @@ section('corners count for size ≥ 4');
   check(keys2.size >= keys1.size, 'size-2 patterns not corner-zeroed: g2 has ≥ keys as g1');
 }
 
-// ── canonMap encoding ─────────────────────────────────────────────────────────
-// twin → 0; pol+1 → abs(canonKey)+1 (positive Smi); pol-1 → -(abs(canonKey)+1) (negative Smi)
-// outKey = abs(enc) - 1;  polarity = enc > 0 ? 1 : -1
+// ── X-hash encoding ───────────────────────────────────────────────────────────
+// The hierarchical X-hash is D4-invariant by construction, so the hash IS the
+// canonical key.  Colour is canonicalised by comparing the two colourings:
+// key = min(kNormal, kInverted), polarity = which one won, twin when equal.
 
-section('canonMap encoding');
+section('X-hash encoding');
 {
-  // twin → 0; pol+1 → abs(key)+1; pol-1 → -(abs(key)+1)
-  function encode(canonKey, polarity, isTwin) {
-    if (isTwin) return 0;
-    const a = canonKey < 0 ? -canonKey : canonKey;
-    return polarity === 1 ? a + 1 : -(a + 1);
-  }
-  function decodeKey(enc)  { return (enc > 0 ? enc : -enc) - 1; }
-  function decodePol(enc)  { return enc > 0 ? 1 : -1; }
-  function decodeTwin(enc) { return enc === 0; }
-
-  const cases = [
-    // [canonKey, polarity, isTwin]
-    [0,           1,  false],
-    [0,          -1,  false],
-    [0,           1,  true ],
-    [1,           1,  false],
-    [1,          -1,  false],
-    [-1,          1,  false],
-    [-1,         -1,  false],
-    [-1,          1,  true ],
-    [2147483647,  1,  false],  // max int32
-    [2147483647, -1,  false],
-    [-2147483647, 1,  false],  // near min int32 (abs safe)
-    [-2147483647,-1,  false],
-  ];
-
-  for (const [key, pol, twin] of cases) {
-    const enc    = encode(key, pol, twin);
-    const isTwin = decodeTwin(enc);
-    check(isTwin === twin,
-      `twin flag: key=${key} pol=${pol} twin=${twin} → enc=${enc} → twin=${isTwin}`);
-    if (!twin) {
-      const outKey = decodeKey(enc);
-      const outPol = decodePol(enc);
-      const absKey = key < 0 ? -key : key;
-      check(outKey === absKey,
-        `round-trip abs(canonKey): key=${key} → enc=${enc} → outKey=${outKey} (expected ${absKey})`);
-      check(outPol === pol,
-        `polarity: key=${key} pol=${pol} → enc=${enc} → outPol=${outPol}`);
-    }
-  }
+  // A colour-twin (pattern equal to its own colour-inverse) contributes nothing
+  // to an antisymmetric value function, so it must not be emitted.  A 2x2 with
+  // one black and one white stone on a diagonal is such a pattern: the two
+  // diagonals are {B,W} and {empty,empty}, and inverting swaps B/W inside an
+  // unordered pair, leaving the hash unchanged.
+  const m = createModel({2:4}, 2);
+  // Twin board: B and W diagonally adjacent.
+  const gT = new Game2(9, false);
+  gT.cells[0] = BLACK; gT.cells[10] = WHITE;
+  const cT = extractFeatures(gT, m).count;
+  // Control: same two window occupancies, but both stones black — not a twin.
+  const gC = new Game2(9, false);
+  gC.cells[0] = BLACK; gC.cells[10] = BLACK;
+  const cC = extractFeatures(gC, m).count;
+  check(cT === cC - 1,
+    `twin 2x2 window is excluded: twin=${cT} control=${cC} (expect control-1)`);
+}
+{
+  // Keys are signed: min() of two hashes, so roughly half are negative.
+  // Nothing downstream may assume non-negative keys.
+  const m = createModel({2:4, 3:9}, 3);
+  const g = new Game2(9, false);
+  for (const mv of [20, 30, 40, 50, 21, 31]) g.play(mv);
+  const f = extractFeatures(g, m);
+  const ks = Array.from(f.keys.slice(0, f.count));
+  check(ks.length > 0, 'board with stones has features');
+  check(ks.every(k => Number.isInteger(k) && k >= -2147483648 && k <= 2147483647),
+    'all output keys are int32');
 }
 {
   // Verify via API: B and W single-stone patterns have opposite polarities and same canonKey.
@@ -381,8 +376,8 @@ section('canonMap encoding');
   const savedKeys = f.keys.slice(0, f.count);
   const savedPols = f.pols.slice(0, f.count);
   check(f.count > 0, 'board with 4 stones has features');
-  // Output keys are always non-negative (abs(enc)-1); negative enc values encode polarity=-1.
-  check(savedKeys.every(k => k >= 0), 'all output keys are non-negative');
+  // Keys are signed int32 (min of the two colourings); negatives are expected.
+  check(savedKeys.every(k => k === (k | 0)), 'all output keys are int32');
   check(Array.from({length: f.count}, (_, i) => f.pols[i]).some(p => p === -1),
     'some features have polarity -1 (exercises negative enc decoding)');
   // Assign distinct weights per unique key.

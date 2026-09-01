@@ -15,6 +15,20 @@
   happens, the "position" was never reachable by legal play, or the replay
   order/colour is wrong.
 
+## Terminology
+
+- **Avoid the word "rate" entirely.** It is three-ways ambiguous here: a
+  quantity per unit time, a fraction of a whole, and — as a verb — the act of
+  scoring or ranking a move, which is exactly what hpat does. Say **ratio** for
+  a fraction of a whole (`--hpat-pos-ratio`, not `--hpat-pos-rate`), and
+  **rank** or **score** for the verb. The one established exception is
+  `winRatio`/win rate in the trainer output, already named ratio.
+- **Name the unit a knob counts.** The two hpat knobs are easy to confuse, so
+  always say which one is meant: `--hpat-pos-ratio R` is the fraction of
+  POSITIONS in which the hpat feature is computed at all; `--hpat-topn N` is how
+  many MOVES get ranked within such a position (0 = every candidate). Never
+  write a bare "rate", "ratio" or "N" where either could be meant.
+
 ## Workflow
 
 - **Never use `pkill`.** To stop a process, kill specific PIDs (e.g. track
