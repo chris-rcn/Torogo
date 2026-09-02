@@ -398,6 +398,9 @@ console.log([
 ].join('  '));
 
 const t0 = Date.now();
+// Ceiling on the gap between printed rows.  The 1.4x growth is on TOTAL
+// elapsed time, so uncapped a week-long run reaches days between lines.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalMoves = 0;
@@ -516,7 +519,7 @@ while (true) {
     // Falls back to live weights before the first applyEMA.
     const saveSrc = (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
     saveWeights(SAVE_PATH, { weights: saveSrc, specs, opts: tacticsOpts, preparedSpecs: prepSpecs });
-    nextPrintAt = t0 + Math.round(nextMs * 1.4);
+    nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_GAP_MS);
   }
 
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {

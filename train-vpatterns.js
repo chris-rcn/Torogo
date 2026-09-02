@@ -388,7 +388,7 @@ console.log([
 ].join('  '));
 
 const t0 = Date.now();
-const MAX_PRINT_INTERVAL_MS = 6 * 60 * 60 * 1000;  // cap status-print gap at 6 hours
+const MAX_PRINT_INTERVAL_MS = 4 * 60 * 60 * 1000;  // cap status-print gap at 4 hours
 let nextPrintAt = t0 + 1000;
 let g = 0;
 let totalMoves = 0;

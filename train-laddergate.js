@@ -158,6 +158,9 @@ console.log(['games'.padStart(5), 'pos'.padStart(8), 'elapsed'.padStart(7), 'acc
 
 const t0 = performance.now();
 let gamesDone = 0, posCount = 0;
+// Ceiling on the gap between printed rows.  This schedule compounds a PERIOD
+// rather than scaling from t0, so the clamp goes on the period itself.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 let printPeriodMs = 1000, nextPrintAt = t0 + printPeriodMs;   // exponential backoff (status line + save)
 
 function printStats() {
@@ -189,7 +192,8 @@ function playGame() {
     const move = (Math.random() < EPSILON) ? game.randomLegalMove() : extGetMove(game).move;
     game.play(move); game3.play(move);
     moves++; posCount++;
-    if (performance.now() >= nextPrintAt) { printStats(); nextPrintAt = performance.now() + printPeriodMs; printPeriodMs = Math.round(printPeriodMs * 1.4); }
+    if (performance.now() >= nextPrintAt) { printStats(); nextPrintAt = performance.now() + printPeriodMs;
+      printPeriodMs = Math.min(Math.round(printPeriodMs * 1.4), MAX_PRINT_GAP_MS); }
   }
   const outcome = game.calcWinner() === BLACK ? 1 : 0;   // absolute P(BLACK wins)
   for (const p of [prev2, prev1]) if (p) gatedUpdate(p, outcome);   // terminal anchor, gated

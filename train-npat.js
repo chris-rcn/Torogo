@@ -354,6 +354,9 @@ console.log([
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 const t0 = Date.now();
+// Ceiling on the gap between printed rows.  The 1.4x growth is on TOTAL
+// elapsed time, so uncapped a week-long run reaches days between lines.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 let nextPrintAt = t0 + 1000;
 let lastPrintAt = t0;
 let g = 0;
@@ -445,7 +448,7 @@ while (true) {
     lastPrintG = g;
 
     saveWeights(SAVE_PATH, weights, { ema, totalUpdates });
-    nextPrintAt = t0 + Math.round(nextMs * 1.4);
+    nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_GAP_MS);
     lastPrintAt = Date.now();
   }
 }

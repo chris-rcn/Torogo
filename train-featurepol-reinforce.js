@@ -323,6 +323,13 @@ const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COL
 printRow(COLS);
 
 const t0 = Date.now();
+// Ceiling on the gap between printed rows.  The 1.4x growth is on TOTAL
+// elapsed time, so uncapped a week-long run reaches days between lines.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
+// Ceiling on the reference games played per printed row.  The batch normally
+// stops at 20% of the interval's elapsed time; this bounds it when the interval
+// is long enough for that budget to run away.
+const MAX_EVAL_GAMES = 2000;
 let nextPrintAt = t0 + 1000, lastPrintAt = t0;
 let g = 0, lastG = 0, elapsedAcc = 0, maxPSum = 0, maxPN = 0;
 const evalHistory = [];   // per-game eval results (1/0); the rolling-half avg (wrAv) uses this
@@ -367,7 +374,7 @@ while (true) {
       if (HPAT_POS_RATIO < 1) FeaturePol.setHpatPositionRatio(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
-      while (evalGames < 1000 && Date.now() - evalStart < evalBudget) {
+      while (evalGames < MAX_EVAL_GAMES && Date.now() - evalStart < evalBudget) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
@@ -393,7 +400,8 @@ while (true) {
     saveWeights();
     maxPSum = 0; maxPN = 0; elapsedAcc = 0; lastG = g;
     komiSum = 0; komiSumGames = 0;
-    nextPrintAt = t0 + Math.round((Date.now() - t0) * 1.4);
+    const nowMs = Date.now();
+    nextPrintAt = Math.min(t0 + Math.round((nowMs - t0) * 1.4), nowMs + MAX_PRINT_GAP_MS);
     lastPrintAt = Date.now();
   }
 }

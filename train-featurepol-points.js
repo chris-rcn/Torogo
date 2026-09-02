@@ -188,6 +188,9 @@ const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COL
 printRow(COLS);
 
 const t0 = Date.now();
+// Ceiling on the gap between printed rows.  The 1.4x growth is on TOTAL
+// elapsed time, so uncapped a week-long run reaches days between lines.
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 let nextPrintAt = t0 + 1000;
 let smpl = 0, epoch = 0;
 const trainAcc = { sumSq: 0, count: 0 };
@@ -219,7 +222,8 @@ while (epoch < EPOCHS) {
   for (const s of trainSet) {
     runSample(s, trainAcc, true);
     smpl++;
-    if (Date.now() >= nextPrintAt) { report(); nextPrintAt = t0 + Math.round((Date.now() - t0) * 1.4); }
+    if (Date.now() >= nextPrintAt) { report(); const now = Date.now();
+    nextPrintAt = Math.min(t0 + Math.round((now - t0) * 1.4), now + MAX_PRINT_GAP_MS); }
   }
 }
 if (trainAcc.count) report();                 // final row + save for the last (partial) interval
