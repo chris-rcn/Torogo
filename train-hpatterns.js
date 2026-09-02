@@ -294,6 +294,12 @@ function tdUpdate(features, target, lr) {
 // ── 1-ply search ──────────────────────────────────────────────────────────────
 
 // Shallow depth for two-pass search: fast first pass to score all moves cheaply.
+// Magnitude of the random nudge that breaks exact ties in search1ply; far
+// below the O(weight) spacing of distinct values, so it can only reorder
+// candidates that were equal.
+const TIE_BREAK = 1e-9;
+function tieBreak() { return (Math.random() - 0.5) * TIE_BREAK; }
+
 const SHALLOW_DEPTH = 3;
 // Temperature for softmax-based full-eval selection (value space, 0–1).
 // Moves with player-score within ~TEMP of the best are evaluated with high probability;
@@ -365,7 +371,12 @@ function search1ply(game, maxSearch, w = model.weights) {
       ? _specVal(game, coords[i], depth1, zShallow, w)
       : evaluateFeatures(extractFeatures(game, model, depth1, coords[i]), w);
     vals1[i]  = val;
-    if (isBlack ? val > best1 : val < best1) { best1 = val; bestMove = coords[i]; }
+    // Random tie-break.  Without it a strict > keeps the FIRST maximum, so
+    // among exactly-tied candidates the lowest board index always wins — and
+    // ties are common early (measured ~6 tied candidates per position before
+    // ply 10, ~1 after), so the opening becomes a fixed low-index cluster.
+    // Too small to reorder distinct values: adjacent values differ by O(w).
+    if (isBlack ? val + tieBreak() > best1 : val + tieBreak() < best1) { best1 = val; bestMove = coords[i]; }
   }
 
   if (!doTwoPass) return bestMove;
@@ -381,7 +392,7 @@ function search1ply(game, maxSearch, w = model.weights) {
     const val = INCREMENTAL
       ? _specVal(game, coords[i], maxSearch, zFull, w)
       : evaluateFeatures(extractFeatures(game, model, maxSearch, coords[i]), w);
-    if (isBlack ? val > bestVal : val < bestVal) { bestVal = val; bestMove = coords[i]; }
+    if (isBlack ? val + tieBreak() > bestVal : val + tieBreak() < bestVal) { bestVal = val; bestMove = coords[i]; }
   }
 
   return bestMove;
