@@ -269,6 +269,10 @@
   // saturatedOnly() to decide, and fall back to full extraction otherwise.
   // Capture moves change windows around every captured stone too — deltaZ
   // returns NaN for those and the caller falls back.
+  //
+  // commitZ is the committed variant for walking a playout path: same window
+  // enumeration, but it advances the buffers move by move instead of
+  // speculating against them.
 
   function saturatedOnly(maxStones) {
     for (const k of Object.keys(maxStones)) {
@@ -370,6 +374,72 @@
     return delta;
   }
 
+  // Committed incremental update: like deltaZ, but WRITES the new window
+  // hashes into the model's buffers, advancing the committed position by one
+  // stone.  Call with the move about to be played (game.current is the mover)
+  // BEFORE game.play(move); afterwards the buffers describe the post-move
+  // position and the returned Δz keeps a running z in step with them.
+  //
+  // Committing removes deltaZ's scratch-lookup: each level's changed windows
+  // are written before the next level runs, so level M reads its children
+  // directly from the (already committed) level M−1 buffers.
+  //
+  // PASS → 0 (no change).  Capture moves change windows around every captured
+  // stone — returns NaN WITHOUT touching the buffers; the caller must play
+  // the move, run extractFeatures on the new position, and restart its
+  // running z from zFromBuffers.  Same saturatedOnly() precondition as
+  // deltaZ, and the same contract that extractFeatures filled the buffers
+  // for the current position.
+  function commitZ(game, model, weights, move, searchMaxSize) {
+    if (move < 0) return 0;                                   // PASS
+    if (game.captureList(move).length > 0) return NaN;
+    const N = game.N, cells = game.cells, cur = game.current;
+    const effMaxSize = Math.min(model.maxSize === Infinity ? N : model.maxSize, N);
+    const top = searchMaxSize !== undefined ? Math.min(searchMaxSize, effMaxSize) : effMaxSize;
+    if (top < 2) return 0;
+    const hB = model._hBufs, hBI = model._hBufsInv;
+    const pr = (move / N) | 0, pc = move % N;
+    let delta = 0;
+    for (let M = 2; M <= top; M++) {
+      const active = (model.maxStones[M] ?? 0) > 0;
+      const bufN = hB[M - 2], bufI = hBI[M - 2];
+      const pbN = M > 2 ? hB[M - 3] : null, pbI = M > 2 ? hBI[M - 3] : null;
+      for (let dr = 0; dr < M; dr++) {
+        const r = (pr - dr + N) % N, r1 = (r + 1) % N;
+        for (let dc = 0; dc < M; dc++) {
+          const c = (pc - dc + N) % N, c1 = (c + 1) % N;
+          const o = r * N + c;
+          let kN, kI;
+          if (M === 2) {
+            const i2 = r * N + c1, i3 = r1 * N + c, i4 = r1 * N + c1;
+            const v1 = o  === move ? cur : cells[o],  v2 = i2 === move ? cur : cells[i2];
+            const v3 = i3 === move ? cur : cells[i3], v4 = i4 === move ? cur : cells[i4];
+            kN = xh4(v1 + 2, v2 + 2, v3 + 2, v4 + 2);
+            kI = xh4(2 - v1, 2 - v2, 2 - v3, 2 - v4);
+          } else {
+            const i2 = r * N + c1, i3 = r1 * N + c, i4 = r1 * N + c1;
+            kN = xh4(pbN[o], pbN[i2], pbN[i3], pbN[i4]);
+            kI = xh4(pbI[o], pbI[i2], pbI[i3], pbI[i4]);
+          }
+          if (active) {
+            const kNo = bufN[o], kIo = bufI[o];
+            if (kNo !== kIo) {
+              const wv = weights.get(kNo < kIo ? kNo : kIo);
+              if (wv !== undefined) delta -= (kNo < kIo ? 1 : -1) * wv;
+            }
+            if (kN !== kI) {
+              const wv = weights.get(kN < kI ? kN : kI);
+              if (wv !== undefined) delta += (kN < kI ? 1 : -1) * wv;
+            }
+          }
+          bufN[o] = kN;
+          bufI[o] = kI;
+        }
+      }
+    }
+    return delta;
+  }
+
   // ── Evaluation ─────────────────────────────────────────────────────────────
 
   function evaluateFeatures(features, weights) {
@@ -462,6 +532,7 @@
     saturatedOnly,
     zFromBuffers,
     deltaZ,
+    commitZ,
   };
   if (typeof module !== 'undefined') module.exports = HPatterns;
   else window.HPatterns = HPatterns;
