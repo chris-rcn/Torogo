@@ -430,7 +430,19 @@ if (require.main === module) {
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'oversample']);
 
 if (opts.help) {
-  console.log('Usage: node evalladders.js [--agent <name>] [--budget <ms>] [--oversample <n>]');
+  console.log(`Usage: node evalladders.js [options]
+
+Runs the hardcoded ladder positions in this file against an AI agent and
+reports, per position, how often the agent played one of the required moves.
+
+  --agent NAME      ai/<name>.js to evaluate                    (default random)
+  --budget MS       time budget per move, milliseconds          (default 1)
+  --oversample N    evaluations per position; >1 is worth it for
+                    a stochastic agent, whose answer varies      (default 10)
+  --help            show this message
+
+Also usable as a library — record-npats.js runs it as a per-checkpoint gate:
+  evalLadders(agent, { budgetMs, oversample }) -> { passed, total, rows }`);
   process.exit(0);
 }
 

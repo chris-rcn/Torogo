@@ -76,7 +76,22 @@ module.exports = { loadCases, evalCases };
 if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'oversample', 'verbose']);
   if (opts.help || !opts.file) {
-    console.log('Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1] [--verbose]');
+    console.log(`Usage: node evalladders2.js --file <cases.txt> [options]
+
+Runs a ladder case file against an AI agent and reports, per case, how often
+the agent played one of the required moves.  Unlike evalladders.js the cases
+come from a file rather than being hardcoded.
+
+  --file FILE       case file to run                            (required)
+  --agent NAME      ai/<name>.js to evaluate                    (default random)
+  --budget MS       time budget per move, milliseconds          (default 1)
+  --oversample N    evaluations per case; >1 is worth it for a
+                    stochastic agent, whose answer varies       (default 1)
+  --verbose         print each case's agent move alongside the requirement
+  --help            show this message
+
+Also usable as a library — the trainers' \`ladr\` column runs it per status
+print: loadCases(file) then evalCases(cases, getMove, { budgetMs, oversample })`);
     process.exit(opts.help ? 0 : 1);
   }
   const agentName  = opts.agent || 'random';
