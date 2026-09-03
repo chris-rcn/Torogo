@@ -78,7 +78,7 @@ function create() {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-ppat-fp-e2-3k',
     path: _isBrowser ? undefined
-                     : require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js') });
+                     : require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js') });
   const fpWeights   = fpModel.weights;
   console.log(`ref-puct-ppat-fp-e2-3k: ${_model ? _model.weights.length : 0} ppat weights, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 

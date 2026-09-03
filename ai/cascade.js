@@ -47,7 +47,7 @@ function create(cfg) {
   const SIM_PHASE = cfg.float('SIM_PHASE', 0.5);
 
   const fpModel = FeaturePol.loadModel({ name: 'cascade',
-    path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
+    path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) });
   const fpWeights = fpModel.weights;
   const vModel  = vLoadWeights(cfg.str('VLIB_WEIGHTS', path.join(__dirname, '..', 'ref', 'vlibpat-4074.js')));
   const ppatModel = PPat.loadWeights(cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js')));

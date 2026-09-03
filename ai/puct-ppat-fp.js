@@ -110,7 +110,7 @@ function create(cfg) {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'puct-ppat-fp',
     path: _isBrowser ? undefined
-                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'featurepol-6082.js')) });
+                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) });
   const fpWeights   = fpModel.weights;
   console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
 

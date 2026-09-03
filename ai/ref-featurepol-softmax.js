@@ -2,7 +2,7 @@
 
 // Softmax-sampling featurepol policy with hardcoded weights file.
 //
-// Same weights as ai/ref-featurepol.js (ref/featurepol-6082.js) but samples
+// Same weights as ai/ref-featurepol.js (featurepol-cbk7wa32.js) but samples
 // from the softmax over the logits (temperature 1) instead of greedy argmax,
 // so its games vary — a stochastic reference for the CGOS ladder, mirroring
 // ai/ref-npat-softmax.js.
@@ -14,7 +14,7 @@ const FeaturePol = require('../featurepol-lib.js');
 const { PASS } = require('../game2.js');
 const { game3FromGame2 } = require('../game3.js');
 
-const WEIGHTS = path.join(__dirname, '..', 'ref', 'featurepol-6082.js');
+const WEIGHTS = path.join(__dirname, '..', 'featurepol-cbk7wa32.js');
 
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-featurepol-softmax', path: WEIGHTS });
 const stateByN = new Map();

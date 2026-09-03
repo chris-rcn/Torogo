@@ -7,10 +7,11 @@
 // ref-puct-ppat-3k 1993; -e2-1k 1791 vs -1k 1726).
 //
 // Data files, both loaded from the repo root (in the browser, load
-// ppat-lib.js + ppat-data.js and featurepol-data.js first, which set
+// ppat-lib.js + ppat-data.js and featurepol-cbk7wa32.js first, which set
 // window.PPATWeights / window.featurepolModel):
 //   ppat-data.js       playout policy — band-trained ppat-data-287076-best
-//   featurepol-data.js priors/pruning policy — featurepol-6082
+//   featurepol-cbk7wa32.js priors/pruning policy — featurepol retrained after
+//   the ladder2 3-liberty change (57.4% vs ref-featurepol over 5394 games)
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
 // nodes (the root searches full width unless rootTopK caps it), RAVE, and
@@ -102,7 +103,7 @@ function create() {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'prod',
     path: _isBrowser ? undefined
-                     : require('path').join(__dirname, '..', 'featurepol-data.js') });
+                     : require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js') });
   const fpWeights   = fpModel.weights;
 
   let _ppatState = null;

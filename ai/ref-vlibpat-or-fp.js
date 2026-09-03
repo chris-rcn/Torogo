@@ -16,7 +16,7 @@ const FeaturePol = require('../featurepol-lib.js');
 
 const vModel = vLoadWeights(path.join(__dirname, '..', 'ref', 'vlibpat-4074.js'));
 const { weights: fpWeights, modelName } = FeaturePol.loadModel({ name: 'ref-vlibpat-or-fp',
-  path: path.join(__dirname, '..', 'ref', 'featurepol-6082.js') });
+  path: path.join(__dirname, '..', 'featurepol-cbk7wa32.js') });
 
 console.error(`ref-vlibpat-or-fp: vlibpat=${vModel.weights.size}w featurepol=${fpWeights.size}w  [50/50 per-move: vlib argmax / fp softmax]`);
 

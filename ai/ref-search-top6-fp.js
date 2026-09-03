@@ -21,7 +21,7 @@ const TOP_K  = 6;
 const DITHER = 0.001;
 
 const VPAT_PATH = path.join(__dirname, '..', 'ref', 'vlibpat-4074.js');
-const FP_PATH   = path.join(__dirname, '..', 'ref', 'featurepol-6082.js');
+const FP_PATH   = path.join(__dirname, '..', 'featurepol-cbk7wa32.js');
 
 // ── Load weights ─────────────────────────────────────────────────────────────
 
