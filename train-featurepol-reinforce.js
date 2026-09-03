@@ -264,7 +264,7 @@ function trainGame(N) {
   let maxProbSum = 0;
   for (const s of steps) { let mx = 0; for (let i = 0; i < s.count; i++) if (s.probs[i] > mx) mx = s.probs[i]; maxProbSum += mx; }
 
-  return { elapsedMs: Date.now() - tStart, weightUpdates, maxProbSum, maxProbN: steps.length,
+  return { elapsedMs: Date.now() - tStart, moves, weightUpdates, maxProbSum, maxProbN: steps.length,
            blackWon: outcomeBlack > 0 ? 1 : 0 };
 }
 
@@ -315,7 +315,7 @@ console.log();
 // line up regardless of the individual formatters' string lengths.
 // winRatio column: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game
 // counts (this interval's, and the rolling-half window).  Fixed 21 chars wide.
-const COLS = ['elapsed', 'game', 'tGm', 'nWts', 'avgW', 'maxP', 'avgK',
+const COLS = ['elapsed', 'game', 'tMv', 'nWts', 'avgW', 'maxP', 'avgK',
   ...(EVAL_AGENT ? ['winRatio'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
 const COLW = [7, 5, 6, 6, 7, 5, 6,
   ...(EVAL_AGENT ? [21] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
@@ -331,14 +331,14 @@ const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 // is long enough for that budget to run away.
 const MAX_EVAL_GAMES = 2000;
 let nextPrintAt = t0 + 1000, lastPrintAt = t0;
-let g = 0, lastG = 0, elapsedAcc = 0, maxPSum = 0, maxPN = 0;
+let g = 0, elapsedAcc = 0, movesAcc = 0, maxPSum = 0, maxPN = 0;
 const evalHistory = [];   // per-game eval results (1/0); the rolling-half avg (wrAv) uses this
 
 while (true) {
   g++;
   const r = trainGame(TRAIN_SIZE);
   totalUpdates += r.weightUpdates;
-  elapsedAcc += r.elapsedMs; maxPSum += r.maxProbSum; maxPN += r.maxProbN;
+  elapsedAcc += r.elapsedMs; movesAcc += r.moves; maxPSum += r.maxProbSum; maxPN += r.maxProbN;
 
   komiSum += KOMI(TRAIN_SIZE); komiSumGames++;
   if (AUTO_KOMI) {
@@ -358,7 +358,7 @@ while (true) {
     const row = [
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
-      Util.fmtMs(elapsedAcc / Math.max(1, g - lastG)),
+      Util.fmtMs(elapsedAcc / Math.max(1, movesAcc)),
       Util.fmt4i(wNz),
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
@@ -398,7 +398,7 @@ while (true) {
     }
     printRow(row);
     saveWeights();
-    maxPSum = 0; maxPN = 0; elapsedAcc = 0; lastG = g;
+    maxPSum = 0; maxPN = 0; elapsedAcc = 0; movesAcc = 0;
     komiSum = 0; komiSumGames = 0;
     const nowMs = Date.now();
     nextPrintAt = Math.min(t0 + Math.round((nowMs - t0) * 1.4), nowMs + MAX_PRINT_GAP_MS);

@@ -552,10 +552,9 @@ const headerCols = [
   'TT'.padStart(5),
   'game'.padStart(4),
   'avgK'.padStart(6),
-  'tGm '.padStart(5),
+  'tMv '.padStart(5),
   'nWts'.padStart(4),
   'avgW'.padStart(6),
-  'tTurn'.padStart(5),
 ];
 // Test / eval columns (right).
 // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
@@ -577,9 +576,7 @@ const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 const MAX_EVAL_GAMES = 2000;
 let nextPrintAt = t0 + 1000;
 let g = 0;
-let totalMoves = 0;
 let intervalGames = 0, intervalMoves = 0;
-let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 const evalHistory = [];
 
@@ -600,10 +597,9 @@ while (true) {
   }
   // Polyak / SWA: fold live weights into the shadow every EMA_PERIOD games.
   if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(model, EMA_ALPHA);
-  totalMoves      += moves;
   intervalGames++;
   intervalMoves   += moves;
-  moveElapsedMs   += elapsedMs;  intervalTrainMs += elapsedMs;
+  intervalTrainMs += elapsedMs;
 
   // Force the print/save block to fire on the limit-reaching iteration so
   // the final stats are emitted before we break.
@@ -632,8 +628,7 @@ while (true) {
       avgWR     = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
     }
     const avgLen    = intervalMoves / intervalGames;
-    const tGameMs   = intervalTrainMs / intervalGames;
-    const tpMove    = moveElapsedMs / totalMoves;
+    const tMvMs     = intervalTrainMs / intervalMoves;
 
     intervalGames   = 0;
     intervalMoves   = 0;
@@ -670,10 +665,9 @@ while (true) {
       Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
       Util.fmt4i(g),
       Util.fmt4(kAvg).padStart(6),
-      Util.fmtMs(tGameMs),
+      Util.fmtMs(tMvMs),
       Util.fmt4i(ws),
       wAvg.toFixed(4).padStart(6),
-      Util.fmtMs(tpMove),
     ];
     // Test / eval columns (right).
     if (evalGetMove) cols.push((`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +

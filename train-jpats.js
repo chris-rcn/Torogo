@@ -324,8 +324,8 @@ console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ''}  eval-komi=${
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log();
 
-// Column order mirrors train-hpatterns.js: T, TT, game, avgK, tGm, nWts, avgW,
-// tTurn, then the jpats-only pair (psize, prunes), then the eval column.
+// Column order mirrors train-hpatterns.js: T, TT, game, avgK, tMv, nWts, avgW,
+// then the jpats-only pair (psize, prunes), then the eval column.
 //   T/TT     this leg's elapsed time, and the total including prior legs
 //   avgK     mean komi over the interval (the auto controller moves it)
 //   psize    mean largest-present pattern size over the anchors that are
@@ -333,9 +333,9 @@ console.log();
 //   prunes   prune passes run so far
 //   winRatio "wr(g)/avg(ga)" — this interval's ratio and game count, then the
 //            rolling-half window's.  Fixed 21 chars wide.
-const COLS = ['T', 'TT', 'game', 'avgK', 'tGm ', 'nWts', 'avgW', 'tTurn', 'psize', 'prunes',
+const COLS = ['T', 'TT', 'game', 'avgK', 'tMv ', 'nWts', 'avgW', 'psize', 'prunes',
               ...(EVAL_AGENT ? ['winRatio'] : [])];
-const COLW = [5, 5, 4, 6, 5, 4, 6, 5, 5, 6, ...(EVAL_AGENT ? [21] : [])];
+const COLW = [5, 5, 4, 6, 5, 4, 6, 5, 6, ...(EVAL_AGENT ? [21] : [])];
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
 printRow(COLS);
 
@@ -397,10 +397,9 @@ while (true) {
               Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
               Util.fmt4i(g),
               Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),
-              Util.fmtMs(intervalMs / nGames),
+              Util.fmtMs(intervalMoves > 0 ? intervalMs / intervalMoves : 0),
               Util.fmt4i(model.weights.size),
               (wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0).toFixed(4),
-              Util.fmtMs(intervalMoves > 0 ? intervalMs / intervalMoves : 0),
               (pSizeAcc / nGames).toFixed(2),
               Util.fmt4i(model.prunes),
               ...(EVAL_AGENT ? [wr] : [])]);
