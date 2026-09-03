@@ -25,6 +25,10 @@
 //               cells; n in {4,8,12,20} (the D4-closed rings).
 //   adjLib<n>   D4-canonical 4 orthogonal neighbours, each a stone encoded with its
 //               chain's liberty count capped at n (radix 2n+1).  A descriptor.
+//   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
+//               plus-of-plusses instead of a min over 8 D4 permutations: invariant
+//               by construction, so much cheaper, at 90.4% of the true D4 orbits.
+//               Takes no size.  Descriptor.
 //   stone8AdjLib<n>  JOINT liberty-aware 3×3 pattern: the 8 nearest cells canonicalised
 //               as ONE unit (orthogonals liberty-aware cap n, diagonals shape-only), so
 //               shape+liberties stay in register — what stones8+adjLib4 cannot do (it
@@ -277,6 +281,49 @@ function _canonRadix(cv, n, radix) {
 }
 // stones<n>: ternary cell values (0 empty / 1 own / 2 enemy).
 function _canonStones(cv, n) { return _canonRadix(cv, n, 3); }
+
+// ── stones12b: recursive plus-of-plusses ("t"-hash) ──────────────────────────
+// D4-invariant BY CONSTRUCTION rather than by enumerating 8 permutations and
+// taking a min.  Two levels:
+//
+//   th5(p)  = mix( uh(uh(N,S), uh(E,W)), centre )      one 5-point plus at p
+//   key(p)  = mix( uh(uh(th5(N),th5(S)), uh(th5(E),th5(W))), th5(p) )
+//
+// uh is unordered, so pairing opposite cells across each axis is invariant to
+// exactly the group preserving the partition {{N,S},{E,W}} — which is D4.  The
+// centre is fixed by every D4 element, so it folds in with an ORDERED mix; a
+// second uh there would confuse "centre X, ring Y" with "centre Y, ring X".
+//
+// The 13 cells covered are stones12's twelve plus the centre.  Fidelity is
+// 90.4% of true D4 orbits (186270 of 206145): what merges is a sub-plus's own
+// internal orientation, since each sub-hash has already discarded it.  Same
+// trade hpatterns makes above 2x2, and the reason this is a SEPARATE feature
+// from stones12 rather than a replacement for it.
+//
+// Leaves enter as value+1 (1..3): uh(a,b) = C + (1+a)(1+b) - 1, so a leaf of
+// exactly -1 would absorb its partner.
+function _uh(a, b) { return (1234567 + a + b + Math.imul(a, b)) | 0; }
+
+// th5 for every board cell, filled once per position by a prepare hook.  Every
+// value is read five times — as one candidate's centre and as four neighbours'
+// arms — so computing it per candidate would do the work five times over.
+let _t5Val = null;
+function _t5Prepare(ctx) {
+  const game = ctx.game, N = game.N, cap = N * N, cur = ctx.cur;
+  const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
+  if (!_t5Val || _t5Val.length < cap) _t5Val = new Int32Array(cap);
+  for (let idx = 0; idx < cap; idx++) {
+    const base = idx * stride;
+    // Symbols inlined rather than via a helper: this is the hot loop, and
+    // 1 empty / 2 own / 3 enemy keeps every leaf clear of uh's absorbing -1.
+    const cN = cells[nn[base]],     sN = cN === 0 ? 1 : cN === cur ? 2 : 3;
+    const cE = cells[nn[base + 1]], sE = cE === 0 ? 1 : cE === cur ? 2 : 3;
+    const cS = cells[nn[base + 2]], sS = cS === 0 ? 1 : cS === cur ? 2 : 3;
+    const cW = cells[nn[base + 3]], sW = cW === 0 ? 1 : cW === cur ? 2 : 3;
+    const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
+    _t5Val[idx] = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC);
+  }
+}
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
@@ -568,6 +615,19 @@ function _makeTerm(str) {
         const nn = ctx.nearNbr, base = idx * ctx.nearStride, cells = ctx.game.cells, cur = ctx.cur, cv = _cvScratch;
         for (let i = 0; i < n; i++) { const c = cells[nn[base + i]]; cv[i] = c === 0 ? 0 : c === cur ? 1 : 2; }
         return _canonStones(cv, n);
+      };
+      break;
+    }
+    case 'stones12b': {
+      // 13-cell shape (stones12 + centre) hashed as a plus of five 5-point
+      // plusses.  Invariant by construction, so no permutation enumeration.
+      if (param !== null) throw new Error(`featurepol: stones12b takes no size, got "${str}"`);
+      maxNear = 4;   // reads only the 4 orthogonals — of the move AND of its neighbours
+      prepare = _t5Prepare;
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, t5 = _t5Val;
+        return _hashCombine(_uh(_uh(t5[nn[base]], t5[nn[base + 2]]),
+                                _uh(t5[nn[base + 1]], t5[nn[base + 3]])), t5[idx]);
       };
       break;
     }
@@ -1018,6 +1078,12 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
 // shortlist, so this is an APPROXIMATION of the whole-board feature: a move the
 // plain spaces dislike can never be ranked, however good hpat thinks it is.
 function _extractTopN(game, state, weights, ctx, spec, useHpat) {
+  // Non-hpat whole-position precomputes still have to run here: this path
+  // returns before extractFeatures' prepare block ever executes.  (The hpat
+  // ranking is this function's own Phase B, hence the exclusion.)
+  const prePreps = spec.prepares;
+  if (prePreps) for (let i = 0; i < prePreps.length; i++)
+    if (prePreps[i] !== _hpatPrepare) prePreps[i](ctx);
   const computers = spec.computers, memo = state.memo, vals = weights.vals;
   const plainSlots = spec.plainSlots, plainSpaces = spec.plainSpaces, hpatSpaces = spec.hpatSpaces;
   const emC = game._emptyCells, ec = game.emptyCount;
@@ -1054,8 +1120,10 @@ function _extractTopN(game, state, weights, ctx, spec, useHpat) {
     rank[i] = best; mask[moves[best]] = 1;
   }
   _hpatMask = mask;
+  // Only the hpat prepare belongs here: it is the ranking, and it must see the
+  // shortlist mask.  The others already ran at the top of this function.
   const preps = spec.prepares;
-  for (let i = 0; i < preps.length; i++) preps[i](ctx);
+  for (let i = 0; i < preps.length; i++) if (preps[i] === _hpatPrepare) preps[i](ctx);
   _hpatMask = null;
   for (let i = 0; i < n; i++) mask[moves[rank[i]]] = 0;   // O(n) clear, not O(board)
   const hKeys = state.hKeys, hCount = state.hCount, stride = spec.hpatMaxKeys, numSlots = spec.numSlots;
@@ -1101,8 +1169,11 @@ function extractFeatures(game, state, weights, game3) {
   // Whole-position precomputes (e.g. hpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
-  if (preps && preps.length) {
-    if (useHpat) for (let i = 0; i < preps.length; i++) preps[i](ctx);
+  if (preps) for (let i = 0; i < preps.length; i++) {
+    // useHpat is about whether the hpat RANKING runs this position; it must not
+    // gate unrelated whole-position precomputes, whose consumers always read.
+    if (preps[i] !== _hpatPrepare) preps[i](ctx);
+    else if (useHpat) preps[i](ctx);
     else _hpatBlank(game.N * game.N);
   }
   const computers = spec.computers, numSlots = spec.numSlots;
