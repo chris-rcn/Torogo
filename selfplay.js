@@ -75,8 +75,36 @@ const opts = Util.parseArgs(process.argv.slice(2), ['help'],
    'min-phase', 'max-phase', 'fallback']);
 
 if (opts.help) {
-  console.log(`Usage: node selfplay.js [--p1 <policy>] [--p2 <policy>] [--size <n>] [--budget <ms>] [--limit <n>]\n` +
-              `       [--stop-tol <a>] [--stop-min <n>]  (early-stop when P(p2 better) reaches 1-a or a)`);
+  console.log(`Usage: node selfplay.js [options]
+
+Play matches between two agents and report the win statistics.  Colours
+alternate between games; per-agent env config uses the P1_/P2_ prefixes
+(e.g. P2_PPAT_DATA=... for --p2's ppat weights).
+
+  --p1 AGENT        ai/<name>.js for player 1 (default prod)
+  --p2 AGENT        ai/<name>.js for player 2 (default: same as --p1)
+  --size N          board size (default 13)
+  --budget MS       per-move time budget in ms (default 1)
+  --limit N         stop after N games (default: run indefinitely)
+
+  --rand-moves N    random opening moves per game for diversity (default 4;
+                    0 when --rand-mirror-pairs is set)
+  --rand-mirror-pairs N
+                    balanced opening: N random black/white stone pairs placed
+                    at mirrored positions (antisymmetric start)
+
+  --min-phase F     p1/p2 play only at board fullness >= F; the fallback agent
+                    plays both sides before that.  The opening is built once
+                    per match pair and shared across the colour swap
+  --max-phase F     past this phase the fallback completes the game (per-move
+                    gate).  Defaults (0,1) = whole game, no fallback
+  --fallback AGENT  agent for moves outside the phase window
+                    (default ref-featurepol-softmax)
+
+  --stop-tol A      early stop once P(p2 truly better than 50%) reaches 1-A
+                    (confidently better) or A (confidently worse)
+  --stop-min N      minimum games before --stop-tol can trigger (default 0)
+  --help            show this message`);
   process.exit(0);
 }
 
@@ -106,7 +134,7 @@ const randMoves = parseInt(opts['rand-moves'] ?? (randMirrorPairs > 0 ? '0' : '4
 // game-played strength-by-phase profile.  Defaults (0,1) = whole game, no fallback.
 const minPhase     = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
 const maxPhase     = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
-const fallbackName = opts.fallback || 'ref-npat';
+const fallbackName = opts.fallback || 'ref-featurepol-softmax';
 if (minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
   console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
   process.exit(1);
