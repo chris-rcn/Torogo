@@ -17,7 +17,7 @@
 // The first --test-pos records form a held-out test set (teMSE column); the
 // rest are the train pool, visited in a fresh shuffle each epoch.
 //
-// Runs indefinitely (Ctrl-C to stop) unless --limit is given.  Weights are
+// Runs indefinitely (Ctrl-C to stop) unless --epochs is given.  Weights are
 // saved at every print.
 
 const path = require('path');
@@ -32,25 +32,37 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
-  ['data', 'test-pos', 'smooth-weights', 'eval', 'eval-size', 'ladder-file',
-   'limit', 'load', 'lr', 'md-file', 'momentum', 'save', 'spec']);
+  ['data', 'test-file', 'test-pos', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
+   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'md-file', 'momentum', 'save', 'spec']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-hpat-playout-eval.js --data <file> [options]
 
 Supervised trainer: fits hpatterns weights to the playout-value labels of a
 gen-playout-evals data file (logistic regression on P(BLACK wins)).  Runs
-indefinitely unless --limit is given; the checkpoint is written at every print.
+indefinitely unless --epochs is given; the checkpoint is written at every print.
 
   --data FILE       gen-playout-evals data file (required)
-  --test-pos N      first N records form the held-out test set for the teMSE
-                    column (default 1000, clamped to half the file)
-  --limit N         stop after N training positions (default 0 = run indefinitely)
+  --test-file F     separate data file supplying the held-out test set (e.g.
+                    a frozen high-playout corpus): its records are filtered to
+                    the phase band, then capped at --test-pos; --data is then
+                    entirely train pool
+  --test-pos N      test-set size cap (default 1000).  Without --test-file:
+                    the first N records of --data (clamped to half the file)
+  --min-phase F     train only on records with phase >= F (default 0)
+  --max-phase F     train only on records with phase <= F (default 1).
+                    The band filters the TRAIN pool only; the test head is
+                    kept whole so teMSE stays comparable across band configs
+                    (the train_ppat --phase convention)
+  --epochs N        stop after N full passes over the train pool
+                    (default 0 = run indefinitely)
 
   --spec S          sizes to extract, as "size:maxStones" pairs (default 2:4).
                     A bare size ("4" or "4:") means no stone limit
                     (maxStones = size^2); a trailing 'f' freezes that size's
                     loaded weights, e.g. '2:4f,3:8'
   --lr F            step size for the update (default 0.3)
+  --lr-decay F      multiply LR by this factor at the end of each epoch
+                    (default 0.9; 1 = no decay)
   --momentum F      SGD momentum (default 0 = off)
   --smooth-weights A  Polyak EMA decay, applied every 1000 positions; 0 = off
                     (default 0.9).  The EMA weights are what gets saved once it
@@ -73,6 +85,7 @@ indefinitely unless --limit is given; the checkpoint is written at every print.
 }
 
 const DATA_PATH  = opts.data;
+const TEST_FILE  = opts['test-file'] || null;
 const EVAL_SIZE  = parseInt(opts['eval-size'] || '13', 10);
 const SAVE_PATH  = opts.save || `out/hpat-pe-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
@@ -80,13 +93,20 @@ const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';
 const LADDER_FILE = opts['ladder-file'] || null;
 const MD_FILE     = opts['md-file'] || null;
-const LR         = parseFloat(opts.lr       || '0.3');
+let LR           = parseFloat(opts.lr       || '0.3');
+const LR_DECAY   = parseFloat(opts['lr-decay'] || '0.9');
 const MOMENTUM   = parseFloat(opts.momentum || '0.0');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
 const SPEC_RAW   = opts.spec || '2:4';
-const LIMIT_POS  = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+const EPOCHS     = opts.epochs !== undefined ? parseInt(opts.epochs, 10) : 0;
 const TEST_POS_RAW = opts['test-pos'] !== undefined ? parseInt(opts['test-pos'], 10) : 1000;
+const MIN_PHASE  = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
+const MAX_PHASE  = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
+if (MIN_PHASE < 0 || MAX_PHASE > 1 || MIN_PHASE > MAX_PHASE) {
+  console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
+  process.exit(1);
+}
 
 // Eval games use the game2 per-size komi (there is no self-play here, so no
 // komi controller either).
@@ -301,7 +321,7 @@ function search1ply(game, maxSearch, w = model.weights) {
 
 function evalVsReference(N, refGetMove, nGames) {
   const results = [];
-  const evalW = (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
+  const evalW = saveEvalW();
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
     const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
@@ -329,18 +349,25 @@ function evalVsReference(N, refGetMove, nGames) {
 // here: the replay validates the move sequence, supplies side-to-move for the
 // target mapping, and cross-checks the recorded phase (redundant by
 // construction, so a mismatch means a corrupt or foreign file).
-const records = [];
-{
-  let malformed = 0, badReplay = 0, badPhase = 0;
-  for (const line of fs.readFileSync(DATA_PATH, 'utf8').split('\n')) {
-    if (!line || line[0] === '#') continue;
+// Loads a data file, band-filtering as it reads (phase is validated and
+// filtered here, then NOT stored — nothing downstream needs it).  The first
+// `exemptFirst` KEPT records bypass the band filter: the head-of-data test
+// set is taken unfiltered, matching the pre-filter file order.
+function loadRecords(filePath, exemptFirst = 0) {
+  const recs = [];
+  let malformed = 0, badReplay = 0, badPhase = 0, outsideBand = 0;
+  // Chunked read: corpora exceed V8's max string length (~512MB), so
+  // readFileSync('utf8') is off the table.  Lines are ASCII; a chunk boundary
+  // can only ever split a line, never a character.
+  const processLine = (line) => {
+    if (!line || line[0] === '#') return;
     const p = line.split(/\s+/);
-    if (p.length !== 4) { malformed++; continue; }
+    if (p.length !== 4) { malformed++; return; }
     const size  = parseInt(p[0], 10);
     const phase = parseFloat(p[1]);
     const wr    = parseFloat(p[3]);
     if (!Number.isFinite(size) || !Number.isFinite(phase) ||
-        !(wr >= 0 && wr <= 1)) { malformed++; continue; }
+        !(wr >= 0 && wr <= 1)) { malformed++; return; }
     const toks = p[2].split(',');
     const moves = new Int16Array(toks.length);
     let ok = true;
@@ -349,28 +376,60 @@ const records = [];
       if (!Number.isInteger(m) || m < PASS || m >= size * size) { ok = false; break; }
       moves[i] = m;
     }
-    if (!ok) { malformed++; continue; }
+    if (!ok) { malformed++; return; }
 
     const game = new Game2(size);
     for (let i = 0; i < moves.length && ok; i++) ok = game.play(moves[i]);
-    if (!ok) { badReplay++; continue; }
+    if (!ok) { badReplay++; return; }
     // Recorded phase is toFixed(3): allow the rounding half-quantum plus slack.
-    if (Math.abs(game.phase() - phase) > 0.0006) { badPhase++; continue; }
+    if (Math.abs(game.phase() - phase) > 0.0006) { badPhase++; return; }
+    if (recs.length >= exemptFirst &&
+        (phase < MIN_PHASE || phase > MAX_PHASE)) { outsideBand++; return; }
 
     const targetB = game.current === BLACK ? wr : 1 - wr;   // P(BLACK wins)
-    records.push({ size, moves, targetB });
+    recs.push({ size, moves, targetB });
+  };
+  const fd = fs.openSync(filePath, 'r');
+  const buf = Buffer.alloc(1 << 22);   // 4MB chunks
+  let rem = '';
+  for (;;) {
+    const n = fs.readSync(fd, buf, 0, buf.length, null);
+    if (n === 0) break;
+    const lines = (rem + buf.toString('utf8', 0, n)).split('\n');
+    rem = lines.pop();
+    for (const line of lines) processLine(line);
   }
+  fs.closeSync(fd);
+  if (rem) processLine(rem);
   if (malformed || badReplay || badPhase) {
-    console.error(`data: dropped ${malformed} malformed, ${badReplay} failed-replay, ` +
+    console.error(`${filePath}: dropped ${malformed} malformed, ${badReplay} failed-replay, ` +
                   `${badPhase} phase-mismatch line(s)`);
   }
-  if (records.length === 0) { console.error(`data '${DATA_PATH}' contains no valid records`); process.exit(1); }
+  recs.outsideBand = outsideBand;
+  if (recs.length === 0) { console.error(`data '${filePath}' contains no valid records`); process.exit(1); }
+  return recs;
 }
-
-// Held-out test head (teMSE), then the train pool.
-const TEST_POS = Math.min(TEST_POS_RAW, records.length >> 1);
-const testRecs  = records.slice(0, TEST_POS);
-const trainRecs = records.slice(TEST_POS);
+// Held-out test set (teMSE), then the train pool.  With --test-file the test
+// set is that file band-filtered and capped at --test-pos, and --data is all
+// train (band-filtered).  Without it, the first --test-pos KEPT records of
+// --data are the unfiltered test head and the rest is the band-filtered
+// train pool.  (The old half-the-file clamp on the head applies post-filter,
+// so in the tiny-file edge a clamped head can leave a few unfiltered records
+// in the train pool — irrelevant at real corpus sizes.)
+const records = loadRecords(DATA_PATH, TEST_FILE ? 0 : TEST_POS_RAW);
+const _testAll = TEST_FILE ? loadRecords(TEST_FILE) : null;
+const testRecs  = TEST_FILE
+  ? _testAll.slice(0, TEST_POS_RAW)
+  : records.slice(0, Math.min(TEST_POS_RAW, records.length >> 1));
+if (TEST_FILE && testRecs.length === 0) {
+  console.error(`no test records in phase band [${MIN_PHASE}, ${MAX_PHASE}]`);
+  process.exit(1);
+}
+const trainRecs = TEST_FILE ? records : records.slice(testRecs.length);
+if (trainRecs.length === 0) {
+  console.error(`no train records in phase band [${MIN_PHASE}, ${MAX_PHASE}]`);
+  process.exit(1);
+}
 
 function replayRecord(rec) {
   const game = new Game2(rec.size);
@@ -381,7 +440,7 @@ function replayRecord(rec) {
 // Full pass over the test head with the save-eval weights (EMA when running).
 function testMSE() {
   if (testRecs.length === 0) return null;
-  const evalW = (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
+  const evalW = saveEvalW();
   let se = 0;
   for (const rec of testRecs) {
     const v = evaluateFeatures(extractFeatures(replayRecord(rec), model, MAX_SIZE), evalW);
@@ -421,29 +480,42 @@ if (NO_ADD && model.weights.size === 0) {
   process.exit(1);
 }
 
-console.log(`data: ${DATA_PATH} (${records.length} records: ${testRecs.length} test, ${trainRecs.length} train)`);
-console.log(`LR=${LR}  momentum=${MOMENTUM}  smooth-weights=${EMA_ALPHA}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
-console.log(`eval-komi=${EVAL_KOMI} (fixed)`);
+{
+  const band = (MIN_PHASE > 0 || MAX_PHASE < 1)
+    ? ` (band [${MIN_PHASE}, ${MAX_PHASE}]: ${records.outsideBand} outside dropped)` : '';
+  console.log(`data: ${DATA_PATH} (${records.length} records: ` +
+    (TEST_FILE ? `all train` : `${testRecs.length} test, ${trainRecs.length} train`) + `)` + band);
+  if (TEST_FILE) console.log(`test: ${TEST_FILE} (${testRecs.length} records, capped at ${TEST_POS_RAW}` +
+    ((MIN_PHASE > 0 || MAX_PHASE < 1) ? `, ${_testAll.outsideBand} outside band dropped)` : `)`));
+}
+console.log(`LR=${LR}  lr-decay=${LR_DECAY}  momentum=${MOMENTUM}  smooth-weights=${EMA_ALPHA}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}${NO_ADD ? `  no-add (fine-tuning the loaded ${model.weights.size} patterns only)` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
+// Eval ≡ save: every test harness (reference games, ladder suite, md suite,
+// teMSE) measures the weights the model save would write — the EMA shadow when
+// enabled and initialized, else the live weights.
+function saveEvalW() {
+  return (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
+}
+
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
-const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
-const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log();
 
 // Training columns (left), then test / eval columns (right).  Every cell is
 // padded to its column width, so headers and data stay aligned regardless of
 // the individual formatters' string lengths.
-const COLS = ['T', 'TT', 'pos', 'epoch', 'tPos', 'nWts', 'avgW', 'trMSE', 'teMSE',
+const COLS = ['T', 'TT', 'pos', 'epoch', 'LR', 'tPos', 'nWts', 'avgW', 'trMSE', 'teMSE',
               ...(evalGetMove ? ['winRatio'] : []),
               ...(ladderCases ? ['ladr'] : []),
               ...(mdPositions ? ['mdRms'] : [])];
-const COLW = [5, 5, 5, 5, 5, 4, 6, 6, 6,
+const COLW = [5, 5, 5, 5, 7, 5, 4, 6, 6, 6,
               ...(evalGetMove ? [21] : []),
               ...(ladderCases ? [4] : []),
               ...(mdPositions ? [5] : [])];
@@ -453,9 +525,13 @@ printRow(COLS);
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 const t0 = Date.now();
+// Print schedule: geometric in POSITIONS — first row at 10k, then total
+// position count grows 1.4x per row.  The 4h time backstop keeps rows coming
+// when positions are slow (huge spec / md suites).
+const PRINT_START_POS  = 10000;
 const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 const MAX_EVAL_GAMES = 2000;
-let nextPrintAt = t0 + 1000, lastPrintAt = t0;
+let nextPrintPos = PRINT_START_POS, nextPrintAt = t0 + MAX_PRINT_GAP_MS;
 let nPos = 0, epoch = 0;
 let intervalPos = 0, intervalTrainMs = 0, trSE = 0, trSEN = 0;
 const evalHistory = [];
@@ -466,6 +542,66 @@ function shuffleOrder() {
     const j = (Math.random() * (i + 1)) | 0;
     const t = order[i]; order[i] = order[j]; order[j] = t;
   }
+}
+
+function statusPrint() {
+    const tTestStart = Date.now();
+    let batch = null, latestWR = 0, avgWR = 0, evalHalf = 0;
+    if (evalGetMove) {
+      batch = [];
+      while (true) {
+        const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2);
+        for (const r of results) batch.push(r);
+        const tMs = Date.now() - tTestStart;
+        if (tMs > 0.3 * intervalTrainMs || batch.length >= MAX_EVAL_GAMES) break;
+      }
+      for (const r of batch) evalHistory.push(r);
+      latestWR  = batch.reduce((s, r) => s + r, 0) / batch.length;
+      evalHalf  = Math.max(1, Math.floor(evalHistory.length / 2));
+      avgWR     = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
+    }
+
+    const tPosMs = intervalTrainMs / Math.max(1, intervalPos);
+    const trMSE  = trSEN > 0 ? trSE / trSEN : 0;
+    const teMSE  = testMSE();
+
+    const ws   = model.weights.size;
+    const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
+    wAbsSum = 0; wUpdateCount = 0;
+    intervalPos = 0; intervalTrainMs = 0; trSE = 0; trSEN = 0;
+
+    let ladrRatio = null;
+    if (ladderCases) {
+      const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
+      ladrRatio = total ? passed / total : 0;
+    }
+    let mdRms = null;
+    if (mdPositions) {
+      mdRms = evalPositions(mdAgent, mdPositions, 0).rmsErr;
+    }
+    const tTestMs = Date.now() - tTestStart;
+
+    const cols = [
+      Util.fmtMs(Date.now() - t0),
+      Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
+      Util.fmt4i(nPos),
+      Util.fmt4i(epoch),
+      LR >= 0.001 ? LR.toFixed(4) : LR.toExponential(1),
+      Util.fmtMs(tPosMs),
+      Util.fmt4i(ws),
+      wAvg.toFixed(4),
+      trMSE.toFixed(4),
+      (teMSE !== null ? teMSE.toFixed(4) : '-'),
+    ];
+    if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
+                               `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
+    if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
+    if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms));
+    printRow(cols);
+
+    saveModel(SAVE_PATH, model);
+    nextPrintPos = Math.max(Math.ceil(nPos * 1.4), nPos + 1);
+    nextPrintAt  = Date.now() + MAX_PRINT_GAP_MS;
 }
 
 let done = false;
@@ -485,73 +621,13 @@ while (!done) {
 
     if (EMA_ALPHA > 0 && nPos % EMA_PERIOD === 0) applyEMA(model, EMA_ALPHA);
 
-    const limitReached = LIMIT_POS > 0 && nPos >= LIMIT_POS;
-    if (limitReached) { done = true; nextPrintAt = 0; }
 
-    if (Date.now() >= nextPrintAt) {
-      const tTestStart = Date.now();
-      let batch = null, latestWR = 0, avgWR = 0, evalHalf = 0;
-      if (evalGetMove) {
-        batch = [];
-        while (true) {
-          const { results } = evalVsReference(EVAL_SIZE, evalGetMove, 2);
-          for (const r of results) batch.push(r);
-          const tMs = Date.now() - tTestStart;
-          if (tMs > 0.3 * intervalTrainMs || batch.length >= MAX_EVAL_GAMES) break;
-        }
-        for (const r of batch) evalHistory.push(r);
-        latestWR  = batch.reduce((s, r) => s + r, 0) / batch.length;
-        evalHalf  = Math.max(1, Math.floor(evalHistory.length / 2));
-        avgWR     = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
-      }
-
-      const tPosMs = intervalTrainMs / Math.max(1, intervalPos);
-      const trMSE  = trSEN > 0 ? trSE / trSEN : 0;
-      const teMSE  = testMSE();
-
-      const ws   = model.weights.size;
-      const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
-      wAbsSum = 0; wUpdateCount = 0;
-      intervalPos = 0; intervalTrainMs = 0; trSE = 0; trSEN = 0;
-
-      let ladrRatio = null;
-      if (ladderCases) {
-        const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
-        ladrRatio = total ? passed / total : 0;
-      }
-      let mdRms = null;
-      if (mdPositions) {
-        mdRms = evalPositions(mdAgent, mdPositions, 0).rmsErr;
-      }
-      const tTestMs = Date.now() - tTestStart;
-
-      const cols = [
-        Util.fmtMs(Date.now() - t0),
-        Util.fmtMs(PRIOR_TRAIN_MS + (Date.now() - t0)),
-        Util.fmt4i(nPos),
-        Util.fmt4i(epoch),
-        Util.fmtMs(tPosMs),
-        Util.fmt4i(ws),
-        wAvg.toFixed(4),
-        trMSE.toFixed(4),
-        (teMSE !== null ? teMSE.toFixed(4) : '-'),
-      ];
-      if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
-                                 `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
-      if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
-      if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms));
-      printRow(cols);
-
-      saveModel(SAVE_PATH, model);
-      const nowMs = Date.now();
-      const geometricAt = t0 + Math.round((nowMs - t0) * 1.3);
-      const cappedAt = Math.min(geometricAt, nowMs + MAX_PRINT_GAP_MS);
-      nextPrintAt = Math.max(cappedAt, nowMs + tTestMs);
-      lastPrintAt = Date.now();
-    }
-    if (done) break;
+    if (nPos >= nextPrintPos || Date.now() >= nextPrintAt) statusPrint();
   }
+  LR *= LR_DECAY;
+  if (EPOCHS > 0 && epoch >= EPOCHS) done = true;
 }
 
+if (intervalPos > 0) statusPrint();   // final partial interval
 console.log();
-console.log(`Reached --limit ${LIMIT_POS} positions — saved ${SAVE_PATH}`);
+console.log(`Reached --epochs ${EPOCHS} — saved ${SAVE_PATH}`);

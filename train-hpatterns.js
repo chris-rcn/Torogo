@@ -532,17 +532,24 @@ console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ''}  eval-komi=${
 console.log(`spec=${SPEC_RAW}${FROZEN.size > 0 ? `  frozen=[${[...FROZEN].join(',')}]` : ''}${NO_ADD ? `  no-add (fine-tuning the loaded ${model.weights.size} patterns only)` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
+// Eval ≡ save: every test harness (reference games, ladder suite, md suite,
+// teMSE) measures the weights the model save would write — the EMA shadow when
+// enabled and initialized, else the live weights.
+function saveEvalW() {
+  return (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
+}
+
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax against
 // --ladder-file at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
-const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the
 // trainee's 1-ply argmax against --md-file at each status print (the `mdRms`
 // column — RMS win-ratio gap to the top move).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
-const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log();
 
