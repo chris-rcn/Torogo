@@ -235,7 +235,13 @@ function getAllLadderStatuses(game, minChainSize = 1) {
     visited.add(gid);
     if (game.groupSize(gid) < minChainSize) continue;
     const { count: lc } = game.groupLibs2(i);
-    if (lc === 0 || lc > 2) continue;
+    // 1-2 liberties always.  3 liberties only when the MOVER IS THE ATTACKER:
+    // the attacker can spend a move to reach the readable 2-liberty case, which
+    // is real information ("a ladder can be started here").  With the defender
+    // to move a 3-liberty group is safe by the escape criterion itself, so the
+    // read is a foregone conclusion and would only cost time.
+    if (lc === 0 || lc > 3) continue;
+    if (lc === 3 && game.cells[i] === game.current) continue;
     const status = getLadderStatus(game, i);
     results.push({ gid, color: game.cells[i], status });
   }
@@ -249,14 +255,19 @@ function getAllLadderStatuses(game, minChainSize = 1) {
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
 function getLadderStatus(game, stoneIdx) {
-  const { count: lc, lib0, lib1 } = game.groupLibs2(stoneIdx);
-  if (lc < 1 || lc > 2) {
+  const { count: lc, lib0, lib1, lib2 } = game.groupLibs3(stoneIdx);
+  if (lc < 1 || lc > 3) {
     const N = game.N;
-    console.warn(`getLadderStatus: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 2)`);
+    console.warn(`getLadderStatus: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected ≤ 3)`);
     return null;
   }
   const atari = lc === 1;
-  const libs = atari ? [lib0] : [lib0, lib1];
+  // At 3 liberties the opponent-first probe returns "escapes" trivially (the
+  // group already meets the escape criterion), so the read reduces to: does any
+  // single attacker move lead to capture?  Each try leaves 2 liberties, which
+  // is the case the search was built for.  A defender-to-move 3-liberty group
+  // therefore reports "not urgent" after one trivial probe.
+  const libs = lc === 1 ? [lib0] : lc === 2 ? [lib0, lib1] : [lib0, lib1, lib2];
   _movePath.length = 0;   // cycle-prune path: fresh per read
   const gColor = game.cells[stoneIdx];
   const mover = game.current;   // BLACK or WHITE

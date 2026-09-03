@@ -656,7 +656,7 @@ Game3 *g3_new(int32_t N) {
     g->N     = N;
     g->cap   = N * N;
     g->W     = (g->cap + 31) >> 5;
-    g->max_g = 4 * g->cap + 4;
+    g->max_g = 5 * g->cap + 10;
 
     g->cells = (int8_t  *)calloc(g->cap, sizeof(int8_t));
     g->gid   = (int32_t *)malloc(g->cap * sizeof(int32_t));

@@ -147,7 +147,7 @@ static void test_init(void) {
     check("init: N",                g->N == 9);
     check("init: cap",              g->cap == 81);
     check("init: W",                g->W == 3);          /* (81+31)/32 = 3 */
-    check("init: max_g",            g->max_g == 4*81 + 4);
+    check("init: max_g",            g->max_g == 5*81 + 10);
     check("init: current is BLACK", g->current == G3_BLACK);
     check("init: ko is PASS",       g->ko == G3_PASS);
     check("init: empty_count",      g->empty_count == 81);

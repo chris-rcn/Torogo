@@ -1002,11 +1002,16 @@ section('getAllLadderStatuses – finds a group in atari');
     · · · · ·
   `, '●');
   const r = getAllLadderStatuses(g2);
-  assert(r.length === 1, 'one group in atari');
-  assert(r[0].color === BLACK, 'the group is black');
-  assert(r[0].status !== null,                    'status is non-null');
-  assert(r[0].status.moverSucceeds === true,      'mover can escape atari');
-  assert(r[0].status.urgentLibs.length === 1,     'one urgent liberty');
+  // The three white singletons have 3 liberties each; with black (their
+  // attacker) to move they qualify under the 3-liberty entry gate.
+  assert(r.length === 4, `four groups seen (got ${r.length})`);
+  const blacks = r.filter(e => e.color === BLACK);
+  assert(blacks.length === 1, 'one black group in atari');
+  assert(blacks[0].status !== null,                'status is non-null');
+  assert(blacks[0].status.moverSucceeds === true,  'mover can escape atari');
+  assert(blacks[0].status.urgentLibs.length === 1, 'one urgent liberty');
+  assert(r.filter(e => e.color !== BLACK).every(e => e.status.libs.length === 3),
+         'white entries are the 3-liberty groups');
 }
 
 section('getAllLadderStatuses – finds multiple low-liberty groups');
@@ -1025,8 +1030,10 @@ section('getAllLadderStatuses – finds multiple low-liberty groups');
     · · · · · · · · ·
   `, '●');
   const r = getAllLadderStatuses(g2);
-  assert(r.length === 2, `two groups in atari (got ${r.length})`);
-  assert(r.every(e => e.color === BLACK), 'both groups are black');
+  // The four white singletons (3 liberties each, black to move) also qualify.
+  const blacks = r.filter(e => e.color === BLACK);
+  assert(r.length === 6, `six groups seen (got ${r.length})`);
+  assert(blacks.length === 2, `two black groups in atari (got ${blacks.length})`);
   assert(r.every(e => typeof e.status.moverSucceeds === 'boolean'), 'status has moverSucceeds');
 }
 

@@ -202,20 +202,24 @@ Ladder2Status ladder2_get_status(Game3 *g, int32_t stone_idx) {
     Ladder2Status r;
     memset(&r, 0, sizeof(r));
 
-    G3GroupLibs2 gl = g3_group_libs2(g, stone_idx);
-    const int32_t lc = gl.count;
-    if (lc < 1 || lc > 2) {
+    /* At 3 liberties the opponent-first probe returns "escapes" trivially (the
+     * group already meets the escape criterion), so the read reduces to: does
+     * any single attacker move lead to capture?  Each try leaves 2 liberties,
+     * which is the case the search was built for.  A defender-to-move 3-liberty
+     * group therefore reports "not urgent" after one trivial probe. */
+    int32_t libs3[3];
+    const int32_t lc = g3_group_libs(g, stone_idx, libs3, 3);
+    if (lc < 1 || lc > 3) {
         const int N = g->N;
         fprintf(stderr,
-                "ladder2_get_status: group at %d,%d has %d liberties (expected <= 2)\n",
+                "ladder2_get_status: group at %d,%d has %d liberties (expected <= 3)\n",
                 stone_idx % N, stone_idx / N, lc);
         r.valid = false;
         return r;
     }
     r.valid     = true;
     r.lib_count = lc;
-    r.libs[0]   = gl.lib0;
-    if (lc == 2) r.libs[1] = gl.lib1;
+    for (int i = 0; i < lc; i++) r.libs[i] = libs3[i];
 
     const bool    atari     = (lc == 1);
     const int8_t  g_color   = g->cells[stone_idx];
@@ -293,7 +297,14 @@ int32_t ladder2_get_all_statuses(Game3 *g, int32_t min_chain_size,
         visited[gid] = true;
         if (g3_group_size(g, gid) < min_chain_size) continue;
         const int32_t lc = g3_group_libs2(g, i).count;
-        if (lc == 0 || lc > 2) continue;
+        /* 1-2 liberties always.  3 liberties only when the MOVER IS THE
+         * ATTACKER: the attacker can spend a move to reach the readable
+         * 2-liberty case, which is real information ("a ladder can be started
+         * here").  With the defender to move a 3-liberty group is safe by the
+         * escape criterion itself, so the read is a foregone conclusion and
+         * would only cost time. */
+        if (lc == 0 || lc > 3) continue;
+        if (lc == 3 && g->cells[i] == g->current) continue;
 
         Ladder2Status st = ladder2_get_status(g, i);
         if (total < max) {

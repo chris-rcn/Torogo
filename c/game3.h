@@ -84,7 +84,7 @@ typedef struct Game3 {
     int32_t N;
     int32_t cap;          /* N * N */
     int32_t W;            /* bitset width: (cap + 31) >> 5 */
-    int32_t max_g;        /* 4 * cap + 4 */
+    int32_t max_g;        /* 5 * cap + 10 */
 
     /* Board state */
     int8_t  *cells;       /* [cap] */

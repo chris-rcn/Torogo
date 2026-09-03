@@ -61,7 +61,7 @@ class Game3 {
     // Bitset arrays
     const W = (cap + 31) >> 5;
     this._W = W;
-    const MAX_G = 4 * cap + 4;
+    const MAX_G = 5 * cap + 10;
     this._maxG = MAX_G;
     this._gc = new Uint8Array(MAX_G);       // group color
     this._sw = new Int32Array(MAX_G * W);   // stones bitset
@@ -827,6 +827,32 @@ class Game3 {
       }
     }
     return { count: lc, lib0, lib1 };
+  }
+
+  // As groupLibs2 but yields up to THREE liberties.  ladder2 needs all of them
+  // to let an attacker try every liberty of a 3-liberty group; groupLibs2 stops
+  // at two and would silently hide the third.
+  groupLibs3(idx) {
+    const gid = this._gid[idx];
+    if (gid === -1) return { count: 0, lib0: -1, lib1: -1, lib2: -1 };
+    const lc = this._ls[gid];
+    if (lc === 0) return { count: 0, lib0: -1, lib1: -1, lib2: -1 };
+    const W = this._W, lb = gid * W, cap = this.N * this.N;
+    let lib0 = -1, lib1 = -1, lib2 = -1, found = 0;
+    for (let wi = 0; wi < W && found < 3; wi++) {
+      let w = this._lw[lb + wi];
+      while (w && found < 3) {
+        const i = wi * 32 + (31 - Math.clz32(w & -w));
+        if (i < cap) {
+          if      (found === 0) lib0 = i;
+          else if (found === 1) lib1 = i;
+          else                  lib2 = i;
+          found++;
+        }
+        w &= w - 1;
+      }
+    }
+    return { count: lc, lib0, lib1, lib2 };
   }
 }
 

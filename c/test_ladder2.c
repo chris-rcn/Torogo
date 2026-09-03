@@ -178,7 +178,7 @@ static void test_status_invalid_too_many_libs(void) {
     fflush(stderr);
     dup2(saved_stderr, fileno(stderr));
     close(saved_stderr);
-    check("status invalid: valid=false on >2 libs", !st.valid);
+    check("status invalid: valid=false on >3 libs", !st.valid);
     g3_free(g);
 }
 
@@ -207,20 +207,25 @@ static void test_all_statuses_filters_by_libs(void) {
 
     Ladder2Result out[81];
     int32_t n = ladder2_get_all_statuses(g, /*min*/1, out, 81);
-    /* Expected qualifying groups:
+    /* Expected qualifying groups (B to move):
      *   - B@31 (1 lib)
-     *   - W@22 with 3 libs — too many, skipped.
-     *   - W@30 with 3 libs — skipped.
-     *   - W@32 with 3 libs — skipped.
-     *   - B@70 with 4 libs — skipped.
-     * So only B@31 should appear. */
-    check("all: returned 1 result", n == 1);
-    if (n >= 1) {
-        check("all: color BLACK", out[0].color == G3_BLACK);
-        check("all: gid matches B@31", out[0].gid == g->gid[31]);
-        check("all: status valid",     out[0].status.valid);
-        check("all: status lc=1",      out[0].status.lib_count == 1);
-        check("all: status lib0=40",   out[0].status.libs[0] == 40);
+     *   - W@22, W@30, W@32 with 3 libs each — attacker (B) to move, so they
+     *     now qualify under the 3-liberty entry gate.
+     *   - B@70 with 4 libs — too many, skipped. */
+    check("all: returned 4 results", n == 4);
+    int32_t bi = -1;
+    for (int32_t k = 0; k < n; k++) if (out[k].gid == g->gid[31]) bi = k;
+    check("all: B@31 present", bi >= 0);
+    if (bi >= 0) {
+        check("all: color BLACK", out[bi].color == G3_BLACK);
+        check("all: status valid",     out[bi].status.valid);
+        check("all: status lc=1",      out[bi].status.lib_count == 1);
+        check("all: status lib0=40",   out[bi].status.libs[0] == 40);
+    }
+    for (int32_t k = 0; k < n; k++) if (k != bi) {
+        check("all: 3-lib entry is WHITE", out[k].color == G3_WHITE);
+        check("all: 3-lib entry valid",    out[k].status.valid);
+        check("all: 3-lib entry lc=3",     out[k].status.lib_count == 3);
     }
     g3_free(g);
 }
@@ -245,12 +250,15 @@ static void test_all_statuses_two_lib_group(void) {
     play_seq(g, seq, 4);
     Ladder2Result out[81];
     int32_t n = ladder2_get_all_statuses(g, /*min*/1, out, 81);
-    /* Only B@40 qualifies (2 libs). */
-    check("all 2-lib: 1 result", n == 1);
-    if (n >= 1) {
-        check("all 2-lib: lc=2",      out[0].status.lib_count == 2);
-        check("all 2-lib: BLACK",     out[0].color == G3_BLACK);
-        check("all 2-lib: gid match", out[0].gid == g->gid[40]);
+    /* B@40 qualifies (2 libs); W@31 and W@39 (3 libs each) also qualify
+     * now — B is to move, so B is the attacker for the W groups. */
+    check("all 2-lib: 3 results", n == 3);
+    int32_t bi = -1;
+    for (int32_t k = 0; k < n; k++) if (out[k].gid == g->gid[40]) bi = k;
+    check("all 2-lib: B@40 present", bi >= 0);
+    if (bi >= 0) {
+        check("all 2-lib: lc=2",      out[bi].status.lib_count == 2);
+        check("all 2-lib: BLACK",     out[bi].color == G3_BLACK);
     }
     g3_free(g);
 }
@@ -274,7 +282,8 @@ static void test_all_statuses_buffer_too_small(void) {
     play_seq(g, seq, 6);
     Ladder2Result out[1];
     int32_t n = ladder2_get_all_statuses(g, /*min*/1, out, /*max*/0);
-    check("all: max=0 still reports total", n == 1);
+    /* B@31 plus the three 3-liberty W groups (attacker B to move). */
+    check("all: max=0 still reports total", n == 4);
     g3_free(g);
 }
 
