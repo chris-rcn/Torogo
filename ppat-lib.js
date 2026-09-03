@@ -259,7 +259,12 @@ function totalWeights(phaseCount, libCap = 2) {
 //   bit 4 — Feature 5: save string in new atari by extension (is self-atari)
 //   bit 5 — Feature 6: solve a new ko by capturing
 //   bit 6 — Feature 7: 2-point semeai (give atari to adjacent enemy)
-function extractFeatures(game, state, phaseCount = 1, libCap = 2) {
+//
+// skipLocal skips features 1-7 entirely (pre-scans, per-candidate mask, emit);
+// only the pattern feature is extracted.  Exactly equivalent for a model whose
+// local weights are all zero: scores are plain sums, so a zero weight
+// contributes nothing.
+function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -288,7 +293,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2) {
   const emC    = game._emptyCells;
   const ec     = game.emptyCount;
   const prev   = game.lastMove;
-  const hasPrev = prev !== PASS;
+  const hasPrev = !skipLocal && prev !== PASS;
   const myKoStone = game.koStone[cur + 1];
 
   // ── Pre-scan: build prevNeighborSet + find friendly strings in atari or with 2 libs ──
@@ -393,7 +398,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2) {
 
   // Feature 6 pre-scan
   let nKoSolve = 0;
-  if (myKoStone !== PASS) {
+  if (!skipLocal && myKoStone !== PASS) {
     const ks4 = myKoStone * 4;
     for (let d = 0; d < 4; d++) {
       const ni = nbr[ks4 + d];
@@ -539,7 +544,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2) {
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -585,7 +590,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -642,7 +647,17 @@ function loadWeights(pathOrObj) {
     console.error('ppat loadWeights: ladder models are no longer supported (ladder features removed)');
     return null;
   }
-  return { phaseCount: raw.phases || 1, weights: raw.weights, libCap };
+  // All-zero local weights (e.g. strip-ppat-local.js output) contribute
+  // nothing to any score, so inference skips extracting features 1-7 entirely.
+  // This detection must stay on the load path: a freshly initialised model's
+  // local weights are also all zero, and a trainer that skipped them would pin
+  // their gradients at zero forever.
+  const phases = raw.phases || 1;
+  let skipLocal = true;
+  for (let i = phases * nPat; i < raw.weights.length; i++)
+    if (raw.weights[i] !== 0) { skipLocal = false; break; }
+  if (skipLocal) console.log('ppat loadWeights: local weights all zero, skipping local feature extraction');
+  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal };
 }
 
 const PPatterns = {
