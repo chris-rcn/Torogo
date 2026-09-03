@@ -295,10 +295,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int pat_offset = phase * ppat_num_patterns;
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
 
-    /* TEMPORARY: the 7 hand-coded previous-move features are disabled —
-     * both the emission AND the pre-scan/mask work that feeds it, so this
-     * measures their true cost.  Uncomment all three blocks to restore.
-     * Weight slots for them still exist in every model; they never fire. */
+    /* The 7 hand-coded previous-move features are disabled — both the
+     * emission AND the pre-scan/mask work that feeds it.  A/B at equal time
+     * showed their information was not worth their ~28% extraction cost
+     * (no-local fine-tune beat the with-local standard in real play,
+     * 2026-09).  Weight slots for them still exist in every model; they
+     * never fire. */
 //    /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings.
 //     * KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
 //     * adjacent to prev, but don't verify that prev *caused* the atari. The spec says
@@ -445,10 +447,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         /* Pattern feature */
         st->feat[nf++] = pat_offset + ppat_canon_id[raw];
 
-        /* TEMPORARY: the 7 hand-coded previous-move features are disabled —
-         * both the emission AND the pre-scan/mask work that feeds it, so this
-         * measures their true cost.  Uncomment all three blocks to restore.
-         * Weight slots for them still exist in every model; they never fire. */
+        /* Previous-move features disabled — see the note at the pre-scan
+         * above. */
 //        /* ── Previous-move features ───────────────────────────────────────── */
 //        uint8_t mask = 0;
 //
