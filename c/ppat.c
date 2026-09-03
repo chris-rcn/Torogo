@@ -295,73 +295,77 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int pat_offset = phase * ppat_num_patterns;
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
 
-    /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings.
-     * KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
-     * adjacent to prev, but don't verify that prev *caused* the atari. The spec says
-     * "new atari" — the string should have had >1 liberty before the opponent's move.
-     * KNOWN LIMITATION (Feature 7): Same issue — we find strings with 2 liberties but
-     * don't verify prev reduced them to 2. */
-    int32_t atari_gids[8];
-    int n_atari = 0;
-    int32_t atari_libs[8];  /* single liberty for each atari group */
-
-    int32_t two_lib_gids[8];
-    int n_two = 0;
-
-    if (has_prev) {
-        int pb4 = prev * 4;
-        for (int d = 0; d < 4; d++) {
-            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 1;
-            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 1;
-            /* Only orthogonal neighbors can have had a liberty removed by prev. */
-            int32_t ni = g2_nbr[pb4 + d];
-            if (g->cells[ni] != cur) continue;
-            int32_t gid = g->gid[ni];
-            int32_t ls  = g->ls[gid];
-            if (ls == 1) {
-                bool dup = false;
-                for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
-                if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
-            } else if (ls == 2) {
-                bool dup = false;
-                for (int j = 0; j < n_two; j++) if (two_lib_gids[j] == gid) { dup = true; break; }
-                if (!dup && n_two < 8) two_lib_gids[n_two++] = gid;
-            }
-        }
-        /* Cache single liberty for each atari group */
-        for (int i = 0; i < n_atari; i++)
-            atari_libs[i] = first_lib(atari_gids[i], g);
-    }
-
-    /* Precompute save-by-capture cells */
-    int32_t sbc_cells[MAX_CAP];
-    int n_sbc = 0;
-    if (n_atari > 0)
-        n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
-
-    /* Precompute semeai candidates */
-    SemeaiCandidate sem_cells[MAX_CAP];
-    int n_sem = 0;
-    if (n_two > 0)
-        n_sem = precompute_semeai(two_lib_gids, n_two, g, foe, sem_cells);
-
-    /* Feature 6 pre-scan: find liberty cells that would capture an enemy group
-     * adjacent to our ko stone. */
-    int32_t ko_solve_libs[4];
-    int n_ko_solve = 0;
-    if (my_ko_stone != PASS) {
-        int ks4 = my_ko_stone * 4;
-        for (int d = 0; d < 4; d++) {
-            int32_t ni = g2_nbr[ks4 + d];
-            if (g->cells[ni] != foe) continue;
-            int32_t egid = g->gid[ni];
-            if (g->ls[egid] == 1) {
-                int32_t lib = first_lib(egid, g);
-                if (lib >= 0) ko_solve_libs[n_ko_solve++] = lib;
-            }
-        }
-    }
-
+    /* TEMPORARY: the 7 hand-coded previous-move features are disabled —
+     * both the emission AND the pre-scan/mask work that feeds it, so this
+     * measures their true cost.  Uncomment all three blocks to restore.
+     * Weight slots for them still exist in every model; they never fire. */
+//    /* Pre-scan: build prevNeighborSet + find atari/2-lib friendly strings.
+//     * KNOWN LIMITATION (Features 2–5): We find strings that currently have 1 liberty
+//     * adjacent to prev, but don't verify that prev *caused* the atari. The spec says
+//     * "new atari" — the string should have had >1 liberty before the opponent's move.
+//     * KNOWN LIMITATION (Feature 7): Same issue — we find strings with 2 liberties but
+//     * don't verify prev reduced them to 2. */
+//    int32_t atari_gids[8];
+//    int n_atari = 0;
+//    int32_t atari_libs[8];  /* single liberty for each atari group */
+//
+//    int32_t two_lib_gids[8];
+//    int n_two = 0;
+//
+//    if (has_prev) {
+//        int pb4 = prev * 4;
+//        for (int d = 0; d < 4; d++) {
+//            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 1;
+//            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 1;
+//            /* Only orthogonal neighbors can have had a liberty removed by prev. */
+//            int32_t ni = g2_nbr[pb4 + d];
+//            if (g->cells[ni] != cur) continue;
+//            int32_t gid = g->gid[ni];
+//            int32_t ls  = g->ls[gid];
+//            if (ls == 1) {
+//                bool dup = false;
+//                for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
+//                if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
+//            } else if (ls == 2) {
+//                bool dup = false;
+//                for (int j = 0; j < n_two; j++) if (two_lib_gids[j] == gid) { dup = true; break; }
+//                if (!dup && n_two < 8) two_lib_gids[n_two++] = gid;
+//            }
+//        }
+//        /* Cache single liberty for each atari group */
+//        for (int i = 0; i < n_atari; i++)
+//            atari_libs[i] = first_lib(atari_gids[i], g);
+//    }
+//
+//    /* Precompute save-by-capture cells */
+//    int32_t sbc_cells[MAX_CAP];
+//    int n_sbc = 0;
+//    if (n_atari > 0)
+//        n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
+//
+//    /* Precompute semeai candidates */
+//    SemeaiCandidate sem_cells[MAX_CAP];
+//    int n_sem = 0;
+//    if (n_two > 0)
+//        n_sem = precompute_semeai(two_lib_gids, n_two, g, foe, sem_cells);
+//
+//    /* Feature 6 pre-scan: find liberty cells that would capture an enemy group
+//     * adjacent to our ko stone. */
+//    int32_t ko_solve_libs[4];
+//    int n_ko_solve = 0;
+//    if (my_ko_stone != PASS) {
+//        int ks4 = my_ko_stone * 4;
+//        for (int d = 0; d < 4; d++) {
+//            int32_t ni = g2_nbr[ks4 + d];
+//            if (g->cells[ni] != foe) continue;
+//            int32_t egid = g->gid[ni];
+//            if (g->ls[egid] == 1) {
+//                int32_t lib = first_lib(egid, g);
+//                if (lib >= 0) ko_solve_libs[n_ko_solve++] = lib;
+//            }
+//        }
+//    }
+//
     int count = 0;
     int nf = 0;  /* index into st->feat[] */
 
@@ -441,77 +445,81 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         /* Pattern feature */
         st->feat[nf++] = pat_offset + ppat_canon_id[raw];
 
-        /* ── Previous-move features ───────────────────────────────────────── */
-        uint8_t mask = 0;
-
-        /* Feature 1: 8-neighborhood of prev */
-        if (has_prev && st->prev_neighbor_set[idx])
-            mask = 1;
-
-        /* Features 2–5: save atari by capture or extension.
-         * Capture (F2/3) takes priority over extension (F4/5). */
-        if (n_atari > 0) {
-            bool feat2 = false;
-            for (int si = 0; si < n_sbc; si++) {
-                if (sbc_cells[si] == idx) { feat2 = true; break; }
-            }
-            bool feat4 = false;
-            if (!feat2) {
-                for (int i = 0; i < n_atari; i++) {
-                    if (atari_libs[i] == idx) { feat4 = true; break; }
-                }
-            }
-            if (feat2 || feat4) {
-                bool sa = false;
-                if (!not_self_atari_cheap(idx, b4, g, cur)) {
-                    Game2 cg;
-                    g2_clone(&cg, g);
-                    g2_play(&cg, idx);
-                    int32_t cid = cg.gid[idx];
-                    sa = (cid != -1 && cg.ls[cid] == 1);
-                }
-                if (feat2) mask |= sa ? 4 : 2;
-                if (feat4) mask |= sa ? 16 : 8;
-            }
-        }
-
-        /* Feature 7: 2-point semeai. Only fires if the atari likely kills. */
-        if (n_sem > 0) {
-            for (int si = 0; si < n_sem; si++) {
-                if (sem_cells[si].cell == idx &&
-                    !opponent_can_save(idx, sem_cells[si].egid, g, foe)) {
-                    mask |= 64;
-                    break;
-                }
-            }
-        }
-
-        /* Feature 6: ko-solve capture */
-        for (int ki = 0; ki < n_ko_solve; ki++) {
-            if (idx == ko_solve_libs[ki]) { mask |= 32; break; }
-        }
-
-        /* Bit 0 piggyback: active for all features 2-7 */
-        if (mask & 0x7E) mask |= 1;
-
-        /* Emit prev feature keys */
-        for (int b = 0; b < 7; b++)
-            if (mask & (1 << b)) st->feat[nf++] = prev_offset + b;
-
+        /* TEMPORARY: the 7 hand-coded previous-move features are disabled —
+         * both the emission AND the pre-scan/mask work that feeds it, so this
+         * measures their true cost.  Uncomment all three blocks to restore.
+         * Weight slots for them still exist in every model; they never fire. */
+//        /* ── Previous-move features ───────────────────────────────────────── */
+//        uint8_t mask = 0;
+//
+//        /* Feature 1: 8-neighborhood of prev */
+//        if (has_prev && st->prev_neighbor_set[idx])
+//            mask = 1;
+//
+//        /* Features 2–5: save atari by capture or extension.
+//         * Capture (F2/3) takes priority over extension (F4/5). */
+//        if (n_atari > 0) {
+//            bool feat2 = false;
+//            for (int si = 0; si < n_sbc; si++) {
+//                if (sbc_cells[si] == idx) { feat2 = true; break; }
+//            }
+//            bool feat4 = false;
+//            if (!feat2) {
+//                for (int i = 0; i < n_atari; i++) {
+//                    if (atari_libs[i] == idx) { feat4 = true; break; }
+//                }
+//            }
+//            if (feat2 || feat4) {
+//                bool sa = false;
+//                if (!not_self_atari_cheap(idx, b4, g, cur)) {
+//                    Game2 cg;
+//                    g2_clone(&cg, g);
+//                    g2_play(&cg, idx);
+//                    int32_t cid = cg.gid[idx];
+//                    sa = (cid != -1 && cg.ls[cid] == 1);
+//                }
+//                if (feat2) mask |= sa ? 4 : 2;
+//                if (feat4) mask |= sa ? 16 : 8;
+//            }
+//        }
+//
+//        /* Feature 7: 2-point semeai. Only fires if the atari likely kills. */
+//        if (n_sem > 0) {
+//            for (int si = 0; si < n_sem; si++) {
+//                if (sem_cells[si].cell == idx &&
+//                    !opponent_can_save(idx, sem_cells[si].egid, g, foe)) {
+//                    mask |= 64;
+//                    break;
+//                }
+//            }
+//        }
+//
+//        /* Feature 6: ko-solve capture */
+//        for (int ki = 0; ki < n_ko_solve; ki++) {
+//            if (idx == ko_solve_libs[ki]) { mask |= 32; break; }
+//        }
+//
+//        /* Bit 0 piggyback: active for all features 2-7 */
+//        if (mask & 0x7E) mask |= 1;
+//
+//        /* Emit prev feature keys */
+//        for (int b = 0; b < 7; b++)
+//            if (mask & (1 << b)) st->feat[nf++] = prev_offset + b;
+//
         count++;
     }
 
     st->feat_start[count] = nf;
     st->count = count;
 
-    /* Clear prevNeighborSet for reuse */
-    if (has_prev) {
-        int pb4 = prev * 4;
-        for (int d = 0; d < 4; d++) {
-            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 0;
-            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 0;
-        }
-    }
+//    /* Clear prevNeighborSet for reuse */
+//    if (has_prev) {
+//        int pb4 = prev * 4;
+//        for (int d = 0; d < 4; d++) {
+//            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 0;
+//            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 0;
+//        }
+//    }
 }
 
 /* ── Policy move ───────────────────────────────────────────────────────────── */
