@@ -34,7 +34,7 @@
 //                 (midgame-weighted).
 //   PPAT_DATA     ppat weight file                 (default root ppat-data.js)
 //   PPAT_MIN_PHASE  uniform playout moves below this board fullness
-//                 (default 0 = ppat everywhere)
+//                 (default 0.6, matching the standard playout)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -54,7 +54,7 @@ function create(cfg) {
   // Hard failure, not a fallback: this agent exists to measure a ppat model, so
   // silently running uniform playouts would produce a meaningless comparison.
   if (!model) throw new Error(`mc-ppat: cannot load ppat weights from ${ppatPath}`);
-  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
+  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
   console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
               (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : `${PLAYOUTS} playouts/move`) +
@@ -126,11 +126,23 @@ function create(cfg) {
     return { move: best, info: `wr=${bestV.toFixed(3)} of ${n}x${per}` };
   }
 
-  return { getMove };
+  // Position value oracle: mean outcome of PLAYOUTS standard playouts from
+  // the position itself (no candidate machinery).  Returns P(BLACK wins),
+  // matching the valueB convention (gen-agent-evals, ref-vlibpat, ...).
+  function valueB(game, options = {}) {
+    const game2 = game.cells ? game : game.toGame2();
+    if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
+    const r = options.rng || rng;
+    let wins = 0;
+    for (let p = 0; p < PLAYOUTS; p++) wins += playout(game2.clone(), r);
+    return wins / PLAYOUTS;
+  }
+
+  return { getMove, valueB };
 }
 
 // Lazy default instance for direct-require callers.
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
 
-module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
+module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), valueB: (g, o) => _def().valueB(g, o) };
