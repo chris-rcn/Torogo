@@ -17,33 +17,42 @@ const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 //  +1 .. +maxLibs = BLACK stone with that many liberties (capped)
 //  -1 .. -maxLibs = WHITE stone with that many liberties (capped)
 
-// ── D4 symmetry permutations ─────────────────────────────────────────────────
 
-// 2×2 grid, row-major: TL=0, TR=1, BL=2, BR=3
-const PERMS_2x2 = [
-  [0, 1, 2, 3],   // Identity
-  [2, 0, 3, 1],   // Rot90CW:   new(r,c) ← old(N-1-c, r), N=2
-  [3, 2, 1, 0],   // Rot180
-  [1, 3, 0, 2],   // Rot270CW
-  [1, 0, 3, 2],   // FlipH:     new(r,c) ← old(r, N-1-c)
-  [2, 3, 0, 1],   // FlipV
-  [0, 2, 1, 3],   // TransposeMD
-  [3, 1, 2, 0],   // TransposeAD
-];
+// ── X-hash (hpatterns' scheme) ────────────────────────────────────────────────
+// Symmetry-invariant hierarchical "X" hash, replacing the min-over-16-
+// transforms canonicalisation: uh(a,b) is an unordered combiner; a 2×2
+// window hashes its two diagonals unordered, which is invariant to exactly
+// D4; 3×3 recurses on its four corner 2×2 sub-windows in the same X
+// arrangement, and 4×4 on its four corner 3×3 sub-windows (deliberately
+// lossy above 2×2 — distinct shapes may share weights, the trade hpatterns
+// measured at ~83% key fidelity for 3-state 3×3).
+// Colour canonicalisation compares the hash of the board against the hash of
+// the colour-inverted board: equal → colour-twin (zero value by symmetry,
+// dropped — all-empty and self-inverse-under-D4 patterns); else key = min,
+// polarity says which colouring won.  Leaves enter as raw + maxLibs + 1 (≥ 1: uh has an
+// absorbing element at -1, and 0 is unsafe as a map key downstream).
+function uh(a, b) {
+  return (1234567 + a + b + Math.imul(a, b)) | 0;
+}
+function xh4(tl, tr, bl, br) {
+  return uh(uh(tl, br), uh(tr, bl));
+}
+// Fold the spec tag ((maxLibs << 3) | size) into a window hash so different
+// spec spaces cannot collide in the shared weight map.
+function mixTag(h, tag) {
+  return uh(h, tag);
+}
 
-// 3×3 grid, row-major: 0=TL, 4=center, 8=BR
-const PERMS_3x3 = [
-  [0, 1, 2, 3, 4, 5, 6, 7, 8],   // Identity
-  [6, 3, 0, 7, 4, 1, 8, 5, 2],   // Rot90CW
-  [8, 7, 6, 5, 4, 3, 2, 1, 0],   // Rot180
-  [2, 5, 8, 1, 4, 7, 0, 3, 6],   // Rot270CW
-  [2, 1, 0, 5, 4, 3, 8, 7, 6],   // FlipH
-  [6, 7, 8, 3, 4, 5, 0, 1, 2],   // FlipV
-  [0, 3, 6, 1, 4, 7, 2, 5, 8],   // TransposeMD
-  [8, 5, 2, 7, 4, 1, 6, 3, 0],   // TransposeAD
-];
-
-// 4×4 grid removed; only sizes 1, 2, 3 are supported.
+// Leaf mapping: leaf(raw) is chosen so that 1 + leaf is PRIME.  uh's core is
+// (1+a)(1+b), so unordered leaf pairs at the 2×2 level collide exactly when
+// products coincide (3·8 = 4·6 ...): with the naive raw+ml+1 mapping the 2×2
+// layer lost 12-35% of distinct orbits at maxLibs >= 2.  Prime leaves make
+// pair products unique by factorisation — measured 2×2 fidelity 100% at every
+// alphabet, and 3×3 fidelity 87.7% -> 94.7% (ml=2), 91.4% -> 97.2% (ml=3).
+// Index: raw + maxLibs ∈ [0, 2·maxLibs]; supports maxLibs <= 15.
+const _PRIMES = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
+                 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127];
+const _leafTab = _PRIMES.map(p => p - 1);   // leaf = prime - 1, so 1+leaf is prime
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
@@ -105,44 +114,16 @@ function _cellLibCounts(game, out) {
 }
 let _libStack = new Int32Array(0), _libSeen = new Int32Array(0),
     _libMark = new Int32Array(0), _libGroup = new Int32Array(0);
+// deltaZ scratch (module-level, reused; stamped arrays reset on wrap).
+let _dzStamp = 0;
+let _dzMark2 = new Int32Array(0), _dzMark3 = new Int32Array(0), _dzMark4 = new Int32Array(0),
+    _dzMarkC = new Int32Array(0);
+let _dzOvN = new Int32Array(0), _dzOvI = new Int32Array(0);       // 2×2 hash overrides
+let _dzOv3N = new Int32Array(0), _dzOv3I = new Int32Array(0);     // 3×3 hash overrides
+let _dzLeafN = new Int32Array(0), _dzLeafI = new Int32Array(0);   // leaf overrides
+let _dzUnion = new Int32Array(0);
 let _libCounts = new Int32Array(0);
 let _libStampVal = 0;
-
-// Given an array of raw cell states and a set of D4 permutation arrays,
-// returns { key, polarity } where key is the minimum 
-// over all 16 transforms (8 D4 × 2 color-flips), and polarity is +1 or -1
-// (whether the minimum-achieving transform used the original or flipped cells).
-// Returns null if all cells are empty.
-function canonicalize(cells, perms, mixer) {
-  const n = perms[0].length;
-
-  // A pattern is color-symmetric if some D4 transform maps each cell to its
-  // negation: cells[perm[i]] === -cells[i] for all i.  Such patterns are
-  // zero-value by symmetry (neither colour has an advantage), so return null.
-  // Also handles all-empty patterns (0 === -0).
-  for (let p = 0; p < perms.length; p++) {
-    const perm = perms[p];
-    let sym = true;
-    for (let i = 0; i < n; i++) { if (cells[perm[i]] !== -cells[i]) { sym = false; break; } }
-    if (sym) return null;
-  }
-
-  // Compute the key as the minimum hash over all 16 transforms (8 D4 × 2 color-flips).
-  let minPos = Infinity, minNeg = Infinity;
-  for (let p = 0; p < perms.length; p++) {
-    const perm = perms[p];
-    let valPos = mixer + 17, valNeg = mixer + 17;
-    for (let i = 0; i < n; i++) {
-      valPos = (valPos * mixer + cells[perm[i]] + 13) | 0;
-      valNeg = (valNeg * mixer - cells[perm[i]] + 13) | 0;
-    }
-    if (valPos < minPos) minPos = valPos;
-    if (valNeg < minNeg) minNeg = valNeg;
-  }
-
-  return minPos < minNeg ? { key: minPos, polarity:  1 }
-                         : { key: minNeg, polarity: -1 };
-}
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
 
@@ -160,62 +141,19 @@ function prepareSpecs(specs) {
   }
   const sortedMaxLibs = [...byMaxLibs.keys()].sort((a, b) => b - a);
 
-  const lut2 = new Map();
-  const lut3 = new Map();
-  for (const maxLibs of sortedMaxLibs) {
-    const sizes = byMaxLibs.get(maxLibs);
-    const base  = 2 * maxLibs + 1;
 
-    if (sizes.includes(2)) {
-      const mix  = 131 * maxLibs;
-      const n    = base ** 4;
-      const keys = new Int32Array(n);
-      const pols = new Int8Array(n);
-      const c    = [0, 0, 0, 0];
-      for (let i = 0; i < n; i++) {
-        let tmp = i;
-        for (let j = 0; j < 4; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
-        const r = canonicalize(c, PERMS_2x2, mix);
-        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-      }
-      const b2 = base * base, b3 = b2 * base;
-      lut2.set(maxLibs, { keys, pols, base, b2, b3, ml: maxLibs });
-    }
-
-    if (sizes.includes(3) && base ** 9 <= 4000000) {
-      const mix  = 537 * maxLibs;
-      const n    = base ** 9;
-      const keys = new Int32Array(n);
-      const pols = new Int8Array(n);
-      const c    = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-      for (let i = 0; i < n; i++) {
-        let tmp = i;
-        for (let j = 0; j < 9; j++) { c[j] = (tmp % base) - maxLibs; tmp = (tmp / base) | 0; }
-        const r = canonicalize(c, PERMS_3x3, mix);
-        if (r !== null) { keys[i] = r.key; pols[i] = r.polarity; }
-      }
-      const b2 = base*base, b3 = b2*base, b4 = b3*base, b5 = b4*base,
-            b6 = b5*base,   b7 = b6*base, b8 = b7*base;
-      lut3.set(maxLibs, { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml: maxLibs });
-    }
-
-    if (sizes.includes(4)) {
-      throw new Error('vpatterns: size 4 is no longer supported');
-    }
-  }
 
   let totalSizes = 0;
   for (const sizes of byMaxLibs.values()) totalSizes += sizes.length;
 
-  return { byMaxLibs, sortedMaxLibs, lut2, lut3, totalSizes };
+  return { byMaxLibs, sortedMaxLibs, totalSizes };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
 //
 // Optimisations vs calling pattern1/2/3 individually:
 //   - Raw cell states are precomputed once per unique maxLibs value.
-//   - size:2 and size:3 use precomputed lookup tables (built by prepareSpecs) to
-//     replace the 8-permutation canonicalize loop with a single array index.
+//   - size:2 and size:3 hash via whole-board X-hash planes (see above).
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
 function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const cells = game.cells;
@@ -226,7 +164,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const maxF   = cap * prepSpecs.totalSizes;
   const outKeys = new Int32Array(maxF);
   const outPols = new Int8Array(maxF);
-  const outTags = new Int8Array(maxF);   // spec tag: (maxLibs << 2) | size
+  const outTags = new Int8Array(maxF);   // spec tag: (maxLibs << 3) | size
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
@@ -239,9 +177,13 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     cells[nextMove] = game.current;
   }
 
-  const { byMaxLibs, sortedMaxLibs, lut2, lut3 } = prepSpecs;
+  const { byMaxLibs, sortedMaxLibs } = prepSpecs;
 
-  const buf = [0, 0, 0, 0, 0, 0, 0, 0, 0];  // scratch for fallback canonicalize (up to 3×3)
+  // X-hash planes: stored per prepSpecs per maxLibs so deltaZ can read the
+  // base position after extraction (the hpatterns buffer contract: the caller
+  // must have run extractFeatures on the current position, and nothing may
+  // overwrite the planes between that call and deltaZ).
+  const planes = prepSpecs._planes || (prepSpecs._planes = new Map());
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
@@ -271,6 +213,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do1   = sizes.includes(1);
     const do2   = sizes.includes(2);
     const do3   = sizes.includes(3);
+    const do4   = sizes.includes(4);
 
     if (do1) {
       const k1base = 131 * maxLibs;
@@ -280,76 +223,81 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           const libs = s > 0 ? s : -s;
           outKeys[count] = libs + k1base;
           outPols[count] = s > 0 ? 1 : -1;
-          outTags[count] = (maxLibs << 2) | 1;
+          outTags[count] = (maxLibs << 3) | 1;
           count++;
         }
       }
     }
 
-    if (do2) {
-      const lut = lut2.get(maxLibs);
-      if (lut) {
-        const { keys, pols, base, b2, b3, ml } = lut;
-        // Toroidal 2×2 window: wrap row and column independently.
-        for (let y = 0; y < N; y++) {
-          const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
-          for (let x = 0; x < N; x++) {
-            const x1 = x + 1 < N ? x + 1 : 0;
-            const li = (raw[r0+x]+ml) + base*(raw[r0+x1]+ml) + b2*(raw[r1+x]+ml) + b3*(raw[r1+x1]+ml);
-            const pol = pols[li];
-            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; outTags[count] = (maxLibs << 2) | 2; count++; }
-          }
-        }
-      } else {
-        const mix2 = 131 * maxLibs;
-        for (let y = 0; y < N; y++) {
-          const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
-          for (let x = 0; x < N; x++) {
-            const x1 = x + 1 < N ? x + 1 : 0;
-            buf[0] = raw[r0+x]; buf[1] = raw[r0+x1];
-            buf[2] = raw[r1+x]; buf[3] = raw[r1+x1];
-            const r = canonicalize(buf, PERMS_2x2, mix2);
-            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; outTags[count] = (maxLibs << 2) | 2; count++; }
-          }
+    if (do2 || do3 || do4) {
+      let pl = planes.get(maxLibs);
+      if (!pl || pl.lN.length < cap) {
+        pl = { lN: new Int32Array(cap), lI: new Int32Array(cap),
+               h2N: new Int32Array(cap), h2I: new Int32Array(cap),
+               h3N: new Int32Array(cap), h3I: new Int32Array(cap) };
+        planes.set(maxLibs, pl);
+      }
+      const lN = pl.lN, lI = pl.lI, h2N = pl.h2N, h2I = pl.h2I;
+      // Leaf planes: the prime mapping over raw (normal) and -raw (colour-
+      // inverted).  Then the 2×2 X-hash plane over both colourings.
+      const off = maxLibs;
+      for (let i = 0; i < cap; i++) { lN[i] = _leafTab[raw[i] + off]; lI[i] = _leafTab[off - raw[i]]; }
+      for (let y = 0; y < N; y++) {
+        const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
+        for (let x = 0; x < N; x++) {
+          const x1 = x + 1 < N ? x + 1 : 0;
+          const i = r0 + x;
+          h2N[i] = xh4(lN[r0+x], lN[r0+x1], lN[r1+x], lN[r1+x1]);
+          h2I[i] = xh4(lI[r0+x], lI[r0+x1], lI[r1+x], lI[r1+x1]);
         }
       }
-    }
-
-    if (do3) {
-      const lut = lut3.get(maxLibs);
-      if (false && lut) {
-        const { keys, pols, base, b2, b3, b4, b5, b6, b7, b8, ml } = lut;
-        // Toroidal 3×3 window: wrap each of the 3 rows and 3 columns independently.
+      if (do2) {
+        const tag = (maxLibs << 3) | 2;
+        for (let i = 0; i < cap; i++) {
+          const kN = h2N[i], kI = h2I[i];
+          if (kN === kI) continue;   // colour-twin (incl. all-empty): zero value
+          outKeys[count] = mixTag(kN < kI ? kN : kI, tag);
+          outPols[count] = kN < kI ? 1 : -1;
+          outTags[count] = tag;
+          count++;
+        }
+      }
+      if (do3 || do4) {
+        // 3×3 = X of the four corner 2×2 sub-windows (anchors i, right, down,
+        // down-right), exactly hpatterns' recursion; the plane is stored so
+        // 4×4 (and deltaZ) can read it.
+        const h3N = pl.h3N, h3I = pl.h3I;
+        const tag = (maxLibs << 3) | 3;
         for (let y = 0; y < N; y++) {
-          const r0 = y*N, r1 = (y+1<N?y+1:y+1-N)*N, r2 = (y+2<N?y+2:y+2-N)*N;
+          const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
           for (let x = 0; x < N; x++) {
-            const x1 = x+1<N?x+1:x+1-N, x2 = x+2<N?x+2:x+2-N;
-            const li =
-              (raw[r0+x]       +ml) +
-              base*(raw[r0+x1] +ml) +
-              b2  *(raw[r0+x2] +ml) +
-              b3  *(raw[r1+x]  +ml) +
-              b4  *(raw[r1+x1] +ml) +
-              b5  *(raw[r1+x2] +ml) +
-              b6  *(raw[r2+x]  +ml) +
-              b7  *(raw[r2+x1] +ml) +
-              b8  *(raw[r2+x2] +ml);
-            const pol = pols[li];
-            if (pol !== 0) { outKeys[count] = keys[li]; outPols[count] = pol; outTags[count] = (maxLibs << 2) | 3; count++; }
+            const x1 = x + 1 < N ? x + 1 : 0;
+            const i = r0 + x;
+            const kN = xh4(h2N[r0+x], h2N[r0+x1], h2N[r1+x], h2N[r1+x1]);
+            const kI = xh4(h2I[r0+x], h2I[r0+x1], h2I[r1+x], h2I[r1+x1]);
+            h3N[i] = kN; h3I[i] = kI;
+            if (!do3 || kN === kI) continue;
+            outKeys[count] = mixTag(kN < kI ? kN : kI, tag);
+            outPols[count] = kN < kI ? 1 : -1;
+            outTags[count] = tag;
+            count++;
           }
         }
-      } else {
-        const mix3 = 537 * maxLibs;
-        for (let y = 0; y < N; y++) {
-          const r0 = y*N, r1 = (y+1<N?y+1:y+1-N)*N, r2 = (y+2<N?y+2:y+2-N)*N;
-          for (let x = 0; x < N; x++) {
-            const x1 = x+1<N?x+1:x+1-N, x2 = x+2<N?x+2:x+2-N;
-            buf[0] = raw[r0+x];
-            buf[1] = raw[r0+x1]; buf[2] = raw[r0+x2];
-            buf[3] = raw[r1+x]; buf[4] = raw[r1+x1]; buf[5] = raw[r1+x2];
-            buf[6] = raw[r2+x]; buf[7] = raw[r2+x1]; buf[8] = raw[r2+x2];
-            const r = canonicalize(buf, PERMS_3x3, mix3);
-            if (r !== null) { outKeys[count] = r.key; outPols[count] = r.polarity; outTags[count] = (maxLibs << 2) | 3; count++; }
+        if (do4) {
+          // 4×4 = X of the four corner 3×3 sub-windows.
+          const tag4 = (maxLibs << 3) | 4;
+          for (let y = 0; y < N; y++) {
+            const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
+            for (let x = 0; x < N; x++) {
+              const x1 = x + 1 < N ? x + 1 : 0;
+              const kN = xh4(h3N[r0+x], h3N[r0+x1], h3N[r1+x], h3N[r1+x1]);
+              const kI = xh4(h3I[r0+x], h3I[r0+x1], h3I[r1+x], h3I[r1+x1]);
+              if (kN === kI) continue;
+              outKeys[count] = mixTag(kN < kI ? kN : kI, tag4);
+              outPols[count] = kN < kI ? 1 : -1;
+              outTags[count] = tag4;
+              count++;
+            }
           }
         }
       }
@@ -365,6 +313,247 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   return { keys: outKeys, pols: outPols, tags: outTags, count, val: 0.5 };
 }
 
+// ── Speculative-incremental 1-ply evaluation ─────────────────────────────────
+//
+// deltaZ(game, prepSpecs, weights, move) → Δz for placing game.current at
+// `move`, reading the base-position planes extractFeatures left on prepSpecs
+// (the caller must have extracted the CURRENT position immediately before,
+// with this prepSpecs, and not extracted anything else since).  V(after) =
+// σ(z_base + Δz), with z_base from evaluateFeatures (features.z).
+//
+// Liberty bookkeeping: the pre-move incremental structures (game._gid/_ls/
+// _lw/_sw) exactly describe the base position, and the post-move liberty
+// counts follow analytically — an adjacent enemy group loses the placed
+// point (ls-1); the placed/merged friendly group's count is the popcount of
+// the merged liberty-bitset union minus the placed point.  A cell's raw
+// value only changes when its group's CAPPED count changes, so groups far
+// from the maxLibs cap contribute nothing however large they are.  Captures
+// dirty far more (removed stones + their neighbours' liberties): NaN, and
+// the caller falls back to full extraction — on a SEPARATE prepSpecs, so
+// the base planes here survive (see vpatsearch).
+function deltaZ(game, prepSpecs, weights, move) {
+  if (move === PASS) return 0;
+  if (game.captureList(move).length > 0) return NaN;
+  const N = game.N, cap = N * N, cells = game.cells, cur = game.current;
+  const gid = game._gid, ls = game._ls, lw = game._lw, sw = game._sw, W = game._W;
+  const nbr = game._nbr;
+
+  if (_dzMark2.length < cap) {
+    _dzMark2 = new Int32Array(cap); _dzMark3 = new Int32Array(cap); _dzMark4 = new Int32Array(cap);
+    _dzMarkC = new Int32Array(cap);
+    _dzOvN = new Int32Array(cap); _dzOvI = new Int32Array(cap);
+    _dzOv3N = new Int32Array(cap); _dzOv3I = new Int32Array(cap);
+    _dzLeafN = new Int32Array(cap); _dzLeafI = new Int32Array(cap);
+    _dzDirtyCells = new Int32Array(cap); _dzA2 = new Int32Array(cap); _dzA3 = new Int32Array(cap);
+  }
+  if (_dzUnion.length < W) _dzUnion = new Int32Array(W);
+  if (_dzStamp > 0x7ffffff0) { _dzMark2.fill(0); _dzMark3.fill(0); _dzMark4.fill(0); _dzMarkC.fill(0); _dzStamp = 0; }
+
+  // Adjacent groups (deduped) and the placed/merged group's liberty count.
+  const b4 = move * 4;
+  let nF = 0, nE = 0;
+  const fG = _dzFG, eG = _dzEG;
+  const un = _dzUnion;
+  for (let w = 0; w < W; w++) un[w] = 0;
+  for (let d = 0; d < 4; d++) {
+    const nb = nbr[b4 + d];
+    const c = cells[nb];
+    if (c === 0) { un[nb >> 5] |= 1 << (nb & 31); continue; }
+    const g = gid[nb];
+    if (c === cur) {
+      let dup = false;
+      for (let j = 0; j < nF; j++) if (fG[j] === g) { dup = true; break; }
+      if (!dup) fG[nF++] = g;
+    } else {
+      let dup = false;
+      for (let j = 0; j < nE; j++) if (eG[j] === g) { dup = true; break; }
+      if (!dup) eG[nE++] = g;
+    }
+  }
+  for (let j = 0; j < nF; j++) {
+    const b = fG[j] * W;
+    for (let w = 0; w < W; w++) un[w] |= lw[b + w];
+  }
+  un[move >> 5] &= ~(1 << (move & 31));
+  let newFLibs = 0;
+  for (let w = 0; w < W; w++) {
+    let v = un[w];
+    v = v - ((v >>> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+    newFLibs += (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+  }
+
+  const { byMaxLibs, sortedMaxLibs } = prepSpecs;
+  const planes = prepSpecs._planes;
+  let delta = 0;
+
+  for (const maxLibs of sortedMaxLibs) {
+    const sizes = byMaxLibs.get(maxLibs);
+    const do1 = sizes.includes(1), do2 = sizes.includes(2), do3 = sizes.includes(3),
+          do4 = sizes.includes(4);
+    const off = maxLibs;
+
+    // ── Dirty cells for this maxLibs: the placed stone, plus every stone of a
+    // group whose capped liberty count changes.  Leaf overrides + size-1 Δ.
+    const cellStamp = ++_dzStamp;
+    const k1base = 131 * maxLibs;
+    let nDirty = 0;
+    const dirty = _dzDirtyCells;
+    const addDirty = (i, newRaw, oldRaw) => {
+      _dzMarkC[i] = cellStamp;
+      _dzLeafN[i] = _leafTab[newRaw + off];
+      _dzLeafI[i] = _leafTab[off - newRaw];
+      dirty[nDirty++] = i;
+      if (do1) {
+        if (oldRaw !== 0) {
+          const w = weights.get((oldRaw > 0 ? oldRaw : -oldRaw) + k1base) ?? 0;
+          delta -= (oldRaw > 0 ? 1 : -1) * w;
+        }
+        if (newRaw !== 0) {
+          const w = weights.get((newRaw > 0 ? newRaw : -newRaw) + k1base) ?? 0;
+          delta += (newRaw > 0 ? 1 : -1) * w;
+        }
+      }
+    };
+    const capd = (v) => v < maxLibs ? v : maxLibs;
+    // The placed stone: 0 → cur * min(newFLibs, ml).
+    addDirty(move, cur * capd(newFLibs), 0);
+    // Friendly groups: min(ls, ml) → min(newFLibs, ml).
+    for (let j = 0; j < nF; j++) {
+      const g = fG[j];
+      const oldC = capd(ls[g]), newC = capd(newFLibs);
+      if (oldC === newC) continue;
+      const b = g * W;
+      for (let w = 0; w < W; w++) {
+        let v = sw[b + w];
+        while (v) {
+          const i = (w << 5) + (31 - Math.clz32(v & -v));
+          if (i < cap) addDirty(i, cur * newC, cur * oldC);
+          v &= v - 1;
+        }
+      }
+    }
+    // Enemy groups: min(ls, ml) → min(ls - 1, ml).
+    for (let j = 0; j < nE; j++) {
+      const g = eG[j];
+      const oldC = capd(ls[g]), newC = capd(ls[g] - 1);
+      if (oldC === newC) continue;
+      const b = g * W;
+      for (let w = 0; w < W; w++) {
+        let v = sw[b + w];
+        while (v) {
+          const i = (w << 5) + (31 - Math.clz32(v & -v));
+          if (i < cap) addDirty(i, -cur * newC, -cur * oldC);
+          v &= v - 1;
+        }
+      }
+    }
+
+    if (!(do2 || do3 || do4)) continue;
+    const pl = planes.get(maxLibs);
+    const lN = pl.lN, lI = pl.lI, h2N = pl.h2N, h2I = pl.h2I;
+    const leafN = (i) => _dzMarkC[i] === cellStamp ? _dzLeafN[i] : lN[i];
+    const leafI = (i) => _dzMarkC[i] === cellStamp ? _dzLeafI[i] : lI[i];
+
+    // ── Affected 2×2 anchors: the 4 windows containing each dirty cell.
+    const a2Stamp = ++_dzStamp;
+    let nA2 = 0;
+    const a2 = _dzA2;
+    const tag2 = (maxLibs << 3) | 2;
+    for (let di = 0; di < nDirty; di++) {
+      const i = dirty[di];
+      const r = (i / N) | 0, c = i % N;
+      const rU = r === 0 ? N - 1 : r - 1, cL = c === 0 ? N - 1 : c - 1;
+      const anchors4 = [r * N + c, r * N + cL, rU * N + c, rU * N + cL];
+      for (let k = 0; k < 4; k++) {
+        const a = anchors4[k];
+        if (_dzMark2[a] === a2Stamp) continue;
+        _dzMark2[a] = a2Stamp;
+        a2[nA2++] = a;
+      }
+    }
+    for (let k = 0; k < nA2; k++) {
+      const a = a2[k];
+      const r = (a / N) | 0, c = a % N;
+      const rD = (r + 1 < N ? r + 1 : 0) * N, r0 = r * N;
+      const cR = c + 1 < N ? c + 1 : 0;
+      const kN = xh4(leafN(r0 + c), leafN(r0 + cR), leafN(rD + c), leafN(rD + cR));
+      const kI = xh4(leafI(r0 + c), leafI(r0 + cR), leafI(rD + c), leafI(rD + cR));
+      _dzOvN[a] = kN; _dzOvI[a] = kI;   // valid for anchors marked a2Stamp
+      if (do2) {
+        const oN = h2N[a], oI = h2I[a];
+        if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag2)) ?? 0);
+        if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag2)) ?? 0);
+      }
+    }
+
+    if (!(do3 || do4)) continue;
+    // ── Affected 3×3 anchors: the 4 windows whose corner children include an
+    // affected 2×2 anchor.  New hashes are recorded as overrides for level 4;
+    // old hashes come from the stored h3 planes.
+    const h3N = pl.h3N, h3I = pl.h3I;
+    const a3Stamp = ++_dzStamp;
+    let nA3 = 0;
+    const a3 = _dzA3;
+    const tag3 = (maxLibs << 3) | 3;
+    const h2at = (i) => _dzMark2[i] === a2Stamp ? _dzOvN[i] : h2N[i];
+    const h2atI = (i) => _dzMark2[i] === a2Stamp ? _dzOvI[i] : h2I[i];
+    for (let k = 0; k < nA2; k++) {
+      const i = a2[k];
+      const r = (i / N) | 0, c = i % N;
+      const rU = r === 0 ? N - 1 : r - 1, cL = c === 0 ? N - 1 : c - 1;
+      const anchors4 = [r * N + c, r * N + cL, rU * N + c, rU * N + cL];
+      for (let m = 0; m < 4; m++) {
+        const a = anchors4[m];
+        if (_dzMark3[a] === a3Stamp) continue;
+        _dzMark3[a] = a3Stamp;
+        a3[nA3++] = a;
+        const ar = (a / N) | 0, ac = a % N;
+        const rD = (ar + 1 < N ? ar + 1 : 0) * N, r0 = ar * N;
+        const cR = ac + 1 < N ? ac + 1 : 0;
+        const oN = h3N[a], oI = h3I[a];
+        const kN = xh4(h2at(r0 + ac), h2at(r0 + cR), h2at(rD + ac), h2at(rD + cR));
+        const kI = xh4(h2atI(r0 + ac), h2atI(r0 + cR), h2atI(rD + ac), h2atI(rD + cR));
+        _dzOv3N[a] = kN; _dzOv3I[a] = kI;   // valid for anchors marked a3Stamp
+        if (do3) {
+          if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag3)) ?? 0);
+          if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag3)) ?? 0);
+        }
+      }
+    }
+
+    if (!do4) continue;
+    // ── Affected 4×4 anchors: the spread of the affected 3×3 anchors.
+    const a4Stamp = ++_dzStamp;
+    const tag4 = (maxLibs << 3) | 4;
+    const h3at = (i) => _dzMark3[i] === a3Stamp ? _dzOv3N[i] : h3N[i];
+    const h3atI = (i) => _dzMark3[i] === a3Stamp ? _dzOv3I[i] : h3I[i];
+    for (let k = 0; k < nA3; k++) {
+      const i = a3[k];
+      const r = (i / N) | 0, c = i % N;
+      const rU = r === 0 ? N - 1 : r - 1, cL = c === 0 ? N - 1 : c - 1;
+      const anchors4 = [r * N + c, r * N + cL, rU * N + c, rU * N + cL];
+      for (let m = 0; m < 4; m++) {
+        const a = anchors4[m];
+        if (_dzMark4[a] === a4Stamp) continue;
+        _dzMark4[a] = a4Stamp;
+        const ar = (a / N) | 0, ac = a % N;
+        const rD = (ar + 1 < N ? ar + 1 : 0) * N, r0 = ar * N;
+        const cR = ac + 1 < N ? ac + 1 : 0;
+        const oN = xh4(h3N[r0 + ac], h3N[r0 + cR], h3N[rD + ac], h3N[rD + cR]);
+        const oI = xh4(h3I[r0 + ac], h3I[r0 + cR], h3I[rD + ac], h3I[rD + cR]);
+        const kN = xh4(h3at(r0 + ac), h3at(r0 + cR), h3at(rD + ac), h3at(rD + cR));
+        const kI = xh4(h3atI(r0 + ac), h3atI(r0 + cR), h3atI(rD + ac), h3atI(rD + cR));
+        if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag4)) ?? 0);
+        if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag4)) ?? 0);
+      }
+    }
+  }
+  return delta;
+}
+const _dzFG = new Int32Array(4), _dzEG = new Int32Array(4);
+let _dzDirtyCells = new Int32Array(0), _dzA2 = new Int32Array(0), _dzA3 = new Int32Array(0);
+
 // ── Value function (pure) ─────────────────────────────────────────────────────
 
 // V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
@@ -377,6 +566,7 @@ function evaluateFeatures(features, weights) {
     const w = weights.get(keys[i]) ?? 0;
     z += pols[i] * w;
   }
+  features.z   = z;   // logit, for the zBase + deltaZ fast path
   features.val = 1 / (1 + Math.exp(-z));
   return features.val;
 }
@@ -394,7 +584,7 @@ function evaluate(game, model) {
 function loadWeights(filePath) {
   const raw = require(require('path').resolve(filePath));
   const specs = raw.specs;
-  return { specs, preparedSpecs: prepareSpecs(specs), weights: new Map(raw.weights) };
+  return { specs, preparedSpecs: prepareSpecs(specs), weights: new Map(raw.weights), komi: raw.komi };
 }
 
 // Writes a model { weights, specs } to a JS file (browser-includable).
@@ -405,7 +595,8 @@ function saveWeights(filePath, model) {
   const src = [
     "'use strict';",
     '// Auto-generated by train-vpatterns.js — do not edit by hand.',
-    `const vpatternsModel = { specs: ${specStr}, weights: new Map(${weightsStr}) };`,
+    `const vpatternsModel = { specs: ${specStr}, weights: new Map(${weightsStr})` +
+      (model.komi !== undefined ? `, komi: ${model.komi}` : '') + ` };`,
     "if (typeof module !== 'undefined') module.exports = vpatternsModel;",
     "else window.vpatternsModel = vpatternsModel;",
   ].join('\n') + '\n';
@@ -416,15 +607,13 @@ function saveWeights(filePath, model) {
 
 const Patterns = {
   rawState,
-  canonicalize,
   prepareSpecs,
   extractFeatures,
   evaluateFeatures,
   evaluate,
+  deltaZ,
   loadWeights,
   saveWeights,
-  PERMS_2x2,
-  PERMS_3x3,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;

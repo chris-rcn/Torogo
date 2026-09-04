@@ -4,9 +4,8 @@
 // test-patterns.js — correctness tests for vpatterns.js
 
 const { Game2, BLACK, WHITE } = require('./game2.js');
-const { rawState, canonicalize, extractFeatures: _extractFeatures,
-        prepareSpecs, evaluateFeatures,
-        PERMS_2x2, PERMS_3x3 } = require('./vpatterns.js');
+const { rawState, extractFeatures: _extractFeatures,
+        prepareSpecs, evaluateFeatures } = require('./vpatterns.js');
 const _prepCache = new Map();
 function extractFeatures(game, specs, ...rest) {
   if (!_prepCache.has(specs)) _prepCache.set(specs, prepareSpecs(specs));
@@ -221,36 +220,6 @@ section('maxLibs key isolation');
   const collisions = [...keys1].filter(k => keys2.has(k));
   check(collisions.length === 0,
     `${collisions.length} collision(s) between maxLibs=1 and maxLibs=2: [${collisions.slice(0, 5)}]`);
-}
-
-// ── Full enumeration counts ───────────────────────────────────────────────────
-
-section('full enumeration counts');
-{
-  // Enumerate all 3^n raw cell patterns and count distinct canonical keys.
-  // Uses canonicalize directly with the same mixers as extractFeatures
-  // (131 for 2×2, 537 for 3×3, both with maxLibs=1).
-  // Expected: 2×2 → 8, 3×3 → 1418.
-
-  const keys2 = new Set();
-  const cells4 = new Array(4);
-  for (let mask = 0; mask < 81 /* 3^4 */; mask++) {
-    let m = mask;
-    for (let i = 0; i < 4; i++) { cells4[i] = (m % 3) - 1; m = (m / 3) | 0; }
-    const r = canonicalize(cells4, PERMS_2x2, 131);
-    if (r !== null) keys2.add(r.key);
-  }
-  check(keys2.size === 8, `2×2 full enum: expected 8, got ${keys2.size}`);
-
-  const keys3 = new Set();
-  const cells9 = new Array(9);
-  for (let mask = 0; mask < 19683 /* 3^9 */; mask++) {
-    let m = mask;
-    for (let i = 0; i < 9; i++) { cells9[i] = (m % 3) - 1; m = (m / 3) | 0; }
-    const r = canonicalize(cells9, PERMS_3x3, 537);
-    if (r !== null) keys3.add(r.key);
-  }
-  check(keys3.size === 1418, `3×3 full enum: expected 1418, got ${keys3.size}`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
