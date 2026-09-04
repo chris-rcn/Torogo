@@ -3,10 +3,13 @@
 // puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  A playout runs
 // until board fullness has advanced by TRUNC_PHASE_DELTA past the leaf; if
 // the position's phase is then below TRUNC_MAX_PHASE, the playout stops and
-// the leaf value is a static hpatterns evaluation (TRUNC_HPAT_DATA, a
-// train-hpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
+// the leaf value is a static vpatterns evaluation (TRUNC_VPAT_DATA, a
+// train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
 // terminal score.  Otherwise the playout continues to the end as usual.
-// The prefix moves still fill the RAVE trace either way.
+// The prefix moves still fill the RAVE trace either way.  (An averaged
+// multi-position evaluation window was tried and removed: consecutive-
+// position evaluator errors are near-perfectly correlated, so averaging
+// bought nothing offline or live — 2026-09-04.)
 //
 // The truncation check is integer (empty-count drop >= ceil(delta*area)), so
 // captures during the prefix delay it correctly: the point is defined by net
@@ -45,7 +48,7 @@ const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
 const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
-const HPat                  = Util.load('./hpatterns.js', 'HPatterns');
+const VPat                  = Util.load('./vpatterns.js', 'VPatterns');
 const { createState, ppatMove, loadWeights } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
@@ -98,53 +101,36 @@ function create(cfg) {
   // this; at or above it the playout runs to the end (late playouts are short
   // and nearly exact, so substitution there is pure downside).
   const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 1);
-  // Evaluation window: at the truncation point, keep the playout going this
-  // many more moves and average an evaluation of every position along the way
-  // (committed-incremental z, ~5.5us/step).  0 = a single evaluation at the
-  // truncation point.  Default 1: the minimal even sample count — the
-  // evaluator is side-to-move-blind, so pairing positions of opposite parity
-  // cancels the tempo bias an unpaired evaluation carries (budget-200 sweep
-  // 2026-09-03: E 1..9 indistinguishable at ~1300 games/arm, so the cheapest
-  // window wins).
-  const TRUNC_EVAL_MOVES  = cfg.int('TRUNC_EVAL_MOVES', 1);
 
-  // Static evaluator: an hpatterns checkpoint (train-hpat-playout-eval).
+  // Static evaluator: a vpatterns checkpoint (train-vpat-playout-eval).
   // Hard failure, not a fallback — this agent's identity IS its truncated
   // playouts, and a silently-missing evaluator would field plain puct-ppat-fp
   // under the wrong name.
-  const _hpatPath = _isNode ? cfg.str('TRUNC_HPAT_DATA', '') : null;
-  if (_isNode && !_hpatPath) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_HPAT_DATA is required`);
+  const _vpatPath = _isNode ? cfg.str('TRUNC_VPAT_DATA', '') : null;
+  if (_isNode && !_vpatPath) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
   }
-  const _hpatRaw = _isNode
-    ? require(require('path').resolve(_hpatPath))
-    : (typeof window !== 'undefined' && window.truncHpatModel) || null;
-  if (!_hpatRaw) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load hpatterns evaluator from ` +
-      (_isNode ? 'TRUNC_HPAT_DATA' : 'window.truncHpatModel'));
+  const _vpatRaw = _isNode
+    ? require(require('path').resolve(_vpatPath))
+    : (typeof window !== 'undefined' && window.truncVpatModel) || null;
+  if (!_vpatRaw) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
+      (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
   }
-  const _hpatModel = HPat.createModel(_hpatRaw.maxStones,
-    _hpatRaw.maxSize === Infinity ? Infinity : _hpatRaw.maxSize);
-  _hpatModel.weights = HPat.weightsMap(_hpatRaw);
-  // The window walk uses commitZ, which (like deltaZ) is only valid when
-  // every active size is saturated.  Hard failure: a silent per-step full
-  // re-extraction would field a different cost profile under the same name.
-  if (TRUNC_EVAL_MOVES > 0 && !HPat.saturatedOnly(_hpatRaw.maxStones)) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-      `TRUNC_EVAL_MOVES needs a saturated spec (bare sizes); got ${JSON.stringify(_hpatRaw.maxStones)}`);
-  }
+  const _vpatModel = { specs: _vpatRaw.specs,
+                       preparedSpecs: VPat.prepareSpecs(_vpatRaw.specs),
+                       weights: new Map(_vpatRaw.weights) };
   // Name the evaluator file and the truncation knobs in the banner: two slots
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.
-  const _hpatName = _isNode ? require('path').basename(_hpatPath) : 'window.truncHpatModel';
+  const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-    `${_hpatModel.weights.size} hpat weights from ${_hpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ${TRUNC_MAX_PHASE}, ` +
-    `trunc-eval-moves: ${TRUNC_EVAL_MOVES}`);
+    `${_vpatModel.weights.size} vpat weights (${_vpatModel.specs.map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}) from ${_vpatName}, ` +
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ${TRUNC_MAX_PHASE}`);
 
-  // Static value of `game2`: P(BLACK wins) from the hpatterns evaluator.
-  function hpatValueB(game2) {
-    return HPat.evaluateFeatures(HPat.extractFeatures(game2, _hpatModel), _hpatModel.weights);
+  // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
+  function vpatValueB(game2) {
+    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs), _vpatModel.weights);
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to the root ppat-data.js
@@ -205,7 +191,7 @@ function create(cfg) {
 
   // ppat-policy playout from `game2` (mutates it), truncated: once board
   // fullness has advanced by TRUNC_PHASE_DELTA, a position still below
-  // TRUNC_MAX_PHASE returns the static hpatterns value; otherwise the playout
+  // TRUNC_MAX_PHASE returns the static vpatterns value; otherwise the playout
   // runs to the end.  Fills `played` (pre-zeroed by the caller) with the
   // colour-signed first-occupancy RAVE trace.  Returns P(BLACK wins) — a
   // fraction at a truncation, {0,1} at the end of a full playout.
@@ -226,11 +212,6 @@ function create(cfg) {
     let moves = 0;
     let weight = 1.0;
 
-    // Evaluation window state (evalLeft > 0 while open): running committed z
-    // over the hpat buffers, sample sum/count, and a staleness flag set when a
-    // capture forces a rebuild.
-    let evalLeft = 0, evalSum = 0, evalCount = 0, z = 0, zStale = false;
-
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
       // usePolicy: use the ppat policy this move — within the PPAT_MOVES window
@@ -239,45 +220,16 @@ function create(cfg) {
       const usePolicy  = ppatActive && (PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO);
       const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng)
                             : game2.randomLegalMove(rng);
-      if (evalLeft > 0) {
-        // Advance the committed hpat buffers with the move about to be played.
-        const d = HPat.commitZ(game2, _hpatModel, _hpatModel.weights, idx);
-        if (Number.isNaN(d)) zStale = true;   // capture: rebuild after the move
-        else z += d;
-      }
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
       }
       game2.play(idx);
       moves++;
       weight -= weightStep;
-      if (evalLeft > 0) {
-        // Game finished inside the window: the exact result supersedes the
-        // collected estimates — fall through to the terminal return.
-        if (game2.gameOver) break;
-        if (zStale) {
-          HPat.extractFeatures(game2, _hpatModel);
-          const zc = HPat.zFromBuffers(_hpatModel, _hpatModel.weights, N);
-          z = zc[zc.length - 1];
-          zStale = false;
-        }
-        evalSum += 1 / (1 + Math.exp(-z));
-        evalCount++;
-        if (--evalLeft === 0) return evalSum / evalCount;
-      } else if (truncArmed && game2.emptyCount <= truncEmpty) {
+      if (truncArmed && game2.emptyCount <= truncEmpty) {
         truncArmed = false;   // one check per playout: past here, play to the end
-        if (!game2.gameOver && (cap - game2.emptyCount) / cap < TRUNC_MAX_PHASE) {
-          if (TRUNC_EVAL_MOVES === 0) return hpatValueB(game2);
-          // Open the window: evaluate the truncation position, then keep the
-          // playout going TRUNC_EVAL_MOVES more moves, evaluating each.
-          HPat.extractFeatures(game2, _hpatModel);
-          const zc = HPat.zFromBuffers(_hpatModel, _hpatModel.weights, N);
-          z = zc[zc.length - 1];
-          evalSum = 1 / (1 + Math.exp(-z));
-          evalCount = 1;
-          evalLeft = TRUNC_EVAL_MOVES;
-          zStale = false;
-        }
+        if (!game2.gameOver && (cap - game2.emptyCount) / cap < TRUNC_MAX_PHASE)
+          return vpatValueB(game2);
       }
     }
 
