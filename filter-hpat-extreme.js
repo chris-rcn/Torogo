@@ -5,11 +5,25 @@
 const fs = require('fs');
 const path = require('path');
 
-const argv = process.argv.slice(2);
-const opt = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i + 1] : d; };
-const IN   = opt('in');
-const OUT  = opt('out');
-const KEEP = parseFloat(opt('keep', '0.5'));   // fraction of entries to KEEP
+const Util = require('./util.js');
+
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out', 'keep']);
+if (opts.help || !opts.in || !opts.out) {
+  console.log(`Usage: node filter-hpat-extreme.js --in <model.js> --out <model.js> [--keep F]
+
+Keep only the most extreme |weight| fraction of an hpatterns save file and
+drop the entries closest to zero.  Output is the same int16-quantised format,
+so it loads anywhere the original did (spec, komi, trainMs carried over).
+
+  --in PATH     hpatterns checkpoint to filter (required)
+  --out PATH    filtered checkpoint to write (required)
+  --keep F      fraction of entries to KEEP, ranked by |weight| (default 0.5)
+  --help        show this message`);
+  process.exit(opts.help ? 0 : 1);
+}
+const IN   = opts.in;
+const OUT  = opts.out;
+const KEEP = parseFloat(opts.keep || '0.5');   // fraction of entries to KEEP
 
 const raw = require(path.resolve(IN));
 const { keys, qvals, count, scale, maxStones, maxSize, komi, trainMs, weightsAreEMA } = raw;
