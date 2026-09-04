@@ -2,7 +2,10 @@
  * train_ppat.c — Simulation Balancing (Huang, Coulom, Lin 2010, Algorithm 1).
  * C port of train-ppat.js.
  *
- * Input: concise format from gen_evals: "<size> <move1,move2,...> <value>"
+ * Input: either eval-file format, discriminated per line (a move list starts
+ * with a coordinate letter, a phase with a digit):
+ *   legacy (gen_evals):        "<size> <move1,move2,...> <value> [best_move]"
+ *   new (gen-agent-evals):     "<size> <phase> <move1,move2,...> <winRatio>"
  * Values in [0,1] mapped to [-1,1].
  *
  * Compile:
@@ -271,8 +274,22 @@ static int parse_position(const char *line, Position *pos) {
     char moves_buf[4096];
     char best_buf[16];
     double value;
-    int fields = sscanf(line, "%d %4095s %lf %15s", &size, moves_buf, &value, best_buf);
-    if (fields < 3) return 0;
+    /* Two line formats (gen-agent-evals announces the new one with a
+     * "# format:" header comment, but detection is per line so concatenated
+     * mixed files work): the second token starts with a digit only in the
+     * new format (a phase like "0.345"); a move list starts with a letter. */
+    if (sscanf(line, "%d %4095s", &size, moves_buf) != 2) return 0;
+    int fields;
+    if (moves_buf[0] >= '0' && moves_buf[0] <= '9') {
+        /* new: <size> <phase> <moves> <winRatio> — phase is redundant with the
+         * replay (which recomputes it for --phase filtering), so skip it. */
+        fields = sscanf(line, "%d %*s %4095s %lf", &size, moves_buf, &value);
+        if (fields < 3) return 0;
+        fields = 3;   /* no best-move token in the new format */
+    } else {
+        fields = sscanf(line, "%d %4095s %lf %15s", &size, moves_buf, &value, best_buf);
+        if (fields < 3) return 0;
+    }
     if (size > MAX_BOARD_SIZE) return 0;
     pos->board_size = size;
     pos->value = 2.0f * (float)value - 1.0f;

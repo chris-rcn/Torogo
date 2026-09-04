@@ -84,7 +84,32 @@ if (require.main === module) {
     ['agent', 'file', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase']);
 
   if (opts.help || !opts.file || !opts.agent) {
-    console.log('Usage: node evalagentvalues.js --agent <name> --file <path> [--limit <n>] [--min-phase <p>] [--max-phase <p>] [--oversample <n>] [--seed <n>] [--show-phases <P>] [--verbose]');
+    console.log(`Usage: node evalagentvalues.js --agent <name> --file <path> [options]
+
+Score an agent's valueB() against a file of labeled positions: replay each
+record, ask the agent for P(BLACK wins), convert to P(side-to-move wins),
+and compare to the file's label.  Errors are reported as MSE / RMS / MAE in
+win-probability units — the same units as a trainer's teMSE — plus mean
+signed bias.  Scoring an agent against a file it generated is a correctness
+check (a deterministic valueB should score ~0 RMS).
+
+Input: the LEGACY eval format only ("<size> <moves> <winRatio> [pass]");
+the current gen-agent-evals format (with its phase column) is not yet
+parsed here.
+
+  --agent NAME      ai/<name>.js — must export valueB(game, opts) ->
+                    P(BLACK wins), e.g. mc-ppat (PLAYOUTS env), vpatsearch
+                    (VPAT_DATA env), puct-ppat-fp (required)
+  --file PATH       labeled positions file (required)
+  --limit N         score only the first N positions (default: all)
+  --min-phase F     skip positions with board fullness < F (default 0)
+  --max-phase F     skip positions with board fullness > F (default 1)
+  --oversample N    score each position N times (stochastic valueBs;
+                    default 1)
+  --seed N          starting agent rng seed (default 1)
+  --show-phases P   append a P-row table of phase-band -> RMS/bias
+  --verbose         per-position pred/target/err table
+  --help            show this message`);
     process.exit(opts.help ? 0 : 1);
   }
 

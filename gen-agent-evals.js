@@ -12,20 +12,23 @@
 // beyond distinct processes.  Size comes from each record, so mixed-size corpora
 // work.  Games are validated on selection (the phase scan is the integrity
 // check); a game that fails replay is counted, dropped from the pool, and
-// reported on stderr.
+// reported on stderr.  Ply 0 (the bare free initial stone) is never eligible:
+// its record would have an empty move list.
 //
 // The position source matters for a reason worth stating: SB's objective is
 // defined at the playout ROOT — E[outcome of a playout from s] should equal
 // v*(s) — and at deployment those roots are search-tree nodes, i.e. positions
 // reached by reasonably strong play.  The corpus's generating agent controls
 // that realism; this tool just samples and labels.  The label is the agent's
-// valueB() (P(BLACK wins)) mapped to P(side-to-move wins), to match the
-// gen_evals format consumed by train_ppat:
+// valueB() (P(BLACK wins)) mapped to P(side-to-move wins).  Output format
+// (shared with the *-playout-eval trainers; announced by a '# format:' header
+// line so legacy consumers can detect it — NOT the old train_ppat gen_evals
+// format, which had no phase column and a trailing best-move token):
 //
-//   <size> <move1,move2,...> <winRatio> pass
+//   <size> <phase> <move1,move2,...> <winRatio>
 //
 // The agent module (ai/<name>.js) must export a valueB(game, options) -> P(BLACK wins).
-// e.g. ref-vlibpat, mc-vlib.
+// e.g. mc-ppat (mean of PLAYOUTS standard playouts), ref-vlibpat, mc-vlib.
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
 // Non-deterministic.  Usage:
@@ -46,8 +49,32 @@ console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['agent', 'corpus', 'min-phase', 'max-phase', 'limit']);
 if (opts.help || !opts.agent || !opts.corpus) {
-  console.error('Usage: node gen-agent-evals.js --agent <name> --corpus <file>\n' +
-                '                               [--min-phase 0] [--max-phase 1] [--limit N]  > out.txt');
+  console.error(`Usage: node gen-agent-evals.js --agent <name> --corpus <file> [options]  > out.txt
+
+Label positions from a game corpus with an agent's valueB() oracle,
+producing (position, value) training data.  Each emitted position comes
+from a fresh corpus game (drawn with replacement, one reservoir-sampled
+ply per game inside the phase window), so positions are independent and
+parallel labelers on the same corpus need no coordination.  Output line
+(announced by a '# format:' header; readable by the *-playout-eval
+trainers and train_ppat):
+
+  <bsize> <phase> <move1,move2,...> <winRatio>    (winRatio: P(side-to-move wins))
+
+Data goes to stdout (redirect to a file); config and a progress table go
+to stderr.  Non-deterministic; runs until --limit or killed.
+
+  --agent NAME      ai/<name>.js — must export valueB(game, opts) ->
+                    P(BLACK wins), e.g. mc-ppat (mean of PLAYOUTS standard
+                    playouts; set PLAYOUTS in the env), vpatsearch,
+                    ref-vlibpat (required)
+  --corpus FILE     gen-games.js corpus ("<size> <move1,move2,...>" lines;
+                    mixed sizes fine — size comes from each record) (required)
+  --min-phase F     sample plies at board fullness >= F (default 0)
+  --max-phase F     sample plies at board fullness <= F (default 1)
+  --limit N         stop after emitting N positions (default: run until
+                    killed)
+  --help            show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -98,14 +125,33 @@ const corpus = [];                   // [{ size, moves: Int16Array }]
     console.error(`corpus '${corpusPath}' contains no games`);
     process.exit(1);
   }
+  process.stdout.write(`# format: bsize phase moves winRatio\n`);
   process.stdout.write(`# corpus: ${corpusPath} (${corpus.length} games)\n`);
 }
 
-process.stderr.write(`gen-agent-evals: agent=${agentName} corpus=${corpusPath} (${corpus.length} games) min-phase=${minPhase} max-phase=${maxPhase} limit=${limit}\n`);
+process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  min-phase: ${minPhase}  max-phase: ${maxPhase}  limit: ${limit}\n`);
 
 let emitted = 0, misses = 0;
-const MAX_MISSES = 10000;            // consecutive games with no eligible position
+
+// Progress table (stderr): geometric print schedule, capped at 4 h between
+// rows (the JS-trainer convention).  tPosition is the interval mean.
+const COLS = ['tElapsed', 'positions', 'tPosition'];
+const COLW = [8, 9, 9];
+const printRow = cells => process.stderr.write(
+  cells.map((c, i) => String(c).padStart(COLW[i])).join('  ') + '\n');
+printRow(COLS);
+const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 const t0 = Date.now();
+let nextPrintAt = t0 + 1000, lastPrintAt = t0, lastEmitted = 0;
+function progressRow() {
+  const now = Date.now();
+  const n = emitted - lastEmitted;
+  printRow([Util.fmtMs(now - t0), Util.fmt4i(emitted),
+            Util.fmtMs(n > 0 ? (now - lastPrintAt) / n : 0)]);
+  lastPrintAt = now; lastEmitted = emitted;
+  nextPrintAt = Math.min(t0 + Math.round((now - t0) * 1.3), now + MAX_PRINT_GAP_MS);
+}
+const MAX_MISSES = 10000;            // consecutive games with no eligible position
 
 while (emitted < limit) {
   // Pick a uniform random game; replay it once, reservoir-sampling one ply
@@ -118,7 +164,9 @@ while (emitted < limit) {
   for (let i = 0; i < moves.length; i++) {
     const phase = game.phase();
     if (phase > maxPhase) break;     // board only fills; nothing eligible past the cap
-    if (phase >= minPhase) {
+    // Ply 0 is ineligible: an empty move list is unparseable, and the
+    // position is the same degenerate one every time.
+    if (phase >= minPhase && i > 0) {
       seen++;
       if (rng.random() < 1 / seen) chosenPos = i;
     }
@@ -150,11 +198,9 @@ while (emitted < limit) {
   const winRatio = pos.current === BLACK ? val : 1 - val;     // P(side-to-move wins)
 
   const seq = Array.from(moves.slice(0, chosenPos), m => coordStr(m, size)).join(',');
-  process.stdout.write(`${size} ${seq} ${winRatio} pass\n`);
+  process.stdout.write(`${size} ${pos.phase().toFixed(3)} ${seq} ${winRatio}\n`);
   emitted++;
 
-  if (emitted % 200 === 0) {
-    const s = (Date.now() - t0) / 1000;
-    process.stderr.write(`  ${emitted} positions  ${(emitted / s).toFixed(1)}/s\n`);
-  }
+  if (Date.now() >= nextPrintAt) progressRow();
 }
+if (emitted > lastEmitted) progressRow();   // final partial interval
