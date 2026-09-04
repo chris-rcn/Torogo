@@ -33,8 +33,8 @@
 // Runs indefinitely (Ctrl-C to stop).  Weights are saved at every print.
 
 const path = require('path');
-const { Game2, BLACK, PASS } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, loadWeights, saveWeights } = require('./vpatterns.js');
+const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
@@ -44,7 +44,58 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+if (opts.help) {
+  console.log(`Usage: node train-vpatterns.js [options]
+
+TD(lambda) self-play trainer for vpatterns value weights (V(s) = P(BLACK
+wins), 2-ply lookahead).  Runs indefinitely unless --limit is given; the
+checkpoint is written at every print.
+
+  --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4;
+                    maxLibs 1 = presence only; trailing 'f' freezes that
+                    spec's loaded weights).  Default 1:6,2:6,3:6.  With
+                    --load, --spec overrides the checkpoint's specs: shared
+                    specs keep their trained weights, new ones start at zero
+  --train-size N    self-play board size (default 9)
+  --eval-size N     evaluation board size (default 13)
+  --size N          sets both of the above
+  --komi K          auto | auto:<start> | <number>.  auto (default) steps komi
+                    by +/-1 every 500 self-play games while black's win share
+                    sits outside [45%, 55%]; a number fixes komi and disables
+                    the controller.  Eval games always use a fixed komi
+  --limit N         stop after N games (default 0 = run indefinitely)
+
+  --lr F            step size for the TD update (default 0.3)
+  --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off
+                    (default 0.9).  The EMA weights are what gets saved
+  --epsilon F       share of moves played uniformly at random (default 0.1)
+  --on-policy F     share of the NON-random moves from this model's own
+                    search; the rest come from --ext (default 1)
+  --ext AGENT       ai/<name>.js supplying the off-policy moves; only
+                    consulted when --on-policy < 1
+  --start-phase F   fill the board with random stones to this phase before
+                    normal training moves begin (backward curriculum)
+
+  --load PATH       resume from a checkpoint
+  --save PATH       checkpoint path (default out/vpatterns-<random>.js)
+
+  --eval AGENT      ai/<name>.js played as the reference in test games
+                    (default: none, which disables the test games)
+  --budget MS       per-move time budget for the reference agent (default 1)
+  --positions-file F  evalmovedetails positions scored each print (rms/rAvg
+                    columns; sampled per print)
+  --positions-n N   positions sampled per print from --positions-file
+                    (default 0 = all)
+  --md-file F       evalmovedetails positions, single full pass each print
+                    (mdRms column)
+  --ladder-file F   evalladders2 suite scored each print (ladr column)
+  --accuracy-file F game corpus for winner-prediction accuracy each print
+                    (vacc column)
+  --accuracy-games N  games sampled from --accuracy-file (default 100)
+  --help            show this message`);
+  process.exit(0);
+}
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -68,6 +119,29 @@ const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
 const EMA_PERIOD = 100;
 const BUDGET     = parseFloat(opts['budget']   || '1');
 
+// Komi controller (the train-hpatterns design): every KOMI_WINDOW self-play
+// games, step komi by +/-1 while black's win share sits outside [45%, 55%].
+// --komi auto:<start> seeds the start; --komi <number> fixes komi and
+// disables the controller.  The current komi is persisted in the checkpoint
+// and restored on --load (auto mode only).
+let AUTO_KOMI = true;
+if (opts.komi !== undefined) {
+  const m = /^auto(?::(-?[0-9.]+))?$/.exec(opts.komi);
+  if (m) {
+    if (m[1] !== undefined) { setKomi(TRAIN_SIZE, parseFloat(m[1])); setKomi(EVAL_SIZE, parseFloat(m[1])); }
+  } else {
+    AUTO_KOMI = false;
+    setKomi(TRAIN_SIZE, parseFloat(opts.komi));
+    setKomi(EVAL_SIZE,  parseFloat(opts.komi));
+  }
+}
+// Eval games ALWAYS use a fixed komi (see train-hpatterns): the controller
+// only ever moves the TRAIN_SIZE komi, and the eval batch pins EVAL_SIZE.
+const EVAL_KOMI = KOMI(EVAL_SIZE);
+const KOMI_WINDOW = 500;
+let komiGames = 0, komiBlackWins = 0;
+let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column)
+
 // ── Features ───────────────────────────
 
 // --spec: comma list of "size:maxLibs[f]" tokens (e.g. "1:6,2:6,3:6").  size is
@@ -77,18 +151,18 @@ const BUDGET     = parseFloat(opts['budget']   || '1');
 // the checkpoint's specs: shared specs keep their trained weights (freeze the
 // carried-over ones with 'f' for a curriculum), new specs start at zero.
 let specs;
-const FROZEN = new Set();   // spec tags ((maxLibs << 2) | size) excluded from updates
+const FROZEN = new Set();   // spec tags ((maxLibs << 3) | size) excluded from updates
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
     const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
-    if (!(size >= 1 && size <= 3) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-3, maxLibs >= 1)`);
+    if (!(size >= 1 && size <= 4) || !(maxLibs >= 1)) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4, maxLibs >= 1)`);
       process.exit(1);
     }
-    if (frozen) FROZEN.add((maxLibs << 2) | size);
+    if (frozen) FROZEN.add((maxLibs << 3) | size);
     return { size, maxLibs };
   });
 } else {
@@ -162,36 +236,13 @@ function tdUpdate(features, target, lr) {
 
 // ── Self-play training ────────────────────────────────────────────────────────
 
-// Custom 1-ply search which bypasses non-capture moves.
+// 1-ply move selection: vpatsearch's incremental depth-1 search (one base
+// extraction, deltaZ per candidate, capture fallback on its own prepSpecs).
+// The same search serves self-play, the ladder/md suites, and eval games.
+// Note the vpatsearch tie/PASS semantics: first-strict-improvement for both
+// colours, and a terminal double-pass is scored exactly.
 function search1ply(game) {
-  const area = game.N * game.N;
-  const isBlack = game.current === BLACK;
-  let bestMove = PASS;
-  let bestScore = isBlack ? -Infinity : Infinity;
-  for (let coord = 0; coord < area; coord++) {
-    if (!game.isLegal(coord) || game.isTrueEye(coord)) continue;
-//    const g = game.clone();
-//    g.play(coord);
-//    const features = extractFeatures(g, specs);
-    const features = extractFeatures(game, prepSpecs, true, coord);
-    evaluateFeatures(features, weights);
-    if (isBlack === (features.val > bestScore)) { 
-      bestScore = features.val;
-      bestMove = coord;
-    }
-  }
-  if (bestMove === PASS) {
-    return PASS;
-  }
-  if (game.consecutivePasses > 0 || game.emptyCount < area/2) {
-    const passFeatures = extractFeatures(game, prepSpecs);
-    evaluateFeatures(passFeatures, weights);
-    if (isBlack === (passFeatures.val > bestScore)) {
-      bestScore = passFeatures.val;
-      bestMove = PASS;
-    }
-  }
-  return bestMove;
+  return search(game, { weights, specs, preparedSpecs: prepSpecs });
 }
 
 // Both colours use the policy.  Per-position features and values are collected
@@ -336,7 +387,11 @@ if (LOAD_PATH) {
     // derived properties that would false-positive the comparison).
     const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs}`).join(',');
     const cliSpecs = opts.spec ? specs : null;
-    ({ weights, specs, preparedSpecs: prepSpecs } = loadWeights(LOAD_PATH));
+    const loaded = loadWeights(LOAD_PATH);
+    ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
+    // Saved komi wins over any auto:<start> seed (auto mode only; the eval
+    // komi stays pinned at EVAL_KOMI).
+    if (AUTO_KOMI && loaded.komi !== undefined) setKomi(TRAIN_SIZE, loaded.komi);
     if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
       // --spec overrides the checkpoint's specs.  Loaded weights are kept —
       // each spec hashes patterns with its own mixer (same collision
@@ -360,15 +415,16 @@ if (LOAD_PATH) {
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
-console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 2) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}`);
+console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 3) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}`);
 console.log();
 
 // Print header.
 console.log([
   // Training columns (left).
   'game'.padStart(4),
+  'avgK'.padStart(6),
   'tElp'.padStart(5),
-  'tGm '.padStart(5),
+  'tMv '.padStart(5),
   'nWts'.padStart(4),
   'avgL'.padStart(4),
   'avgW'.padStart(6),
@@ -402,7 +458,18 @@ const rmsHistory  = [];   // per-interval rmsErr values
 
 while (true) {
   g++;
-  const { moves, elapsedMs } = trainGame(TRAIN_SIZE);
+  const { winner, moves, elapsedMs } = trainGame(TRAIN_SIZE);
+  komiSum += KOMI(TRAIN_SIZE); komiSumGames++;
+  if (AUTO_KOMI) {
+    komiGames++; komiBlackWins += winner === BLACK ? 1 : 0;
+    if (komiGames >= KOMI_WINDOW) {
+      const bw = komiBlackWins / komiGames;
+      if (bw > 0.55 || bw < 0.45) {
+        setKomi(TRAIN_SIZE, KOMI(TRAIN_SIZE) + (bw > 0.55 ? 1 : -1));
+      }
+      komiGames = 0; komiBlackWins = 0;
+    }
+  }
   if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
   totalMoves += moves;
   intervalGames++;
@@ -419,6 +486,8 @@ while (true) {
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
     let evalMatchMs = 0, evalMatchMoves = 0, evalAccC = 0, evalAccN = 0;
     if (evalGetMove) {
+      const trainKomi = KOMI(TRAIN_SIZE);
+      setKomi(EVAL_SIZE, EVAL_KOMI);
       const resultsBatch = [];
       while (true) {
         const { results, moves, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
@@ -429,6 +498,7 @@ while (true) {
         if (evalMatchMs > 0.3 * intervalTrainMs) break;
         if (resultsBatch.length >= 998) break;
       }
+      setKomi(TRAIN_SIZE, trainKomi);   // restore (same entry when sizes match)
       for (const r of resultsBatch) evalHistory.push(r);
 
       latestWR = resultsBatch.reduce((s, r) => s + r, 0) / resultsBatch.length;
@@ -438,7 +508,9 @@ while (true) {
     }
 
     const avgLen  = intervalMoves / intervalGames;
-    const tGameMs = intervalTrainMs / intervalGames;
+    const tMvMs   = intervalTrainMs / Math.max(1, intervalMoves);
+    const kAvg    = komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE);
+    komiSum = 0; komiSumGames = 0;   // per-interval avgK: reset at each print
     intervalGames = 0;
     intervalMoves = 0;
     let ladrCol = null;
@@ -476,8 +548,9 @@ while (true) {
     console.log([
       // Training columns (left).
       Util.fmt4i(g),
+      Util.fmt4(kAvg).padStart(6),
       Util.fmtMs(elapsedMs),
-      Util.fmtMs(tGameMs),
+      Util.fmtMs(tMvMs),
       Util.fmt4i(weights.size),
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
@@ -494,7 +567,7 @@ while (true) {
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
     ].join('  '));
-    saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs });
+    saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
     nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);
   }
 
