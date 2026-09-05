@@ -34,7 +34,7 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights } = require('./vpatterns.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
@@ -52,7 +52,8 @@ TD(lambda) self-play trainer for vpatterns value weights (V(s) = P(BLACK
 wins), 2-ply lookahead).  Runs indefinitely unless --limit is given; the
 checkpoint is written at every print.
 
-  --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4;
+  --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4, or
+                    34 = the 3x4/4x3 rectangle pair, both orientations;
                     maxLibs 1 = presence only; trailing 'f' freezes that
                     spec's loaded weights).  Default 1:6,2:6,3:6.  With
                     --load, --spec overrides the checkpoint's specs: shared
@@ -145,7 +146,8 @@ let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column)
 // ── Features ───────────────────────────
 
 // --spec: comma list of "size:maxLibs[f]" tokens (e.g. "1:6,2:6,3:6").  size is
-// 1-3; maxLibs caps the per-cell liberty count (1 = presence only).  A trailing
+// 1-4 or 34 (the 3×4/4×3 rectangle pair, both orientations under one tag);
+// maxLibs caps the per-cell liberty count (1 = presence only).  A trailing
 // 'f' freezes that spec's weights (loaded values stay fixed; gradient updates
 // skipped).  Default: sizes 1/2/3 at maxLibs 6.  With --load, --spec overrides
 // the checkpoint's specs: shared specs keep their trained weights (freeze the
@@ -158,11 +160,11 @@ if (opts.spec) {
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
     const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
-    if (!(size >= 1 && size <= 4) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4, maxLibs >= 1)`);
+    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1)) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
-    if (frozen) FROZEN.add((maxLibs << 3) | size);
+    if (frozen) FROZEN.add(specTag({ size, maxLibs }));
     return { size, maxLibs };
   });
 } else {
@@ -415,7 +417,7 @@ if (LOAD_PATH) {
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
-console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 3) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}`);
+console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has(specTag(sp))).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}`);
 console.log();
 
 // Print header.

@@ -49,10 +49,15 @@ function uh(a, b) {
 function xh4(tl, tr, bl, br) {
   return uh(uh(tl, br), uh(tr, bl));
 }
-// Fold the spec tag ((maxLibs << 3) | size) into a window hash so different
-// spec spaces cannot collide in the shared weight map.
+// Fold the spec tag ((maxLibs << 3) | sizeCode) into a window hash so
+// different spec spaces cannot collide in the shared weight map.
 function mixTag(h, tag) {
   return uh(h, tag);
+}
+// Spec size → 3-bit tag code.  Sizes 1-4 are themselves; spec size 34 (the
+// 3×4 ∪ 4×3 rectangle pair) takes the free code 5.
+function specTag(spec) {
+  return (spec.maxLibs << 3) | (spec.size === 34 ? 5 : spec.size);
 }
 
 // Leaf mapping: leaf(raw) is chosen so that 1 + leaf is PRIME.  uh's core is
@@ -155,8 +160,9 @@ function prepareSpecs(specs) {
 
 
 
-  let totalSizes = 0;
-  for (const sizes of byMaxLibs.values()) totalSizes += sizes.length;
+  let totalSizes = 0;   // feature slots per cell (size 34 emits 2: one per orientation)
+  for (const sizes of byMaxLibs.values())
+    for (const s of sizes) totalSizes += s === 34 ? 2 : 1;
 
   return { byMaxLibs, sortedMaxLibs, totalSizes };
 }
@@ -226,6 +232,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do2   = sizes.includes(2);
     const do3   = sizes.includes(3);
     const do4   = sizes.includes(4);
+    const do34  = sizes.includes(34);   // 3×4 ∪ 4×3 rectangle pair
 
     if (do1) {
       const k1base = 131 * maxLibs;
@@ -241,7 +248,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
     }
 
-    if (do2 || do3 || do4) {
+    if (do2 || do3 || do4 || do34) {
       let pl = planes.get(maxLibs);
       if (!pl || pl.lN.length < cap) {
         pl = { lN: new Int32Array(cap), lI: new Int32Array(cap),
@@ -274,7 +281,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           count++;
         }
       }
-      if (do3 || do4) {
+      if (do3 || do4 || do34) {
         // 3×3 = X of the four corner 2×2 sub-windows (anchors i, right, down,
         // down-right), exactly hpatterns' recursion; the plane is stored so
         // 4×4 (and deltaZ) can read it.
@@ -309,6 +316,38 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
               outPols[count] = kN < kI ? 1 : -1;
               outTags[count] = tag4;
               count++;
+            }
+          }
+        }
+        if (do34) {
+          // 3×4 ∪ 4×3 = uh of two adjacent 3×3 sub-hashes (sharing a 3×2
+          // core).  BOTH orientations under ONE tag, mandatorily: a 90°
+          // board rotation carries each horizontal window onto a vertical
+          // one with an equal hash (each 3×3 child is D4-invariant, uh
+          // unordered), so only the union of the two families keeps the
+          // feature multiset D4-invariant.
+          const tag34 = (maxLibs << 3) | 5;
+          for (let y = 0; y < N; y++) {
+            const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
+            for (let x = 0; x < N; x++) {
+              const x1 = x + 1 < N ? x + 1 : 0;
+              const i = r0 + x;
+              // Horizontal: 3 rows × 4 cols (children at i and one right).
+              let kN = uh(h3N[i], h3N[r0 + x1]), kI = uh(h3I[i], h3I[r0 + x1]);
+              if (kN !== kI) {
+                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34);
+                outPols[count] = kN < kI ? 1 : -1;
+                outTags[count] = tag34;
+                count++;
+              }
+              // Vertical: 4 rows × 3 cols (children at i and one down).
+              kN = uh(h3N[i], h3N[r1 + x]); kI = uh(h3I[i], h3I[r1 + x]);
+              if (kN !== kI) {
+                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34);
+                outPols[count] = kN < kI ? 1 : -1;
+                outTags[count] = tag34;
+                count++;
+              }
             }
           }
         }
@@ -402,7 +441,7 @@ function deltaZ(game, prepSpecs, weights, move) {
   for (const maxLibs of sortedMaxLibs) {
     const sizes = byMaxLibs.get(maxLibs);
     const do1 = sizes.includes(1), do2 = sizes.includes(2), do3 = sizes.includes(3),
-          do4 = sizes.includes(4);
+          do4 = sizes.includes(4), do34 = sizes.includes(34);
     const off = maxLibs;
 
     // ── Dirty cells for this maxLibs: the placed stone, plus every stone of a
@@ -461,7 +500,7 @@ function deltaZ(game, prepSpecs, weights, move) {
       }
     }
 
-    if (!(do2 || do3 || do4)) continue;
+    if (!(do2 || do3 || do4 || do34)) continue;
     const pl = planes.get(maxLibs);
     const lN = pl.lN, lI = pl.lI, h2N = pl.h2N, h2I = pl.h2I;
     const leafN = (i) => _dzMarkC[i] === cellStamp ? _dzLeafN[i] : lN[i];
@@ -499,7 +538,7 @@ function deltaZ(game, prepSpecs, weights, move) {
       }
     }
 
-    if (!(do3 || do4)) continue;
+    if (!(do3 || do4 || do34)) continue;
     // ── Affected 3×3 anchors: the 4 windows whose corner children include an
     // affected 2×2 anchor.  New hashes are recorded as overrides for level 4;
     // old hashes come from the stored h3 planes.
@@ -534,30 +573,60 @@ function deltaZ(game, prepSpecs, weights, move) {
       }
     }
 
-    if (!do4) continue;
-    // ── Affected 4×4 anchors: the spread of the affected 3×3 anchors.
-    const a4Stamp = ++_dzStamp;
-    const tag4 = (maxLibs << 3) | 4;
+    if (!(do4 || do34)) continue;
     const h3at = (i) => _dzMark3[i] === a3Stamp ? _dzOv3N[i] : h3N[i];
     const h3atI = (i) => _dzMark3[i] === a3Stamp ? _dzOv3I[i] : h3I[i];
-    for (let k = 0; k < nA3; k++) {
-      const i = a3[k];
-      const r = (i / N) | 0, c = i % N;
-      const rU = r === 0 ? N - 1 : r - 1, cL = c === 0 ? N - 1 : c - 1;
-      const anchors4 = [r * N + c, r * N + cL, rU * N + c, rU * N + cL];
-      for (let m = 0; m < 4; m++) {
-        const a = anchors4[m];
-        if (_dzMark4[a] === a4Stamp) continue;
-        _dzMark4[a] = a4Stamp;
-        const ar = (a / N) | 0, ac = a % N;
-        const rD = (ar + 1 < N ? ar + 1 : 0) * N, r0 = ar * N;
-        const cR = ac + 1 < N ? ac + 1 : 0;
-        const oN = xh4(h3N[r0 + ac], h3N[r0 + cR], h3N[rD + ac], h3N[rD + cR]);
-        const oI = xh4(h3I[r0 + ac], h3I[r0 + cR], h3I[rD + ac], h3I[rD + cR]);
-        const kN = xh4(h3at(r0 + ac), h3at(r0 + cR), h3at(rD + ac), h3at(rD + cR));
-        const kI = xh4(h3atI(r0 + ac), h3atI(r0 + cR), h3atI(rD + ac), h3atI(rD + cR));
-        if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag4)) ?? 0);
-        if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag4)) ?? 0);
+    if (do4) {
+      // ── Affected 4×4 anchors: the spread of the affected 3×3 anchors.
+      const a4Stamp = ++_dzStamp;
+      const tag4 = (maxLibs << 3) | 4;
+      for (let k = 0; k < nA3; k++) {
+        const i = a3[k];
+        const r = (i / N) | 0, c = i % N;
+        const rU = r === 0 ? N - 1 : r - 1, cL = c === 0 ? N - 1 : c - 1;
+        const anchors4 = [r * N + c, r * N + cL, rU * N + c, rU * N + cL];
+        for (let m = 0; m < 4; m++) {
+          const a = anchors4[m];
+          if (_dzMark4[a] === a4Stamp) continue;
+          _dzMark4[a] = a4Stamp;
+          const ar = (a / N) | 0, ac = a % N;
+          const rD = (ar + 1 < N ? ar + 1 : 0) * N, r0 = ar * N;
+          const cR = ac + 1 < N ? ac + 1 : 0;
+          const oN = xh4(h3N[r0 + ac], h3N[r0 + cR], h3N[rD + ac], h3N[rD + cR]);
+          const oI = xh4(h3I[r0 + ac], h3I[r0 + cR], h3I[rD + ac], h3I[rD + cR]);
+          const kN = xh4(h3at(r0 + ac), h3at(r0 + cR), h3at(rD + ac), h3at(rD + cR));
+          const kI = xh4(h3atI(r0 + ac), h3atI(r0 + cR), h3atI(rD + ac), h3atI(rD + cR));
+          if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag4)) ?? 0);
+          if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag4)) ?? 0);
+        }
+      }
+    }
+    if (do34) {
+      // ── Affected 3×4/4×3 pair anchors: each affected 3×3 anchor sits in
+      // two horizontal pairs (anchored at it and one left) and two vertical
+      // pairs (at it and one up).  Sequential per-orientation passes reuse
+      // _dzMark4 under fresh stamps.
+      const tag34 = (maxLibs << 3) | 5;
+      for (let ori = 0; ori < 2; ori++) {   // 0 = horizontal, 1 = vertical
+        const oStamp = ++_dzStamp;
+        for (let k = 0; k < nA3; k++) {
+          const i = a3[k];
+          const r = (i / N) | 0, c = i % N;
+          const aPrev = ori === 0 ? r * N + (c === 0 ? N - 1 : c - 1)
+                                  : (r === 0 ? N - 1 : r - 1) * N + c;
+          for (let m = 0; m < 2; m++) {
+            const a = m === 0 ? i : aPrev;
+            if (_dzMark4[a] === oStamp) continue;
+            _dzMark4[a] = oStamp;
+            const ar = (a / N) | 0, ac = a % N;
+            const aNext = ori === 0 ? ar * N + (ac + 1 < N ? ac + 1 : 0)
+                                    : (ar + 1 < N ? ar + 1 : 0) * N + ac;
+            const oN = uh(h3N[a], h3N[aNext]), oI = uh(h3I[a], h3I[aNext]);
+            const kN = uh(h3at(a), h3at(aNext)), kI = uh(h3atI(a), h3atI(aNext));
+            if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag34)) ?? 0);
+            if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag34)) ?? 0);
+          }
+        }
       }
     }
   }
@@ -624,6 +693,7 @@ function saveWeights(filePath, model) {
 const Patterns = {
   rawState,
   makeWeights,
+  specTag,
   prepareSpecs,
   extractFeatures,
   evaluateFeatures,

@@ -22,7 +22,7 @@ const path = require('path');
 const fs   = require('fs');
 const { Game2, BLACK, PASS, KOMI, parseMove } = require('./game2.js');
 const { prepareSpecs, extractFeatures, evaluateFeatures,
-        loadWeights, saveWeights, makeWeights } = require('./vpatterns.js');
+        loadWeights, saveWeights, makeWeights, specTag } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
@@ -55,7 +55,8 @@ print, and each new best teMSE also writes the -best checkpoint.
   --epochs N        stop after N full passes over the train pool
                     (default 0 = run indefinitely)
 
-  --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4;
+  --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4, or
+                    34 = the 3x4/4x3 rectangle pair, both orientations;
                     maxLibs 1 = presence only; trailing 'f' freezes that
                     spec's loaded weights).  Default 1:6,2:6,3:6
   --lr F            step size for the update (default 0.3)
@@ -117,11 +118,11 @@ if (opts.spec) {
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
     const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
-    if (!(size >= 1 && size <= 4) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4, maxLibs >= 1)`);
+    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1)) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
-    if (frozen) FROZEN.add((maxLibs << 3) | size);
+    if (frozen) FROZEN.add(specTag({ size, maxLibs }));
     return { size, maxLibs };
   });
 } else {
@@ -328,7 +329,7 @@ if (NO_ADD && weights.size === 0) {
     (BAND_ACTIVE ? `, ${_testAll.outsideBand} outside band dropped)` : `)`));
 }
 console.log(`LR=${LR}  lr-decay=${LR_DECAY}  smooth-weights=${EMA_ALPHA}  max-weights=${MAX_WEIGHTS || '(unlimited)'}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
-console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 3) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}${NO_ADD ? `  no-add` : ''}`);
+console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has(specTag(sp))).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}${NO_ADD ? `  no-add` : ''}`);
 // '-best' goes before the file extension, whatever it is (x.js -> x-best.js,
 // x.txt -> x-best.txt); an extensionless path gets it appended.
 const BEST_PATH = (() => {
