@@ -81,13 +81,13 @@ function create(cfg) {
   // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
   const PPAT_RATIO = cfg.float('PPAT_RATIO', 1);
 
-  // ppat playout policy weights: PPAT_DATA, defaulting to the root ppat-data.js
+  // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
   // (the current single-phase model, as cascade.js does); window.PPATWeights in
   // the browser.  Hard failure, not a fallback: this agent's strength IS its
   // ppat playouts, so silently running uniform (e.g. a relative PPAT_DATA that
   // misses under a different cwd) fields a wrong engine under the right name.
   const _ppatPath = _isNode
-    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'ppat-data.js'))
+    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
     : null;
   const _model = _isNode
     ? loadWeights(_ppatPath)

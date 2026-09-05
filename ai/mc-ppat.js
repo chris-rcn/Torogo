@@ -32,7 +32,7 @@
 //                 list shrinks (endgame-weighted), while a fixed per-candidate
 //                 count spends more total playouts while the list is long
 //                 (midgame-weighted).
-//   PPAT_DATA     ppat weight file                 (default root ppat-data.js)
+//   PPAT_DATA     ppat weight file                 (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE  uniform playout moves below this board fullness
 //                 (default 0.6, matching the standard playout)
 
@@ -49,7 +49,7 @@ function create(cfg) {
   const PLAYOUTS   = Math.max(1, cfg.int('PLAYOUTS', 1));
   const CAND_PLAYOUTS = Math.max(0, cfg.int('CAND_PLAYOUTS', 0));
 
-  const ppatPath = cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js'));
+  const ppatPath = cfg.str('PPAT_DATA', path.join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'));
   const model    = PPat.loadWeights(ppatPath);
   // Hard failure, not a fallback: this agent exists to measure a ppat model, so
   // silently running uniform playouts would produce a meaningless comparison.

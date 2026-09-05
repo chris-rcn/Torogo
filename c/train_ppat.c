@@ -50,8 +50,9 @@
  *                           local features are worth, alongside --lib-cap 1, which
  *                           ablates liberty information from the 3x3 pattern.
  *     --ref-weights <path>  reference model for the directWR column (default
- *                           ref/ppat-data-287076-best.js, the band-trained
- *                           standard; "none" disables the column).  Each row plays
+ *                           out/ppat-data-233162-best-ref-candidate.js, the
+ *                           pat-only lib-cap-2 model; "none" disables the
+ *                           column).  Each row plays
  *                           --ref-games policy-only games (no search, no tree)
  *                           between the current model and the reference and
  *                           reports the current model's win rate, so it reads
@@ -114,7 +115,8 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
  * instrument settings, not per-run choices — pick good ones once.
  *
  * Scales (6000 games each, colour-swap pairing on a shared opening):
- *   directWR  27.3 = uniform, 50.0 = as good as the reference.  The neutral
+ *   directWR  50.0 = as good as the reference (27.3 = uniform was measured
+ *             against the retired 287076 reference; re-measure per ref).  The neutral
  *             point is EXACT, not estimated: with identical weights both seats
  *             play the same game, so each colour-swapped pair scores one win and
  *             one loss by construction and the self-match cannot drift off 50. */
@@ -1463,7 +1465,7 @@ int main(int argc, char **argv) {
     cfg_test_file = get_str_arg(argc, argv, "--test-file", NULL);
     cfg_test_pos_given = has_flag(argc, argv, "--test-pos");
     cfg_no_local       = has_flag(argc, argv, "--no-local");
-    cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "ref/ppat-data-287076-best.js");
+    cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "out/ppat-data-233162-best-ref-candidate.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);

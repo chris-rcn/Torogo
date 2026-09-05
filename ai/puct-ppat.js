@@ -66,12 +66,12 @@ function create(cfg) {
   // Per-move probability of using ppat (vs uniform) within the PPAT_MOVES window.
   const PPAT_RATIO = cfg.float('PPAT_RATIO', 1);
 
-  // ppat playout policy weights: PPAT_DATA, defaulting to the root ppat-data.js
+  // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
   // (the current single-phase model, as puct-ppat-fp and cascade do);
   // window.PPATWeights in the browser.  A missing/unreadable file leaves _model
   // null and playouts fall back to uniform-random, with a warning.
   const _ppatPath = _isNode
-    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'ppat-data.js'))
+    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
     : null;
   const _model = _isNode
     ? loadWeights(_ppatPath)
