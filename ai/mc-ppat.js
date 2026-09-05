@@ -133,9 +133,15 @@ function create(cfg) {
     const game2 = game.cells ? game : game.toGame2();
     if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
     const r = options.rng || rng;
-    let wins = 0;
-    for (let p = 0; p < PLAYOUTS; p++) wins += playout(game2.clone(), r);
-    return wins / PLAYOUTS;
+    let wins = 0, n = 0;
+    if (options.budgetMs > 0) {
+      const deadline = Date.now() + options.budgetMs;
+      do { wins += playout(game2.clone(), r); n++; } while (Date.now() < deadline);
+    } else {
+      for (let p = 0; p < PLAYOUTS; p++) wins += playout(game2.clone(), r);
+      n = PLAYOUTS;
+    }
+    return wins / n;
   }
 
   return { getMove, valueB };

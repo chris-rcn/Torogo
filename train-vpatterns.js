@@ -34,7 +34,7 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights } = require('./vpatterns.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
@@ -176,22 +176,22 @@ let prepSpecs = prepareSpecs(specs);
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
-let weights  = new Map();  // pattern key (int32) → weight (float)
-let weightsEMA = new Map();  // Polyak-averaged shadow (saved/eval'd when EMA on)
+let weights  = makeWeights();  // pattern key (int32) → weight (float)
+let weightsEMA = makeWeights();  // Polyak-averaged shadow (saved/eval'd when EMA on)
 let weightsEMAInit = false;  // first applyEMA seeds EMA = weights
 
 // Polyak / SWA averaging: weightsEMA[k] = alpha·weightsEMA[k] + (1-alpha)·weights[k].
 // New keys (interned since the last call) are seeded at their live value.
 function applyEMA(alpha) {
   if (!weightsEMAInit) {
-    for (const [k, v] of weights) weightsEMA.set(k, v);
+    weights.forEach((k, v) => weightsEMA.set(k, v));
     weightsEMAInit = true;
     return;
   }
-  for (const [k, v] of weights) {
+  weights.forEach((k, v) => {
     const e = weightsEMA.get(k);
     weightsEMA.set(k, e === undefined ? v : alpha * e + (1 - alpha) * v);
-  }
+  });
 }
 
 // Eval ≡ save: the model that save writes and eval matches measure — the EMA
@@ -403,7 +403,7 @@ if (LOAD_PATH) {
       prepSpecs = prepareSpecs(specs);
     }
     if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
-      weightsEMA = new Map(weights);
+      weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);

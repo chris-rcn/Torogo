@@ -475,8 +475,11 @@ function create(cfg) {
     if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
 
     const r = options.rng || makeRng();
-    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
-    const { root } = runSearch(game2, N, r, playoutLimit, 0);
+    // Fixed PLAYOUTS wins (as in getMove); else an options.budgetMs time
+    // budget; else the historical 1000-playout default.
+    const budgetMs = options.budgetMs > 0 ? options.budgetMs : 0;
+    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : (budgetMs > 0 ? 0 : 1000);
+    const { root } = runSearch(game2, N, r, playoutLimit, budgetMs);
 
     let totalChildWins = 0;
     const M = root.legalMoves.length;

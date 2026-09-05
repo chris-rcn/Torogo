@@ -22,7 +22,7 @@ const path = require('path');
 const fs   = require('fs');
 const { Game2, BLACK, PASS, KOMI, parseMove } = require('./game2.js');
 const { prepareSpecs, extractFeatures, evaluateFeatures,
-        loadWeights, saveWeights } = require('./vpatterns.js');
+        loadWeights, saveWeights, makeWeights } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
@@ -132,21 +132,21 @@ const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
-let weights = new Map();
-let weightsEMA = new Map();
+let weights = makeWeights();
+let weightsEMA = makeWeights();
 let weightsEMAInit = false;
 let wAbsSum = 0, wUpdateCount = 0;   // per-interval avgW (reset each print)
 
 function applyEMA(alpha) {
   if (!weightsEMAInit) {
-    for (const [k, v] of weights) weightsEMA.set(k, v);
+    weights.forEach((k, v) => weightsEMA.set(k, v));
     weightsEMAInit = true;
     return;
   }
-  for (const [k, v] of weights) {
+  weights.forEach((k, v) => {
     const e = weightsEMA.get(k);
     weightsEMA.set(k, e === undefined ? v : alpha * e + (1 - alpha) * v);
-  }
+  });
 }
 
 // Eval ≡ save: every test harness (teMSE, ladder/md suites, reference games)
@@ -306,7 +306,7 @@ if (LOAD_PATH) {
       prepSpecs = prepareSpecs(specs);
     }
     if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
-      weightsEMA = new Map(weights);
+      weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
     console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
@@ -329,7 +329,12 @@ if (NO_ADD && weights.size === 0) {
 }
 console.log(`LR=${LR}  lr-decay=${LR_DECAY}  smooth-weights=${EMA_ALPHA}  max-weights=${MAX_WEIGHTS || '(unlimited)'}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
 console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has((sp.maxLibs << 3) | sp.size)).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}${NO_ADD ? `  no-add` : ''}`);
-const BEST_PATH = SAVE_PATH.replace(/\.js$/, '-best.js');
+// '-best' goes before the file extension, whatever it is (x.js -> x-best.js,
+// x.txt -> x-best.txt); an extensionless path gets it appended.
+const BEST_PATH = (() => {
+  const pp = path.parse(SAVE_PATH);
+  return path.join(pp.dir, `${pp.name}-best${pp.ext}`);
+})();
 let bestTeMSE = Infinity;
 const hasBest = TEST_FILE || TEST_POS_RAW > 0;
 console.log(`Out: ${SAVE_PATH}${hasBest ? ` (best: ${BEST_PATH})` : ''}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);

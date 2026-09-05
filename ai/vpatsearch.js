@@ -18,7 +18,7 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { extractFeatures, evaluateFeatures, deltaZ, loadWeights, prepareSpecs } = _isNode ? require('../vpatterns.js') : window.VPatterns;
+const { extractFeatures, evaluateFeatures, deltaZ, loadWeights, prepareSpecs, makeWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const Util = _isNode ? require('../util.js') : window.Util;
 const { BLACK, PASS } = _isNode ? require('../game2.js') : window.game;
@@ -36,7 +36,7 @@ for (let maxLibs = MIN_LIBS; maxLibs <= MAX_LIBS; maxLibs++)
   for (const size of [1, 2, 3])
     defaultSpecs.push({ size, maxLibs });
 
-let model = { weights: new Map(), specs: defaultSpecs, preparedSpecs: prepareSpecs(defaultSpecs) };
+let model = { weights: makeWeights(), specs: defaultSpecs, preparedSpecs: prepareSpecs(defaultSpecs) };
 
 // ── Search ────────────────────────────────────────────────────────────────────
 

@@ -117,9 +117,11 @@ function create(cfg) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
       (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
   }
+  const _vpatWeights = VPat.makeWeights(Math.max(1024, (_vpatRaw.weights.size ?? _vpatRaw.weights.length) * 2));
+  for (const [k, v] of _vpatRaw.weights) _vpatWeights.set(k, v);
   const _vpatModel = { specs: _vpatRaw.specs,
                        preparedSpecs: VPat.prepareSpecs(_vpatRaw.specs),
-                       weights: new Map(_vpatRaw.weights) };
+                       weights: _vpatWeights };
   // Name the evaluator file and the truncation knobs in the banner: two slots
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.
@@ -541,8 +543,11 @@ function create(cfg) {
     if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
 
     const r = options.rng || makeRng();
-    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : 1000;
-    const { root } = runSearch(game2, N, r, playoutLimit, 0);
+    // Fixed PLAYOUTS wins (as in getMove); else an options.budgetMs time
+    // budget; else the historical 1000-playout default.
+    const budgetMs = options.budgetMs > 0 ? options.budgetMs : 0;
+    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : (budgetMs > 0 ? 0 : 1000);
+    const { root } = runSearch(game2, N, r, playoutLimit, budgetMs);
 
     let totalChildWins = 0;
     const M = root.legalMoves.length;
