@@ -101,6 +101,33 @@ function create(cfg) {
   // this; at or above it the playout runs to the end (late playouts are short
   // and nearly exact, so substitution there is pure downside).
   const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 1);
+  // Gate ramp: truncation probability is 1 at or below _A, 0 at or above _B,
+  // linear between (drawn once per playout, anchored on the leaf — the
+  // endpoint phase is leaf + delta by construction).  Both default to
+  // TRUNC_MAX_PHASE, i.e. the hard cliff.  The ramp exists to smooth the
+  // truncate/no-truncate currency seam between sibling branches: a k-stone
+  // capture shifts the leaf by (k-1)/cap of phase, which across a hard gate
+  // flips the subtree's value source outright.
+  // TRUNC_MAX_PHASE_A also accepts the sentinel 'auto': the ramp start is
+  // then dynamic, the midpoint of (rootPhase + TRUNC_PHASE_DELTA) — the
+  // minimum endpoint this decision can produce — and _B.  Shallow leaves
+  // (the bulk of the frontier) sit on the p=1 plateau, so the truncation
+  // throughput survives; only the deeper half of the reachable range ramps
+  // toward full-playout (unbiased) returns.  (The full-span variant, ramp
+  // start at root+delta itself, measured a clear loss at budget 500 —
+  // 2026-09-06: too many full playouts across the whole zone.)
+  const _gateARaw = cfg.str('TRUNC_MAX_PHASE_A', '');
+  const GATE_A_AUTO = _gateARaw === 'auto';
+  const TRUNC_MAX_PHASE_A = GATE_A_AUTO ? NaN
+    : _gateARaw !== '' ? parseFloat(_gateARaw) : TRUNC_MAX_PHASE;
+  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', TRUNC_MAX_PHASE);
+  if (!GATE_A_AUTO && !(TRUNC_MAX_PHASE_A <= TRUNC_MAX_PHASE_B)) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+      `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
+  }
+  // Ramp start used by playout(); in auto mode runSearch refreshes it per
+  // decision from the root position.
+  let _gateA = TRUNC_MAX_PHASE_A;
 
   // Static evaluator: a vpatterns checkpoint (train-vpat-playout-eval).
   // Hard failure, not a fallback — this agent's identity IS its truncated
@@ -128,7 +155,10 @@ function create(cfg) {
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${_vpatModel.specs.map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}) from ${_vpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ${TRUNC_MAX_PHASE}`);
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ` +
+    (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
+     : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
+     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`));
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -207,7 +237,15 @@ function create(cfg) {
     // once, at the first position whose net empty-count drop reaches the
     // delta.  Checked after each move; captures push it further away.
     const truncEmpty = game2.emptyCount - Math.ceil(TRUNC_PHASE_DELTA * cap);
-    let truncArmed = true;
+    // Gate, decided up front from the leaf (the endpoint phase is fixed at
+    // playout start: the trigger fires at exactly truncEmpty empties).
+    // p = 1 at/below _A, 0 at/above _B, linear ramp between; the cliff
+    // (_A === _B) takes the no-draw paths, leaving the rng stream untouched.
+    const epPhase = (cap - truncEmpty) / cap;
+    let truncArmed;
+    if (epPhase >= TRUNC_MAX_PHASE_B) truncArmed = false;
+    else if (epPhase <= _gateA)       truncArmed = true;
+    else truncArmed = rng.random() < (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
 
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
@@ -229,9 +267,9 @@ function create(cfg) {
       moves++;
       weight -= weightStep;
       if (truncArmed && game2.emptyCount <= truncEmpty) {
-        truncArmed = false;   // one check per playout: past here, play to the end
-        if (!game2.gameOver && (cap - game2.emptyCount) / cap < TRUNC_MAX_PHASE)
-          return vpatValueB(game2);
+        // The gate itself was decided at playout start (leaf-anchored draw).
+        if (!game2.gameOver) return vpatValueB(game2);
+        truncArmed = false;
       }
     }
 
@@ -447,6 +485,12 @@ function create(cfg) {
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
+    // Root-anchored ramp start: the minimum endpoint phase this decision can
+    // produce (see TRUNC_MAX_PHASE_A='auto').
+    if (GATE_A_AUTO) {
+      const minEp = (N * N - game2.emptyCount) / (N * N) + TRUNC_PHASE_DELTA;
+      _gateA = (minEp + TRUNC_MAX_PHASE_B) / 2;
+    }
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
