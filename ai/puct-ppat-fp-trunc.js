@@ -125,6 +125,17 @@ function create(cfg) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
       `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
   }
+  // Cap on the truncation probability: even where the gate would give p = 1,
+  // at most this fraction of playouts truncate — the rest run full, keeping
+  // an unbiased playout component in every node's value.  The evaluator's
+  // variance edge depreciates with budget while its bias doesn't; the cap
+  // buys bias anchoring at a throughput price, so it should earn its keep at
+  // high budgets if anywhere.  1 = no cap (default, rng stream untouched).
+  const TRUNC_MAX_RATIO = cfg.float('TRUNC_MAX_RATIO', 1);
+  if (!(TRUNC_MAX_RATIO > 0 && TRUNC_MAX_RATIO <= 1)) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+      `TRUNC_MAX_RATIO (${TRUNC_MAX_RATIO}) must be in (0, 1]`);
+  }
   // Ramp start used by playout(); in auto mode runSearch refreshes it per
   // decision from the root position.
   let _gateA = TRUNC_MAX_PHASE_A;
@@ -158,7 +169,8 @@ function create(cfg) {
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
-     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`));
+     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`) +
+    (TRUNC_MAX_RATIO < 1 ? `, trunc-max-ratio: ${TRUNC_MAX_RATIO}` : ''));
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -244,8 +256,9 @@ function create(cfg) {
     const epPhase = (cap - truncEmpty) / cap;
     let truncArmed;
     if (epPhase >= TRUNC_MAX_PHASE_B) truncArmed = false;
-    else if (epPhase <= _gateA)       truncArmed = true;
-    else truncArmed = rng.random() < (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
+    else if (epPhase <= _gateA)       truncArmed = TRUNC_MAX_RATIO >= 1 || rng.random() < TRUNC_MAX_RATIO;
+    else truncArmed = rng.random() <
+      TRUNC_MAX_RATIO * (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
 
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
