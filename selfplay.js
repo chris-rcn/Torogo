@@ -72,7 +72,7 @@ const VERBOSE = Util.envInt('VERBOSE', 0);
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'rand-mirror-pairs', 'stop-tol', 'stop-min',
-   'min-phase', 'max-phase', 'fallback']);
+   'min-phase', 'max-phase', 'fallback', 'fallback-playouts']);
 
 if (opts.help) {
   console.log(`Usage: node selfplay.js [options]
@@ -100,6 +100,17 @@ alternate between games; per-agent env config uses the P1_/P2_ prefixes
                     gate).  Defaults (0,1) = whole game, no fallback
   --fallback AGENT  agent for moves outside the phase window
                     (default ref-featurepol-softmax)
+  --fallback-playouts N
+                    adjudicate instead of playing out past max-phase: run N
+                    standard playouts (mc-ppat) from the handoff position and
+                    score the game to the side whose win-ratio exceeds 0.5
+                    (exact ties flip a coin).  Far lower variance than a
+                    played-out fallback.  Votes are PURE-UNIFORM playouts
+                    by default (no learned components in the judge); judge
+                    env config uses the PJ_ prefix, e.g.
+                    PJ_PPAT_MIN_PHASE=0.6 for standard ppat-flavoured
+                    votes.  The pre-min-phase opening still uses the
+                    --fallback agent.  (default 0 = play out)
 
   --stop-tol A      early stop once P(p2 truly better than 50%) reaches 1-A
                     (confidently better) or A (confidently worse)
@@ -135,6 +146,11 @@ const randMoves = parseInt(opts['rand-moves'] ?? (randMirrorPairs > 0 ? '0' : '4
 const minPhase     = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
 const maxPhase     = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
 const fallbackName = opts.fallback || 'ref-featurepol-softmax';
+const fallbackPlayouts = parseInt(opts['fallback-playouts'] || '0', 10);
+if (!(fallbackPlayouts >= 0)) {
+  console.error('--fallback-playouts must be a non-negative integer');
+  process.exit(1);
+}
 if (minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
   console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
   process.exit(1);
@@ -179,8 +195,25 @@ const p2Budget = slotBudget(2);
 const usePhaseWindow = minPhase > 0 || maxPhase < 1;
 const fallback       = usePhaseWindow ? loadAgent(fallbackName, 'F') : null;
 const fallbackBudget = slotBudget('F');
+// Post-max-phase adjudicator (--fallback-playouts): an mc-ppat instance whose
+// valueB runs the votes.  Judge config uses slot 'J' (PJ_* overrides, plain
+// env fallback), so judge-only knobs cannot leak into the contestants'
+// plain-env reads.  Votes default to PURE-UNIFORM playouts
+// (PPAT_MIN_PHASE 1): a judge with no learned components shares no training
+// lineage with the contestants, so its errors cannot correlate with the
+// knob under test (measured cost vs ppat-flavoured votes: ~3x the games —
+// 1k-vs-2k calibration, 2026-09-06).  PJ_PPAT_MIN_PHASE opts back into
+// ppat-flavoured votes; the PLAYOUTS override pins the count.
+const adjudicator = usePhaseWindow && fallbackPlayouts > 0
+  ? require('./ai/mc-ppat.js').create(Util.makeCfg('J', {
+      PLAYOUTS: String(fallbackPlayouts),
+      PPAT_MIN_PHASE: process.env.PJ_PPAT_MIN_PHASE !== undefined ? process.env.PJ_PPAT_MIN_PHASE : '1',
+    }))
+  : null;
+let adjCount = 0, adjCloseCount = 0, adjAbsSum = 0;   // adjudication margin stats
 if (usePhaseWindow)
-  console.log(`phase window: [${minPhase}, ${maxPhase}]  fallback: ${fallbackName} (budget ${fallbackBudget}ms)`);
+  console.log(`phase window: [${minPhase}, ${maxPhase}]  fallback: ${fallbackName} (budget ${fallbackBudget}ms)` +
+    (adjudicator ? `  adjudication: ${fallbackPlayouts} standard playouts past max-phase` : ''));
 
 // Board fullness used to gate the window: 1 − empty/area, per the canonical
 // "phase" definition.  Not strictly monotonic (captures lower it), which is fine
@@ -239,6 +272,9 @@ function printStats(gamesPlayed) {
     Util.fmtRatio4(tally.p2 / gamesPlayed)                 .padStart(4),
     Util.fmtRatio4(probPlayerBetter(tally.p2, gamesPlayed)).padStart(8),
   ].join('  '));
+  if (adjCount > 0) {
+    console.log(`adj: ${adjCount} games  close(|P-0.5|<0.05): ${adjCloseCount}  avg|margin|: ${(adjAbsSum / adjCount).toFixed(3)}`);
+  }
 }
 
 function maybePrint(gamesPlayed) {
@@ -375,6 +411,7 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
   if (VERBOSE) console.log(`${names[0]} ● vs ${names[1]} ○`);
 
   const game = startGame.clone();
+  let adjP = null;   // adjudicated P(BLACK wins), when --fallback-playouts ends the game
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === BLACK;
@@ -383,6 +420,17 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
     // attributed to p1/p2 timing.  (min-phase is already satisfied by the shared
     // opening; we don't re-gate on it mid-game — see phaseOf note above.)
     if (fallback && phaseOf(game) > maxPhase) {
+      if (adjudicator) {
+        // Adjudicate instead of playing out: N standard playouts from the
+        // handoff position; the game scores to the playout-majority side.
+        adjP = adjudicator.valueB(game, { rng: isBlackTurn ? seatRng[0] : seatRng[1] });
+        adjCount++;
+        const m = Math.abs(adjP - 0.5);
+        adjAbsSum += m;
+        if (m < 0.05) adjCloseCount++;
+        if (VERBOSE) console.log(`adjudicated at phase ${phaseOf(game).toFixed(3)}: P(BLACK) = ${adjP.toFixed(3)}`);
+        break;
+      }
       Math.random = (isBlackTurn ? seatRng[0] : seatRng[1]).random;
       const fm = fallback(game, fallbackBudget);
       Math.random = origRandom;
@@ -416,7 +464,10 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
   }
   totalGameLen += game.moveCount;
   maxGameLen = Math.max(maxGameLen, game.moveCount);
-  const winner = game.calcWinner();
+  const winner = adjP !== null
+    ? (adjP > 0.5 ? BLACK : adjP < 0.5 ? WHITE
+       : (seatRng[0].random() < 0.5 ? BLACK : WHITE))
+    : game.calcWinner();
   if (winner === BLACK) {
     blackWinCount++;
     tally[p1IsBlack ? 'p1' : 'p2']++;
