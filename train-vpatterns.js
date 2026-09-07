@@ -54,7 +54,9 @@ checkpoint is written at every print.
 
   --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4, or
                     34 = the 3x4/4x3 rectangle pair, both orientations;
-                    maxLibs 1 = presence only; trailing 'f' freezes that
+                    maxLibs 1 = presence only, or L = ladder-coded cells
+                    (vlibpat 7-state tactical alphabet; game3 pass per
+                    position, not incremental); trailing 'f' freezes that
                     spec's loaded weights).  Default 1:6,2:6,3:6.  With
                     --load, --spec overrides the checkpoint's specs: shared
                     specs keep their trained weights, new ones start at zero
@@ -159,9 +161,12 @@ if (opts.spec) {
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
-    const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
-    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4 or 34, maxLibs >= 1)`);
+    const body = frozen ? mRaw.slice(0, -1) : mRaw;
+    // 'L' = the ladder-coded family (vlibpat 7-state tactical alphabet),
+    // internally maxLibs 0.  Not incremental: unusable with deltaZ consumers.
+    const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
+    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1 || body === 'L')) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
@@ -387,7 +392,7 @@ if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     // Compare canonical fields, not whole objects (spec objects can carry
     // derived properties that would false-positive the comparison).
-    const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs}`).join(',');
+    const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
     const cliSpecs = opts.spec ? specs : null;
     const loaded = loadWeights(LOAD_PATH);
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);

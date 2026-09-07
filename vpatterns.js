@@ -10,6 +10,8 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 
 const { BLACK, EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
 const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
+const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
 
 // Weight tables are open-addressing int32→float64 maps (int-map.js): far
 // cheaper get/set than a V8 Map at large sizes, same get/set/size surface,
@@ -55,7 +57,11 @@ function mixTag(h, tag) {
   return uh(h, tag);
 }
 // Spec size → 3-bit tag code.  Sizes 1-4 are themselves; spec size 34 (the
-// 3×4 ∪ 4×3 rectangle pair) takes the free code 5.
+// 3×4 ∪ 4×3 rectangle pair) takes the free code 5.  maxLibs 0 is the
+// LADDER-CODED family ('size:L' in the trainers): raw is vlibpat's 7-state
+// turn-independent tactical alphabet (0 empty, ±1 alive, ±2 dead, ±3
+// unsettled) instead of capped liberty counts — structurally identical to
+// an ml=3 encoding, so the whole plane/hash/34 machinery is shared.
 function specTag(spec) {
   return (spec.maxLibs << 3) | (spec.size === 34 ? 5 : spec.size);
 }
@@ -164,7 +170,11 @@ function prepareSpecs(specs) {
   for (const sizes of byMaxLibs.values())
     for (const s of sizes) totalSizes += s === 34 ? 2 : 1;
 
-  return { byMaxLibs, sortedMaxLibs, totalSizes };
+  // maxLibs 0 = the ladder-coded family (needs a game3 tactical pass; not
+  // incremental — deltaZ and speculative extraction refuse it).
+  const hasLadder = byMaxLibs.has(0);
+
+  return { byMaxLibs, sortedMaxLibs, totalSizes, hasLadder };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -186,6 +196,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
+  // Ladder codes classify via a game3 rebuild of the CURRENT cells; under a
+  // speculative mutation the mover/turn bookkeeping is wrong, so refuse
+  // before touching the board.
+  if (doSetNext && prepSpecs.hasLadder) {
+    throw new Error('vpatterns: ladder-coded specs (size:L) do not support speculative extraction (doSetNext)');
+  }
   let captures;
   if (doSetNext) {
     captures = game.captureList(nextMove);
@@ -205,7 +221,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
-    if (raw === null) {
+    const isLadder = maxLibs === 0;   // sorts last (descending), after the liberty chain
+    if (isLadder) {
+      // vlibpat's turn-independent 7-state tactical alphabet, from a fresh
+      // game3 tactical pass over the current cells.
+      raw = VLibPat.computeLadderCodes(game3FromGame2(game), null);
+    } else if (raw === null) {
       raw = new Int8Array(cap);
       if (maxLibs === 1) {
         for (let i = 0; i < cap; i++) raw[i] = cells[i];
@@ -227,6 +248,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         else if (raw[i] < -maxLibs) raw[i] = -maxLibs;
       }
     }
+    // Ladder family: leaf offset 3 (codes span ±3); size-1 keys in their own
+    // block (131*16 — a real maxLibs cannot exceed 15).
+    const effOff = isLadder ? 3 : maxLibs;
     const sizes = byMaxLibs.get(maxLibs);
     const do1   = sizes.includes(1);
     const do2   = sizes.includes(2);
@@ -235,7 +259,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do34  = sizes.includes(34);   // 3×4 ∪ 4×3 rectangle pair
 
     if (do1) {
-      const k1base = 131 * maxLibs;
+      const k1base = 131 * (isLadder ? 16 : maxLibs);
       for (let idx = 0; idx < cap; idx++) {
         const s = raw[idx];
         if (s !== 0) {
@@ -259,7 +283,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       const lN = pl.lN, lI = pl.lI, h2N = pl.h2N, h2I = pl.h2I;
       // Leaf planes: the prime mapping over raw (normal) and -raw (colour-
       // inverted).  Then the 2×2 X-hash plane over both colourings.
-      const off = maxLibs;
+      const off = effOff;
       for (let i = 0; i < cap; i++) { lN[i] = _leafTab[raw[i] + off]; lI[i] = _leafTab[off - raw[i]]; }
       for (let y = 0; y < N; y++) {
         const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
@@ -383,6 +407,11 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
 // the caller falls back to full extraction — on a SEPARATE prepSpecs, so
 // the base planes here survive (see vpatsearch).
 function deltaZ(game, prepSpecs, weights, move) {
+  // Ladder codes update non-locally (one stone can flip a whole ladder
+  // path), so the incremental contract cannot hold — fail loudly.
+  if (prepSpecs.hasLadder) {
+    throw new Error('vpatterns deltaZ: ladder-coded specs (size:L) are not incremental');
+  }
   if (move === PASS) return 0;
   if (game.captureList(move).length > 0) return NaN;
   const N = game.N, cap = N * N, cells = game.cells, cur = game.current;
