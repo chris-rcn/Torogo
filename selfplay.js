@@ -272,7 +272,9 @@ function printStats(gamesPlayed) {
     Util.fmtRatio4(tally.p2 / gamesPlayed)                 .padStart(4),
     Util.fmtRatio4(probPlayerBetter(tally.p2, gamesPlayed)).padStart(8),
   ].join('  '));
-  if (adjCount > 0) {
+  // Adjudication margin stats: diagnostic only (close-call fraction flags a
+  // margin-compressed matchup); VERBOSE to keep routine output to the table.
+  if (VERBOSE && adjCount > 0) {
     console.log(`adj: ${adjCount} games  close(|P-0.5|<0.05): ${adjCloseCount}  avg|margin|: ${(adjAbsSum / adjCount).toFixed(3)}`);
   }
 }
