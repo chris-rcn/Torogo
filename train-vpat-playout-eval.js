@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
-  ['data', 'test-file', 'test-pos', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
+  ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
    'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
@@ -42,6 +42,12 @@ indefinitely unless --epochs is given; the checkpoint is written at every
 print, and each new best teMSE also writes the -best checkpoint.
 
   --data FILE       gen-agent-evals data file (required)
+  --bias-file F     bias test set (measure-trunc-bias --emit): per print,
+                    the EMA weights are scored over its cached endpoint
+                    pairs, adding b2 and bias columns — the truncation bias
+                    floor E[b^2] and its shared lean, the deployment
+                    quantities teMSE cannot see.  Reported only; -best
+                    stays teMSE-selected
   --test-file F     separate data file supplying the held-out test set:
                     band-filtered, then all of it (or capped at --test-pos);
                     --data is then entirely train pool
@@ -57,7 +63,9 @@ print, and each new best teMSE also writes the -best checkpoint.
 
   --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4, or
                     34 = the 3x4/4x3 rectangle pair, both orientations;
-                    maxLibs 1 = presence only; trailing 'f' freezes that
+                    maxLibs 1 = presence only, or L = ladder-coded cells
+                    (vlibpat 7-state tactical alphabet; game3 pass per
+                    position, not incremental); trailing 'f' freezes that
                     spec's loaded weights).  Default 1:6,2:6,3:6
   --lr F            step size for the update (default 0.3)
   --lr-decay F      multiply LR by this factor at the end of each epoch
@@ -117,9 +125,12 @@ if (opts.spec) {
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
-    const maxLibs = parseInt(frozen ? mRaw.slice(0, -1) : mRaw, 10);
-    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1)) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f], size 1-4 or 34, maxLibs >= 1)`);
+    const body = frozen ? mRaw.slice(0, -1) : mRaw;
+    // 'L' = the ladder-coded family (vlibpat 7-state tactical alphabet),
+    // internally maxLibs 0.  Not incremental: unusable with deltaZ consumers.
+    const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
+    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1 || body === 'L')) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
@@ -129,7 +140,7 @@ if (opts.spec) {
   specs = [{ size: 1, maxLibs: 6 }, { size: 2, maxLibs: 6 }, { size: 3, maxLibs: 6 }];
 }
 let prepSpecs = prepareSpecs(specs);
-const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs}`).join(',');
+const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -279,6 +290,56 @@ function replayRecord(rec, bandExempt = false) {
   return game;
 }
 
+// ── Bias test set (measure-trunc-bias --emit artifact) ───────────────────────
+// Endpoint features are model-independent given the spec: replay + extract
+// once at load, then each print is just 2n evaluateFeatures passes.
+const BIAS_FILE = opts['bias-file'] || null;
+let biasPairs = null;
+// Called AFTER --load has resolved the final specs/prepSpecs: the cached
+// features must be extracted under the spec the weights are keyed by.
+function loadBiasPairs() {
+  if (!BIAS_FILE) return;
+  const lines = fs.readFileSync(BIAS_FILE, 'utf8').split('\n');
+  const header = lines.find(l => l.startsWith('# bias-pairs:'));
+  if (header) console.log(header.slice(2));
+  biasPairs = [];
+  const t0b = Date.now();
+  for (const line of lines) {
+    if (!line || line[0] === '#') continue;
+    const p = line.trim().split(/\s+/);
+    if (p.length !== 7) continue;
+    const size = parseInt(p[0], 10);
+    const rec = { pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
+    for (const [key, col] of [['f1', 3], ['f2', 4]]) {
+      const g = new Game2(size);
+      for (const t of p[col].split(',')) {
+        if (!g.play(parseMove(t, size))) {
+          console.error(`bias-file: replay failed (${BIAS_FILE})`);
+          process.exit(1);
+        }
+      }
+      const f = extractFeatures(g, prepSpecs);
+      rec[key] = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), count: f.count };
+    }
+    biasPairs.push(rec);
+  }
+  console.log(`bias pairs: ${biasPairs.length} loaded+extracted from ${BIAS_FILE} in ${((Date.now() - t0b) / 1000).toFixed(1)}s`);
+}
+
+
+function biasStats() {
+  if (!biasPairs) return null;
+  const evalW = saveEvalW();
+  let prod = 0, lean = 0;
+  for (const rec of biasPairs) {
+    const v1 = evaluateFeatures(rec.f1, evalW);
+    const v2 = evaluateFeatures(rec.f2, evalW);
+    prod += (v1 - rec.pa) * (v2 - rec.pb);
+    lean += (v1 + v2) / 2 - (rec.pa + rec.pb) / 2;
+  }
+  return { b2: prod / biasPairs.length, lean: lean / biasPairs.length };
+}
+
 function testMSE() {
   if (testRecs.length === 0) return null;
   const evalW = saveEvalW();
@@ -328,6 +389,7 @@ if (NO_ADD && weights.size === 0) {
     (Number.isFinite(TEST_POS_RAW) ? `, capped at ${TEST_POS_RAW}` : ``) +
     (BAND_ACTIVE ? `, ${_testAll.outsideBand} outside band dropped)` : `)`));
 }
+loadBiasPairs();
 console.log(`LR=${LR}  lr-decay=${LR_DECAY}  smooth-weights=${EMA_ALPHA}  max-weights=${MAX_WEIGHTS || '(unlimited)'}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
 console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has(specTag(sp))).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}${NO_ADD ? `  no-add` : ''}`);
 // '-best' goes before the file extension, whatever it is (x.js -> x-best.js,
@@ -377,10 +439,12 @@ function evalVsReference(N, refGetMove, nGames) {
 // ── Columns ───────────────────────────────────────────────────────────────────
 
 const COLS = ['T', 'pos', 'epoch', 'LR', 'tPos', 'nWts', 'avgW', 'trMSE', 'teMSE',
+              ...(biasPairs ? ['b2', 'bias', 'varB'] : []),
               ...(evalGetMove ? ['winRatio'] : []),
               ...(ladderCases ? ['ladr'] : []),
               ...(mdPositions ? ['mdRms'] : [])];
 const COLW = [5, 5, 5, 7, 5, 4, 6, 6, 7,
+              ...(biasPairs ? [8, 7, 8] : []),
               ...(evalGetMove ? [21] : []),
               ...(ladderCases ? [4] : []),
               ...(mdPositions ? [5] : [])];
@@ -457,6 +521,12 @@ function statusPrint() {
     trMSE.toFixed(4),
     (teMSE !== null ? teMSE.toFixed(4) + (isBest ? '*' : ' ') : '-'),
   ];
+  if (biasPairs) {
+    const bs = biasStats();
+    // varB = the floor that survives a constant (step-2) correction.
+    cols.push(bs.b2.toFixed(5), (bs.lean >= 0 ? '+' : '') + bs.lean.toFixed(3),
+              (bs.b2 - bs.lean * bs.lean).toFixed(5));
+  }
   if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
                              `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
   if (ladrRatio !== null) cols.push(Util.fmtRatio4(ladrRatio));
