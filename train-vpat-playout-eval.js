@@ -303,12 +303,19 @@ function loadBiasPairs() {
   const header = lines.find(l => l.startsWith('# bias-pairs:'));
   if (header) console.log(header.slice(2));
   biasPairs = [];
+  let biasDropped = 0;
   const t0b = Date.now();
   for (const line of lines) {
     if (!line || line[0] === '#') continue;
     const p = line.trim().split(/\s+/);
     if (p.length !== 7) continue;
     const size = parseInt(p[0], 10);
+    // Pairs whose ENDPOINT phase falls outside the training band are dropped:
+    // under the band-matching convention the training band IS the consulted
+    // band, and out-of-band pairs add checkpoint-dependent extrapolation
+    // noise to varB (and to -best selection).
+    const ph = parseFloat(p[1]);
+    if (ph < MIN_PHASE || ph > MAX_PHASE) { biasDropped++; continue; }
     const rec = { pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
     for (const [key, col] of [['f1', 3], ['f2', 4]]) {
       const g = new Game2(size);
@@ -323,7 +330,8 @@ function loadBiasPairs() {
     }
     biasPairs.push(rec);
   }
-  console.log(`bias pairs: ${biasPairs.length} loaded+extracted from ${BIAS_FILE} in ${((Date.now() - t0b) / 1000).toFixed(1)}s`);
+  console.log(`bias pairs: ${biasPairs.length} loaded+extracted from ${BIAS_FILE} in ${((Date.now() - t0b) / 1000).toFixed(1)}s` +
+    (biasDropped ? ` (${biasDropped} outside band [${MIN_PHASE}, ${MAX_PHASE}] dropped)` : ''));
 }
 
 
@@ -398,9 +406,9 @@ const BEST_PATH = (() => {
   const pp = path.parse(SAVE_PATH);
   return path.join(pp.dir, `${pp.name}-best${pp.ext}`);
 })();
-let bestTeMSE = Infinity;
+let bestMetric = Infinity;
 const hasBest = TEST_FILE || TEST_POS_RAW > 0;
-console.log(`Out: ${SAVE_PATH}${hasBest ? ` (best: ${BEST_PATH})` : ''}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
+console.log(`Out: ${SAVE_PATH}${hasBest || biasPairs ? ` (best: ${BEST_PATH})` : ''}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const testAgent = gm => ({ move: gm.gameOver ? PASS
@@ -492,8 +500,13 @@ function statusPrint() {
   const tPosMs = intervalTrainMs / Math.max(1, intervalPos);
   const trMSE  = trSEN > 0 ? trSE / trSEN : 0;
   const teMSE  = testMSE();
-  const isBest = teMSE !== null && teMSE < bestTeMSE;
-  if (isBest) bestTeMSE = teMSE;
+  const bs = biasPairs ? biasStats() : null;
+  const varB = bs ? bs.b2 - bs.lean * bs.lean : null;
+  // One -best, selected by the most deployment-relevant metric available:
+  // varB (the truncation floor) when a bias file is loaded, else teMSE.
+  const metric = varB !== null ? varB : teMSE;
+  const isBest = metric !== null && metric < bestMetric;
+  if (isBest) bestMetric = metric;
 
   const ws   = weights.size;
   const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
@@ -519,13 +532,13 @@ function statusPrint() {
     Util.fmt4i(ws),
     wAvg.toFixed(4),
     trMSE.toFixed(4),
-    (teMSE !== null ? teMSE.toFixed(4) + (isBest ? '*' : ' ') : '-'),
+    (teMSE !== null ? teMSE.toFixed(4) + (isBest && varB === null ? '*' : ' ') : '-'),
   ];
-  if (biasPairs) {
-    const bs = biasStats();
-    // varB = the floor that survives a constant (step-2) correction.
+  if (bs) {
+    // varB = the floor that survives a constant (step-2) correction; when a
+    // bias file is loaded it is the -best selector, so the '*' lives here.
     cols.push(bs.b2.toFixed(5), (bs.lean >= 0 ? '+' : '') + bs.lean.toFixed(3),
-              (bs.b2 - bs.lean * bs.lean).toFixed(5));
+              varB.toFixed(5) + (isBest ? '*' : ' '));
   }
   if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
                              `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
