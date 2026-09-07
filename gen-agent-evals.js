@@ -37,7 +37,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Game2, BLACK, PASS, coordStr, parseMove } = require('./game2.js');
+const { Game2, BLACK, PASS, coordStr, parseMove, setKomi } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
@@ -47,7 +47,7 @@ const Util = require('./util.js');
 console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['agent', 'corpus', 'min-phase', 'max-phase', 'limit']);
+  ['agent', 'corpus', 'min-phase', 'max-phase', 'limit', 'komi']);
 if (opts.help || !opts.agent || !opts.corpus) {
   console.error(`Usage: node gen-agent-evals.js --agent <name> --corpus <file> [options]  > out.txt
 
@@ -72,6 +72,10 @@ to stderr.  Non-deterministic; runs until --limit or killed.
                     mixed sizes fine — size comes from each record) (required)
   --min-phase F     sample plies at board fullness >= F (default 0)
   --max-phase F     sample plies at board fullness <= F (default 1)
+  --komi K          scoring komi for the labeling playouts (default 3.5;
+                    applied to every board size via setKomi before the
+                    agent loads).  Integer komi allows tied scores on this
+                    area scoring — prefer half-integer values
   --limit N         stop after emitting N positions (default: run until
                     killed)
   --help            show this message`);
@@ -83,6 +87,14 @@ const corpusPath = opts.corpus;
 const minPhase   = parseFloat(opts['min-phase'] !== undefined ? opts['min-phase'] : '0');
 const maxPhase   = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase'] : '1');
 const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+// Labeling komi: applied before the agent loads so its playouts score with
+// it.  Set for every plausible board size (setKomi is per-size).
+const KOMI_ARG = opts.komi !== undefined ? parseFloat(opts.komi) : null;
+if (KOMI_ARG !== null) {
+  if (!(KOMI_ARG > -100 && KOMI_ARG < 100)) { console.error('--komi: bad value'); process.exit(1); }
+  if (Number.isInteger(KOMI_ARG)) { console.error('--komi: komi must be half-integer'); process.exit(1); }
+  for (let n = 5; n <= 19; n++) setKomi(n, KOMI_ARG);
+}
 
 const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
 if (typeof agent.valueB !== 'function') {
@@ -127,27 +139,32 @@ const corpus = [];                   // [{ size, moves: Int16Array }]
   }
   process.stdout.write(`# format: bsize phase moves winRatio\n`);
   process.stdout.write(`# corpus: ${corpusPath} (${corpus.length} games)\n`);
+  process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
 }
 
-process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  min-phase: ${minPhase}  max-phase: ${maxPhase}  limit: ${limit}\n`);
+const corpusSizes = [...new Set(corpus.map(g => g.size))].sort((a, b) => a - b).join(',');
+process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  size: ${corpusSizes}  min-phase: ${minPhase}  max-phase: ${maxPhase}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
 
 let emitted = 0, misses = 0;
 
 // Progress table (stderr): geometric print schedule, capped at 4 h between
 // rows (the JS-trainer convention).  tPosition is the interval mean.
-const COLS = ['tElapsed', 'positions', 'tPosition'];
-const COLW = [8, 9, 9];
+const COLS = ['tElapsed', 'positions', 'tPosition', 'blkWR'];
+const COLW = [8, 9, 9, 6];
 const printRow = cells => process.stderr.write(
   cells.map((c, i) => String(c).padStart(COLW[i])).join('  ') + '\n');
 printRow(COLS);
 const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 const t0 = Date.now();
 let nextPrintAt = t0 + 1000, lastPrintAt = t0, lastEmitted = 0;
+let pBlackSum = 0;   // running P(BLACK) over every emitted label — the
+                     // symmetry gauge the labeling komi is tuned against
 function progressRow() {
   const now = Date.now();
   const n = emitted - lastEmitted;
   printRow([Util.fmtMs(now - t0), Util.fmt4i(emitted),
-            Util.fmtMs(n > 0 ? (now - lastPrintAt) / n : 0)]);
+            Util.fmtMs(n > 0 ? (now - lastPrintAt) / n : 0),
+            emitted > 0 ? Util.fmtRatio4(pBlackSum / emitted) : '-']);
   lastPrintAt = now; lastEmitted = emitted;
   nextPrintAt = Math.min(t0 + Math.round((now - t0) * 1.3), now + MAX_PRINT_GAP_MS);
 }
@@ -195,6 +212,7 @@ while (emitted < limit) {
   const pos = new Game2(size);
   for (let i = 0; i < chosenPos; i++) pos.play(moves[i]);
   const val = agent.valueB(pos, { rng });                     // P(BLACK wins)
+  pBlackSum += val;
   const winRatio = pos.current === BLACK ? val : 1 - val;     // P(side-to-move wins)
 
   const seq = Array.from(moves.slice(0, chosenPos), m => coordStr(m, size)).join(',');

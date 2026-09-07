@@ -24,7 +24,12 @@ const _komiOverrides = new Map([
   [ 7, 48.5],
 ]);
 const KOMI = size => _komiOverrides.get(size) ?? 3.5;
-function setKomi(size, komi) { _komiOverrides.set(size, komi); }
+// Komi must be half-integer: area scores are integers, and the engine does
+// not support tied scores.
+function setKomi(size, komi) {
+  if (Number.isInteger(komi)) throw new Error(`setKomi: komi must be half-integer (got ${komi})`);
+  _komiOverrides.set(size, komi);
+}
 
 // Shared neighbor-table cache (same design as game.js)
 const topologyCache = new Map();
