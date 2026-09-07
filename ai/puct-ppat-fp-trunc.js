@@ -125,6 +125,25 @@ function create(cfg) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
       `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
   }
+  // Measured deployment correction for the truncated evals (step 2 of the
+  // komi/bias program): the evaluator's lean vs the deployed playout
+  // currency, as a linear function of the EVAL-POINT phase — measured per
+  // model by measure-trunc-bias / score-bias-curve.  "a,b" means
+  // offset(ph) = a + b*ph in win-probability units; it is applied as a
+  // LOGIT shift (4*offset, the slope match at v = 0.5), whose natural
+  // attenuation at extreme values matches the komi effect shrinking in
+  // decided positions.  Empty/off by default (bit-identical).
+  const _voRaw = cfg.str('TRUNC_VALUE_OFFSET', '');
+  let VO_A = 0, VO_B = 0, VO_ON = false;
+  if (_voRaw !== '') {
+    const parts = _voRaw.split(',').map(parseFloat);
+    if (parts.length < 1 || parts.length > 2 || parts.some(x => !Number.isFinite(x))) {
+      throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+        `TRUNC_VALUE_OFFSET must be "a" or "a,b" (offset = a + b*phase), got "${_voRaw}"`);
+    }
+    VO_A = parts[0]; VO_B = parts.length === 2 ? parts[1] : 0; VO_ON = true;
+  }
+
   // Cap on the truncation probability: even where the gate would give p = 1,
   // at most this fraction of playouts truncate — the rest run full, keeping
   // an unbiased playout component in every node's value.  The evaluator's
@@ -165,16 +184,22 @@ function create(cfg) {
   // and gate each side is actually running.
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-    `${_vpatModel.weights.size} vpat weights (${_vpatModel.specs.map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}) from ${_vpatName}, ` +
+    `${_vpatModel.weights.size} vpat weights (${_vpatModel.specs.map(sp => `${sp.size}:${sp.maxLibs === 0 ? 'L' : sp.maxLibs}`).join(',')}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
      : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`) +
-    (TRUNC_MAX_RATIO < 1 ? `, trunc-max-ratio: ${TRUNC_MAX_RATIO}` : ''));
+    (TRUNC_MAX_RATIO < 1 ? `, trunc-max-ratio: ${TRUNC_MAX_RATIO}` : '') +
+    (VO_ON ? `, trunc-value-offset: ${VO_A}${VO_B !== 0 ? `${VO_B >= 0 ? '+' : ''}${VO_B}*ph` : ''}` : ''));
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
-    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs), _vpatModel.weights);
+    const f = VPat.extractFeatures(game2, _vpatModel.preparedSpecs);
+    const v = VPat.evaluateFeatures(f, _vpatModel.weights);
+    if (!VO_ON) return v;
+    const cap = game2.N * game2.N;
+    const ph = (cap - game2.emptyCount) / cap;
+    return 1 / (1 + Math.exp(-(f.z - 4 * (VO_A + VO_B * ph))));
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
