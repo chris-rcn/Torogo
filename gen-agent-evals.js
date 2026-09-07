@@ -27,13 +27,21 @@
 //
 //   <size> <phase> <move1,move2,...> <winRatio>
 //
+// With --prefix-delta D each sampled ply is instead treated as a playout-
+// START: a standard-playout prefix (ppat policy, uniform below fullness 0.6
+// — the deployed playout) advances the position until board fullness has
+// gained D, and the ENDPOINT is what gets labeled and emitted (its move
+// list includes the prefix).  This produces the truncation deployment
+// distribution — coherent substrate under a playout crust — with the phase
+// window selecting playout-starts.
+//
 // The agent module (ai/<name>.js) must export a valueB(game, options) -> P(BLACK wins).
 // e.g. mc-ppat (mean of PLAYOUTS standard playouts), ref-vlibpat, mc-vlib.
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
 // Non-deterministic.  Usage:
 //   node gen-agent-evals.js --agent <name> --corpus <file>
-//        [--min-phase 0] [--max-phase 1] [--limit N]  > out.txt
+//        [--min-phase 0] [--max-phase 1] [--prefix-delta D] [--limit N]  > out.txt
 
 const fs = require('fs');
 const path = require('path');
@@ -47,7 +55,7 @@ const Util = require('./util.js');
 console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['agent', 'corpus', 'min-phase', 'max-phase', 'limit', 'komi']);
+  ['agent', 'corpus', 'min-phase', 'max-phase', 'prefix-delta', 'limit', 'komi']);
 if (opts.help || !opts.agent || !opts.corpus) {
   console.error(`Usage: node gen-agent-evals.js --agent <name> --corpus <file> [options]  > out.txt
 
@@ -76,6 +84,14 @@ to stderr.  Non-deterministic; runs until --limit or killed.
                     applied to every board size via setKomi before the
                     agent loads).  Integer komi allows tied scores on this
                     area scoring — prefer half-integer values
+  --prefix-delta D  treat each sampled ply as a playout-START: advance a
+                    standard-playout prefix (ppat policy, uniform below
+                    fullness 0.6 — the deployed playout) until board
+                    fullness has gained D, then label the ENDPOINT; the
+                    emitted move list includes the prefix.  The phase
+                    window still selects the start, so endpoints land
+                    near [min+D, max+D].  Samples whose game ends inside
+                    the prefix are skipped
   --limit N         stop after emitting N positions (default: run until
                     killed)
   --help            show this message`);
@@ -87,6 +103,10 @@ const corpusPath = opts.corpus;
 const minPhase   = parseFloat(opts['min-phase'] !== undefined ? opts['min-phase'] : '0');
 const maxPhase   = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase'] : '1');
 const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+const PREFIX_DELTA = opts['prefix-delta'] !== undefined ? parseFloat(opts['prefix-delta']) : null;
+if (PREFIX_DELTA !== null && !(PREFIX_DELTA > 0 && PREFIX_DELTA < 1)) {
+  console.error('--prefix-delta: must be in (0, 1)'); process.exit(1);
+}
 // Labeling komi: applied before the agent loads so its playouts score with
 // it.  Set for every plausible board size (setKomi is per-size).
 const KOMI_ARG = opts.komi !== undefined ? parseFloat(opts.komi) : null;
@@ -103,6 +123,16 @@ if (typeof agent.valueB !== 'function') {
 }
 
 const rng = makeRng(((Date.now() ^ (process.pid << 16)) >>> 0) || 1);   // non-deterministic
+
+// Standard-playout prefix machinery (--prefix-delta): the same policy the
+// deployed playout uses, matching measure-trunc-bias's defaults.
+let PPat = null, ppatModel = null;
+const ppatStates = new Map();                 // size -> ppat scratch state
+if (PREFIX_DELTA !== null) {
+  PPat = require('./ppat-lib.js');
+  ppatModel = PPat.loadWeights(path.join(__dirname, 'out', 'ppat-data-233162-best-ref-candidate.js'));
+  ppatModel.uniformBelowPhase = 0.6;
+}
 
 // Load the corpus up front (token->index only; each game is replay-validated
 // when it is first selected, not eagerly).
@@ -140,12 +170,14 @@ const corpus = [];                   // [{ size, moves: Int16Array }]
   process.stdout.write(`# format: bsize phase moves winRatio\n`);
   process.stdout.write(`# corpus: ${corpusPath} (${corpus.length} games)\n`);
   process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
+  if (PREFIX_DELTA !== null) process.stdout.write(
+    `# prefix-delta: ${PREFIX_DELTA} (standard-playout prefix from each sampled ply; endpoint labeled)\n`);
 }
 
 const corpusSizes = [...new Set(corpus.map(g => g.size))].sort((a, b) => a - b).join(',');
-process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  size: ${corpusSizes}  min-phase: ${minPhase}  max-phase: ${maxPhase}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
+process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  size: ${corpusSizes}  min-phase: ${minPhase}  max-phase: ${maxPhase}${PREFIX_DELTA !== null ? `  prefix-delta: ${PREFIX_DELTA}` : ''}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
 
-let emitted = 0, misses = 0;
+let emitted = 0, misses = 0, prefixSkips = 0, prefixStreak = 0;
 
 // Progress table (stderr): geometric print schedule, capped at 4 h between
 // rows (the JS-trainer convention).  tPosition is the interval mean.
@@ -211,14 +243,45 @@ while (emitted < limit) {
   // Replay to the chosen position and label it with the agent's value().
   const pos = new Game2(size);
   for (let i = 0; i < chosenPos; i++) pos.play(moves[i]);
+  let seq = Array.from(moves.slice(0, chosenPos), m => coordStr(m, size)).join(',');
+
+  if (PREFIX_DELTA !== null) {
+    // Advance the standard-playout prefix; the endpoint is the labeled
+    // position.  Captures delay the fullness gain, as deployed; a game
+    // that ends before the gain is reached has no endpoint — skip it.
+    let state = ppatStates.get(size);
+    if (!state) { state = PPat.createState(size); ppatStates.set(size, state); }
+    const area = size * size;
+    const stopEmpty = pos.emptyCount - Math.ceil(PREFIX_DELTA * area);
+    const moveLimit = 3 * pos.emptyCount + 20;
+    let n = 0;
+    while (!pos.gameOver && pos.emptyCount > stopEmpty && n < moveLimit) {
+      const m = PPat.ppatMove(pos, state, ppatModel, rng);
+      pos.play(m);
+      seq += ',' + coordStr(m, size);
+      n++;
+    }
+    if (pos.emptyCount > stopEmpty) {
+      prefixSkips++;
+      if (++prefixStreak >= MAX_MISSES) {
+        console.error(`game ended inside the prefix in ${MAX_MISSES} consecutive samples ` +
+                      `(--max-phase + --prefix-delta likely past reachable fullness)`);
+        process.exit(1);
+      }
+      continue;
+    }
+    prefixStreak = 0;
+  }
+
   const val = agent.valueB(pos, { rng });                     // P(BLACK wins)
   pBlackSum += val;
   const winRatio = pos.current === BLACK ? val : 1 - val;     // P(side-to-move wins)
 
-  const seq = Array.from(moves.slice(0, chosenPos), m => coordStr(m, size)).join(',');
   process.stdout.write(`${size} ${pos.phase().toFixed(3)} ${seq} ${winRatio}\n`);
   emitted++;
 
   if (Date.now() >= nextPrintAt) progressRow();
 }
 if (emitted > lastEmitted) progressRow();   // final partial interval
+if (prefixSkips) process.stderr.write(
+  `prefix-delta: ${prefixSkips} sample(s) skipped (game ended inside the prefix)\n`);
