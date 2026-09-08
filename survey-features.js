@@ -72,12 +72,12 @@ let games = 0;
 // Mirror any newly-interned probe keys' learned weights from the full model.
 function syncSubval(st) {
   if (st.weights.size === st.synced) return;
-  for (const [hash, d] of st.weights.map) {
+  st.weights.map.forEach((hash, d) => {
     if (d >= st.synced) {
       const mi = model.map.get(hash);
-      st.subval[d] = mi !== undefined ? model.vals[mi] : 0;
+      st.subval[d] = mi >= 0 ? model.vals[mi] : 0;
     }
-  }
+  });
   st.synced = st.weights.size;
 }
 

@@ -57,12 +57,12 @@ for (let p = 0; p < NPOS; p++) {
   }
   FeaturePol.extractFeatures(game, state, weights, g3);
   // Assign deterministic weights to every interned key (idempotent across positions).
-  for (const [hash, idx] of weights.map) weights.vals[idx] = wForHash(hash);
+  weights.map.forEach((hash, idx) => { weights.vals[idx] = wForHash(hash); });
   FeaturePol.computeSoftmax(state, weights, TEMP);
 
   // invert dense idx -> hash for this dump
   const invMap = new Map();
-  for (const [hash, idx] of weights.map) invMap.set(idx, hash);
+  weights.map.forEach((hash, idx) => invMap.set(idx, hash));
 
   const cands = [];
   for (let i = 0; i < state.count; i++) {

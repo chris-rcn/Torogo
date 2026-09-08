@@ -59,7 +59,7 @@ for (let i = 0; i < STEPS; i++) {
 if (SAVE) fs.writeFileSync(SAVE, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates }));
 
 const pairs = [];
-for (const [hash, idx] of weights.map) pairs.push([hash >>> 0, weights.vals[idx]]);
+weights.map.forEach((hash, idx) => pairs.push([hash >>> 0, weights.vals[idx]]));
 pairs.sort((a, b) => a[0] - b[0]);
 for (const [h, v] of pairs) out.push('W ' + h + ' ' + v.toPrecision(17));
 process.stdout.write(out.join('\n') + '\n');

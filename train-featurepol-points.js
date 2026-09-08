@@ -114,7 +114,7 @@ if (loaded) {
   const kept    = [...cliSpaces].filter(s => savedSpaces.has(s));
   const added   = [...cliSpaces].filter(s => !savedSpaces.has(s));
   const removed = [...savedSpaces].filter(s => !cliSpaces.has(s));
-  for (const [hash, srcIdx] of loaded.weights.map) weights.vals[FeaturePol.internKey(weights, hash)] = loaded.weights.vals[srcIdx];
+  loaded.weights.map.forEach((hash, srcIdx) => { weights.vals[FeaturePol.internKey(weights, hash)] = loaded.weights.vals[srcIdx]; });
   console.log(`Resumed from ${LOAD_PATH}: spaces kept ${kept.length}, added ${added.length}${added.length ? ` (${added.join(', ')})` : ''}, removed ${removed.length}${removed.length ? ` (${removed.join(', ')})` : ''}`);
 }
 

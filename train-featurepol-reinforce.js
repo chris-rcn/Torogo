@@ -18,9 +18,9 @@ const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'],
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'ladder-file', 'md-file', 'load', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'ladder-file', 'md-file', 'load', 'max-weights', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -65,6 +65,12 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --md-file P       evalmovedetails positions scored each status print; greedy
                     move-quality RMS gap to best (mdRms column)
   --load PATH       resume from saved weights
+  --max-weights N   stop interning NEW keys once the table holds N;
+                    existing weights keep training (0 = unlimited, default).
+                    The soft form of --no-add for huge shapes (stones20/24)
+  --no-add          fine-tune ONLY the keys already in the loaded model:
+                    unknown keys contribute zero, get no gradient, and are
+                    never interned (requires --load)
   --save PATH       where to save (default out/featurepol-<rand>.js)`);
   process.exit(opts.help ? 0 : 1);
 }
@@ -144,6 +150,12 @@ let totalUpdates = 0;
 // avgW: running frequency-weighted mean |weight| over every weight update this run.
 const wStats = { absSum: 0, count: 0 };
 
+const NO_ADD = opts['no-add'] === true;
+const MAX_WEIGHTS = opts['max-weights'] !== undefined ? parseInt(opts['max-weights'], 10) : 0;
+if (NO_ADD && !loaded) {
+  console.error('Error: --no-add needs a loaded model to fine-tune (pass --load).');
+  process.exit(1);
+}
 if (loaded) {
   ema = loaded.ema; totalUpdates = loaded.totalUpdates;
   // A saved komi wins over an auto:<start> seed — the seed only applies to
@@ -161,10 +173,10 @@ if (loaded) {
   const added   = [...cliSpaces].filter(s => !savedSpaces.has(s));
   const removed = [...savedSpaces].filter(s => !cliSpaces.has(s));
   let imported = 0;
-  for (const [hash, srcIdx] of loaded.weights.map) {
+  loaded.weights.map.forEach((hash, srcIdx) => {
     weights.vals[FeaturePol.internKey(weights, hash)] = loaded.weights.vals[srcIdx];
     imported++;
-  }
+  });
   console.log(`Resumed from ${LOAD_PATH}: imported ${imported} weights, ema=${ema.toFixed(3)}`);
   console.log(`  spaces: kept ${kept.length}` +
               `, added ${added.length}${added.length ? ` (${added.join(', ')})` : ''}` +
@@ -172,6 +184,15 @@ if (loaded) {
   if (kept.length === 0) {
     console.warn('  WARNING: CLI --spec shares no feature space with the saved model — nothing carried over (effectively a fresh start).');
   }
+}
+// After the import, so the loaded keys are all interned first.
+if (NO_ADD) {
+  weights.noAdd = true;
+  console.log(`no-add: key set frozen at ${weights.map.size} loaded weights (unknown keys contribute zero, no gradient)`);
+}
+if (MAX_WEIGHTS > 0) {
+  weights.maxWeights = MAX_WEIGHTS;
+  console.log(`max-weights: ${MAX_WEIGHTS} (new keys stop interning at the cap; existing keys keep training)`);
 }
 
 const evalGetMove = EVAL_AGENT ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove : null;
@@ -360,14 +381,12 @@ while (true) {
   }
 
   if (Date.now() >= nextPrintAt) {
-    let wNz = 0;
-    for (let i = 0; i < weights.size; i++) if (weights.vals[i] !== 0) wNz++;
     const avgW = wStats.count > 0 ? wStats.absSum / wStats.count : 0;
     const row = [
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
       Util.fmtMs(elapsedAcc / Math.max(1, movesAcc)),
-      Util.fmt4i(wNz),
+      Util.fmt4i(weights.map.size),
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
       Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),

@@ -44,10 +44,16 @@ const golden  = FeaturePol.loadModel({ name: 'golden',  path: opts.golden });
 const orphans = FeaturePol.loadModel({ name: 'orphans', path: opts.orphans });
 
 const before = golden.weights.map.size;
+// int-map has no delete (open addressing): rebuild the survivors instead.
+const orphanKeys = new Set();
+orphans.weights.map.forEach((key) => orphanKeys.add(key));
+const rebuilt = FeaturePol.createWeights({ spec: golden.spec, initialCapacity: before });
 let removed = 0;
-for (const key of orphans.weights.map.keys()) {
-  if (golden.weights.map.delete(key)) removed++;
-}
+golden.weights.map.forEach((key, idx) => {
+  if (orphanKeys.has(key)) { removed++; return; }
+  rebuilt.vals[FeaturePol.internKey(rebuilt, key)] = golden.weights.vals[idx];
+});
+golden.weights = rebuilt;
 
 console.log(`golden: ${before} weights (${golden.spec.str})`);
 console.log(`orphans: ${orphans.weights.map.size} keys (${orphans.spec.str})`);

@@ -67,7 +67,7 @@ for (let g = 0; g < MAXGAMES; g++) {
     // Term's keys for every candidate move at this position.
     FP.extractFeatures(game, termState, termWeights, termSpec.needsLadder ? game3 : undefined);
     if (termWeights.size !== lastTermSize) {             // keep dense-idx → raw-hash map current
-      for (const [h, d] of termWeights.map) if (!idx2hash.has(d)) idx2hash.set(d, h);
+      termWeights.map.forEach((h, d) => { if (!idx2hash.has(d)) idx2hash.set(d, h); });
       lastTermSize = termWeights.size;
     }
     for (let i = 0; i < termState.count; i++) {
@@ -77,9 +77,9 @@ for (let g = 0; g < MAXGAMES; g++) {
         if (seen.has(hash)) continue;
         seen.add(hash);
         const di = model.map.get(hash);
-        const logit = di !== undefined ? model.vals[di] : 0;
+        const logit = di >= 0 ? model.vals[di] : 0;
         shown++;
-        console.log(`\n=== key #${shown}  game ${g + 1} move ${mv + 1}  point=${coordStr(idx, N)}  logit=${logit.toFixed(4)}${di === undefined ? '  (UNLEARNED)' : ''} ===`);
+        console.log(`\n=== key #${shown}  game ${g + 1} move ${mv + 1}  point=${coordStr(idx, N)}  logit=${logit.toFixed(4)}${di < 0 ? '  (UNLEARNED)' : ''} ===`);
         console.log(game.toString(idx, { centerAt: idx, labels: true }));
         if (shown >= MAXKEYS) { console.error(`reached --max-keys ${MAXKEYS}`); break outer; }
       }

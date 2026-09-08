@@ -29,6 +29,14 @@
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
 //               Takes no size.  Descriptor.
+//   stones24    25-cell shape (stones24 + centre): the stones12b trick
+//               recursed once more — a plus of five 13-cell t-hashes,
+//               covering the L1-radius-3 diamond.  Invariant by
+//               construction.  Fidelity is HIGHER than stones12b's: the
+//               five sub-diamonds overlap heavily, anchoring sub-shape
+//               orientations — 96.20% exact on the binary alphabet (all
+//               2^25 patterns; stones12b: 84.95% binary, 90.36% ternary),
+//               ternary extrapolates to ~97.5-98.5%.
 //   stone8AdjLib<n>  JOINT liberty-aware 3×3 pattern: the 8 nearest cells canonicalised
 //               as ONE unit (orthogonals liberty-aware cap n, diagonals shape-only), so
 //               shape+liberties stay in register — what stones8+adjLib4 cannot do (it
@@ -85,6 +93,7 @@ const { PASS, BLACK }          = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
 const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
 const VPatterns                = Util.load('./vpatterns.js', 'VPatterns');
+const { makeIntMap }           = Util.load('./int-map.js', 'IntMap');
 
 // ── 32-bit hashing ────────────────────────────────────────────────────────────
 
@@ -327,6 +336,22 @@ function _t5Prepare(ctx) {
     _t5Val[idx] = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC);
   }
 }
+
+// t13 (the stones12b value) for every board cell: the same plus-of-plusses
+// composition one level up.  Runs its own t5 pass — when stones12b is also
+// in the spec its prepare fills _t5Val a second time (harmless, ~cheap).
+let _t13Val = null;
+function _t13Prepare(ctx) {
+  _t5Prepare(ctx);
+  const cap = ctx.game.N * ctx.game.N, nn = ctx.nearNbr, stride = ctx.nearStride;
+  if (!_t13Val || _t13Val.length < cap) _t13Val = new Int32Array(cap);
+  const t5 = _t5Val;
+  for (let idx = 0; idx < cap; idx++) {
+    const base = idx * stride;
+    _t13Val[idx] = _hashCombine(_uh(_uh(t5[nn[base]], t5[nn[base + 2]]),
+                                    _uh(t5[nn[base + 1]], t5[nn[base + 3]])), t5[idx]);
+  }
+}
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
@@ -545,8 +570,10 @@ function _makeTerm(str) {
   // the OPTIONAL trailing run of digits.  Lazy kind + greedy trailing \d* split them.
   const m = /^([a-zA-Z][a-zA-Z0-9]*?)(\d*)$/.exec(str);
   if (!m) throw new Error(`featurepol: bad feature term "${str}"`);
-  const kind = m[1];
-  const param = m[2] ? parseInt(m[2], 10) : null;
+  // stones24 is a fixed-shape NAME (the stones12b recursion), not stones<n>;
+  // the trailing-digit split cannot tell, so match the exact token.
+  const kind = str === 'stones24' ? 'stones24' : m[1];
+  const param = kind === 'stones24' ? null : (m[2] ? parseInt(m[2], 10) : null);
   const salt = _hashStr(str);
   // A size<n> term is CUMULATIVE: it carries sizeFn (the raw size) and is expanded
   // by parseSpec into n additive "≥k present" indicator spaces (thermometer
@@ -590,6 +617,18 @@ function _makeTerm(str) {
         const nn = ctx.nearNbr, base = idx * ctx.nearStride, t5 = _t5Val;
         return _hashCombine(_uh(_uh(t5[nn[base]], t5[nn[base + 2]]),
                                 _uh(t5[nn[base + 1]], t5[nn[base + 3]])), t5[idx]);
+      };
+      break;
+    }
+    case 'stones24': {
+      // 25-cell shape: stones12b recursed — plus of five 13-cell t-hashes.
+      if (param !== null) throw new Error(`featurepol: stones24 takes no size, got "${str}"`);
+      maxNear = 4;
+      prepare = _t13Prepare;
+      evalFn = (ctx, idx) => {
+        const nn = ctx.nearNbr, base = idx * ctx.nearStride, t13 = _t13Val;
+        return _hashCombine(_uh(_uh(t13[nn[base]], t13[nn[base + 2]]),
+                                _uh(t13[nn[base + 1]], t13[nn[base + 3]])), t13[idx]);
       };
       break;
     }
@@ -929,7 +968,7 @@ function createWeights(opts = {}) {
   return {
     spec,
     nSpaces: spec.spaces.length,
-    map:   new Map(),                          // 32-bit hash → dense idx
+    map:   makeIntMap(Math.max(64, initialCapacity * 2)),   // 32-bit hash → dense idx (int-map: key 0 reserved, get miss = -1)
     vals:  new Float32Array(initialCapacity),  // weight[dense idx]
     delta: new Float32Array(initialCapacity),  // reusable scatter buffer
     count: new Int32Array(initialCapacity),    // per-key contributor count (for per-key gradient mean)
@@ -938,9 +977,16 @@ function createWeights(opts = {}) {
 }
 
 function _intern(w, key) {
+  key |= 0;                       // int-map stores int32; hashes arrive as uint32
   const map = w.map;
   const existing = map.get(key);
-  if (existing !== undefined) return existing;
+  if (existing >= 0) return existing;
+  // no-add mode (weights.noAdd, the trainers' --no-add): unknown keys are
+  // not interned — the caller skips them, so they contribute zero to the
+  // logit and receive no gradient, and the key set stays exactly as loaded.
+  // maxWeights (the trainers' --max-weights) is the size-triggered form:
+  // existing keys keep training, new ones stop interning at the cap.
+  if (w.noAdd || (w.maxWeights > 0 && w.size >= w.maxWeights)) return -1;
   const idx = w.size;
   if (idx >= w.vals.length) {
     const cap = w.vals.length * 2;
@@ -1016,10 +1062,10 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
   }
   const ct = sp.cumTerms;
   if (ct.length === 0) {
-    out[pos++] = _intern(weights, base >>> 0);
+    { const ix = _intern(weights, base >>> 0); if (ix >= 0) out[pos++] = ix; }
   } else if (ct.length === 1) {
     const t = ct[0]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
-    for (let k = 1; k <= sz; k++) out[pos++] = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0);
+    for (let k = 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) out[pos++] = ix; }
   } else {
     let acc = accA, nxt = accB, nAcc = 1; acc[0] = base;
     for (let ci = 0; ci < ct.length; ci++) {
@@ -1028,7 +1074,7 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
       for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
       const tmp = acc; acc = nxt; nxt = tmp; nAcc = on;
     }
-    for (let a = 0; a < nAcc; a++) out[pos++] = _intern(weights, acc[a] >>> 0);
+    for (let a = 0; a < nAcc; a++) { const ix = _intern(weights, acc[a] >>> 0); if (ix >= 0) out[pos++] = ix; }
   }
   return pos;
 }
@@ -1164,11 +1210,11 @@ function extractFeatures(game, state, weights, game3) {
       }
       const ct = sp.cumTerms;
       if (ct.length === 0) {
-        keys[pos++] = _intern(weights, base >>> 0);
+        { const ix = _intern(weights, base >>> 0); if (ix >= 0) keys[pos++] = ix; }
       } else if (ct.length === 1) {
         // Single thermometer: present levels 1..min(size, maxLevel) (size ≥ 1, gated above).
         const t = ct[0]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
-        for (let k = 1; k <= sz; k++) keys[pos++] = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0);
+        for (let k = 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) keys[pos++] = ix; }
       } else {
         // ≥2 cumulative terms: cross-product of their present levels (rare).
         let acc = accA, nxt = accB, nAcc = 1; acc[0] = base;
@@ -1178,7 +1224,7 @@ function extractFeatures(game, state, weights, game3) {
           for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
           const tmp = acc; acc = nxt; nxt = tmp; nAcc = on;
         }
-        for (let a = 0; a < nAcc; a++) keys[pos++] = _intern(weights, acc[a] >>> 0);
+        for (let a = 0; a < nAcc; a++) { const ix = _intern(weights, acc[a] >>> 0); if (ix >= 0) keys[pos++] = ix; }
       }
     }
     moves[count] = idx;
@@ -1365,19 +1411,24 @@ function modelWeights(raw) {
 }
 
 function serialize(weights, meta = {}) {
-  const count = weights.map.size;
   let maxAbs = 0;
-  for (const [, d] of weights.map) { const a = Math.abs(weights.vals[d]); if (a > maxAbs) maxAbs = a; }
+  weights.map.forEach((k, d) => { const a = Math.abs(weights.vals[d]); if (a > maxAbs) maxAbs = a; });
   const scale = maxAbs > 0 ? 32767 / maxAbs : 1;
+  // Keys whose weight quantizes to 0 are NOT written: they contribute
+  // nothing on load and would bloat both the file and the reloaded table
+  // (at stones20 scale the sub-floor tail was ~70% of all keys).
+  let count = 0;
+  weights.map.forEach((k, d) => { if (Math.round(weights.vals[d] * scale) !== 0) count++; });
   const keys = new Int32Array(count), qvals = new Int16Array(count);
   let i = 0;
-  for (const [key, d] of weights.map) {
-    keys[i] = key | 0;
+  weights.map.forEach((key, d) => {
     let q = Math.round(weights.vals[d] * scale);
+    if (q === 0) return;
     if (q > 32767) q = 32767; else if (q < -32768) q = -32768;
+    keys[i] = key | 0;
     qvals[i] = q;
     i++;
-  }
+  });
   let buf, b64;
   if (typeof Buffer !== 'undefined') {
     buf = Buffer.alloc(count * 6);
