@@ -63,15 +63,18 @@
 //               (urgent-kill/urgent-save/wasted-extend/wasted-attack)
 //   urgentKill<n> / urgentSave<n> / wastedExtend<n> / wastedAttack<n>
 //               one ladder flag's summed chain stone-count (cumulative, up to n)
-//   hpat<n>     rank of the move under a fixed hierarchical-pattern (hpatterns)
-//               model, mover-relative: 1 = that model's top choice, 2 = its
-//               second, up to n.  CUMULATIVE in rank quality: rank r contributes
+//   vpat<n>     rank of the move under a fixed external vpatterns value model,
+//               mover-relative: 1 = that model's top choice, 2 = its second,
+//               up to n.  CUMULATIVE in rank quality: rank r contributes
 //               levels 1..n+1-r, so the top choice lights every level and rank n
 //               only level 1; rank past n emits nothing and shares the implicit
 //               zero baseline.  Still exactly n weights per space combination,
 //               but level k is estimated from every move ranked <= n+1-k rather
-//               than from one rank alone.  The model file comes from FP_HPAT_DATA
-//               and is never trained here.
+//               than from one rank alone.  The model file comes from FP_VPAT_DATA
+//               and is never trained here.  Pattern-only models rank
+//               incrementally (deltaZ); ladder-coded models (size:L) are
+//               supported but rank NON-incrementally — a full extraction on a
+//               clone per candidate, several times slower per position.
 //
 // BROWSER-COMPATIBLE: no Node-only APIs at top level.
 
@@ -81,7 +84,7 @@ const Util = (typeof require === 'function') ? require('./util.js') : window.Uti
 const { PASS, BLACK }          = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
 const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
-const HPatterns                = Util.load('./hpatterns.js', 'HPatterns');
+const VPatterns                = Util.load('./vpatterns.js', 'VPatterns');
 
 // ── 32-bit hashing ────────────────────────────────────────────────────────────
 
@@ -420,161 +423,120 @@ function _t5Prepare(ctx) {
   }
 })();
 
-// ── hpat: rank under a hierarchical-pattern model ────────────────────────────
-//
-// hpat<n> ranks every candidate of the CURRENT position by the hpatterns model's
-// Delta-z (mover-relative: higher = better for the side to move) and feeds that
-// rank in as a CUMULATIVE (thermometer) size, exactly like capture<n> and the
-// other size terms: rank r maps to size n+1-r, so the model's top choice
-// contributes levels 1..n, its second levels 1..n-1, and rank n only level 1.
-// Rank > n maps to size 0, which gates the space off, so everything past n
-// shares the implicit zero baseline.
-//
-// The term still costs exactly n weights per space combination, but they now
-// partition by THRESHOLD rather than by exact rank: level k fires for every move
-// ranked <= n+1-k, so level 1 ("in the top n") is estimated from n times more
-// data than level n ("is the top choice").  The measured rank-quality curve is
-// smooth and monotone through the first several ranks, which is precisely where
-// sharing statistics across adjacent ranks pays and one-hot ranks waste data.
-//
-// The model is a FIXED external evaluator; featurepol never trains it.  It comes
-// from the file named by FP_HPAT_DATA (a train-hpatterns save) -- or, in a
-// browser, from window.hpatternsModel.
-//
-// Ranking is a whole-position computation, not a per-move one, so it runs once
-// per position in a prepare hook rather than in an evalFn.
-
-let _hpatModel = null;
-let _hpatIncremental = false;     // saturated caps => deltaZ is usable
-function _hpatLoad() {
-  if (_hpatModel) return _hpatModel;
-  let raw;
-  const envPath = (typeof process !== 'undefined' && process.env) ? process.env.FP_HPAT_DATA : null;
-  if (envPath) {
-    raw = require(require('path').resolve(envPath));
-  } else if (typeof window !== 'undefined' && window.hpatternsModel) {
-    raw = window.hpatternsModel;
-  } else {
-    throw new Error('featurepol: the hpat<n> feature needs a hierarchical-pattern model — set FP_HPAT_DATA to a train-hpatterns save file');
-  }
-  const model = HPatterns.createModel(raw.maxStones, raw.maxSize);
-  model.weights = HPatterns.weightsMap(raw);
-  // A BINDING stone cap needs per-window stone counts that the incremental path
-  // does not maintain, so deltaZ is only valid when every cap is saturated.
-  _hpatIncremental = HPatterns.saturatedOnly(model.maxStones);
-  _hpatModel = model;
-  return model;
-}
-
-// Swap in shadow hash buffers so a speculative full extraction does not clobber
-// the buffers deltaZ reads for the current position.
-function _hpatFallback(model, fn) {
-  if (!model._fbBufs) {
-    model._fbBufs  = model._hBufs.map(b => new Int32Array(b.length));
-    model._fbBufsI = model._hBufsInv.map(b => new Int32Array(b.length));
-  }
-  const sN = model._hBufs, sI = model._hBufsInv;
-  model._hBufs = model._fbBufs; model._hBufsInv = model._fbBufsI;
-  const r = fn();
-  model._hBufs = sN; model._hBufsInv = sI;
-  return r;
-}
-
 // Optional candidate restriction: when set, only these board indices are ranked
 // (everything else gets rank 0, i.e. the space stays dark for them).  Used to
 // evaluate "rank only the top-N moves by the cheap features" -- ranks then run
 // 1..N within that shortlist rather than over the whole board.  null = rank
 // every legal non-true-eye move, which is the normal behaviour.
-let _hpatAllow = null;     // Set of board indices, or null -- external tooling
-let _hpatMask  = null;     // Uint8Array board mask, or null -- the top-N path
-let _hpatTopN = 0;         // 0 = rank the whole board (the default)
-// Fraction of positions in which the hpat feature is computed at all.  1 = every
+let _rankAllow = null;     // Set of board indices, or null -- external tooling
+let _rankMask  = null;     // Uint8Array board mask, or null -- the top-N path
+let _rankTopN = 0;         // 0 = rank the whole board (the default)
+// Fraction of positions in which the rank feature is computed at all.  1 = every
 // position (the default).  Below 1, the ranking is skipped on the rest and the
-// hpat spaces emit nothing there, so the feature keeps its whole-board meaning
+// rank spaces emit nothing there, so the feature keeps its whole-board meaning
 // -- rank 1 is still "best on the board" -- and only its FREQUENCY drops.  That
-// is the difference from _hpatTopN, which narrows what rank means.
-let _hpatPosRatio = 1;
-let _hpatRank = null;      // _hpatRank[boardIdx] = 1-based rank, 0 = not a candidate
-let _hpatOrder = null;     // scratch: candidate board indices, sorted best-first
-let _hpatScore = null;     // scratch: _hpatScore[boardIdx] = mover-relative score
+// is the difference from _rankTopN, which narrows what rank means.
+let _rankPosRatio = 1;
+let _rank = null;      // _rank[boardIdx] = 1-based rank, 0 = not a candidate
+let _rankOrder = null;     // scratch: candidate board indices, sorted best-first
+let _rankScore = null;     // scratch: _rankScore[boardIdx] = mover-relative score
 
-// Zero the ranking so the hpat spaces stay dark for this position.
-function _hpatBlank(cap) {
-  if (!_hpatRank || _hpatRank.length < cap) {
-    _hpatRank  = new Int32Array(cap);
-    _hpatOrder = new Int32Array(cap);
-    _hpatScore = new Float64Array(cap);
+// Zero the ranking so the rank spaces stay dark for this position.
+function _rankBlank(cap) {
+  if (!_rank || _rank.length < cap) {
+    _rank  = new Int32Array(cap);
+    _rankOrder = new Int32Array(cap);
+    _rankScore = new Float64Array(cap);
   }
-  _hpatRank.fill(0, 0, cap);
+  _rank.fill(0, 0, cap);
 }
 
-// Fill _hpatRank for every legal non-true-eye move of ctx.game.  Runs once per
-// position; each hpat<n> evalFn then just reads and clamps.
-function _hpatPrepare(ctx) {
-  const game = ctx.game, N = game.N, cap = N * N;
-  const model = _hpatLoad(), w = model.weights;
-  if (!_hpatRank || _hpatRank.length < cap) {
-    _hpatRank  = new Int32Array(cap);
-    _hpatOrder = new Int32Array(cap);
-    _hpatScore = new Float64Array(cap);
-  }
-  _hpatRank.fill(0, 0, cap);
-  const black = ctx.cur === BLACK;   // hpat z is the BLACK-wins logit
+// ── vpat: the rank feature — candidates scored by a vpatterns model ────────
+//
+// Candidates are scored by the vpatterns model's deltaZ (V = sigma(zBase+dz)),
+// mirroring vpatsearch's incremental depth-1 loop.  Captures fall back to a
+// full extraction on a SEPARATE prepared spec so the base planes deltaZ reads
+// stay valid for the remaining candidates.  Ladder-coded models (size:L) have
+// no incremental contract at all, so they rank via that fallback for EVERY
+// candidate — supported, but several times slower per position.
 
-  // zBase is the position's own logit.  It is the SAME constant for every
-  // candidate, so it cancels out of the ranking -- the only consumer is the
-  // capture fallback below, which produces an absolute z and so has to be put
-  // on the same footing.  Captures are ~0.7% of candidates, so compute it
-  // lazily: most positions never touch it, and zFromBuffers walks every window.
-  let zBase = 0, haveZBase = false;
-  if (_hpatIncremental) HPatterns.extractFeatures(game, model);   // primes the buffers deltaZ reads
-  const getZBase = () => {
-    if (!haveZBase) {
-      const zCum = HPatterns.zFromBuffers(model, w, N);
-      zBase = zCum[zCum.length - 1];
-      haveZBase = true;
-    }
-    return zBase;
-  };
+let _vpatModel = null;
+function _vpatLoad() {
+  if (_vpatModel) return _vpatModel;
+  const envPath = (typeof process !== 'undefined' && process.env) ? process.env.FP_VPAT_DATA : null;
+  let model;
+  if (envPath) {
+    model = VPatterns.loadWeights(envPath);
+  } else if (typeof window !== 'undefined' && window.vpatternsModel) {
+    const raw = window.vpatternsModel;
+    model = { specs: raw.specs, preparedSpecs: VPatterns.prepareSpecs(raw.specs), weights: raw.weights };
+  } else {
+    throw new Error('featurepol: the vpat<n> feature needs a vpatterns model — set FP_VPAT_DATA to a trained save file');
+  }
+  if (model.preparedSpecs.hasLadder) {
+    console.error('featurepol vpat<n>: ladder-coded model — ranking non-incrementally (full extraction per candidate)');
+  }
+  _vpatModel = model;
+  return model;
+}
+
+// Fill the rank arrays for every legal non-true-eye move of ctx.game.  Runs
+// once per position; each vpat<n> evalFn then just reads and clamps.
+function _vpatPrepare(ctx) {
+  const game = ctx.game, N = game.N, cap = N * N;
+  const model = _vpatLoad();
+  _rankBlank(cap);                   // (re)size + zero the shared rank arrays
+  const black = ctx.cur === BLACK;   // vpat z is the BLACK-wins logit
+
+  const prep = model.preparedSpecs;
+  const incremental = !prep.hasLadder;
+  let zBase = 0;
+  if (incremental) {
+    const f = VPatterns.extractFeatures(game, prep);   // primes the planes deltaZ reads
+    VPatterns.evaluateFeatures(f, model.weights);
+    zBase = f.z;
+  }
 
   const emC = game._emptyCells, ec = game.emptyCount;
   let n = 0;
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
-    if (_hpatMask  !== null && _hpatMask[idx] === 0) continue;
-    if (_hpatAllow !== null && !_hpatAllow.has(idx)) continue;
+    if (_rankMask  !== null && _rankMask[idx] === 0) continue;
+    if (_rankAllow !== null && !_rankAllow.has(idx)) continue;
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
     let z;
-    if (_hpatIncremental) {
-      const d = HPatterns.deltaZ(game, model, w, idx);
-      // NaN = the move captures; the incremental path cannot express that, and
-      // capture moves are exactly where this model disagrees most usefully, so
-      // pay for a full extraction rather than dropping them.
-      z = Number.isNaN(d)
-        ? _hpatFallback(model, () => _zOf(HPatterns.extractFeatures(game, model, undefined, idx), w)) - getZBase()
-        : d;
+    if (incremental) {
+      z = VPatterns.deltaZ(game, prep, model.weights, idx);
+      if (z !== z) {
+        // Capture: full extraction on a separate prepared spec (vpatsearch's rule).
+        const fb = model._fbPrep || (model._fbPrep = VPatterns.prepareSpecs(model.specs));
+        const g = game.clone();
+        g.play(idx);
+        const ff = VPatterns.extractFeatures(g, fb);
+        VPatterns.evaluateFeatures(ff, model.weights);
+        z = ff.z - zBase;
+      }
     } else {
-      z = _zOf(HPatterns.extractFeatures(game, model, undefined, idx), w);
+      // Ladder-coded model: full extraction on a clone.  Absolute logits —
+      // the position's own zBase is a shared constant, so it cancels in the
+      // ranking and never needs computing.
+      const g = game.clone();
+      g.play(idx);
+      const ff = VPatterns.extractFeatures(g, prep);
+      VPatterns.evaluateFeatures(ff, model.weights);
+      z = ff.z;
     }
-    _hpatScore[idx] = black ? z : -z;             // mover-relative: higher = better
-    _hpatOrder[n++] = idx;
+    _rankScore[idx] = black ? z : -z;             // mover-relative: higher = better
+    _rankOrder[n++] = idx;
   }
-  const order = _hpatOrder.subarray(0, n);
-  order.sort((a, b) => _hpatScore[b] - _hpatScore[a]);
-  for (let r = 0; r < n; r++) _hpatRank[order[r]] = r + 1;
+  const order = _rankOrder.subarray(0, n);
+  order.sort((a, b) => _rankScore[b] - _rankScore[a]);
+  for (let r = 0; r < n; r++) _rank[order[r]] = r + 1;
 }
 
-// Raw logit of an hpatterns feature set (HPatterns.evaluateFeatures returns the
-// sigmoid; ranking only needs the monotone pre-image).
-function _zOf(f, weights) {
-  let z = 0;
-  const keys = f.keys, pols = f.pols, count = f.count;
-  for (let i = 0; i < count; i++) {
-    const v = weights.get(keys[i]);
-    if (v !== undefined) z += pols[i] * v;
-  }
-  return z;
-}
+// The rank-prepare tag: everything that special-cases "the rank feature" (the
+// top-N split, the pos-ratio gate) keys on this, not on function identity.
+_vpatPrepare._isRank = true;
 
 // Build one feature term { str, kind, param, salt, evalFn, needsLadder } from a
 // token like "capture6" / "stones4" / "ladderStatus".
@@ -595,15 +557,15 @@ function _makeTerm(str) {
   let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
   let prepare = null;
   switch (kind) {
-    case 'hpat': {
-      // Rank under the hpatterns model as a cumulative size: rank r -> n+1-r, so
-      // the top choice lights levels 1..n and rank n only level 1.  Rank > n
-      // gives 0, which gates the space off.  n weights per space.
-      if (param === null || param < 1) throw new Error(`featurepol: hpat<n> needs a rank count n >= 1, got "${str}"`);
+    case 'vpat': {
+      // Rank under the external value model as a cumulative size: rank r ->
+      // n+1-r, so the top choice lights levels 1..n and rank n only level 1.
+      // Rank > n gives 0, which gates the space off.  n weights per space.
+      if (param === null || param < 1) throw new Error(`featurepol: vpat<n> needs a rank count n >= 1, got "${str}"`);
       const n = param;
-      prepare = _hpatPrepare;
+      prepare = _vpatPrepare;
       cumulative = true;
-      sizeFn = (ctx, idx) => { const r = _hpatRank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
+      sizeFn = (ctx, idx) => { const r = _rank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
       break;
     }
     case 'stones': {
@@ -940,22 +902,22 @@ function parseSpec(specStr) {
     }
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= c.maxLevel;
-    const usesHpat = terms.some(t => t.prepare === _hpatPrepare);
-    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesHpat });
+    const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
+    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesRank });
   }
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
   for (const sp of spaces) maxKeysPerMove += sp.maxKeys;
-  // Split for the top-N path: which spaces need the hpat ranking, and which memo
+  // Split for the top-N path: which spaces need the rank feature’s ranking, and which memo
   // slots the remaining ("plain") spaces read.  Plain spaces can be scored
   // before the ranking exists, which is what makes the shortlist possible.
-  const hpatSpaces  = spaces.filter(sp => sp.usesHpat);
-  const plainSpaces = spaces.filter(sp => !sp.usesHpat);
+  const rankSpaces  = spaces.filter(sp => sp.usesRank);
+  const plainSpaces = spaces.filter(sp => !sp.usesRank);
   const plainSlots = [];
   for (const sp of plainSpaces)
     for (const t of [...sp.baseTerms, ...sp.cumTerms]) if (!plainSlots.includes(t.slot)) plainSlots.push(t.slot);
-  const hpatMaxKeys = hpatSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
-  return { str, spaces, plainSpaces, hpatSpaces, plainSlots, hpatMaxKeys,
+  const rankMaxKeys = rankSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
+  return { str, spaces, plainSpaces, rankSpaces, plainSlots, rankMaxKeys,
            computers, numSlots: computers.length, prepares, maxKeysPerMove, needsLadder, nearMax };
 }
 
@@ -1021,9 +983,9 @@ function createState(N, spec) {
     keys:     new Int32Array(cap * maxK),       // variable: move i's keys are keys[keyOff[i]..keyOff[i+1])
     keyOff:   new Int32Array(cap + 1),
     keys2:    new Int32Array(cap * maxK),       // top-N path: rebuild target
-    hKeys:    new Int32Array(cap * Math.max(1, spec.hpatMaxKeys)),   // shortlisted moves' hpat keys
-    hCount:   new Int32Array(cap),
-    hMask:    new Uint8Array(cap),              // top-N path: shortlist membership
+    rKeys:    new Int32Array(cap * Math.max(1, spec.rankMaxKeys)),   // shortlisted moves' rank-space keys
+    rCount:   new Int32Array(cap),
+    rMask:    new Uint8Array(cap),              // top-N path: shortlist membership
     pScore:   new Float64Array(cap),            // plain-space score, drives the shortlist
     pOrder:   new Int32Array(cap),
     memo:     new Float64Array(spec.numSlots),  // per-move scratch: one value per distinct fixed-space term
@@ -1042,7 +1004,7 @@ function createState(N, spec) {
 // Fill state.keys (interned dense indices) for every legal non-true-eye move.
 // Emit one space's keys for the move whose term values are in `memo`.  Same
 // logic as the main loop below; factored out because the top-N path emits the
-// plain spaces and the hpat spaces in two separate phases.
+// plain spaces and the rank spaces in two separate phases.
 function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
   const gate = sp.gate;
   for (let gi = 0; gi < gate.length; gi++) if (memo[gate[gi]] < 1) return pos;   // space stays dark
@@ -1072,20 +1034,20 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
 }
 
 // Top-N extraction: score every candidate on the spaces that do NOT need the
-// hpat ranking, then rank hpat within the best `_hpatTopN` of them only.  The
+// ranking, then rank within the best `_rankTopN` of them only.  The
 // whole point is that the ranking -- the expensive part -- runs over a handful
 // of candidates instead of the whole board.  Ranks are then 1..N within that
 // shortlist, so this is an APPROXIMATION of the whole-board feature: a move the
-// plain spaces dislike can never be ranked, however good hpat thinks it is.
-function _extractTopN(game, state, weights, ctx, spec, useHpat) {
-  // Non-hpat whole-position precomputes still have to run here: this path
-  // returns before extractFeatures' prepare block ever executes.  (The hpat
+// plain spaces dislike can never be ranked, however good the value model thinks it is.
+function _extractTopN(game, state, weights, ctx, spec, useRank) {
+  // Non-rank whole-position precomputes still have to run here: this path
+  // returns before extractFeatures' prepare block ever executes.  (The rank
   // ranking is this function's own Phase B, hence the exclusion.)
   const prePreps = spec.prepares;
   if (prePreps) for (let i = 0; i < prePreps.length; i++)
-    if (prePreps[i] !== _hpatPrepare) prePreps[i](ctx);
+    if (!prePreps[i]._isRank) prePreps[i](ctx);
   const computers = spec.computers, memo = state.memo, vals = weights.vals;
-  const plainSlots = spec.plainSlots, plainSpaces = spec.plainSpaces, hpatSpaces = spec.hpatSpaces;
+  const plainSlots = spec.plainSlots, plainSpaces = spec.plainSpaces, rankSpaces = spec.rankSpaces;
   const emC = game._emptyCells, ec = game.emptyCount;
   const moves = state.moves, keyOff = state.keyOff, pScore = state.pScore;
   const accA = state.accA, accB = state.accB;
@@ -1106,11 +1068,11 @@ function _extractTopN(game, state, weights, ctx, spec, useHpat) {
   }
   state.count = count;
   if (count === 0) return;
-  if (useHpat === false) { _hpatBlank(game.N * game.N); return; }   // hpat sits out this position
-  // Phase B — rank hpat over the top-N by plain score, then emit their keys.
+  if (useRank === false) { _rankBlank(game.N * game.N); return; }   // the rank feature sits out this position
+  // Phase B — run the ranking over the top-N by plain score, then emit their keys.
   // Partial selection, not a sort: n is 2-6 against ~30 candidates, so a few
   // linear max passes beat a comparator sort and allocate nothing.
-  const n = Math.min(_hpatTopN, count), rank = state.pOrder, mask = state.hMask;
+  const n = Math.min(_rankTopN, count), rank = state.pOrder, mask = state.rMask;
   for (let i = 0; i < n; i++) {
     let best = -1, bestS = -Infinity;
     for (let j = 0; j < count; j++) {
@@ -1119,34 +1081,34 @@ function _extractTopN(game, state, weights, ctx, spec, useHpat) {
     }
     rank[i] = best; mask[moves[best]] = 1;
   }
-  _hpatMask = mask;
-  // Only the hpat prepare belongs here: it is the ranking, and it must see the
+  _rankMask = mask;
+  // Only the rank prepare belongs here: it is the ranking, and it must see the
   // shortlist mask.  The others already ran at the top of this function.
   const preps = spec.prepares;
-  for (let i = 0; i < preps.length; i++) if (preps[i] === _hpatPrepare) preps[i](ctx);
-  _hpatMask = null;
+  for (let i = 0; i < preps.length; i++) if (preps[i]._isRank) preps[i](ctx);
+  _rankMask = null;
   for (let i = 0; i < n; i++) mask[moves[rank[i]]] = 0;   // O(n) clear, not O(board)
-  const hKeys = state.hKeys, hCount = state.hCount, stride = spec.hpatMaxKeys, numSlots = spec.numSlots;
-  hCount.fill(0, 0, count);
+  const rKeys = state.rKeys, rCount = state.rCount, stride = spec.rankMaxKeys, numSlots = spec.numSlots;
+  rCount.fill(0, 0, count);
   for (let ii = 0; ii < n; ii++) {
     const ci = rank[ii], idx = moves[ci];
-    // The hpat spaces may read terms the plain spaces never used (stones4 in
-    // stones4+hpat6, say), so recompute every slot for these few moves.
+    // The rank spaces may read terms the plain spaces never used (stones4 in
+    // stones4+vpat6, say), so recompute every slot for these few moves.
     for (let sl = 0; sl < numSlots; sl++) memo[sl] = computers[sl](ctx, idx);
     const base = ci * stride;
     let hp = base;
-    for (let s = 0; s < hpatSpaces.length; s++) hp = _emitSpace(hpatSpaces[s], memo, weights, hKeys, hp, accA, accB);
-    hCount[ci] = hp - base;
+    for (let s = 0; s < rankSpaces.length; s++) hp = _emitSpace(rankSpaces[s], memo, weights, rKeys, hp, accA, accB);
+    rCount[ci] = hp - base;
   }
-  // Splice the hpat keys into each move's range, keeping the flat layout every
+  // Splice the rank-space keys into each move's range, keeping the flat layout every
   // downstream consumer (_score, the gradient paths) expects.
   const keys2 = state.keys2;
   let p2 = 0;
   for (let i = 0; i < count; i++) {
     const a = keyOff[i], b = keyOff[i + 1], startNew = p2;
     for (let k = a; k < b; k++) keys2[p2++] = keys[k];
-    const hc = hCount[i], hb = i * stride;
-    for (let k = 0; k < hc; k++) keys2[p2++] = hKeys[hb + k];
+    const hc = rCount[i], hb = i * stride;
+    for (let k = 0; k < hc; k++) keys2[p2++] = rKeys[hb + k];
     keyOff[i] = startNew;
   }
   keyOff[count] = p2;
@@ -1162,19 +1124,19 @@ function extractFeatures(game, state, weights, game3) {
     const g3 = game3 || game3FromGame2(game);
     ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);
   }
-  // Is the hpat feature live for this position at all?
-  const useHpat = _hpatPosRatio >= 1 || Math.random() < _hpatPosRatio;
-  // Top-N: rank hpat over a shortlist instead of the whole board.
-  if (_hpatTopN > 0 && spec.hpatSpaces && spec.hpatSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useHpat);
-  // Whole-position precomputes (e.g. hpat ranking) -- once per position, before
+  // Is the rank feature live for this position at all?
+  const useRank = _rankPosRatio >= 1 || Math.random() < _rankPosRatio;
+  // Top-N: run the ranking over a shortlist instead of the whole board.
+  if (_rankTopN > 0 && spec.rankSpaces && spec.rankSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useRank);
+  // Whole-position precomputes (e.g. the vpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
   if (preps) for (let i = 0; i < preps.length; i++) {
-    // useHpat is about whether the hpat RANKING runs this position; it must not
+    // useRank is about whether the RANKING runs this position; it must not
     // gate unrelated whole-position precomputes, whose consumers always read.
-    if (preps[i] !== _hpatPrepare) preps[i](ctx);
-    else if (useHpat) preps[i](ctx);
-    else _hpatBlank(game.N * game.N);
+    if (!preps[i]._isRank) preps[i](ctx);
+    else if (useRank) preps[i](ctx);
+    else _rankBlank(game.N * game.N);
   }
   const computers = spec.computers, numSlots = spec.numSlots;
   const emC = game._emptyCells, ec = game.emptyCount;
@@ -1491,12 +1453,12 @@ const FeaturePol = {
   NEAR_MAX,
   // exposed for tests
   _hashStr, _captureCount, _atariStones,
-  _hpatRanks: () => _hpatRank,
-  _setHpatAllow: (set) => { _hpatAllow = set; },
-  setHpatTopN: (n) => { _hpatTopN = n | 0; },
-  setHpatPositionRatio: (p) => { _hpatPosRatio = p; },
-  getHpatPositionRatio: () => _hpatPosRatio,
-  getHpatTopN: () => _hpatTopN,
+  _ranks: () => _rank,
+  _setRankAllow: (set) => { _rankAllow = set; },
+  setRankTopN: (n) => { _rankTopN = n | 0; },
+  setRankPositionRatio: (p) => { _rankPosRatio = p; },
+  getRankPositionRatio: () => _rankPosRatio,
+  getRankTopN: () => _rankTopN,
 };
 
 if (typeof module !== 'undefined') module.exports = FeaturePol;
