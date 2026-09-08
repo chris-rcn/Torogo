@@ -12,7 +12,18 @@ const Util = require('../util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['p', 'top', 'size', 'data']);
 if (opts.help || !opts.p) {
-  console.log('Usage: node cgos/opponents.js --p <player> [--top 10] [--size <n>] [--data <dir>]');
+  console.log(`Usage: node cgos/opponents.js --p <player> [options]
+
+Show a player's most-played opponents on the local toroidal CGOS ladder:
+games and win% from the player's perspective, most games first (draws
+count half; the player name must match the ladder name exactly,
+including any suffix it joined under).
+
+  --p NAME       ladder player name (required)
+  --top N        opponents to list (default 10)
+  --size N       board size / ladder to read (default 13)
+  --data DIR     server data directory (default cgos/data/<size>x<size>)
+  --help         show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 const player  = opts.p;

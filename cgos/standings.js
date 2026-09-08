@@ -30,7 +30,26 @@ const Util = require('../util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'live']);
 if (opts.help) {
-  console.log('Usage: node cgos/standings.js [--live] [--size <n>] [--data <dir>] [--refs <file>] [--ini <file>]');
+  console.log(`Usage: node cgos/standings.js [options]
+
+Print the rating table for the local toroidal CGOS server.
+
+Columns: engine, elo (the server's stored rating — refit from the full
+games table with the anchored Bradley-Terry MLE every mleInterval
+finalized games, incremental Elo in between; a trailing ? marks a
+provisional rating, K > 16), games, ms/mv.  The scale is anchored at
+random = 0.  Markers: a house emoji for house engines (the reference
+fleet), a link emoji for guest engines currently connected (trials being
+rated via join.js) — guest connectivity is fetched live over the admin
+protocol and the column is omitted when the server is down.
+
+  --live         show only participating engines: house references and
+                 connected guests (retired engines hidden)
+  --size N       board size / ladder to read (default 13)
+  --data DIR     server data directory (default cgos/data/<size>x<size>)
+  --refs FILE    reference-fleet roster (default cgos/refs.json)
+  --ini FILE     server config (default cgos/torogo<size>.ini)
+  --help         show this message`);
   process.exit(0);
 }
 const size    = opts.getInt('size', 13);
