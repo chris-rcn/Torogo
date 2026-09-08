@@ -158,10 +158,35 @@ let specs;
 const FROZEN = new Set();   // spec tags ((maxLibs << 3) | size) excluded from updates
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
+    // 'C' = the chain-attribute family (per-chain keyed features; not
+    // incremental), internally {size: 0, maxLibs: 0}.  Optional caps:
+    // 'C<stones>.<libs>.<adjE>.<sec>' (default C8.8.4.8); trailing 'f' freezes.
+    if (tok[0] === 'C') {
+      const frozenC = /f$/.test(tok);
+      let body = frozenC ? tok.slice(1, -1) : tok.slice(1);
+      // optional phase-bucket suffix pN (e.g. C8.16.2.2.3p2)
+      let phaseBins = 0;
+      const pm = /p(\d+)$/.exec(body);
+      if (pm) { phaseBins = parseInt(pm[1], 10); body = body.slice(0, -pm[0].length); }
+      if (frozenC) FROZEN.add(specTag({ size: 0, maxLibs: 0 }));
+      if (body === '') return phaseBins > 1 ? { size: 0, maxLibs: 0, phaseBins } : { size: 0, maxLibs: 0 };
+      const caps = body.split('.').map(x => parseInt(x, 10));
+      if (caps.length < 4 || caps.length > 12 || caps.some(x => !(x >= 0 && x <= 31)) || caps.slice(0, 4).some(x => x < 1)) {
+        console.error(`--spec: bad C token '${tok}' (expected C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>[.<sharedLibs>[.<bestFriendLibs>]]]]], core caps 1-31, optional caps 0=off)`);
+        process.exit(1);
+      }
+      const specC = { size: 0, maxLibs: 0, caps };
+      if (phaseBins > 1) specC.phaseBins = phaseBins;
+      return specC;
+    }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);
-    const body = frozen ? mRaw.slice(0, -1) : mRaw;
+    let body = frozen ? mRaw.slice(0, -1) : mRaw;
+    // optional phase-bin suffix pN (e.g. 2:1p2): per-spec phase-salted keys
+    let patBins = 0;
+    const pbm = /p(\d+)$/.exec(body);
+    if (pbm) { patBins = parseInt(pbm[1], 10); body = body.slice(0, -pbm[0].length); }
     // 'L' = the ladder-coded family (vlibpat 7-state tactical alphabet),
     // internally maxLibs 0.  Not incremental: the 1-ply search falls back to
     // a full extraction per candidate (several times slower per move).
@@ -171,7 +196,7 @@ if (opts.spec) {
       process.exit(1);
     }
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
-    return { size, maxLibs };
+    return patBins > 1 ? { size, maxLibs, phaseBins: patBins } : { size, maxLibs };
   });
 } else {
   specs = [
@@ -504,7 +529,7 @@ while (true) {
         evalAccC += accCorrect; evalAccN += accN;
         evalMatchMs = Date.now() - tTestStart;
         if (evalMatchMs > 0.3 * intervalTrainMs) break;
-        if (resultsBatch.length >= 998) break;
+        if (resultsBatch.length >= 2000) break;
       }
       setKomi(TRAIN_SIZE, trainKomi);   // restore (same entry when sizes match)
       for (const r of resultsBatch) evalHistory.push(r);

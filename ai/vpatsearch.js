@@ -49,14 +49,15 @@ function search(game, m, depth = 1, dither = 0) {
 // Depth-1 fast path: one base extraction, then speculative-incremental
 // deltaZ per candidate (V = sigma(zBase + dz)).  Captures fall back to full
 // extraction on a SEPARATE prepSpecs, so the base planes deltaZ reads stay
-// valid for the remaining candidates.  Ladder-coded specs (size:L) have no
-// incremental contract, so EVERY candidate takes the fallback path there —
-// supported, several times slower per move.  Semantics mirror ab() at depth 1:
+// valid for the remaining candidates.  Ladder-coded (size:L), chain-
+// attribute (C) and phase-binned (pN) specs have no incremental contract,
+// so EVERY candidate takes the fallback path there — supported, several
+// times slower per move.  Semantics mirror ab() at depth 1:
 // board-index order, strict-improvement argmax, PASS considered last under
 // the same conditions, terminal PASS scored exactly.
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
-  const incremental = !prep.hasLadder;
+  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns);
   const f = extractFeatures(game, prep);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;

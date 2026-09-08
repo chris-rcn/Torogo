@@ -146,6 +146,7 @@ let _dzOv3N = new Int32Array(0), _dzOv3I = new Int32Array(0);     // 3×3 hash o
 let _dzLeafN = new Int32Array(0), _dzLeafI = new Int32Array(0);   // leaf overrides
 let _dzUnion = new Int32Array(0);
 let _libCounts = new Int32Array(0);
+const _phSaltScratch = new Int32Array(64);
 let _libStampVal = 0;
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
@@ -158,7 +159,36 @@ let _libStampVal = 0;
 //   Index = Σ (cell[i]+maxLibs) * base^i.  pols[i]===0 → skip (symmetric/empty).
 function prepareSpecs(specs) {
   const byMaxLibs = new Map();
+  // size 0 = the chain-attribute family (spec token 'C', optionally
+  // 'C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>
+  // [.<sharedLibs>[.<bestFriendLibs>]]]]]'
+  // caps, default 8.8.4.8; a fifth cap enables joinable-friendly-chains, a
+  // sixth weakest-adjacent-enemy (min liberties over adjacent enemy chains,
+  // 0 = none — the race signal), a seventh true-eye liberties (the life
+  // signal; game2's eye rule replicated for the CHAIN's colour)): per-chain
+  // keyed features, not windowed — kept out of the window machinery
+  // entirely.  One C spec per model (the first wins).
+  const chainSpec = specs.find(sp => sp.size === 0);
+  const hasChains = chainSpec !== undefined;
+  const chainCaps = hasChains ? (chainSpec.caps || [8, 8, 4, 8]) : null;
+  // Optional phase bucketing (token suffix pN): chain keys additionally
+  // keyed by floor(phase * N) over [0, 1] — every chain in a position
+  // shares the bucket.
+  const chainPhaseBins = hasChains ? (chainSpec.phaseBins || 1) : 1;
+  // Per-PATTERN-spec phase bins (token suffix pN on size:maxLibs): emitted
+  // keys are salted by floor(phase * N), giving each spec its own phase-
+  // conditioned weight planes.  Non-incremental (bucket crossings invalidate
+  // every key): deltaZ and doSetNext refuse.
+  const patPhaseBins = new Int32Array(64);
+  let hasPhasedPatterns = false;
+  for (const sp of specs) {
+    if (sp.size !== 0 && sp.phaseBins > 1) {
+      patPhaseBins[(sp.maxLibs << 3) | (sp.size === 34 ? 5 : sp.size)] = sp.phaseBins;
+      hasPhasedPatterns = true;
+    }
+  }
   for (const spec of specs) {
+    if (spec.size === 0) continue;
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
@@ -174,7 +204,7 @@ function prepareSpecs(specs) {
   // incremental — deltaZ and speculative extraction refuse it).
   const hasLadder = byMaxLibs.has(0);
 
-  return { byMaxLibs, sortedMaxLibs, totalSizes, hasLadder };
+  return { byMaxLibs, sortedMaxLibs, totalSizes: totalSizes + (hasChains ? 1 : 0), hasLadder, hasChains, chainCaps, chainPhaseBins, patPhaseBins, hasPhasedPatterns };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -202,6 +232,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   if (doSetNext && prepSpecs.hasLadder) {
     throw new Error('vpatterns: ladder-coded specs (size:L) do not support speculative extraction (doSetNext)');
   }
+  if (doSetNext && prepSpecs.hasPhasedPatterns) {
+    throw new Error('vpatterns: phase-binned pattern specs (pN) do not support speculative extraction (doSetNext)');
+  }
+  if (doSetNext && prepSpecs.hasChains) {
+    throw new Error('vpatterns: chain-attribute specs (C) do not support speculative extraction (doSetNext) — the group structures are stale under the mutation');
+  }
   let captures;
   if (doSetNext) {
     captures = game.captureList(nextMove);
@@ -218,6 +254,18 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   // must have run extractFeatures on the current position, and nothing may
   // overwrite the planes between that call and deltaZ).
   const planes = prepSpecs._planes || (prepSpecs._planes = new Map());
+
+  const phSalt = _phSaltScratch;
+  if (prepSpecs.hasPhasedPatterns) {
+    const bins = prepSpecs.patPhaseBins, ph = 1 - game.emptyCount / cap;
+    for (let t = 0; t < 64; t++) {
+      if (bins[t] > 1) {
+        let b = Math.floor(ph * bins[t]);
+        if (b >= bins[t]) b = bins[t] - 1;
+        phSalt[t] = Math.imul((b + 1) ^ Math.imul(t + 1, 131), 0x9E3779B1) | 0;
+      } else phSalt[t] = 0;
+    }
+  } else phSalt.fill(0);
 
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
@@ -264,7 +312,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         const s = raw[idx];
         if (s !== 0) {
           const libs = s > 0 ? s : -s;
-          outKeys[count] = libs + k1base;
+          outKeys[count] = (libs + k1base) ^ phSalt[(maxLibs << 3) | 1];
           outPols[count] = s > 0 ? 1 : -1;
           outTags[count] = (maxLibs << 3) | 1;
           count++;
@@ -296,10 +344,11 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
       if (do2) {
         const tag = (maxLibs << 3) | 2;
+        const pS2 = phSalt[tag];
         for (let i = 0; i < cap; i++) {
           const kN = h2N[i], kI = h2I[i];
           if (kN === kI) continue;   // colour-twin (incl. all-empty): zero value
-          outKeys[count] = mixTag(kN < kI ? kN : kI, tag);
+          outKeys[count] = mixTag(kN < kI ? kN : kI, tag) ^ pS2;
           outPols[count] = kN < kI ? 1 : -1;
           outTags[count] = tag;
           count++;
@@ -311,6 +360,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         // 4×4 (and deltaZ) can read it.
         const h3N = pl.h3N, h3I = pl.h3I;
         const tag = (maxLibs << 3) | 3;
+        const pS3 = phSalt[tag];
         for (let y = 0; y < N; y++) {
           const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
           for (let x = 0; x < N; x++) {
@@ -320,7 +370,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
             const kI = xh4(h2I[r0+x], h2I[r0+x1], h2I[r1+x], h2I[r1+x1]);
             h3N[i] = kN; h3I[i] = kI;
             if (!do3 || kN === kI) continue;
-            outKeys[count] = mixTag(kN < kI ? kN : kI, tag);
+            outKeys[count] = mixTag(kN < kI ? kN : kI, tag) ^ pS3;
             outPols[count] = kN < kI ? 1 : -1;
             outTags[count] = tag;
             count++;
@@ -329,6 +379,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         if (do4) {
           // 4×4 = X of the four corner 3×3 sub-windows.
           const tag4 = (maxLibs << 3) | 4;
+          const pS4 = phSalt[tag4];
           for (let y = 0; y < N; y++) {
             const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
             for (let x = 0; x < N; x++) {
@@ -336,7 +387,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
               const kN = xh4(h3N[r0+x], h3N[r0+x1], h3N[r1+x], h3N[r1+x1]);
               const kI = xh4(h3I[r0+x], h3I[r0+x1], h3I[r1+x], h3I[r1+x1]);
               if (kN === kI) continue;
-              outKeys[count] = mixTag(kN < kI ? kN : kI, tag4);
+              outKeys[count] = mixTag(kN < kI ? kN : kI, tag4) ^ pS4;
               outPols[count] = kN < kI ? 1 : -1;
               outTags[count] = tag4;
               count++;
@@ -351,6 +402,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           // unordered), so only the union of the two families keeps the
           // feature multiset D4-invariant.
           const tag34 = (maxLibs << 3) | 5;
+          const pS34 = phSalt[tag34];
           for (let y = 0; y < N; y++) {
             const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
             for (let x = 0; x < N; x++) {
@@ -359,7 +411,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
               // Horizontal: 3 rows × 4 cols (children at i and one right).
               let kN = uh(h3N[i], h3N[r0 + x1]), kI = uh(h3I[i], h3I[r0 + x1]);
               if (kN !== kI) {
-                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34);
+                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34) ^ pS34;
                 outPols[count] = kN < kI ? 1 : -1;
                 outTags[count] = tag34;
                 count++;
@@ -367,7 +419,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
               // Vertical: 4 rows × 3 cols (children at i and one down).
               kN = uh(h3N[i], h3N[r1 + x]); kI = uh(h3I[i], h3I[r1 + x]);
               if (kN !== kI) {
-                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34);
+                outKeys[count] = mixTag(kN < kI ? kN : kI, tag34) ^ pS34;
                 outPols[count] = kN < kI ? 1 : -1;
                 outTags[count] = tag34;
                 count++;
@@ -385,6 +437,128 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     }
     cells[nextMove] = EMPTY;
   }
+  // Chain-attribute family (spec 'C'): one antisymmetric feature per chain,
+  // keyed by (stones, liberties, adjacent enemy chains, secondary liberties),
+  // each clamped.  Secondary liberties = distinct empties adjacent to the
+  // chain's liberties that are not themselves liberties (a cheap eye-space
+  // proxy).  Polarity = the owner, so a WHITE chain with the same attributes
+  // contributes -w — the antisymmetric convention the komi machinery needs.
+  if (prepSpecs.hasChains) {
+    const gid = game._gid, nbr = game._nbr;
+    const chains = new Map();   // gid -> { c, stones, cells }
+    for (let idx = 0; idx < cap; idx++) {
+      const c = cells[idx];
+      if (c === 0) continue;
+      let r = chains.get(gid[idx]);
+      if (!r) { r = { c, stones: 0, cells: [] }; chains.set(gid[idx], r); }
+      r.stones++;
+      r.cells.push(idx);
+    }
+    const [CS, CL, CA, CE] = prepSpecs.chainCaps;
+    const phBins = prepSpecs.chainPhaseBins;
+    let phSalt = 0;
+    if (phBins > 1) {
+      const ph = 1 - game.emptyCount / cap;
+      let b = Math.floor(ph * phBins);
+      if (b >= phBins) b = phBins - 1;
+      phSalt = Math.imul(b + 1, 0x9E3779B1) | 0;
+    }
+    const capCode = CS + 32 * (CL + 32 * (CA + 32 * CE));
+    const CJ = prepSpecs.chainCaps.length > 4 ? prepSpecs.chainCaps[4] : -1;
+    const CW = prepSpecs.chainCaps.length > 5 ? prepSpecs.chainCaps[5] : -1;
+    const CY = prepSpecs.chainCaps.length > 6 ? prepSpecs.chainCaps[6] : -1;
+    const CH = prepSpecs.chainCaps.length > 7 ? prepSpecs.chainCaps[7] : -1;   // shared (enemy-contested) liberties
+    const CF = prepSpecs.chainCaps.length > 8 ? prepSpecs.chainCaps[8] : -1;   // strongest joinable friend's liberties
+    const CP = prepSpecs.chainCaps.length > 9 ? prepSpecs.chainCaps[9] : -1;   // connection points (liberties adjacent to another friendly chain)
+    const CD = prepSpecs.chainCaps.length > 10 ? prepSpecs.chainCaps[10] : -1; // density: floor(4*libs/stones) bucketed (blob low, string high)
+    const CI = prepSpecs.chainCaps.length > 11 ? prepSpecs.chainCaps[11] : -1; // interior stones (all 4 neighbours same chain)
+    const ls = game._ls, dnbr = game._dnbr;
+    // Eye rule for the per-chain attribute (Chris, 2026-09-08): a liberty
+    // is an eye of THIS chain iff all 4 orthogonals belong to this chain.
+    // Multi-chain eyes are not counted — whether those chains connect is
+    // the joinable attribute's department — and no diagonal heuristic.
+    const trueEyeFor = (idx, g) => {
+      const base = idx * 4;
+      for (let i = 0; i < 4; i++) if (gid[nbr[base + i]] !== g) return false;
+      return true;
+    };
+    for (const [g, r] of chains) {
+      const libSet = new Set(), adj = new Set();
+      for (const idx of r.cells) {
+        const base = idx * 4;
+        for (let d = 0; d < 4; d++) {
+          const n = nbr[base + d], nc = cells[n];
+          if (nc === 0) libSet.add(n);
+          else if (nc !== r.c) adj.add(gid[n]);
+        }
+      }
+      let sec = 0;
+      const secSeen = new Set(), friends = new Set();
+      for (const l of libSet) {
+        const base = l * 4;
+        for (let d = 0; d < 4; d++) {
+          const n = nbr[base + d], nc = cells[n];
+          if (nc === 0) { if (!libSet.has(n) && !secSeen.has(n)) { secSeen.add(n); sec++; } }
+          else if (CJ >= 0 && nc === r.c && gid[n] !== g) friends.add(gid[n]);
+        }
+      }
+      const stones = r.stones > CS ? CS : r.stones;
+      const libs   = libSet.size > CL ? CL : libSet.size;
+      const adjE   = adj.size > CA ? CA : adj.size;
+      const secL   = sec > CE ? CE : sec;
+      const joinF  = CJ >= 0 ? (friends.size > CJ ? CJ : friends.size) : 0;
+      let weakest = 0;
+      if (CW >= 0 && adj.size > 0) {
+        weakest = Infinity;
+        for (const eg of adj) { const el = ls[eg]; if (el < weakest) weakest = el; }
+        if (weakest > CW) weakest = CW;
+      }
+      let eyes = 0;
+      if (CY >= 0) {
+        for (const l of libSet) if (trueEyeFor(l, g)) { eyes++; if (eyes >= CY) break; }
+      }
+      let shared = 0;
+      if (CH >= 0) {
+        for (const l of libSet) {
+          const base = l * 4;
+          for (let d = 0; d < 4; d++) { const nc = cells[nbr[base + d]]; if (nc !== 0 && nc !== r.c) { shared++; break; } }
+        }
+        if (shared > CH) shared = CH;
+      }
+      let bestF = 0;
+      if (CF >= 0) {
+        for (const fg of friends) { const fl = ls[fg]; if (fl > bestF) bestF = fl; }
+        if (bestF > CF) bestF = CF;
+      }
+      let interior = 0;
+      if (CI >= 0) {
+        for (const idx of r.cells) {
+          const base = idx * 4;
+          let own = 0;
+          for (let d = 0; d < 4; d++) if (gid[nbr[base + d]] === g && cells[nbr[base + d]] !== 0) own++;
+          if (own === 4) { interior++; if (interior >= CI) break; }
+        }
+      }
+      let connP = 0;
+      if (CP >= 0) {
+        for (const l of libSet) {
+          const base = l * 4;
+          for (let d = 0; d < 4; d++) { const n = nbr[base + d]; if (cells[n] === r.c && gid[n] !== g) { connP++; break; } }
+        }
+        if (connP > CP) connP = CP;
+      }
+      let dens = 0;
+      if (CD >= 0) { dens = Math.floor(4 * libSet.size / r.stones); if (dens > CD) dens = CD; }
+      const pack   = stones + (CS + 1) * (libs + (CL + 1) * (adjE + (CA + 1) * (secL + (CE + 1) * (joinF + (CJ >= 0 ? CJ + 1 : 1) * (weakest + (CW >= 0 ? CW + 1 : 1) * (eyes + (CY >= 0 ? CY + 1 : 1) * (shared + (CH >= 0 ? CH + 1 : 1) * (bestF + (CF >= 0 ? CF + 1 : 1) * (connP + (CP >= 0 ? CP + 1 : 1) * (dens + (CD >= 0 ? CD + 1 : 1) * interior)))))))))); 
+      let key = (Math.imul(pack + 1, 2654435761) ^ Math.imul(capCode + 1, 0x45d9f3b) ^ phSalt) | 0;
+      if (key === 0) key = 1;    // int-map reserves key 0
+      outKeys[count] = key;
+      outPols[count] = r.c;
+      outTags[count] = 0;        // specTag({size:0, maxLibs:0})
+      count++;
+    }
+  }
+
   return { keys: outKeys, pols: outPols, tags: outTags, count, val: 0.5 };
 }
 
@@ -411,6 +585,12 @@ function deltaZ(game, prepSpecs, weights, move) {
   // path), so the incremental contract cannot hold — fail loudly.
   if (prepSpecs.hasLadder) {
     throw new Error('vpatterns deltaZ: ladder-coded specs (size:L) are not incremental');
+  }
+  if (prepSpecs.hasChains) {
+    throw new Error('vpatterns deltaZ: chain-attribute specs (C) are not incremental');
+  }
+  if (prepSpecs.hasPhasedPatterns) {
+    throw new Error('vpatterns deltaZ: phase-binned pattern specs (pN) are not incremental');
   }
   if (move === PASS) return 0;
   if (game.captureList(move).length > 0) return NaN;
