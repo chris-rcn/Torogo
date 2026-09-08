@@ -163,7 +163,8 @@ if (opts.spec) {
     const frozen = /f$/.test(mRaw);
     const body = frozen ? mRaw.slice(0, -1) : mRaw;
     // 'L' = the ladder-coded family (vlibpat 7-state tactical alphabet),
-    // internally maxLibs 0.  Not incremental: unusable with deltaZ consumers.
+    // internally maxLibs 0.  Not incremental: the 1-ply search falls back to
+    // a full extraction per candidate (several times slower per move).
     const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
     if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1 || body === 'L')) {
       console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4 or 34, maxLibs >= 1)`);
