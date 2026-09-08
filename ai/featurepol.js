@@ -15,6 +15,11 @@ const { game3FromGame2 } = require('../game3.js');
 
 const FPOL_TEMP = process.env.FPOL_TEMP !== undefined ? parseFloat(process.env.FPOL_TEMP) : 0;
 const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, '..', 'featurepol-cbk7wa32.js');
+// Rank-feature shortlist (the deployment setting; the trainer's --eval-rank-topn
+// equivalent): rank the vpat<n> feature over only the best N moves by the other
+// feature spaces.  0 = rank every candidate.  No-op for specs without vpat<n>.
+const FPOL_RANK_TOPN = process.env.FPOL_RANK_TOPN !== undefined ? parseInt(process.env.FPOL_RANK_TOPN, 10) : 5;
+if (FPOL_RANK_TOPN > 0) FeaturePol.setRankTopN(FPOL_RANK_TOPN);
 
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 const _stateByN = new Map();
