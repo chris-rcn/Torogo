@@ -15,13 +15,22 @@
 //   AB_DEPTH    plies of lookahead (1 = score own moves' results) (default 2)
 //   AB_TOP_K    fp candidates searched per node                   (default 3)
 //   FPOL_DATA   featurepol weights          (default featurepol-cbk7wa32.js)
-//   VPAT_DATA   leaf evaluator              (default out/vpat-pe-55dq1yxv-best.js)
-//   DITHER      uniform noise on root values                    (default 0.001)
-//   SOFTMAX_RATIO  fraction of MOVES taken from fp softmax sampling
-//               (temperature 1) instead of the search — the corpus-
-//               generation diversity knob (the epsilon/on-policy recipe;
-//               fp-softmax is the incumbent diversity engine).  Set ~0.2
-//               for corpus generation (default 0 = full strength)
+//   VPAT_DATA   leaf evaluator              (default ref/ref-ab-fp-vpat-data.js)
+//   DITHER      uniform noise on root values                    (default 0.005)
+//               Both DITHER and AB_TEMP scale by (1 - phase): full strength
+//               of the knob at an empty board, zero at phase 1 — diversity
+//               lives in the opening, determinism in the endgame.
+//   AB_TEMP     root value-softmax: sample the move among the K searched
+//               candidates with probability ∝ exp(v/AB_TEMP) over their
+//               minimax values (mover-relative, win-prob units).  Deviations
+//               concentrate where the search itself calls the moves equal,
+//               so strength cost stays tiny while openings branch.
+//               (default 0.002; 0 = argmax).  Gentler than FP_SOFTMAX_MOVES, which
+//               plays a weaker policy's move outright
+//   FP_SOFTMAX_MOVES  while the board holds FEWER than this many stones,
+//               play an fp softmax move (temperature 1) instead of
+//               searching — opening diversity confined to the first
+//               stones, full search strength after (default 3; 0 = off)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -36,17 +45,19 @@ function create(cfg) {
 
   const AB_DEPTH = Math.max(1, cfg.int('AB_DEPTH', 2));
   const AB_TOP_K = Math.max(1, cfg.int('AB_TOP_K', 3));
-  const DITHER   = cfg.float('DITHER', 0.001);
-  const SOFTMAX_RATIO = cfg.float('SOFTMAX_RATIO', 0);
+  const DITHER   = cfg.float('DITHER', 0.005);
+  const AB_TEMP  = cfg.float('AB_TEMP', 0.002);
+  const FP_SOFTMAX_MOVES = cfg.int('FP_SOFTMAX_MOVES', 3);
 
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
     path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
   const vpatModel = VPat.loadWeights(cfg.str('VPAT_DATA',
-    path.join(__dirname, '..', 'out', 'vpat-pe-55dq1yxv-best.js')));
+    path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')));
 
   console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} top-K=${AB_TOP_K}` +
-              (SOFTMAX_RATIO > 0 ? ` softmax-ratio=${SOFTMAX_RATIO}` : '') + `  ` +
-              `fp=${fpWeights.map.size}w  vpat=${vpatModel.weights.size}w (${vpatModel.specs.map(s => s.size + ':' + (s.maxLibs || 'L')).join(',')})`);
+              (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
+              (FP_SOFTMAX_MOVES > 0 ? ` fp-softmax<${FP_SOFTMAX_MOVES}st` : '') + `  ` +
+              `fp=${fpWeights.map.size}w  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${vpatModel.specs.map(s => s.size + ':' + (s.maxLibs || 'L')).join(',')})`);
 
   const rng = makeRng();
   let fpState = null, fpScores = null;
@@ -98,7 +109,10 @@ function create(cfg) {
   function getMove(game, _budgetMs, options = {}) {
     if (game.gameOver) return { move: PASS };
     const r = options.rng || rng;
-    if (SOFTMAX_RATIO > 0 && r.random() < SOFTMAX_RATIO) {
+    const phaseScale = 1 - game.phase();
+    const dither = DITHER * phaseScale;
+    const temp   = AB_TEMP * phaseScale;
+    if (FP_SOFTMAX_MOVES > 0 && (game.N * game.N - game.emptyCount) < FP_SOFTMAX_MOVES) {
       const N = game.N;
       if (!fpState || fpState.moves.length < N * N) {
         fpState  = FeaturePol.createState(N, fpWeights.spec);
@@ -106,19 +120,29 @@ function create(cfg) {
       }
       const game3 = fpWeights.spec.needsLadder ? game3FromGame2(game) : undefined;
       const m = FeaturePol.policyMove(game, fpState, fpWeights, r, game3, 1).move;
-      return { move: m, info: 'fp-softmax (mix)' };
+      return { move: m, info: 'fp-softmax (opening)' };
     }
     const cand = new Int32Array(AB_TOP_K);
     const k = fpTopK(game, cand);
     if (k === 0) return { move: PASS };
     const mover = game.current;
+    const vals = new Float64Array(k);
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
       const c = game.clone();
       c.play(cand[j]);
       const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity);
-      const mv = (mover === BLACK ? v : 1 - v) + (DITHER > 0 ? r.random() * DITHER : 0);
+      const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? r.random() * dither : 0);
+      vals[j] = mv;
       if (mv > bestV) { bestV = mv; best = cand[j]; }
+    }
+    if (temp > 0 && k > 1) {
+      // Root value-softmax over the searched candidates' minimax values.
+      let sum = 0;
+      const w = new Float64Array(k);
+      for (let j = 0; j < k; j++) { w[j] = Math.exp((vals[j] - bestV) / temp); sum += w[j]; }
+      let u = r.random() * sum;
+      for (let j = 0; j < k; j++) { u -= w[j]; if (u <= 0) return { move: cand[j], info: `ab~=${vals[j].toFixed(3)} d${AB_DEPTH}k${AB_TOP_K}t${AB_TEMP}` }; }
     }
     return { move: best, info: `ab=${bestV.toFixed(3)} d${AB_DEPTH}k${AB_TOP_K}` };
   }
