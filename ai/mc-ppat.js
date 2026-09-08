@@ -44,6 +44,27 @@
 //                 sims are long and noisy, so the budget is saved for the
 //                 phase where it discriminates).  Requires FP_TOP > 0.
 //                 (default 0 = sims at every phase)
+//   FP_GAP_SKIP   when fp's raw-score gap between its #1 and #2 exceeds
+//                 this, play #1 without any sims (the decision is not
+//                 contested; the budget is saved for moves that are).
+//                 Requires FP_TOP > 0.  (default 0 = off)
+//   FP_GAP_SKIP_MAX_PHASE  the gap skip only applies below this board
+//                 fullness (measured: fp's big-gap calls are reliable early
+//                 but materially wrong ~1-in-6 late, so late moves always
+//                 get their vote).  (default 1 = skip at every phase)
+//   VOTE_BLOCK    sequential voting: sims run in blocks of this many per
+//                 candidate, stopping early once the leader's margin over
+//                 the runner-up exceeds VOTE_Z standard errors (or the
+//                 CAND_PLAYOUTS/PLAYOUTS cap is reached).  Decided moves
+//                 stop after one block; contested moves run to the cap.
+//                 (default 0 = single fixed-depth vote)
+//   VOTE_Z        the stopping margin in standard errors (default 2)
+//   VPAT_PICK     1 = below SIM_PHASE, instead of fp's top move, choose
+//                 among the FP_TOP candidates by the vpat evaluator's value
+//                 of the successor position (1-ply pick; the ref-search
+//                 pattern).  Needs FP_TOP > 0 and TRUNC_VPAT_DATA.
+//                 SIM_PHASE=1 with VPAT_PICK=1 is a pure 1-ply agent.
+//                 (default 0)
 //   PPAT_DATA     ppat weight file                 (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE  uniform playout moves below this board fullness
 //                 (default 0.6, matching the standard playout)
@@ -88,6 +109,17 @@ function create(cfg) {
   if (SIM_PHASE > 0 && FP_TOP === 0) {
     throw new Error('mc-ppat: SIM_PHASE needs FP_TOP > 0 — below the gate there is no cheap pick to play');
   }
+  const VPAT_PICK = cfg.int('VPAT_PICK', 0);
+  const FP_GAP_SKIP = cfg.float('FP_GAP_SKIP', 0);
+  const FP_GAP_SKIP_MAX_PHASE = cfg.float('FP_GAP_SKIP_MAX_PHASE', 1);
+  const VOTE_BLOCK  = Math.max(0, cfg.int('VOTE_BLOCK', 0));
+  const VOTE_Z      = cfg.float('VOTE_Z', 2);
+  if (FP_GAP_SKIP > 0 && FP_TOP === 0) {
+    throw new Error('mc-ppat: FP_GAP_SKIP needs FP_TOP > 0 — the gap is between fp\'s ranked candidates');
+  }
+  if (VPAT_PICK && FP_TOP === 0) {
+    throw new Error('mc-ppat: VPAT_PICK needs FP_TOP > 0 — it chooses among the fp candidates');
+  }
   let fpWeights = null, fpState = null, fpScores = null;
   if (FP_TOP > 0) {
     fpWeights = FeaturePol.loadModel({ name: 'mc-ppat',
@@ -98,7 +130,7 @@ function create(cfg) {
   const TRUNC_DELTA = cfg.float('TRUNC_PHASE_DELTA', 0);
   const TRUNC_B     = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
   let vpatModel = null, VO_A = 0, VO_B = 0;
-  if (TRUNC_DELTA > 0) {
+  if (TRUNC_DELTA > 0 || VPAT_PICK) {
     vpatModel = VPat.loadWeights(cfg.str('TRUNC_VPAT_DATA', ''));   // throws if unset/unloadable — no silent full-playout fallback
     const vo = cfg.str('TRUNC_VALUE_OFFSET', '0,0').split(',').map(parseFloat);
     VO_A = vo[0]; VO_B = vo[1];
@@ -108,6 +140,9 @@ function create(cfg) {
               (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : `${PLAYOUTS} playouts/move`) +
               (FP_TOP > 0 ? ` over fp top-${FP_TOP}` : ` over ${CANDIDATES > 0 ? CANDIDATES : 'all'} candidates`) +
               (SIM_PHASE > 0 ? `  sims from phase ${SIM_PHASE}` : '') +
+              (VPAT_PICK ? `  vpat-pick below the gate` : '') +
+              (FP_GAP_SKIP > 0 ? `  gap-skip>${FP_GAP_SKIP}` : '') +
+              (VOTE_BLOCK > 0 ? `  seq-vote block=${VOTE_BLOCK} z=${VOTE_Z}` : '') +
               (TRUNC_DELTA > 0 ? `  trunc: delta=${TRUNC_DELTA} B=${TRUNC_B} offset=${VO_A},${VO_B}` : ''));
 
   const rng = makeRng();
@@ -159,7 +194,9 @@ function create(cfg) {
   let _cand = new Int32Array(64);
 
   // Featurepol pruning (the cascade stage-1 rule): fp's top FP_TOP moves by
-  // raw linear score, written into `out`.  Returns the candidate count.
+  // raw linear score, written into `out` best-first.  Returns the candidate
+  // count; _fpGap holds the #1-vs-#2 raw-score gap (Infinity when only one).
+  let _fpGap = 0;
   function fpCandidates(game, out) {
     const N = game.N;
     if (!fpState || fpState.moves.length < N * N) {
@@ -173,7 +210,8 @@ function create(cfg) {
     const k = Math.min(FP_TOP, n);
     const order = new Array(n);
     for (let i = 0; i < n; i++) order[i] = i;
-    if (k < n) order.sort((a, b) => fpScores[b] - fpScores[a]);
+    order.sort((a, b) => fpScores[b] - fpScores[a]);
+    _fpGap = n > 1 ? fpScores[order[0]] - fpScores[order[1]] : Infinity;
     for (let j = 0; j < k; j++) out[j] = fpState.moves[order[j]];
     return k;
   }
@@ -189,9 +227,27 @@ function create(cfg) {
     const n = FP_TOP > 0 ? fpCandidates(game, _cand) : sampleMoves(game, want, _cand, r);
     if (n === 0) return { move: PASS };
     // Below SIM_PHASE the sims don't discriminate (long, noisy playouts vs
-    // tiny value gaps): play fp's top-scored candidate outright.
+    // tiny value gaps): play fp's top-scored candidate outright — or, with
+    // VPAT_PICK, the candidate whose successor the vpat evaluator likes best
+    // (constant lean is common-mode across same-position candidates).
     if (SIM_PHASE > 0 && game.phase() < SIM_PHASE) {
-      return { move: _cand[0], info: 'fp-top (below sim-phase)' };
+      if (!VPAT_PICK || n === 1) return { move: _cand[0], info: 'fp-top (below sim-phase)' };
+      const mover = game.current;
+      let best = _cand[0], bestV = -Infinity;
+      for (let c = 0; c < n; c++) {
+        const g = game.clone();
+        g.play(_cand[c]);
+        const v = vpatValueB(g);
+        const mv2 = mover === BLACK ? v : 1 - v;
+        if (mv2 > bestV) { bestV = mv2; best = _cand[c]; }
+      }
+      return { move: best, info: `vpat-pick=${bestV.toFixed(3)}` };
+    }
+
+    // Uncontested by fp's own scores: play #1, save the sims for moves
+    // that are contested.
+    if (FP_GAP_SKIP > 0 && _fpGap > FP_GAP_SKIP && game.phase() < FP_GAP_SKIP_MAX_PHASE) {
+      return { move: _cand[0], info: `fp-gap=${_fpGap.toFixed(2)}` };
     }
 
     // CAND_PLAYOUTS fixes the per-candidate count (total then scales with n);
@@ -199,6 +255,37 @@ function create(cfg) {
     // found (n can be < CANDIDATES late), keeping per-decision cost at PLAYOUTS.
     const per = CAND_PLAYOUTS > 0 ? CAND_PLAYOUTS : Math.max(1, Math.round(PLAYOUTS / n));
     const mover = game.current;
+
+    // Sequential vote: blocks of VOTE_BLOCK sims per candidate, stopping as
+    // soon as the leader's mean beats the runner-up's by VOTE_Z standard
+    // errors.  Decided moves cost one block; contested moves run to `per`.
+    if (VOTE_BLOCK > 0 && n > 1) {
+      const sum = new Float64Array(n), sq = new Float64Array(n);
+      let done = 0;
+      while (done < per) {
+        const b = Math.min(VOTE_BLOCK, per - done);
+        for (let c = 0; c < n; c++) {
+          for (let p = 0; p < b; p++) {
+            const g = game.clone();
+            g.play(_cand[c]);
+            const res = playout(g, r);
+            const v = mover === BLACK ? res : 1 - res;
+            sum[c] += v; sq[c] += v * v;
+          }
+        }
+        done += b;
+        let li = 0, ri = 1;
+        for (let c = 1; c < n; c++) if (sum[c] > sum[li]) li = c;
+        ri = li === 0 ? 1 : 0;
+        for (let c = 0; c < n; c++) if (c !== li && sum[c] > sum[ri]) ri = c;
+        const mL = sum[li] / done, mR = sum[ri] / done;
+        const vL = Math.max(1e-6, sq[li] / done - mL * mL), vR = Math.max(1e-6, sq[ri] / done - mR * mR);
+        if (mL - mR > VOTE_Z * Math.sqrt((vL + vR) / done)) break;
+      }
+      let li = 0;
+      for (let c = 1; c < n; c++) if (sum[c] + r.random() * 1e-9 > sum[li]) li = c;
+      return { move: _cand[li], info: `wr=${(sum[li] / done).toFixed(3)} of ${n}x${done}` };
+    }
     let best = _cand[0], bestV = -1;
     for (let c = 0; c < n; c++) {
       let wins = 0;
