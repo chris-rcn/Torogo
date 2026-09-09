@@ -101,7 +101,7 @@ const EMIT_PATH = opts.emit || null;
 if (EMIT_PATH && NULL_MODE) { console.error('--emit and --null are mutually exclusive'); process.exit(1); }
 if (EMIT_PATH && DELTAS.length !== 1) { console.error('--emit requires exactly one --delta'); process.exit(1); }
 const NULL_K = parseInt(opts['null-playouts'] || '200', 10);
-const vpatModel = (NULL_MODE || EMIT_PATH) ? null : VPat.loadWeights(opts.vpat);
+const vpatModel = (NULL_MODE || EMIT_PATH) ? null : VPat.loadWeights(opts.vpat, process.env.HEALTH_DATA || '');
 const ppatModel = PPat.loadWeights(opts.ppat ||
   path.join(__dirname, 'out', 'ppat-data-233162-best-ref-candidate.js'));
 ppatModel.uniformBelowPhase = parseFloat(opts['ppat-min-phase'] || '0.6');

@@ -46,7 +46,7 @@ if (opts.fit !== undefined) {
 }
 const files = Array.isArray(opts.file) ? opts.file : [opts.file];
 
-const model = VPat.loadWeights(opts.model);
+const model = VPat.loadWeights(opts.model, process.env.HEALTH_DATA || '');
 console.log(`model: ${opts.model}`);
 
 function replay(size, moves) {

@@ -23,6 +23,12 @@
 // FEATURE TERMS (extend by adding a case to _makeTerm):
 //   stones<n>   D4-canonical encoded states (empty/friend/foe) of the nearest n
 //               cells; n in {4,8,12,20} (the D4-closed rings).
+//   adjHealth<n>  as adjLib<n>, but each neighbouring stone carries its chain's
+//               HEALTH bucket (P(survives a standard playout) under a frozen
+//               train-health.js model, split into n levels) instead of its
+//               liberty count.  Liberty count is a crude proxy for the same
+//               thing; in the vpatterns families the learned version beat it
+//               outright.  Needs FP_HEALTH_DATA.  A descriptor.
 //   adjLib<n>   D4-canonical 4 orthogonal neighbours, each a stone encoded with its
 //               chain's liberty count capped at n (radix 2n+1).  A descriptor.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
@@ -507,6 +513,58 @@ function _vpatLoad() {
 
 // Fill the rank arrays for every legal non-true-eye move of ctx.game.  Runs
 // once per position; each vpat<n> evalFn then just reads and clamps.
+// ── adjHealth: per-position chain health ──────────────────────────────────────
+// P(chain survives) is a per-POSITION quantity, so it is computed once here and
+// reused by every candidate move — ~200 ninecell hashes amortised over ~100
+// candidates.  Stored per CELL as p*255 so the prepare hook is independent of
+// any one term's bucket count.
+let _healthModel = null;
+function _healthLoad() {
+  if (_healthModel) return _healthModel;
+  const envPath = (typeof process !== 'undefined' && process.env) ? process.env.FP_HEALTH_DATA : null;
+  if (!envPath && typeof window === 'undefined') {
+    throw new Error('featurepol: the adjHealth<n> feature needs a health model — set FP_HEALTH_DATA to a train-health.js save file');
+  }
+  _healthModel = VPatterns.resolveHealthModel(envPath || '');
+  return _healthModel;
+}
+let _hpP = new Uint8Array(0);
+function _healthPrepare(ctx) {
+  const game = ctx.game, cap = game.N * game.N;
+  const cells = game.cells, gid = game._gid, ls = game._ls, nbr = game._nbr, dnbr = game._dnbr;
+  const model = _healthLoad();
+  if (_hpP.length < cap) _hpP = new Uint8Array(cap);
+  _hpP.fill(0, 0, cap);
+  const byGid = new Map();
+  for (let i = 0; i < cap; i++) {
+    if (cells[i] === 0) continue;
+    let r = byGid.get(gid[i]);
+    if (!r) { r = { c: cells[i], stones: [], libs: [] }; byGid.set(gid[i], r); }
+    r.stones.push(i);
+  }
+  for (let l = 0; l < cap; l++) {
+    if (cells[l] !== 0) continue;
+    const b4 = l * 4;
+    let s0 = -1, s1 = -1, s2 = -1;
+    for (let d = 0; d < 4; d++) {
+      const j = nbr[b4 + d];
+      if (cells[j] === 0) continue;
+      const gj = gid[j];
+      if (gj === s0 || gj === s1 || gj === s2) continue;
+      if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
+      byGid.get(gj).libs.push(l);
+    }
+  }
+  const libsByGid = new Map();
+  for (const [g, r] of byGid) libsByGid.set(g, r.libs);
+  for (const [g, r] of byGid) {
+    const p = VPatterns.chainSurvivalP(model, cells, nbr, dnbr, gid, ls, r.c, g, r.libs, r.stones, libsByGid);
+    let v = (p * 255) | 0;
+    if (v > 255) v = 255; else if (v < 0) v = 0;
+    for (let k = 0; k < r.stones.length; k++) _hpP[r.stones[k]] = v;
+  }
+}
+
 function _vpatPrepare(ctx) {
   const game = ctx.game, N = game.N, cap = N * N;
   const model = _vpatLoad();
@@ -534,7 +592,8 @@ function _vpatPrepare(ctx) {
       z = VPatterns.deltaZ(game, prep, model.weights, idx);
       if (z !== z) {
         // Capture: full extraction on a separate prepared spec (vpatsearch's rule).
-        const fb = model._fbPrep || (model._fbPrep = VPatterns.prepareSpecs(model.specs));
+        const fb = model._fbPrep || (model._fbPrep = VPatterns.prepareSpecs(model.specs,
+          { health: model.preparedSpecs && model.preparedSpecs.healthModel }));
         const g = game.clone();
         g.play(idx);
         const ff = VPatterns.extractFeatures(g, fb);
@@ -665,6 +724,30 @@ function _makeTerm(str) {
         }
         return _hashCombine(_canonStones(cv, n), n) >>> 0;
       };
+      break;
+    }
+    case 'adjHealth': {
+      // adjLib's shape with health buckets in place of liberty counts: per-cell
+      // symbol (radix 2n+1) 0 = empty, 1..n = own stone in that health bucket,
+      // n+1..2n = enemy stone likewise.  Canonicalised over D4.  A descriptor.
+      if (!param || param < 2) throw new Error(`featurepol: adjHealth<n> needs a bucket count n >= 2, got "${str}"`);
+      {
+        const n = param, radix = 2 * n + 1;
+        maxNear = 4;
+        prepare = _healthPrepare;
+        evalFn = (ctx, idx) => {
+          const nn = ctx.nearNbr, base = idx * ctx.nearStride, game = ctx.game;
+          const cells = game.cells, cur = ctx.cur, cv = _cvScratch;
+          for (let i = 0; i < 4; i++) {
+            const ni = nn[base + i], c = cells[ni];
+            if (c === 0) { cv[i] = 0; continue; }
+            let b = ((_hpP[ni] * n) >> 8) + 1;
+            if (b > n) b = n;
+            cv[i] = (c === cur) ? b : n + b;
+          }
+          return _canonRadix(cv, 4, radix);
+        };
+      }
       break;
     }
     case 'adjLib': {

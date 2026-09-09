@@ -57,7 +57,7 @@ function search(game, m, depth = 1, dither = 0) {
 // the same conditions, terminal PASS scored exactly.
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
-  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns);
+  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns || prep.hasHealth);
   const f = extractFeatures(game, prep);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;
@@ -72,7 +72,9 @@ function search1(game, m, dither) {
     if (d === d) {
       s = 1 / (1 + Math.exp(-(zBase + d))) + (dither > 0 ? Math.random() * dither : 0);
     } else {
-      const fb = m._fbPrep || (m._fbPrep = prepareSpecs(m.specs));
+      // reuse the health model the caller already resolved onto m.preparedSpecs
+      const fb = m._fbPrep || (m._fbPrep = prepareSpecs(m.specs,
+        { health: m.preparedSpecs && m.preparedSpecs.healthModel }));
       const g = game.clone();
       g.play(i);
       s = evaluateFeatures(extractFeatures(g, fb), m.weights) + (dither > 0 ? Math.random() * dither : 0);

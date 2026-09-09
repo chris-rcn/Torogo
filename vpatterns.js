@@ -48,6 +48,240 @@ function makeWeights(minCap) {
 function uh(a, b) {
   return (1234567 + a + b + Math.imul(a, b)) | 0;
 }
+// Chain-relative hash of the NINECELL centred on l — the 3x3 region, of which
+// only the eight surrounding cells are coded, the centre being the anchor.
+// The same function therefore serves a stone (its own chain's surround) and an
+// empty point such as a liberty.  Two xh4 combines, orthogonals and diagonals,
+// each pairing opposite cells, giving D4 invariance.  Shared by the E
+// (eye-pair) family and train-health.js.
+//
+// Three-state alphabet by default (empty / owner's colour / enemy).  Pass
+// gid and chainGid for the FOUR-state alphabet, which splits the owner's
+// colour into "this chain" and "friendly but a different chain" — the
+// distinction the strict eye rule needs, since four friendly stones around a
+// point make an eye only when they are all the SAME chain.
+//
+// Pass ls (liberty count by gid) and maxLibs to split the OTHER-chain stone
+// states by capped liberty count, giving 2 + 2*maxLibs states: at maxLibs 2
+// that is six — empty / this chain / friendly-other in atari /
+// friendly-other 2+ / enemy in atari / enemy 2+.  The subject chain is one
+// state: splitting it too was measured worse, since its liberty count is
+// already implicit in how many liberty ninecells the chain emits.
+// Layout: 1 empty, then this-chain, friendly-other, enemy, each 1..maxLibs.
+function ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs) {
+  const b4 = l * 4;
+  const subj = 2;
+  const base2 = 2;                                         // friendly-other base
+  // No closures here: this runs once per liberty and per stone of every chain
+  // — order 900 calls per position — so the cell coders are module-level
+  // functions and the eight neighbours are read straight from the tables.
+  // xh4 pairs opposite cells; nbr order is N,S,W,E and dnbr NW,NE,SW,SE.
+  const n0 = nbr[b4], n1 = nbr[b4 + 1], n2 = nbr[b4 + 2], n3 = nbr[b4 + 3];
+  const m0 = dnbr[b4], m1 = dnbr[b4 + 1], m2 = dnbr[b4 + 2], m3 = dnbr[b4 + 3];
+  let o, d;
+  if (gid === undefined) {
+    o = xh4(_c3(cells, n0, owner), _c3(cells, n2, owner), _c3(cells, n3, owner), _c3(cells, n1, owner));
+    d = xh4(_c3(cells, m0, owner), _c3(cells, m1, owner), _c3(cells, m2, owner), _c3(cells, m3, owner));
+  } else if (ls === undefined) {
+    o = xh4(_c4(cells, gid, n0, owner, chainGid), _c4(cells, gid, n2, owner, chainGid),
+            _c4(cells, gid, n3, owner, chainGid), _c4(cells, gid, n1, owner, chainGid));
+    d = xh4(_c4(cells, gid, m0, owner, chainGid), _c4(cells, gid, m1, owner, chainGid),
+            _c4(cells, gid, m2, owner, chainGid), _c4(cells, gid, m3, owner, chainGid));
+  } else {
+    o = xh4(_cL(cells, gid, ls, n0, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, n2, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, n3, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, n1, owner, chainGid, subj, base2, maxLibs));
+    d = xh4(_cL(cells, gid, ls, m0, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, m1, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, m2, owner, chainGid, subj, base2, maxLibs),
+            _cL(cells, gid, ls, m3, owner, chainGid, subj, base2, maxLibs));
+  }
+  return uh(o, Math.imul(d, 31));
+}
+// Cell coders for the three alphabets: 3-state, 4-state (chain-relative),
+// and the liberty-split alphabet.
+function _c3(cells, i, owner) { const c = cells[i]; return c === 0 ? 1 : c === owner ? 2 : 3; }
+function _c4(cells, gid, i, owner, chainGid) {
+  const c = cells[i];
+  return c === 0 ? 1 : c !== owner ? 4 : gid[i] === chainGid ? 2 : 3;
+}
+function _cL(cells, gid, ls, i, owner, chainGid, subj, base2, maxLibs) {
+  const c = cells[i];
+  if (c === 0) return 1;
+  const g = gid[i];
+  if (c === owner && g === chainGid) return subj;
+  let lib = ls[g];
+  if (lib > maxLibs) lib = maxLibs;
+  return (c === owner ? base2 : base2 + maxLibs) + lib;
+}
+
+// Key for the chain-level LIBERTY-COUNT one-hot: exactly one weight per
+// example, indexed by the chain's liberty count capped at subjectMaxLibs.  The
+// ninecell sum can only move linearly with liberty count (one term per
+// liberty), but survival is sharply non-linear in it — the step from one
+// liberty to two is worth ~1.5 in logit, later steps ~0.5 — so this lets the
+// model fit that curve directly.  Its own salt keeps it clear of the ninecell
+// key space.
+// Key for the BEST-SINGLE-JOIN liberty one-hot: the liberty count this chain
+// would have after the most favourable connecting move available to it.
+// Playing at a join point p merges this chain with EVERY friendly chain
+// adjacent to p at once, so the result is
+//     (my liberties U those friends' liberties U p's empty neighbours) \ {p}
+// maximised over p.  Unlike every other chain aggregate, this is a
+// COUNTERFACTUAL: no sum over current neighbourhoods can compute what the
+// liberty count becomes after a move that has not been played, at any window
+// size.  Chains with no join available fall back to their own liberty count.
+const CHAIN_JOIN_SALT = 0x3b9aca07 | 0;
+function chainJoinLibsKey(nLibs, cap) {
+  const b = nLibs > cap ? cap : nLibs;
+  const k = (Math.imul(b + 1, 0x45d9f3b3) ^ CHAIN_JOIN_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
+// Generation-stamped scratch for the union counts: no allocation, no clearing.
+let _joinMark = null, _joinGen = 0;
+
+const CHAIN_LIB_SALT = 0x2f1d3b77 | 0;
+function chainLibCountKey(nLibs, cap) {
+  const b = nLibs > cap ? cap : nLibs;
+  const k = (Math.imul(b + 1, 0x9E3779B1) ^ CHAIN_LIB_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
+// Ninecell keys for ONE chain, in the order train-health.js emits them: one
+// per liberty, then one per stone (stone ninecells XORed into their own key
+// space), then the chain-level one-hots: liberty count when subjectMaxLibs > 0,
+// then best-single-join liberties when joinCap > 0, which additionally needs
+// libsByGid — a per-position Map from group id to that chain's liberty cells,
+// so a friend's liberties are looked up rather than rescanned.  Shared by the
+// trainer and by the C family's survival attribute so the two can never drift
+// apart.  libs/stones may be any iterable of cells.
+function chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, chainGid, libs, stones,
+                       maxLibs, stoneSalt, out, subjectMaxLibs, joinCap, libsByGid) {
+  for (const l of libs)
+    out.push(ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs));
+  for (const st of stones) {
+    const h = (ninecellHash(cells, nbr, dnbr, st, owner, gid, chainGid, ls, maxLibs) ^ stoneSalt) | 0;
+    out.push(h === 0 ? 1 : h);
+  }
+  if (subjectMaxLibs > 0) {
+    let n = 0;
+    for (const _ of libs) n++;
+    out.push(chainLibCountKey(n, subjectMaxLibs));
+  }
+  if (joinCap > 0) {
+    if (_joinMark === null || _joinMark.length < cells.length) _joinMark = new Int32Array(cells.length);
+    const mark = _joinMark;
+    // Stamp my own liberties once; each candidate join point then counts the
+    // union incrementally against a fresh stamp.
+    const gMine = ++_joinGen;
+    let nMine = 0;
+    for (const l of libs) { mark[l] = gMine; nMine++; }
+    let best = nMine;
+    for (const p of libs) {
+      const b4p = p * 4;
+      // friends adjacent to p — connecting here merges with all of them
+      let hasFriend = false;
+      const gU = ++_joinGen;
+      let n = nMine - 1;                       // p itself stops being a liberty
+      for (let d = 0; d < 4; d++) {
+        const j = nbr[b4p + d];
+        const c = cells[j];
+        if (c === 0) {
+          // an empty neighbour of p is a liberty of the connecting stone;
+          // new only if it is not already one of mine
+          if (mark[j] !== gMine && mark[j] !== gU) { mark[j] = gU; n++; }
+          continue;
+        }
+        if (c !== owner) continue;
+        const gj = gid[j];
+        if (gj === chainGid) continue;
+        hasFriend = true;
+        // that friend's liberties join mine — looked up, never rescanned
+        const fl = libsByGid.get(gj);
+        for (let i = 0; i < fl.length; i++) {
+          const q = fl[i];
+          if (q === p) continue;
+          if (mark[q] !== gMine && mark[q] !== gU) { mark[q] = gU; n++; }
+        }
+      }
+      if (hasFriend && n > best) best = n;
+    }
+    out.push(chainJoinLibsKey(best, joinCap));
+  }
+  return out;
+}
+
+// P(chain survives a standard playout) under a frozen train-health
+// model: sigma(bias + sum of its ninecell weights).  The model carries its own
+// alphabet parameters, so a model trained with different settings still
+// scores correctly.
+const _survScratch = [];
+function chainSurvivalP(model, cells, nbr, dnbr, gid, ls, owner, chainGid, libs, stones, libsByGid) {
+  _survScratch.length = 0;
+  chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, chainGid, libs, stones,
+                model.otherMaxLibs, model.stoneSalt, _survScratch,
+                model.maxLibs || 0, model.maxJoinLibs || 0, libsByGid);
+  let z = model.bias;
+  const w = model.weights;
+  for (let i = 0; i < _survScratch.length; i++) z += w.get(_survScratch[i]) || 0;
+  return 1 / (1 + Math.exp(-z));
+}
+
+// The saved model stores its weights in a plain Map; move them into an
+// open-addressing int map, which is markedly cheaper for the ~900 int-keyed
+// lookups this costs per position.
+function _survIntern(raw) {
+  if (!(raw.weights instanceof Map)) return raw;
+  // Field names follow train-health.js's CLI: maxLibs is the SUBJECT chain's
+  // liberty-count one-hot cap, otherMaxLibs the OTHER chains' alphabet cap.
+  // Files written before that swap used maxLibs for the alphabet cap and had
+  // no otherMaxLibs, so reading them here would silently re-interpret both —
+  // refuse instead.
+  if (raw.otherMaxLibs === undefined) {
+    throw new Error('vpatterns: this health model predates the maxLibs/otherMaxLibs rename ' +
+                    '(no otherMaxLibs field) — retrain it with train-health.js');
+  }
+  const w = makeWeights(raw.weights.size * 2);
+  raw.weights.forEach((v, k) => w.set(k, v));
+  return { bias: raw.bias, otherMaxLibs: raw.otherMaxLibs, maxLibs: raw.maxLibs || 0,
+           maxJoinLibs: raw.maxJoinLibs || 0,
+           stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
+           delta: raw.delta, weights: w };
+}
+
+// Resolve a health model from a path, a already-loaded model object, or the
+// browser global.  The CALLER supplies it — a library reading the environment
+// behind the caller's back cannot be given per-agent values, and a
+// module-level singleton would force every agent in a process to share one.
+// The result is attached to the prepared specs (prepareSpecs opts), so two
+// agents can carry different health models.
+const _healthCache = new Map();          // path -> interned model
+function resolveHealthModel(pathOrModel) {
+  if (pathOrModel && typeof pathOrModel === 'object') return _survIntern(pathOrModel);
+  if (typeof pathOrModel === 'string' && pathOrModel !== '') {
+    const abs = _isNode ? require('path').resolve(pathOrModel) : pathOrModel;
+    let m = _healthCache.get(abs);
+    if (!m) { m = _survIntern(require(abs)); _healthCache.set(abs, m); }
+    return m;
+  }
+  if (typeof window !== 'undefined' && window.chainSurvModel) return _survIntern(window.chainSurvModel);
+  throw new Error('vpatterns: health-coded specs need a health model — pass it as ' +
+                  'prepareSpecs(specs, { health: <path or model> }) / loadWeights(file, health)');
+}
+
+// Unordered eye-pair key over two ninecellHash values (uh is symmetric).
+// Shared by the E family and train-health.js.  The optional rel code
+// types the pair by the two points' toroidal relationship (same-eyespace
+// neighbours mean something different from separated liberties); rel 0 is
+// the untyped key.
+function pairKey(ha, hb, rel) {
+  let k = (Math.imul(uh(ha, hb) + 1, 2654435761) ^ 0x3E9A17) | 0;
+  if (rel) k = (k ^ Math.imul(rel, 0x27d4eb2d)) | 0;
+  return k === 0 ? 1 : k;
+}
+
 function xh4(tl, tr, bl, br) {
   return uh(uh(tl, br), uh(tr, bl));
 }
@@ -62,8 +296,21 @@ function mixTag(h, tag) {
 // turn-independent tactical alphabet (0 empty, ±1 alive, ±2 dead, ±3
 // unsettled) instead of capped liberty counts — structurally identical to
 // an ml=3 encoding, so the whole plane/hash/34 machinery is shared.
+// Render a spec back to its command-line token — the inverse of the trainers'
+// --spec parser, so what a run prints can be pasted into the next one.
+function specToken(sp) {
+  const ph = sp.phaseBins > 1 ? 'p' + sp.phaseBins : '';
+  if (sp.size === 0) return 'C' + (sp.caps ? sp.caps.join('.') : '') + ph;
+  if (sp.size === 6) return 'E' + (sp.libGate || 8) + ph;
+  const body = sp.maxLibs === 0 ? 'L'
+             : sp.maxLibs < 0 ? 'H' + (-sp.maxLibs)
+             : String(sp.maxLibs);
+  return sp.size + ':' + body + ph;
+}
+function specString(specs) { return specs.map(specToken).join(','); }
+
 function specTag(spec) {
-  return (spec.maxLibs << 3) | (spec.size === 34 ? 5 : spec.size);
+  return (tagBaseOf(spec.maxLibs) << 3) | (spec.size === 34 ? 5 : spec.size);
 }
 
 // Leaf mapping: leaf(raw) is chosen so that 1 + leaf is PRIME.  uh's core is
@@ -146,7 +393,11 @@ let _dzOv3N = new Int32Array(0), _dzOv3I = new Int32Array(0);     // 3×3 hash o
 let _dzLeafN = new Int32Array(0), _dzLeafI = new Int32Array(0);   // leaf overrides
 let _dzUnion = new Int32Array(0);
 let _libCounts = new Int32Array(0);
-const _phSaltScratch = new Int32Array(64);
+// Health-coded specs ('size:H<N>') are stored with maxLibs = -N so they group
+// and sort apart from liberty-coded ones; their tag base is lifted clear of the
+// liberty range so the two never share a key space.
+function tagBaseOf(maxLibs) { return maxLibs < 0 ? 16 - maxLibs : maxLibs; }
+const _phSaltScratch = new Int32Array(256);
 let _libStampVal = 0;
 
 // ── Multi-spec extraction ─────────────────────────────────────────────────────
@@ -157,7 +408,7 @@ let _libStampVal = 0;
 // Also precomputes lookup tables for size:2 and size:3:
 //   lut2/lut3: Map<maxLibs, { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }>
 //   Index = Σ (cell[i]+maxLibs) * base^i.  pols[i]===0 → skip (symmetric/empty).
-function prepareSpecs(specs) {
+function prepareSpecs(specs, opts) {
   const byMaxLibs = new Map();
   // size 0 = the chain-attribute family (spec token 'C', optionally
   // 'C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>
@@ -170,6 +421,15 @@ function prepareSpecs(specs) {
   // entirely.  One C spec per model (the first wins).
   const chainSpec = specs.find(sp => sp.size === 0);
   const hasChains = chainSpec !== undefined;
+  // size 6 = the eye-pair family (token 'E[<libGate>][pN]'): for each chain
+  // with at most libGate liberties, one feature per unordered pair of
+  // NON-ADJACENT liberties, keyed by the pair of owner-relative t-hashed
+  // 3x3 neighbourhoods.  Two-eye safety is a conjunction of two separated
+  // local shapes; no window family can see conjunctions.  Non-incremental.
+  const eyeSpec = specs.find(sp => sp.size === 6);
+  const hasEyePairs = eyeSpec !== undefined;
+  const eyePairGate = hasEyePairs ? (eyeSpec.libGate || 8) : 0;
+  const eyePairPhaseBins = hasEyePairs ? (eyeSpec.phaseBins || 1) : 1;
   const chainCaps = hasChains ? (chainSpec.caps || [8, 8, 4, 8]) : null;
   // Optional phase bucketing (token suffix pN): chain keys additionally
   // keyed by floor(phase * N) over [0, 1] — every chain in a position
@@ -179,16 +439,16 @@ function prepareSpecs(specs) {
   // keys are salted by floor(phase * N), giving each spec its own phase-
   // conditioned weight planes.  Non-incremental (bucket crossings invalidate
   // every key): deltaZ and doSetNext refuse.
-  const patPhaseBins = new Int32Array(64);
+  const patPhaseBins = new Int32Array(256);
   let hasPhasedPatterns = false;
   for (const sp of specs) {
     if (sp.size !== 0 && sp.phaseBins > 1) {
-      patPhaseBins[(sp.maxLibs << 3) | (sp.size === 34 ? 5 : sp.size)] = sp.phaseBins;
+      patPhaseBins[(tagBaseOf(sp.maxLibs) << 3) | (sp.size === 34 ? 5 : sp.size)] = sp.phaseBins;
       hasPhasedPatterns = true;
     }
   }
   for (const spec of specs) {
-    if (spec.size === 0) continue;
+    if (spec.size === 0 || spec.size === 6) continue;
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
@@ -203,8 +463,21 @@ function prepareSpecs(specs) {
   // maxLibs 0 = the ladder-coded family (needs a game3 tactical pass; not
   // incremental — deltaZ and speculative extraction refuse it).
   const hasLadder = byMaxLibs.has(0);
+  // Negative group keys are the HEALTH-coded families (maxLibs = -N): each
+  // stone is coded by its chain's frozen-model survival bucket instead of its
+  // liberty count.  Needs the game's _gid/_ls, so like the ladder family it is
+  // not incremental and refuses speculative extraction.
+  const hasHealth = sortedMaxLibs.some(m => m < 0);
 
-  return { byMaxLibs, sortedMaxLibs, totalSizes: totalSizes + (hasChains ? 1 : 0), hasLadder, hasChains, chainCaps, chainPhaseBins, patPhaseBins, hasPhasedPatterns };
+  // Health model, resolved once per prepared-specs object: needed by the
+  // 'size:H<N>' families and by the C survival attribute.
+  const needHealth = sortedMaxLibs.some(m => m < 0) ||
+                     (hasChains && chainCaps.length > 12 && chainCaps[12] >= 2);
+  const healthModel = needHealth ? resolveHealthModel(opts && opts.health) : null;
+  return { byMaxLibs, sortedMaxLibs, healthModel,
+           totalSizes: totalSizes + (hasChains ? 1 : 0) + (hasEyePairs ? 4 : 0),
+           hasLadder, hasHealth, hasChains, chainCaps, chainPhaseBins, patPhaseBins, hasPhasedPatterns,
+           hasEyePairs, eyePairGate, eyePairPhaseBins };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -222,7 +495,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   const maxF   = cap * prepSpecs.totalSizes;
   const outKeys = new Int32Array(maxF);
   const outPols = new Int8Array(maxF);
-  const outTags = new Int8Array(maxF);   // spec tag: (maxLibs << 3) | size
+  const outTags = new Int16Array(maxF);  // spec tag: (tagBase << 3) | size
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
@@ -234,6 +507,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   }
   if (doSetNext && prepSpecs.hasPhasedPatterns) {
     throw new Error('vpatterns: phase-binned pattern specs (pN) do not support speculative extraction (doSetNext)');
+  }
+  if (doSetNext && prepSpecs.hasHealth) {
+    throw new Error('vpatterns: health-coded specs (size:H<N>) do not support speculative extraction (doSetNext)');
+  }
+  if (doSetNext && prepSpecs.hasEyePairs) {
+    throw new Error('vpatterns: eye-pair specs (E) do not support speculative extraction (doSetNext)');
   }
   if (doSetNext && prepSpecs.hasChains) {
     throw new Error('vpatterns: chain-attribute specs (C) do not support speculative extraction (doSetNext) — the group structures are stale under the mutation');
@@ -254,11 +533,18 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   // must have run extractFeatures on the current position, and nothing may
   // overwrite the planes between that call and deltaZ).
   const planes = prepSpecs._planes || (prepSpecs._planes = new Map());
+  // Chain survival is identical across health groups — only the bucketing
+  // differs — so compute it once per POSITION and let every 'size:H<N>' group
+  // reuse it.  Rebuilt on each extractFeatures call; never cached across
+  // positions.
+  let survChains = null, survByGid = null, survLibsByGid = null;
 
   const phSalt = _phSaltScratch;
   if (prepSpecs.hasPhasedPatterns) {
     const bins = prepSpecs.patPhaseBins, ph = 1 - game.emptyCount / cap;
-    for (let t = 0; t < 64; t++) {
+    // over the WHOLE tag space: health families sit at lifted tag bases, and
+    // a short loop would silently drop their phase salt
+    for (let t = 0; t < bins.length; t++) {
       if (bins[t] > 1) {
         let b = Math.floor(ph * bins[t]);
         if (b >= bins[t]) b = bins[t] - 1;
@@ -270,10 +556,59 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   let raw = null;
   for (const maxLibs of sortedMaxLibs) {
     const isLadder = maxLibs === 0;   // sorts last (descending), after the liberty chain
+    const isHealth = maxLibs < 0;     // 'size:H<N>' — stored as -N, sorts after the ladder
+    const hb = isHealth ? -maxLibs : 0;
     if (isLadder) {
       // vlibpat's turn-independent 7-state tactical alphabet, from a fresh
       // game3 tactical pass over the current cells.
       raw = VLibPat.computeLadderCodes(game3FromGame2(game), null);
+    } else if (isHealth) {
+      // One survival probability per chain, bucketed to 1..hb and signed by
+      // colour — the same alphabet shape as liberty counts, but the levels
+      // mean "how likely is this chain to live" instead of "how many
+      // liberties".  Uses the game's incremental chain structures, so this
+      // family cannot run under doSetNext.
+      raw = new Int8Array(cap);
+      if (survChains === null) {
+        const model = prepSpecs.healthModel;
+        const gidH = game._gid, lsH = game._ls, nbrH = game._nbr, dnbrH = game._dnbr;
+        survChains = [];
+        survByGid = new Map();
+        const byGid = survByGid;
+        for (let i = 0; i < cap; i++) {
+          const c = cells[i];
+          if (c === 0) continue;
+          let r = byGid.get(gidH[i]);
+          if (!r) { r = { c, gid: gidH[i], stones: [], libs: [], p: 0 }; byGid.set(gidH[i], r); survChains.push(r); }
+          r.stones.push(i);
+        }
+        for (let l = 0; l < cap; l++) {
+          if (cells[l] !== 0) continue;
+          const b4 = l * 4;
+          let s0 = -1, s1 = -1, s2 = -1;
+          for (let d = 0; d < 4; d++) {
+            const j = nbrH[b4 + d];
+            if (cells[j] === 0) continue;
+            const gj = gidH[j];
+            if (gj === s0 || gj === s1 || gj === s2) continue;
+            if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
+            byGid.get(gj).libs.push(l);
+          }
+        }
+        survLibsByGid = new Map();
+        for (let k = 0; k < survChains.length; k++) survLibsByGid.set(survChains[k].gid, survChains[k].libs);
+        for (let k = 0; k < survChains.length; k++) {
+          const r = survChains[k];
+          r.p = chainSurvivalP(model, cells, nbrH, dnbrH, gidH, lsH, r.c, r.gid, r.libs, r.stones, survLibsByGid);
+        }
+      }
+      for (let k = 0; k < survChains.length; k++) {
+        const r = survChains[k];
+        let b = Math.floor(r.p * hb) + 1;
+        if (b > hb) b = hb;
+        const v = r.c * b;
+        for (let j = 0; j < r.stones.length; j++) raw[r.stones[j]] = v;
+      }
     } else if (raw === null) {
       raw = new Int8Array(cap);
       if (maxLibs === 1) {
@@ -297,8 +632,10 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
     }
     // Ladder family: leaf offset 3 (codes span ±3); size-1 keys in their own
-    // block (131*16 — a real maxLibs cannot exceed 15).
-    const effOff = isLadder ? 3 : maxLibs;
+    // block (131*16 — a real maxLibs cannot exceed 15).  Health families use
+    // their bucket count as the offset, and a lifted tag base.
+    const effOff = isLadder ? 3 : (isHealth ? hb : maxLibs);
+    const tagBase = tagBaseOf(maxLibs);
     const sizes = byMaxLibs.get(maxLibs);
     const do1   = sizes.includes(1);
     const do2   = sizes.includes(2);
@@ -307,14 +644,14 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const do34  = sizes.includes(34);   // 3×4 ∪ 4×3 rectangle pair
 
     if (do1) {
-      const k1base = 131 * (isLadder ? 16 : maxLibs);
+      const k1base = 131 * (isLadder ? 16 : tagBase);
       for (let idx = 0; idx < cap; idx++) {
         const s = raw[idx];
         if (s !== 0) {
           const libs = s > 0 ? s : -s;
-          outKeys[count] = (libs + k1base) ^ phSalt[(maxLibs << 3) | 1];
+          outKeys[count] = (libs + k1base) ^ phSalt[(tagBase << 3) | 1];
           outPols[count] = s > 0 ? 1 : -1;
-          outTags[count] = (maxLibs << 3) | 1;
+          outTags[count] = (tagBase << 3) | 1;
           count++;
         }
       }
@@ -343,7 +680,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         }
       }
       if (do2) {
-        const tag = (maxLibs << 3) | 2;
+        const tag = (tagBase << 3) | 2;
         const pS2 = phSalt[tag];
         for (let i = 0; i < cap; i++) {
           const kN = h2N[i], kI = h2I[i];
@@ -359,7 +696,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         // down-right), exactly hpatterns' recursion; the plane is stored so
         // 4×4 (and deltaZ) can read it.
         const h3N = pl.h3N, h3I = pl.h3I;
-        const tag = (maxLibs << 3) | 3;
+        const tag = (tagBase << 3) | 3;
         const pS3 = phSalt[tag];
         for (let y = 0; y < N; y++) {
           const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
@@ -378,7 +715,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         }
         if (do4) {
           // 4×4 = X of the four corner 3×3 sub-windows.
-          const tag4 = (maxLibs << 3) | 4;
+          const tag4 = (tagBase << 3) | 4;
           const pS4 = phSalt[tag4];
           for (let y = 0; y < N; y++) {
             const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
@@ -401,7 +738,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
           // one with an equal hash (each 3×3 child is D4-invariant, uh
           // unordered), so only the union of the two families keeps the
           // feature multiset D4-invariant.
-          const tag34 = (maxLibs << 3) | 5;
+          const tag34 = (tagBase << 3) | 5;
           const pS34 = phSalt[tag34];
           for (let y = 0; y < N; y++) {
             const r0 = y * N, r1 = (y + 1 < N ? y + 1 : 0) * N;
@@ -472,6 +809,31 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     const CP = prepSpecs.chainCaps.length > 9 ? prepSpecs.chainCaps[9] : -1;   // connection points (liberties adjacent to another friendly chain)
     const CD = prepSpecs.chainCaps.length > 10 ? prepSpecs.chainCaps[10] : -1; // density: floor(4*libs/stones) bucketed (blob low, string high)
     const CI = prepSpecs.chainCaps.length > 11 ? prepSpecs.chainCaps[11] : -1; // interior stones (all 4 neighbours same chain)
+    // Slot 13 is the only one in the dot-list that is a COUNT, not a cap:
+    // it is the NUMBER OF HEALTH BUCKETS the frozen chain-survival model's
+    // P(survive) is split into (2 = two buckets, either side of p = 0.5).
+    // 0 or 1 = off.
+    const CV = prepSpecs.chainCaps.length > 12 ? prepSpecs.chainCaps[12] : 0;
+    const survModel = CV >= 2 ? prepSpecs.healthModel : null;
+    // gid -> liberty cells, for the survival model's best-single-join feature
+    let cLibsByGid = null;
+    if (survModel && survModel.maxJoinLibs > 0) {
+      cLibsByGid = new Map();
+      for (const g2 of chains.keys()) cLibsByGid.set(g2, []);
+      for (let l = 0; l < cap; l++) {
+        if (cells[l] !== 0) continue;
+        const b4 = l * 4;
+        let a0 = -1, a1 = -1, a2 = -1;
+        for (let d = 0; d < 4; d++) {
+          const j = nbr[b4 + d];
+          if (cells[j] === 0) continue;
+          const gj = gid[j];
+          if (gj === a0 || gj === a1 || gj === a2) continue;
+          if (a0 < 0) a0 = gj; else if (a1 < 0) a1 = gj; else a2 = gj;
+          cLibsByGid.get(gj).push(l);
+        }
+      }
+    }
     const ls = game._ls, dnbr = game._dnbr;
     // Eye rule for the per-chain attribute (Chris, 2026-09-08): a liberty
     // is an eye of THIS chain iff all 4 orthogonals belong to this chain.
@@ -514,7 +876,10 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         if (weakest > CW) weakest = CW;
       }
       let eyes = 0;
-      if (CY >= 0) {
+      // >= 1, not >= 0: these count-and-break attributes would otherwise
+      // leave a stray 1 at cap 0, since the first hit satisfies `>= 0`.  Cap 0
+      // must mean OFF, exactly as it does for the clamp-after-loop attributes.
+      if (CY >= 1) {
         for (const l of libSet) if (trueEyeFor(l, g)) { eyes++; if (eyes >= CY) break; }
       }
       let shared = 0;
@@ -531,7 +896,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
         if (bestF > CF) bestF = CF;
       }
       let interior = 0;
-      if (CI >= 0) {
+      if (CI >= 1) {   // see the eyes note above: cap 0 means off
         for (const idx of r.cells) {
           const base = idx * 4;
           let own = 0;
@@ -549,13 +914,71 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       }
       let dens = 0;
       if (CD >= 0) { dens = Math.floor(4 * libSet.size / r.stones); if (dens > CD) dens = CD; }
-      const pack   = stones + (CS + 1) * (libs + (CL + 1) * (adjE + (CA + 1) * (secL + (CE + 1) * (joinF + (CJ >= 0 ? CJ + 1 : 1) * (weakest + (CW >= 0 ? CW + 1 : 1) * (eyes + (CY >= 0 ? CY + 1 : 1) * (shared + (CH >= 0 ? CH + 1 : 1) * (bestF + (CF >= 0 ? CF + 1 : 1) * (connP + (CP >= 0 ? CP + 1 : 1) * (dens + (CD >= 0 ? CD + 1 : 1) * interior)))))))))); 
+      let surv = 0;
+      if (CV >= 2) {
+        const p = chainSurvivalP(survModel, cells, nbr, dnbr, gid, ls, r.c, g, libSet, r.cells, cLibsByGid);
+        surv = Math.floor(p * CV);          // CV buckets: 0 .. CV-1
+        if (surv > CV - 1) surv = CV - 1;
+      }
+      const pack   = stones + (CS + 1) * (libs + (CL + 1) * (adjE + (CA + 1) * (secL + (CE + 1) * (joinF + (CJ >= 0 ? CJ + 1 : 1) * (weakest + (CW >= 0 ? CW + 1 : 1) * (eyes + (CY >= 0 ? CY + 1 : 1) * (shared + (CH >= 0 ? CH + 1 : 1) * (bestF + (CF >= 0 ? CF + 1 : 1) * (connP + (CP >= 0 ? CP + 1 : 1) * (dens + (CD >= 0 ? CD + 1 : 1) * (interior + (CI >= 0 ? CI + 1 : 1) * surv))))))))))); 
       let key = (Math.imul(pack + 1, 2654435761) ^ Math.imul(capCode + 1, 0x45d9f3b) ^ phSalt) | 0;
       if (key === 0) key = 1;    // int-map reserves key 0
       outKeys[count] = key;
       outPols[count] = r.c;
       outTags[count] = 0;        // specTag({size:0, maxLibs:0})
       count++;
+    }
+  }
+
+  // Eye-pair family (spec 'E'): for each chain with <= libGate liberties,
+  // one antisymmetric feature per unordered pair of NON-ADJACENT liberties,
+  // keyed by the two owner-relative t-hashed 3x3 neighbourhoods (uh makes
+  // the pair unordered; each region hash is D4-invariant by construction,
+  // t-hash fidelity caveats as usual).  Pair geometry beyond non-adjacency
+  // is deliberately discarded: two real eyes anywhere alive the chain.
+  if (prepSpecs.hasEyePairs) {
+    const gid = game._gid, nbr = game._nbr, dnbr = game._dnbr;
+    const gate = prepSpecs.eyePairGate;
+    let phSaltE = 0;
+    const eBins = prepSpecs.eyePairPhaseBins;
+    if (eBins > 1) {
+      const ph = 1 - game.emptyCount / cap;
+      let b = Math.floor(ph * eBins);
+      if (b >= eBins) b = eBins - 1;
+      phSaltE = Math.imul(b + 1, 0x85ebca6b) | 0;
+    }
+    const r3 = (l, owner) => ninecellHash(cells, nbr, dnbr, l, owner);
+    const seenG = new Set();
+    const libs = [];
+    for (let idx = 0; idx < cap; idx++) {
+      const c = cells[idx];
+      if (c === 0) continue;
+      const g0 = gid[idx];
+      if (seenG.has(g0)) continue;
+      seenG.add(g0);
+      // collect this chain's liberties (walk its cells via gid match)
+      libs.length = 0;
+      for (let j = 0; j < cap; j++) {
+        if (cells[j] !== 0) continue;
+        const b4 = j * 4;
+        for (let d = 0; d < 4; d++) if (gid[nbr[b4 + d]] === g0 && cells[nbr[b4 + d]] !== 0) { libs.push(j); break; }
+      }
+      if (libs.length < 2 || libs.length > gate) continue;
+      for (let a = 0; a < libs.length; a++) {
+        const ha = r3(libs[a], c);
+        for (let b = a + 1; b < libs.length; b++) {
+          const la = libs[a], lb = libs[b];
+          // non-adjacent only: orthogonally adjacent liberties are one eyespace
+          const b4 = la * 4;
+          if (nbr[b4] === lb || nbr[b4 + 1] === lb || nbr[b4 + 2] === lb || nbr[b4 + 3] === lb) continue;
+          let key = pairKey(ha, r3(lb, c)) ^ phSaltE;
+          if (key === 0) key = 1;
+          outKeys[count] = key;
+          outPols[count] = c;
+          outTags[count] = 6;
+          count++;
+        }
+      }
     }
   }
 
@@ -588,6 +1011,12 @@ function deltaZ(game, prepSpecs, weights, move) {
   }
   if (prepSpecs.hasChains) {
     throw new Error('vpatterns deltaZ: chain-attribute specs (C) are not incremental');
+  }
+  if (prepSpecs.hasHealth) {
+    throw new Error('vpatterns deltaZ: health-coded specs (size:H<N>) are not incremental');
+  }
+  if (prepSpecs.hasEyePairs) {
+    throw new Error('vpatterns deltaZ: eye-pair specs (E) are not incremental');
   }
   if (prepSpecs.hasPhasedPatterns) {
     throw new Error('vpatterns deltaZ: phase-binned pattern specs (pN) are not incremental');
@@ -871,25 +1300,68 @@ function evaluate(game, model) {
 
 // Loads a model JS file and returns { weights: Map<number,float>, specs: [...] }.
 // Always returns a fresh copy so multiple callers don't share the same Map.
-function loadWeights(filePath) {
+// health: path to (or already-loaded) health model, required when the specs
+// are health-coded or use the C survival attribute.
+function loadWeights(filePath, health) {
   const raw = require(require('path').resolve(filePath));
   const specs = raw.specs;
   const weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
   for (const [k, v] of raw.weights) weights.set(k, v);
-  return { specs, preparedSpecs: prepareSpecs(specs), weights, komi: raw.komi };
+  const preparedSpecs = prepareSpecs(specs, { health });
+  if (raw.health) checkHealthMatch(raw.health, filePath, preparedSpecs.healthModel);
+  return { specs, preparedSpecs, weights, komi: raw.komi };
+}
+
+// A health-coded model's keys are bucket indices produced by whichever health
+// model was loaded when it trained, so pairing it with a different one
+// re-indexes every weight — no error, just wrong.  We do NOT match file names
+// (a model may legitimately be copied or renamed); we compare the parameters
+// the training run recorded against the health model now in use.  Alphabet
+// differences change the key space outright and are fatal; the rest change
+// the bucket boundaries and are reported loudly.
+function checkHealthMatch(want, filePath, got) {
+  const fatal = [];
+  for (const k of ['otherMaxLibs', 'maxLibs', 'maxJoinLibs', 'stoneSalt']) {
+    if (want[k] !== undefined && want[k] !== got[k]) fatal.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
+  }
+  if (fatal.length) {
+    throw new Error(`vpatterns: ${filePath} was trained against a health model with a different ALPHABET ` +
+                    `— its weights index a different key space (${fatal.join('; ')})`);
+  }
+  const soft = [];
+  for (const k of ['minPhase', 'maxPhase', 'delta', 'bias', 'nWeights']) {
+    if (want[k] !== undefined && got[k] !== undefined && want[k] !== got[k]) {
+      soft.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
+    }
+  }
+  if (soft.length) {
+    console.error(`vpatterns WARNING: ${filePath} was trained against a DIFFERENT health model ` +
+                  `(${soft.join('; ')}) — same alphabet, but the survival probabilities and hence the ` +
+                  `bucket assignments differ, so its weights are mis-indexed.`);
+  }
 }
 
 // Writes a model { weights, specs } to a JS file (browser-includable).
 function saveWeights(filePath, model) {
   const fs         = require('fs');
   const specStr    = JSON.stringify(model.specs);
+  // Health-coded models record the health model's PARAMETERS (never its path)
+  // so a later pairing can be sanity-checked — see checkHealthMatch.
+  let healthStr = '';
+  if (model.specs.some(sp => sp.maxLibs < 0)) {
+    const h = model.preparedSpecs.healthModel;
+    healthStr = `, health: { minPhase: ${h.minPhase}, maxPhase: ${h.maxPhase}, delta: ${h.delta}, ` +
+                `otherMaxLibs: ${h.otherMaxLibs}, maxLibs: ${h.maxLibs}, maxJoinLibs: ${h.maxJoinLibs}, ` +
+                `stoneSalt: ${h.stoneSalt}, ` +
+                `bias: ${h.bias}, nWeights: ${h.weights.size} }`;
+  }
   const pairs = [];
   model.weights.forEach((k, v) => pairs.push(`[${k},${+v.toFixed(6)}]`));
   const weightsStr = '[' + pairs.join(',') + ']';
   const src = [
     "'use strict';",
     '// Auto-generated by train-vpatterns.js — do not edit by hand.',
-    `const vpatternsModel = { specs: ${specStr}, weights: new Map(${weightsStr})` +
+    `const vpatternsModel = { specs: ${specStr}${healthStr}, weights: new Map(${weightsStr})` +
       (model.komi !== undefined ? `, komi: ${model.komi}` : '') + ` };`,
     "if (typeof module !== 'undefined') module.exports = vpatternsModel;",
     "else window.vpatternsModel = vpatternsModel;",
@@ -910,6 +1382,15 @@ const Patterns = {
   deltaZ,
   loadWeights,
   saveWeights,
+  resolveHealthModel,
+  chainLibCountKey,
+  chainJoinLibsKey,
+  specToken,
+  specString,
+  ninecellHash,
+  chainSurvKeys,
+  chainSurvivalP,
+  pairKey,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;

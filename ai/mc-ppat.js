@@ -131,7 +131,7 @@ function create(cfg) {
   const TRUNC_B     = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
   let vpatModel = null, VO_A = 0, VO_B = 0;
   if (TRUNC_DELTA > 0 || VPAT_PICK) {
-    vpatModel = VPat.loadWeights(cfg.str('TRUNC_VPAT_DATA', ''));   // throws if unset/unloadable — no silent full-playout fallback
+    vpatModel = VPat.loadWeights(cfg.str('TRUNC_VPAT_DATA', ''), cfg.str('HEALTH_DATA', ''));   // throws if unset/unloadable — no silent full-playout fallback
     const vo = cfg.str('TRUNC_VALUE_OFFSET', '0,0').split(',').map(parseFloat);
     VO_A = vo[0]; VO_B = vo[1];
   }

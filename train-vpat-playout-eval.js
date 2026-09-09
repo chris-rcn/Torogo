@@ -22,7 +22,7 @@ const path = require('path');
 const fs   = require('fs');
 const { Game2, BLACK, PASS, KOMI, parseMove } = require('./game2.js');
 const { prepareSpecs, extractFeatures, evaluateFeatures,
-        loadWeights, saveWeights, makeWeights, specTag } = require('./vpatterns.js');
+        loadWeights, saveWeights, makeWeights, specTag, specString } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
@@ -119,12 +119,31 @@ const EVAL_KOMI = KOMI(EVAL_SIZE);
 
 // vpatterns spec grammar: "size:maxLibs[f]" (see train-vpatterns).
 let specs;
-const FROZEN = new Set();   // spec tags ((maxLibs << 3) | size) excluded from updates
+const FROZEN = new Set();
+// Health model for health-coded specs / the C survival attribute; the library
+// no longer reads the environment itself.
+const HEALTH_PATH = (typeof process !== 'undefined' && process.env.HEALTH_DATA) || '';   // spec tags ((maxLibs << 3) | size) excluded from updates
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
     // 'C' = the chain-attribute family (per-chain keyed features; not
     // incremental), internally {size: 0, maxLibs: 0}.  Optional caps:
     // 'C<stones>.<libs>.<adjE>.<sec>' (default C8.8.4.8); trailing 'f' freezes.
+    // 'E[<libGate>][pN]' = the eye-pair family (unordered non-adjacent
+    // liberty-pair 3x3 conjunctions per chain, libs <= gate; default 8).
+    if (tok[0] === 'E') {
+      let body = tok.slice(1);
+      let phaseBins = 0;
+      const pm = /p(\d+)$/.exec(body);
+      if (pm) { phaseBins = parseInt(pm[1], 10); body = body.slice(0, -pm[0].length); }
+      const libGate = body === '' ? 8 : parseInt(body, 10);
+      if (!(libGate >= 2 && libGate <= 30)) {
+        console.error(`--spec: bad E token '${tok}' (expected E[<libGate 2-30>][pN])`);
+        process.exit(1);
+      }
+      const specE = { size: 6, maxLibs: 0, libGate };
+      if (phaseBins > 1) specE.phaseBins = phaseBins;
+      return specE;
+    }
     if (tok[0] === 'C') {
       const frozenC = /f$/.test(tok);
       let body = frozenC ? tok.slice(1, -1) : tok.slice(1);
@@ -135,8 +154,14 @@ if (opts.spec) {
       if (frozenC) FROZEN.add(specTag({ size: 0, maxLibs: 0 }));
       if (body === '') return phaseBins > 1 ? { size: 0, maxLibs: 0, phaseBins } : { size: 0, maxLibs: 0 };
       const caps = body.split('.').map(x => parseInt(x, 10));
-      if (caps.length < 4 || caps.length > 12 || caps.some(x => !(x >= 0 && x <= 31)) || caps.slice(0, 4).some(x => x < 1)) {
-        console.error(`--spec: bad C token '${tok}' (expected C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>[.<sharedLibs>[.<bestFriendLibs>]]]]], core caps 1-31, optional caps 0=off)`);
+      // Slots 1-12 are CAPS (packed with radix cap+1, core four also folded
+      // into capCode, hence 31); slot 13 is a BUCKET COUNT and wants real
+      // resolution, so it takes a much larger range.
+      const capsOk = caps.slice(0, 12).every(x => x >= 0 && x <= 31) &&
+                     caps.slice(0, 4).every(x => x >= 1) &&
+                     (caps.length < 13 || (caps[12] >= 0 && caps[12] <= 255));
+      if (caps.length < 4 || caps.length > 13 || !capsOk) {
+        console.error(`--spec: bad C token '${tok}' (expected C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>[.<sharedLibs>[.<bestFriendLibs>[.<connPoints>[.<density>[.<interior>[.<healthBuckets>]]]]]]]]], core caps 1-31, optional caps 0-31 with 0=off; the LAST slot is a BUCKET COUNT, not a cap — 2 = two health buckets, range 0-255 — and needs HEALTH_DATA)`);
         process.exit(1);
       }
       const specC = { size: 0, maxLibs: 0, caps };
@@ -151,8 +176,29 @@ if (opts.spec) {
     let patBins = 0;
     const pbm = /p(\d+)$/.exec(body);
     if (pbm) { patBins = parseInt(pbm[1], 10); body = body.slice(0, -pbm[0].length); }
+    // 'H<N>' = the health-coded family: each stone takes its chain's survival
+    // bucket (1..N under the frozen chain-survival model) in place of its
+    // liberty count.  Internally maxLibs = -N; needs HEALTH_DATA, and like
+    // 'L' it is not incremental.
+    const hm = /^H(\d+)$/.exec(body);
+    if (hm) {
+      const hb = parseInt(hm[1], 10);
+      if (!((size >= 1 && size <= 4) || size === 34) || !(hb >= 2 && hb <= 15)) {
+        console.error(`--spec: bad token '${tok}' (expected size:H<N>, size 1-4 or 34, N 2-15)`);
+        process.exit(1);
+      }
+      if (frozen) FROZEN.add(specTag({ size, maxLibs: -hb }));
+      return patBins > 1 ? { size, maxLibs: -hb, phaseBins: patBins } : { size, maxLibs: -hb };
+    }
     // 'L' = the ladder-coded family (vlibpat 7-state tactical alphabet),
     // internally maxLibs 0.  Not incremental: unusable with deltaZ consumers.
+    // Strict: parseInt would silently accept trailing garbage ('2H' -> 2), so
+    // a mistyped family marker would train as a liberty spec instead of
+    // erroring.  Only 'L', 'H<N>' (handled above) or bare digits are valid.
+    if (body !== 'L' && !/^\d+$/.test(body)) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs, size:L or size:H<N>; got '${body}')`);
+      process.exit(1);
+    }
     const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
     if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1 || body === 'L')) {
       console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4 or 34, maxLibs >= 1)`);
@@ -164,7 +210,7 @@ if (opts.spec) {
 } else {
   specs = [{ size: 1, maxLibs: 6 }, { size: 2, maxLibs: 6 }, { size: 3, maxLibs: 6 }];
 }
-let prepSpecs = prepareSpecs(specs);
+let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
 const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -393,12 +439,12 @@ const evalGetMove = EVAL_AGENT
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     const cliSpecs = opts.spec ? specs : null;
-    const loaded = loadWeights(LOAD_PATH);
+    const loaded = loadWeights(LOAD_PATH, HEALTH_PATH);
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
     if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
       console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
       specs = cliSpecs;
-      prepSpecs = prepareSpecs(specs);
+      prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
     }
     if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
       weightsEMA = weights.clone();
@@ -424,7 +470,7 @@ if (NO_ADD && weights.size === 0) {
 }
 loadBiasPairs();
 console.log(`LR=${LR}  lr-decay=${LR_DECAY}  smooth-weights=${EMA_ALPHA}  max-weights=${MAX_WEIGHTS || '(unlimited)'}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
-console.log(`Specs: ${JSON.stringify(specs)}${FROZEN.size > 0 ? `  frozen: [${specs.filter(sp => FROZEN.has(specTag(sp))).map(sp => `${sp.size}:${sp.maxLibs}`).join(',')}]` : ''}${NO_ADD ? `  no-add` : ''}`);
+console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}${NO_ADD ? `  no-add` : ''}`);
 // '-best' goes before the file extension, whatever it is (x.js -> x-best.js,
 // x.txt -> x-best.txt); an extensionless path gets it appended.
 const BEST_PATH = (() => {

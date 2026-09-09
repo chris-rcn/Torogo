@@ -177,14 +177,14 @@ function create(cfg) {
   const _vpatWeights = VPat.makeWeights(Math.max(1024, (_vpatRaw.weights.size ?? _vpatRaw.weights.length) * 2));
   for (const [k, v] of _vpatRaw.weights) _vpatWeights.set(k, v);
   const _vpatModel = { specs: _vpatRaw.specs,
-                       preparedSpecs: VPat.prepareSpecs(_vpatRaw.specs),
+                       preparedSpecs: VPat.prepareSpecs(_vpatRaw.specs, { health: cfg.str('HEALTH_DATA', '') }),
                        weights: _vpatWeights };
   // Name the evaluator file and the truncation knobs in the banner: two slots
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-    `${_vpatModel.weights.size} vpat weights (${_vpatModel.specs.map(sp => `${sp.size}:${sp.maxLibs === 0 ? 'L' : sp.maxLibs}`).join(',')}) from ${_vpatName}, ` +
+    `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
