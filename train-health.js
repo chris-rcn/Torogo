@@ -480,7 +480,16 @@ if (FLOOR === null) {
 // growing arrays where vpatterns reuses a scratch), and --verbose inflates it
 // further with the per-key bookkeeping.
 const COLS = ['T', 'games', 'ex', 'nWts', 'tPos', 'loss', 'exc'];
-const COLW = [5, 5, 5, 5, 5, 7, 7];
+const COLW = [5, 5, 5, 5, 5, 7, 8];
+// '*' marks a row whose exc is the lowest so far.  Nothing is saved on it —
+// the checkpoint is written every row regardless; the marker is only so the
+// run's best interval is visible while it scrolls.
+let bestExc = Infinity;
+const excCell = exc => {
+  const best = exc < bestExc;
+  if (best) bestExc = exc;
+  return exc.toFixed(4) + (best ? '*' : ' ');
+};
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
 printRow(COLS);
 
@@ -589,7 +598,7 @@ for (let gi = 0; gi < GAMES; gi++) {
   if (nEx >= nextPrintEx) {
     printRow([Util.fmtMs(Date.now() - t0), Util.fmt4i(gi + 1), Util.fmt4i(nEx),
               Util.fmt4i(weights.size), Util.fmtMs(infMs / infPos),
-              (ivSum / ivN).toFixed(4), (ivSum / ivN - FLOOR).toFixed(4)]);
+              (ivSum / ivN).toFixed(4), excCell(ivSum / ivN - FLOOR)]);
     nextPrintEx = Math.max(Math.ceil(nEx * 1.4), nEx + 1);
     ivSum = 0; ivN = 0;
     saveModel();
@@ -601,7 +610,7 @@ for (let gi = 0; gi < GAMES; gi++) {
 if (ivN > 0) {
   printRow([Util.fmtMs(Date.now() - t0), Util.fmt4i(GAMES), Util.fmt4i(nEx),
             Util.fmt4i(weights.size), Util.fmtMs(infMs / infPos),
-            (ivSum / ivN).toFixed(4), (ivSum / ivN - FLOOR).toFixed(4)]);
+            (ivSum / ivN).toFixed(4), excCell(ivSum / ivN - FLOOR)]);
 }
 const secs = (Date.now() - t0) / 1000;
 console.log(`done: ${GAMES} games in ${secs.toFixed(1)}s (${(secs / GAMES * 1000).toFixed(1)}ms/game, ${nSkip} skipped: game ended inside the descent)`);
