@@ -724,7 +724,6 @@ class Game2 {
     const cells  = this.cells;
     const gidArr = this._gid;
     const nbr    = this._nbr;
-    const dnbr   = this._dnbr;
     const base   = idx * 4;
     let firstGid = -2, friendCount = 0, emptyCount = 0, sameGroup = 0;
     for (let i = 0; i < 4; i++) {
@@ -739,13 +738,7 @@ class Game2 {
         emptyCount++;
       }
     }
-    // 3 same-group friends + 1 empty: proto-eye, treat as true eye
-    if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
-    if (friendCount < 4) return false;
-    if (sameGroup === 4) return true;
-    let dc = 0;
-    for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === color) dc++;
-    return dc >= 3;
+    return isEye(cells, this._dnbr, base, color, friendCount, emptyCount, sameGroup);
   }
 
   // ── Main move interface ────────────────────────────────────────────────────
@@ -1203,11 +1196,14 @@ function agentMoveToIdx(agentMove, N) {
   return agentMove.type === 'pass' ? PASS : agentMove.y * N + agentMove.x;
 }
 
-// Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation.
+// Parse an ASCII board into a Game2.  Accepts ●○· or XO. notation, and the
+// lower-case xo used to mark a subject chain (find-health-errors.js prints the
+// chain under examination in upper case and everything else in lower case, so
+// its boards paste straight back in).
 // Rows are top-to-bottom (row N..1).  Row numbers and letter labels are stripped.
 // toMove defaults to BLACK.
 function parseBoard(boardStr, toMove = BLACK) {
-  const valid = new Set(['●','○','·','X','O','.']);
+  const valid = new Set(['●','○','·','X','O','.','x','o']);
   const rows = boardStr.replace(/[()]/g, ' ').trim().split('\n')
     .map(r => r.trim().split(/\s+/).filter(t => valid.has(t)))
     .filter(row => row.length > 0);
@@ -1217,14 +1213,44 @@ function parseBoard(boardStr, toMove = BLACK) {
     for (let x = 0; x < size; x++) {
       const ch = rows[y][x];
       const idx = (size - 1 - y) * size + x;
-      if (ch === '●' || ch === 'X') g._place(idx, BLACK);
-      else if (ch === '○' || ch === 'O') g._place(idx, WHITE);
+      if (ch === '●' || ch === 'X' || ch === 'x') g._place(idx, BLACK);
+      else if (ch === '○' || ch === 'O' || ch === 'o') g._place(idx, WHITE);
     }
   g.current = toMove;
   return g;
 }
 
-const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard };
+// THE eye rule, in one place.  Callers that already have the four orthogonal
+// neighbours summarised — Game2.isTrueEye and ppat-lib's playout move filter —
+// pass the counts in rather than rescanning; the hostile-diagonal count is
+// taken only on the branch that needs it.
+//
+// Keep this shared.  ppat-lib carried its own inlined copy that asked for three
+// FRIENDLY diagonals where this asks for at most one HOSTILE one.  Those differ
+// whenever a diagonal is EMPTY, so the playout filled multi-chain eyes that
+// isTrueEye called eyes, killing live groups and corrupting every survival
+// label derived from it (found 2026-09-10).  c/ppat.c still has that stale
+// copy at its own move filter.
+function isEye(cells, dnbr, base, color, friendCount, emptyCount, sameGroup) {
+  // 3 same-group friends + 1 empty: proto-eye, treat as true eye
+  if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
+  if (friendCount < 4) return false;
+  // A wall that is already ONE chain cannot be cut, so the diagonals are
+  // irrelevant — this is deliberately more permissive than the diagonal rule
+  // below and must stay ahead of it.
+  if (sameGroup === 4) return true;
+  // Otherwise the wall spans several friendly chains and the question is
+  // whether the opponent can cut them apart: count HOSTILE diagonals and allow
+  // one.  (Demanding three FRIENDLY diagonals instead counts an EMPTY diagonal
+  // against the eye and misses ~79% of real eyes in late-game positions.)  The
+  // board is toroidal, so every point is interior and the allowance is one
+  // everywhere; there is no edge case.
+  let hostile = 0;
+  for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) hostile++;
+  return hostile <= 1;
+}
+
+const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard, isEye };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Game2 = _exports;
 

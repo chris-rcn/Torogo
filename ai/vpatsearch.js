@@ -57,7 +57,7 @@ function search(game, m, depth = 1, dither = 0) {
 // the same conditions, terminal PASS scored exactly.
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
-  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns || prep.hasHealth);
+  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
   const f = extractFeatures(game, prep);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;

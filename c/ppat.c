@@ -423,14 +423,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             CHECK_AND_ADJ(c2, ni2, vW);
             CHECK_AND_ADJ(c3, ni3, vE);
             #undef CHECK_AND_ADJ
-            if (friend_count == 3 && empty_count_e == 1 && same_group == 3) continue;
-            if (friend_count == 4) {
-                if (same_group == 4) continue;
-                int dc = 0;
-                for (int i = 0; i < 4; i++)
-                    if (g->cells[g2_dnbr[b4 + i]] == cur) dc++;
-                if (dc >= 3) continue;
-            }
+            /* THE eye rule lives in g2_is_eye; the counts above are handed to
+             * it so it need not rescan.  This used to be an inlined copy that
+             * had drifted (three FRIENDLY diagonals instead of at most one
+             * HOSTILE), which made the playout fill multi-chain eyes and kill
+             * live groups. */
+            if (g2_is_eye(g, b4, cur, friend_count, empty_count_e, same_group)) continue;
         }
 
         int vNE = diag_val(g2_dnbr[b4 + 1], g, cur);

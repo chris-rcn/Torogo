@@ -10,6 +10,7 @@
 // . empty.  The point under test is marked in the comment above each board.
 
 const { parseBoard, BLACK, WHITE } = require('./game2.js');
+const { game3FromGame2 } = require('./game3.js');
 
 let pass = 0, fail = 0, known = 0;
 function check(cond, msg) {
@@ -37,21 +38,38 @@ const centre = g => { const N = g.N; return ((N - 1) >> 1) * N + ((N - 1) >> 1);
 
 section('same-chain wall');
 {
-  // Centre ringed by a single connected white chain; the centre's diagonals are
-  // EMPTY, which the "three friendly diagonals" test would reject.
+  // The four orthogonals of the centre belong to ONE white chain (connected the
+  // long way round), and two of the diagonals are hostile.  That fails the
+  // current test (fewer than three friendly diagonals) AND the standard rule
+  // (more than one hostile diagonal), so the point can only be recognised via
+  // the same-chain shortcut — which is right, because a wall that is already
+  // one chain cannot be cut, whatever sits on the diagonals.
   const g = parseBoard(`
-    . . . . . . .
-    . O O O O O .
-    . O . O . O .
-    . O O . O O .
-    . O . O . O .
-    . O O O O O .
-    . . . . . . .`, WHITE);
+    . . . . . . . . .
+    . O O O O . . . .
+    . O . . O . . . .
+    . O . X O O . . .
+    . O O O . O . . .
+    . . . O O X . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .`, WHITE);
   const c = centre(g);
-  const gids = new Set([g._nbr[c * 4], g._nbr[c * 4 + 1], g._nbr[c * 4 + 2], g._nbr[c * 4 + 3]]
-    .map(i => g._gid[i]));
-  check(gids.size === 1, 'the four orthogonals are a single chain');
-  check(g.isTrueEye(c) === true, 'same-chain wall with EMPTY diagonals is an eye');
+  const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, gid = g._gid;
+  const orth = [0, 1, 2, 3].map(d => nbr[c * 4 + d]);
+  let hostileDiag = 0, friendlyDiag = 0;
+  for (let d = 0; d < 4; d++) {
+    const v = cells[dnbr[c * 4 + d]];
+    if (v === BLACK) hostileDiag++; else if (v === WHITE) friendlyDiag++;
+  }
+  check(orth.every(i => cells[i] === WHITE), 'all four orthogonals are friendly');
+  check(new Set(orth.map(i => gid[i])).size === 1, 'and they are a single chain');
+  check(hostileDiag >= 2, 'two hostile diagonals — fails the standard rule too');
+  check(friendlyDiag < 3, 'and fewer than three friendly diagonals');
+  check([at(g, 3, 3), at(g, 5, 5)].every(i => g._ls[gid[i]] > 0),
+        'the hostile diagonal stones are alive (not a captured-stone artefact)');
+  check(g.isTrueEye(c) === true,
+        'same-chain wall is an eye regardless of the diagonals');
 }
 
 // ── multi-chain walls: the diagonal rule decides ──────────────────────────────
@@ -76,13 +94,8 @@ section('multi-chain wall');
   check(friends === 4, 'all four orthogonals are friendly');
   check(gids.size > 1, 'they span more than one chain');
   check(hostileDiag <= 1, 'at most one hostile diagonal — an eye by the standard rule');
-  // KNOWN FAILURE: isTrueEye asks for >= 3 FRIENDLY diagonals, so an empty
-  // diagonal counts against the eye and the point is left fillable by its own
-  // owner.  Measured on late-game positions, this misses ~79% of real eyes.
-  xfail(g.isTrueEye(c) === true,
-        'multi-chain wall with one hostile diagonal should be an eye — isTrueEye ' +
-        'requires >= 3 FRIENDLY diagonals, so an EMPTY diagonal counts against it ' +
-        '(misses ~79% of real eyes in late-game positions)');
+  check(g.isTrueEye(c) === true,
+        'multi-chain wall with one hostile diagonal is an eye');
 }
 {
   // A genuine FALSE eye: four friendly orthogonals in separate chains with
@@ -114,6 +127,57 @@ section('capture is never blocked');
   check(g._ls[g._gid[white]] === 1, 'the white stone is in atari');
   check(g.isTrueEye(lib) === false, 'the capturing point is not an eye for the capturer');
   check(g.isLegal(lib) === true, 'and the capture is legal');
+}
+
+// ── game3 agrees with game2 ───────────────────────────────────────────────────
+// game3 carries its own copy of the rule for the tactical passes, so the two
+// must decide every point identically or a ladder read and a playout disagree
+// about what is fillable.
+
+section('game3 parity');
+{
+  // Every board used above, every empty point, both colours to move.
+  const boards = [
+    `. . . . . . . . .
+     . O O O O . . . .
+     . O . . O . . . .
+     . O . X O O . . .
+     . O O O . O . . .
+     . . . O O X . . .
+     . . . . . . . . .
+     . . . . . . . . .
+     . . . . . . . . .`,
+    `. . . . .
+     . . O O .
+     . O . O .
+     . O O X .
+     . . . . .`,
+    `. . . . .
+     . X O X .
+     . O . O .
+     . X O X .
+     . . . . .`,
+    `. . . . .
+     . X X X .
+     . X O X .
+     . X . X .
+     . . . . .`,
+  ];
+  let compared = 0, disagreed = 0;
+  for (const b of boards) {
+    const g2 = parseBoard(b, BLACK);
+    const g3 = game3FromGame2(g2);
+    for (let i = 0; i < g2.N * g2.N; i++) {
+      if (g2.cells[i] !== 0) continue;
+      for (const col of [BLACK, WHITE]) {
+        g2.current = col; g3.current = col;
+        compared++;
+        if (g2.isTrueEye(i) !== g3.isTrueEye(i)) disagreed++;
+      }
+    }
+  }
+  check(compared > 0, `compared ${compared} (point, colour) pairs`);
+  check(disagreed === 0, `game3 matches game2 everywhere (${disagreed} disagreements)`);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────

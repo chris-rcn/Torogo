@@ -759,12 +759,19 @@ class Game3 {
     // 3 same-group friends + 1 empty: proto-eye, treat as true eye
     if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
     if (friendCount < 4) return false;
+    // A wall that is already ONE chain cannot be cut, so the diagonals are
+    // irrelevant — deliberately more permissive than the rule below, and must
+    // stay ahead of it.
     if (sameGroup === 4) return true;
 
-    // Check diagonals for friendly color
-    let dc = 0;
-    for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === color) dc++;
-    return dc >= 3;
+    // The wall spans several friendly chains: the question is whether the
+    // opponent can cut them apart, so count HOSTILE diagonals and allow one.
+    // (This previously demanded three FRIENDLY diagonals, counting an EMPTY
+    // diagonal against the eye.)  Toroidal board: every point is interior, so
+    // the allowance is one everywhere.  Kept in step with game2.js.
+    let hostile = 0;
+    for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) hostile++;
+    return hostile <= 1;
   }
 
   // ── Group Query ────────────────────────────────────────────────────────────

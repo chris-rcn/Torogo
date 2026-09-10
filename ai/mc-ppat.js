@@ -163,14 +163,18 @@ function create(cfg) {
     if (ppatState === null || ppatState.moves.length < game2.N * game2.N)
       ppatState = PPat.createState(game2.N);
     const area = game2.N * game2.N;
-    let stopEmpty = -1;
+    // Prefix length in MOVES, not a fullness check repeated per move: delta is
+    // a fullness fraction only so one number carries across board sizes, and a
+    // per-move check descends further whenever the prefix captures.  Matches
+    // ai/puct-ppat-fp-trunc.js and the offline prefix generators.
+    let prefixLen = -1;
     if (TRUNC_DELTA > 0 && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_B) {
-      stopEmpty = game2.emptyCount - Math.ceil(TRUNC_DELTA * area);
+      prefixLen = Math.ceil(TRUNC_DELTA * area);
     }
     const moveLimit = 3 * game2.emptyCount + 20;
     let moves = 0;
     while (!game2.gameOver && moves < moveLimit) {
-      if (stopEmpty >= 0 && game2.emptyCount <= stopEmpty) return vpatValueB(game2);
+      if (prefixLen >= 0 && moves >= prefixLen) return vpatValueB(game2);
       game2.play(PPat.ppatMove(game2, ppatState, model, r));
       moves++;
     }

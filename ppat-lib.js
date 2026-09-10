@@ -5,7 +5,7 @@
 (function () {
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const { PASS } = _isNode ? require('./game2.js') : window.Game2;
+const { PASS, isEye } = _isNode ? require('./game2.js') : window.Game2;
 const Util = _isNode ? require('./util.js') : window.Util;
 
 // ── D4 position permutations ──────────────────────────────────────────────────
@@ -451,16 +451,11 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
       if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = s_; }
       else vE2 = _LC + s_; }
 
-    if (friendCount === 3 && emptyNbr === 1 && sameGroup === 3) continue;
-    if (friendCount === 4) {
-      if (sameGroup === 4) continue;
-      let dc = 0;
-      if (cells[dnbr[b4]]     === cur) dc++;
-      if (cells[dnbr[b4 + 1]] === cur) dc++;
-      if (cells[dnbr[b4 + 2]] === cur) dc++;
-      if (cells[dnbr[b4 + 3]] === cur) dc++;
-      if (dc >= 3) continue;
-    }
+    // THE eye rule lives in game2.isEye; the counts above are handed to it so
+    // it need not rescan.  This used to be an inlined copy that had drifted
+    // (three FRIENDLY diagonals instead of at most one HOSTILE), which made the
+    // playout fill multi-chain eyes and kill live groups.
+    if (isEye(cells, dnbr, b4, cur, friendCount, emptyNbr, sameGroup)) continue;
 
     // Diag values
     const cNE2 = cells[dnbr[b4 + 1]], vNE = cNE2 === 0 ? 0 : (cNE2 === cur ? 1 : 2);

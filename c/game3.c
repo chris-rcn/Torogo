@@ -256,10 +256,16 @@ bool g3_is_true_eye(const Game3 *g, int32_t idx) {
     }
     if (friend_count == 3 && empty_count == 1 && same_group == 3) return true;
     if (friend_count < 4) return false;
+    /* Already one chain: nothing to cut, diagonals irrelevant.  Must stay
+     * ahead of the rule below, which is stricter. */
     if (same_group == 4) return true;
-    int dc = 0;
-    for (int i = 0; i < 4; i++) if (g->cells[g->dnbr[base + i]] == color) dc++;
-    return dc >= 3;
+    /* Multi-chain wall: count HOSTILE diagonals and allow one (previously it
+     * demanded three FRIENDLY diagonals, so an EMPTY diagonal counted against
+     * the eye).  Toroidal board — every point is interior.  In step with
+     * game3.js and c/game2.c. */
+    int hostile = 0;
+    for (int i = 0; i < 4; i++) if (g->cells[g->dnbr[base + i]] == -color) hostile++;
+    return hostile <= 1;
 }
 
 bool g3_is_valid_move(const Game3 *g, int32_t idx) {

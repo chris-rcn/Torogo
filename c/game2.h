@@ -85,6 +85,9 @@ bool  g2_play(Game2 *g, int32_t idx);            /* returns success */
 void  g2_play_unchecked(Game2 *g, int32_t idx);  /* skip legality check (caller must ensure legal) */
 bool  g2_is_legal(const Game2 *g, int32_t idx);
 bool  g2_is_true_eye(const Game2 *g, int32_t idx);
+/* THE eye rule, for callers that already summarised the four orthogonals. */
+bool  g2_is_eye(const Game2 *g, int base, int8_t color,
+                int friend_count, int empty_count, int same_group);
 bool  g2_is_capture(const Game2 *g, int32_t idx);
 int32_t g2_random_legal_move(Game2 *g, Rng *rng);   /* returns idx or PASS */
 

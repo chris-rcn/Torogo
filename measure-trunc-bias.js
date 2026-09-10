@@ -133,18 +133,19 @@ function parseMoveTok(t, N) {
   return (parseInt(t.slice(1), 10) - 1) * N + (t.charCodeAt(0) - 97);
 }
 
-// One playout from a clone of g: play (ppat policy) until net empty-count
-// advance reaches `need` (Infinity = to the end).  Returns P(BLACK wins):
-// the vpat value at the truncation point, or the terminal score if the game
-// ends first (as the deployed playout does).
+// One playout from a clone of g: play (ppat policy) for `need` * area MOVES
+// (Infinity = to the end).  A FIXED prefix length, as the deployed agent uses
+// — delta is a fullness fraction only so one number carries across board
+// sizes.  Returns P(BLACK wins): the vpat value at the truncation point, or
+// the terminal score if the game ends first (as the deployed playout does).
 function playout(g0, need, state) {
   const g = g0.clone();
   const cap = g.N * g.N;
-  const stopEmpty = need === Infinity ? -1 : g.emptyCount - Math.ceil(need * cap);
+  const prefixLen = need === Infinity ? -1 : Math.ceil(need * cap);
   const moveLimit = 3 * g.emptyCount + 20;
   let moves = 0;
   while (!g.gameOver && moves < moveLimit) {
-    if (stopEmpty >= 0 && g.emptyCount <= stopEmpty) {
+    if (prefixLen >= 0 && moves >= prefixLen) {
       if (!NULL_MODE) return VPat.evaluate(g, vpatModel);
       // Null check: an unbiased estimate of the truncation point's own
       // playout value, in place of the evaluator.
@@ -158,17 +159,16 @@ function playout(g0, need, state) {
   return g.estimateWinner() === BLACK ? 1 : 0;
 }
 
-// Prefix recorder for --emit: play until the truncation point, returning the
+// Prefix recorder for --emit: play the fixed prefix length, returning the
 // coord-string moves and endpoint phase, or null if the game ends first.
 function prefixMoves(g0, need, state) {
   const g = g0.clone();
   const cap = g.N * g.N;
-  const stopEmpty = g.emptyCount - Math.ceil(need * cap);
-  const moveLimit = 3 * g.emptyCount + 20;
+  const prefixLen = Math.ceil(need * cap);
   const moves = [];
   let n = 0;
-  while (!g.gameOver && n < moveLimit) {
-    if (g.emptyCount <= stopEmpty) return { moves, phase: 1 - g.emptyCount / cap };
+  while (!g.gameOver) {
+    if (n >= prefixLen) return { moves, phase: 1 - g.emptyCount / cap };
     const m = PPat.ppatMove(g, state, ppatModel, rng);
     g.play(m);
     moves.push(coordStr(m, g.N));

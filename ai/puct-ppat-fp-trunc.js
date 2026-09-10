@@ -1,7 +1,7 @@
 'use strict';
 
 // puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  A playout runs
-// until board fullness has advanced by TRUNC_PHASE_DELTA past the leaf; if
+// for the turn's fixed prefix length (TRUNC_PHASE_DELTA * area moves); if
 // the position's phase is then below TRUNC_MAX_PHASE, the playout stops and
 // the leaf value is a static vpatterns evaluation (TRUNC_VPAT_DATA, a
 // train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
@@ -16,7 +16,7 @@
 // board-filling progress, not move count.
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes (the root searches full width unless ROOT_TOP_K caps it), RAVE, and
+// nodes and ROOT_TOP_K at the root (0 = full width), RAVE, and
 // ppat-policy full-playout leaf
 // evaluation.
 //
@@ -74,11 +74,14 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.5);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
-  // Top-K kept move count (applies only below root).
-  const TOP_K     = cfg.int('TOP_K', 40);
+  // Top-K kept move count (applies only below root).  30 beat 40 by 52.3%
+  // over 1427 games (match8, 2026-09-09).
+  const TOP_K     = cfg.int('TOP_K', 30);
   // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
-  // the classic full-width root).
-  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 0);
+  // the classic full-width root).  50 beat full width by 56.7% over 2387
+  // games pooled across K 40-80 (matchSweepROOT_TOP_K, 2026-09-10, z = +6.5);
+  // 40 and 50 led the sweep, and 30 gave the benefit up entirely at 51.2%.
+  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 50);
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
   // run from the unexpanded position.  1 = expand on first contact (the
@@ -97,6 +100,8 @@ function create(cfg) {
   // default 1 can never be reached, so out of the box every playout runs to
   // the end — plain puct-ppat-fp behaviour until the knobs are set.
   const TRUNC_PHASE_DELTA = cfg.float('TRUNC_PHASE_DELTA', 1);
+  // Prefix length in moves, set once per turn from the board size (getMove).
+  let _prefixLen = 0;
   // Truncate only when the position's phase at the truncation point is below
   // this; at or above it the playout runs to the end (late playouts are short
   // and nearly exact, so substitution there is pure downside).
@@ -258,8 +263,8 @@ function create(cfg) {
     return state;
   }
 
-  // ppat-policy playout from `game2` (mutates it), truncated: once board
-  // fullness has advanced by TRUNC_PHASE_DELTA, a position still below
+  // ppat-policy playout from `game2` (mutates it), truncated: after the
+  // turn's fixed prefix length in moves, a position still below
   // TRUNC_MAX_PHASE returns the static vpatterns value; otherwise the playout
   // runs to the end.  Fills `played` (pre-zeroed by the caller) with the
   // colour-signed first-occupancy RAVE trace.  Returns P(BLACK wins) — a
@@ -270,15 +275,16 @@ function create(cfg) {
 
     _ensurePpatState(N);
 
-    // Truncation trigger, in integer empties (phase = 1 - empty/cap): fires
-    // once, at the first position whose net empty-count drop reaches the
-    // delta.  Checked after each move; captures push it further away.
-    const truncEmpty = game2.emptyCount - Math.ceil(TRUNC_PHASE_DELTA * cap);
-    // Gate, decided up front from the leaf (the endpoint phase is fixed at
-    // playout start: the trigger fires at exactly truncEmpty empties).
-    // p = 1 at/below _A, 0 at/above _B, linear ramp between; the cliff
-    // (_A === _B) takes the no-draw paths, leaving the rng stream untouched.
-    const epPhase = (cap - truncEmpty) / cap;
+    // Truncation trigger, in MOVES: the turn's fixed prefix length, so every
+    // truncated playout descends the same distance whatever it captures along
+    // the way.  A pass counts as a move, as it must for a move count.
+    const truncMoves = _prefixLen;
+    // Gate, decided up front from the leaf.  The endpoint phase is the leaf's
+    // plus the prefix, exact when the prefix captures nothing and an upper
+    // bound otherwise.  p = 1 at/below _A, 0 at/above _B, linear ramp
+    // between; the cliff (_A === _B) takes the no-draw paths, leaving the rng
+    // stream untouched.
+    const epPhase = (cap - (game2.emptyCount - truncMoves)) / cap;
     let truncArmed;
     if (epPhase >= TRUNC_MAX_PHASE_B) truncArmed = false;
     else if (epPhase <= _gateA)       truncArmed = TRUNC_MAX_RATIO >= 1 || rng.random() < TRUNC_MAX_RATIO;
@@ -304,7 +310,7 @@ function create(cfg) {
       game2.play(idx);
       moves++;
       weight -= weightStep;
-      if (truncArmed && game2.emptyCount <= truncEmpty) {
+      if (truncArmed && moves >= truncMoves) {
         // The gate itself was decided at playout start (leaf-anchored draw).
         if (!game2.gameOver) return vpatValueB(game2);
         truncArmed = false;
@@ -566,6 +572,15 @@ function create(cfg) {
     const N          = game.cells ? game.N : game.boardSize;
     const game2      = game.cells ? game.clone() : game.toGame2();
     const rootPlayer = game2.current;
+
+    // Prefix length in MOVES, fixed for the whole tree at the start of the
+    // turn.  TRUNC_PHASE_DELTA is expressed as a fullness delta only so that
+    // one number carries across board sizes; once the size is known the
+    // descent should be a constant number of moves, not a fullness check
+    // repeated after every move.  Under the old rule a capture pushed the
+    // trigger further away and different playouts descended different
+    // distances; now every truncated playout plays exactly this many.
+    _prefixLen = Math.ceil(TRUNC_PHASE_DELTA * N * N);
 
     if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
       return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };

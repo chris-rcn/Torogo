@@ -62,12 +62,14 @@ print, and each new best teMSE also writes the -best checkpoint.
                     (default 0 = run indefinitely)
 
   --spec S          comma list of "size:maxLibs[f]" tokens (size 1-4, or
-                    34 = the 3x4/4x3 rectangle pair, both orientations;
+                    23 = the 2x3/3x2 and 34 = the 3x4/4x3 rectangle
+                    pairs, both orientations;
                     maxLibs 1 = presence only, or L = ladder-coded cells
                     (vlibpat 7-state tactical alphabet; game3 pass per
                     position, not incremental); trailing 'f' freezes that
-                    spec's loaded weights).  Default 1:6,2:6,3:6
-  --lr F            step size for the update (default 0.3)
+                    spec's loaded weights).  Default
+                    1:H15p3,2:H6p3,23:H3p3,3:1p3,tp9 (needs HEALTH_DATA)
+  --lr F            step size for the update (default 0.2)
   --lr-decay F      multiply LR by this factor at the end of each epoch
                     (default 0.9; 1 = no decay)
   --smooth-weights A  Polyak EMA decay, applied every 1000 positions; 0 = off
@@ -99,7 +101,7 @@ const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';
 const LADDER_FILE = opts['ladder-file'] || null;
 const MD_FILE     = opts['md-file'] || null;
-let LR           = parseFloat(opts.lr       || '0.3');
+let LR           = parseFloat(opts.lr       || '0.2');
 const LR_DECAY   = parseFloat(opts['lr-decay'] || '0.9');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
@@ -130,6 +132,21 @@ if (opts.spec) {
     // 'C<stones>.<libs>.<adjE>.<sec>' (default C8.8.4.8); trailing 'f' freezes.
     // 'E[<libGate>][pN]' = the eye-pair family (unordered non-adjacent
     // liberty-pair 3x3 conjunctions per chain, libs <= gate; default 8).
+    // 't[pN]' = the TURN family: one antisymmetric feature per position, +1
+    // when BLACK is to move, keyed by phase bucket (z has no tempo term
+    // otherwise).  Not incremental — a move flips it — so deltaZ and
+    // speculative extraction refuse it.
+    if (tok[0] === 't') {
+      let body = tok.slice(1);
+      let phaseBins = 0;
+      const pm = /^p(\d+)$/.exec(body);
+      if (pm) { phaseBins = parseInt(pm[1], 10); body = ''; }
+      if (body !== '' || (pm && !(phaseBins >= 1 && phaseBins <= 64))) {
+        console.error(`--spec: bad t token '${tok}' (expected t or t p<1-64>, e.g. tp9)`);
+        process.exit(1);
+      }
+      return phaseBins > 1 ? { size: 5, maxLibs: 0, phaseBins } : { size: 5, maxLibs: 0 };
+    }
     if (tok[0] === 'E') {
       let body = tok.slice(1);
       let phaseBins = 0;
@@ -183,8 +200,8 @@ if (opts.spec) {
     const hm = /^H(\d+)$/.exec(body);
     if (hm) {
       const hb = parseInt(hm[1], 10);
-      if (!((size >= 1 && size <= 4) || size === 34) || !(hb >= 2 && hb <= 15)) {
-        console.error(`--spec: bad token '${tok}' (expected size:H<N>, size 1-4 or 34, N 2-15)`);
+      if (!((size >= 1 && size <= 4) || size === 34 || size === 23) || !(hb >= 2 && hb <= 15)) {
+        console.error(`--spec: bad token '${tok}' (expected size:H<N>, size 1-4, 23 or 34, N 2-15)`);
         process.exit(1);
       }
       if (frozen) FROZEN.add(specTag({ size, maxLibs: -hb }));
@@ -200,15 +217,21 @@ if (opts.spec) {
       process.exit(1);
     }
     const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
-    if (!((size >= 1 && size <= 4) || size === 34) || !(maxLibs >= 1 || body === 'L')) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4 or 34, maxLibs >= 1)`);
+    if (!((size >= 1 && size <= 4) || size === 34 || size === 23) || !(maxLibs >= 1 || body === 'L')) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4, 23 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
     return patBins > 1 ? { size, maxLibs, phaseBins: patBins } : { size, maxLibs };
   });
 } else {
-  specs = [{ size: 1, maxLibs: 6 }, { size: 2, maxLibs: 6 }, { size: 3, maxLibs: 6 }];
+  // '1:H15p3,2:H6p3,23:H3p3,3:1p3,tp9' — needs HEALTH_DATA.  Measured against
+  // the same stack without the turn term (2026-09-09, 1.6M positions): teMSE
+  // 0.0022 vs 0.0029 and varB 0.00036 vs 0.00071, the turn feature converting
+  // variable truncation bias into constant lean for five extra weights.
+  specs = [{ size: 1, maxLibs: -15, phaseBins: 3 }, { size: 2, maxLibs: -6, phaseBins: 3 },
+           { size: 23, maxLibs: -3, phaseBins: 3 }, { size: 3, maxLibs: 1, phaseBins: 3 },
+           { size: 5, maxLibs: 0, phaseBins: 9 }];
 }
 let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
 const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');

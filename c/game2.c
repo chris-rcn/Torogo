@@ -298,6 +298,36 @@ bool g2_is_capture(const Game2 *g, int32_t idx) {
     return false;
 }
 
+/* THE eye rule, in one place — the C twin of game2.js's isEye().  Callers that
+ * already have the four orthogonal neighbours summarised (g2_is_true_eye, and
+ * ppat.c's playout move filter) pass the counts in rather than rescanning; the
+ * hostile-diagonal count is taken only on the branch that needs it.
+ *
+ * Keep this shared.  ppat.c carried its own inlined copy that asked for three
+ * FRIENDLY diagonals where this asks for at most one HOSTILE one.  Those differ
+ * whenever a diagonal is EMPTY, so the playout filled multi-chain eyes that
+ * g2_is_true_eye called eyes, killing live groups and corrupting every survival
+ * label derived from it (found 2026-09-10, same drift as ppat-lib.js). */
+bool g2_is_eye(const Game2 *g, int base, int8_t color,
+               int friend_count, int empty_count, int same_group) {
+    if (friend_count == 3 && empty_count == 1 && same_group == 3) return true;
+    if (friend_count < 4) return false;
+    /* A wall that is already ONE chain cannot be cut, so the diagonals are
+     * irrelevant — deliberately more permissive than the rule below, and must
+     * stay ahead of it. */
+    if (same_group == 4) return true;
+    /* The wall spans several friendly chains: the question is whether the
+     * opponent can cut them apart, so count HOSTILE diagonals and allow one.
+     * (This previously demanded three FRIENDLY diagonals, counting an EMPTY
+     * diagonal against the eye, which missed ~79% of real eyes in late-game
+     * positions.)  Toroidal board: every point is interior, so the allowance
+     * is one everywhere.  Kept in step with game2.js. */
+    int hostile = 0;
+    for (int i = 0; i < 4; i++)
+        if (g->cells[g2_dnbr[base + i]] == -color) hostile++;
+    return hostile <= 1;
+}
+
 bool g2_is_true_eye(const Game2 *g, int32_t idx) {
     int8_t color = g->current;
     int base = idx * 4;
@@ -315,13 +345,7 @@ bool g2_is_true_eye(const Game2 *g, int32_t idx) {
             empty_count++;
         }
     }
-    if (friend_count == 3 && empty_count == 1 && same_group == 3) return true;
-    if (friend_count < 4) return false;
-    if (same_group == 4) return true;
-    int dc = 0;
-    for (int i = 0; i < 4; i++)
-        if (g->cells[g2_dnbr[base + i]] == color) dc++;
-    return dc >= 3;
+    return g2_is_eye(g, base, color, friend_count, empty_count, same_group);
 }
 
 /* ── Initialization ────────────────────────────────────────────────────────── */

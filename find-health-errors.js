@@ -67,6 +67,9 @@ if (MIN_PH === undefined || MAX_PH === undefined || DELTA === undefined) {
   process.exit(1);
 }
 const area = SIZE * SIZE;
+// Prefix length in MOVES (see the descent below): delta is a fullness fraction
+// only so one number carries across board sizes.
+const PREFIX_LEN = Math.ceil(DELTA * area);
 
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
@@ -92,14 +95,14 @@ function sampleEndpoint(line) {
     walk.play(parseMove(toks[i], SIZE));
   }
   if (!game) return null;
-  const stopEmpty = game.emptyCount - Math.ceil(DELTA * area);
-  const lim = 3 * game.emptyCount + 20;
+  // Fixed-length prefix in MOVES, matching train-health.js and the deployed
+  // agent — a fullness check repeated per move descends further on captures.
   let n = 0;
-  while (!game.gameOver && game.emptyCount > stopEmpty && n < lim) {
+  while (!game.gameOver && n < PREFIX_LEN) {
     game.play(PPat.ppatMove(game, ppatState, ppatModel, rng));
     n++;
   }
-  return game.emptyCount > stopEmpty ? null : game;
+  return n < PREFIX_LEN ? null : game;
 }
 
 // Whole board, every row, TRANSLATED so the subject chain sits in the middle.
@@ -149,57 +152,31 @@ for (let gi = 0; gi < GAMES; gi++) {
   nPos++;
   const cells = pos.cells, gid = pos._gid, ls = pos._ls, nbr = pos._nbr, dnbr = pos._dnbr;
 
-  // chains of this position
-  const byGid = new Map();
-  for (let i = 0; i < area; i++) {
-    if (cells[i] === 0) continue;
-    let r = byGid.get(gid[i]);
-    if (!r) { r = { c: cells[i], stones: [], libs: [] }; byGid.set(gid[i], r); }
-    r.stones.push(i);
-  }
-  for (let l = 0; l < area; l++) {
-    if (cells[l] !== 0) continue;
-    const b4 = l * 4;
-    let s0 = -1, s1 = -1, s2 = -1;
-    for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d];
-      if (cells[j] === 0) continue;
-      const gj = gid[j];
-      if (gj === s0 || gj === s1 || gj === s2) continue;
-      if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
-      byGid.get(gj).libs.push(l);
-    }
-  }
-  const libsByGid = new Map();
-  for (const [g, r] of byGid) libsByGid.set(g, r.libs);
-
-  // model prediction per chain
-  const gids = [...byGid.keys()];
-  const pred = new Float64Array(gids.length);
-  for (let i = 0; i < gids.length; i++) {
-    const r = byGid.get(gids[i]);
-    pred[i] = VPat.chainSurvivalP(health, cells, nbr, dnbr, gid, ls, r.c, gids[i], r.libs, r.stones, libsByGid);
-  }
+  // chains of this position, each with the model's prediction
+  const { chains, byGid } = VPat.chainsOf(cells, nbr, gid);
+  VPat.chainHealthAll(health, cells, nbr, dnbr, gid, ls, chains, byGid);
+  const pred = new Float64Array(chains.length);
+  for (let i = 0; i < chains.length; i++) pred[i] = chains[i].p;
 
   // empirical q from M completions of THIS position — one sweep serves every chain
-  const surv = new Int32Array(gids.length);
+  const surv = new Int32Array(chains.length);
   for (let m = 0; m < M; m++) {
     const g = pos.clone();
     let k = 0;
     const lim = 3 * g.emptyCount + 20;
     while (!g.gameOver && k < lim) { g.play(PPat.ppatMove(g, ppatState, ppatModel, rng)); k++; }
-    for (let i = 0; i < gids.length; i++) {
-      const r = byGid.get(gids[i]);
+    for (let i = 0; i < chains.length; i++) {
+      const r = chains[i];
       if (g.cells[r.stones[0]] === r.c) surv[i]++;
     }
   }
 
-  for (let i = 0; i < gids.length; i++) {
+  for (let i = 0; i < chains.length; i++) {
     const q = surv[i] / M, p = pred[i], err = Math.abs(p - q);
     nChains++;
     if (q < MIN_Q || q > MAX_Q || err <= worst) continue;
     worst = err;
-    const r = byGid.get(gids[i]);
+    const r = chains[i];
     const phase = 1 - pos.emptyCount / area;
     console.log(`\n=== |p-q| ${err.toFixed(3)}   model ${p.toFixed(3)}  actual ${q.toFixed(3)} (${surv[i]}/${M})` +
                 `   game ${gi}  phase ${phase.toFixed(2)}`);
@@ -210,7 +187,7 @@ for (let gi = 0; gi < GAMES; gi++) {
     console.log(`    chain: ${r.c === 1 ? 'black' : 'white'}  ${r.stones.length} stones  ${r.libs.length} liberties` +
                 `   to move: ${pos.current === 1 ? 'black' : 'white'} (${mine ? 'the chain\'s owner' : 'the opponent'})` +
                 `   (upper case below)`);
-    console.log(board(pos, gids[i], r.stones));
+    console.log(board(pos, r.gid, r.stones));
   }
   if (nPos % 25 === 0) {
     process.stderr.write(`\r${Util.fmtMs(Date.now() - t0)}  ${nPos} positions  ${nChains} chains  worst ${worst.toFixed(3)}   `);

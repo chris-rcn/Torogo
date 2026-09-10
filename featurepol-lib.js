@@ -535,31 +535,11 @@ function _healthPrepare(ctx) {
   const model = _healthLoad();
   if (_hpP.length < cap) _hpP = new Uint8Array(cap);
   _hpP.fill(0, 0, cap);
-  const byGid = new Map();
-  for (let i = 0; i < cap; i++) {
-    if (cells[i] === 0) continue;
-    let r = byGid.get(gid[i]);
-    if (!r) { r = { c: cells[i], stones: [], libs: [] }; byGid.set(gid[i], r); }
-    r.stones.push(i);
-  }
-  for (let l = 0; l < cap; l++) {
-    if (cells[l] !== 0) continue;
-    const b4 = l * 4;
-    let s0 = -1, s1 = -1, s2 = -1;
-    for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d];
-      if (cells[j] === 0) continue;
-      const gj = gid[j];
-      if (gj === s0 || gj === s1 || gj === s2) continue;
-      if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
-      byGid.get(gj).libs.push(l);
-    }
-  }
-  const libsByGid = new Map();
-  for (const [g, r] of byGid) libsByGid.set(g, r.libs);
-  for (const [g, r] of byGid) {
-    const p = VPatterns.chainSurvivalP(model, cells, nbr, dnbr, gid, ls, r.c, g, r.libs, r.stones, libsByGid);
-    let v = (p * 255) | 0;
+  const { chains, byGid } = VPatterns.chainsOf(cells, nbr, gid);
+  VPatterns.chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid);
+  for (let i = 0; i < chains.length; i++) {
+    const r = chains[i];
+    let v = (r.p * 255) | 0;
     if (v > 255) v = 255; else if (v < 0) v = 0;
     for (let k = 0; k < r.stones.length; k++) _hpP[r.stones[k]] = v;
   }

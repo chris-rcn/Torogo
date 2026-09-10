@@ -19,6 +19,20 @@ set -e
 # data/output paths (e.g. out/evals-s9-500k.txt, out/ppat-data-*.js) resolve.
 BIN="$(cd "$(dirname "$0")" && pwd)/train_ppat.bin"
 
+# Usage text is the header comment above, so the two cannot drift apart.
+usage() {
+    awk 'NR == 1 && /^#!/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+    exit "${1:-0}"
+}
+case "${1:-}" in
+    -h|--help) usage 0 ;;
+esac
+if [ $# -lt 2 ]; then
+    echo "train-ppat-parallel.sh: need <K> and <data>" >&2
+    echo >&2
+    usage 1 >&2
+fi
+
 K="$1"; DATA="$2"; shift 2
 RUN="$$"
 SYNC_DIR="out/ppat-sync-$RUN"

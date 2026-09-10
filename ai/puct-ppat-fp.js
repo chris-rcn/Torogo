@@ -5,7 +5,7 @@
 // CGOS ladder, so its priors and top-K candidate sets should be sharper).
 //
 // PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes (the root searches full width unless ROOT_TOP_K caps it), RAVE, and
+// nodes and ROOT_TOP_K at the root (0 = full width), RAVE, and
 // ppat-policy full-playout leaf
 // evaluation.
 //
@@ -62,11 +62,14 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.5);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
-  // Top-K kept move count (applies only below root).
-  const TOP_K     = cfg.int('TOP_K', 40);
+  // Top-K kept move count (applies only below root).  30 beat 40 by 52.3%
+  // over 1427 games (match8, 2026-09-09), measured on puct-ppat-fp-trunc.
+  const TOP_K     = cfg.int('TOP_K', 30);
   // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
-  // the classic full-width root).
-  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 0);
+  // the classic full-width root).  50 beat full width by 56.7% over 2387
+  // games pooled across K 40-80 (matchSweepROOT_TOP_K, 2026-09-10, z = +6.5);
+  // 40 and 50 led the sweep, and 30 gave the benefit up entirely at 51.2%.
+  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 50);
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
   // run from the unexpanded position.  1 = expand on first contact (the

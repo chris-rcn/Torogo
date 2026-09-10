@@ -247,21 +247,21 @@ while (emitted < limit) {
 
   if (PREFIX_DELTA !== null) {
     // Advance the standard-playout prefix; the endpoint is the labeled
-    // position.  Captures delay the fullness gain, as deployed; a game
-    // that ends before the gain is reached has no endpoint — skip it.
+    // position.  A FIXED number of moves, as deployed — delta is a fullness
+    // fraction only so one number carries across board sizes, and a fullness
+    // check repeated per move descends further whenever the prefix captures.
+    // A game that ends before the prefix completes has no endpoint — skip it.
     let state = ppatStates.get(size);
     if (!state) { state = PPat.createState(size); ppatStates.set(size, state); }
-    const area = size * size;
-    const stopEmpty = pos.emptyCount - Math.ceil(PREFIX_DELTA * area);
-    const moveLimit = 3 * pos.emptyCount + 20;
+    const prefixLen = Math.ceil(PREFIX_DELTA * size * size);
     let n = 0;
-    while (!pos.gameOver && pos.emptyCount > stopEmpty && n < moveLimit) {
+    while (!pos.gameOver && n < prefixLen) {
       const m = PPat.ppatMove(pos, state, ppatModel, rng);
       pos.play(m);
       seq += ',' + coordStr(m, size);
       n++;
     }
-    if (pos.emptyCount > stopEmpty) {
+    if (n < prefixLen) {
       prefixSkips++;
       if (++prefixStreak >= MAX_MISSES) {
         console.error(`game ended inside the prefix in ${MAX_MISSES} consecutive samples ` +
