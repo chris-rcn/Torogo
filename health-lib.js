@@ -195,6 +195,21 @@ function chainStoneCountKey(nStones, cap) {
   return k === 0 ? 1 : k;
 }
 
+// Key for the JOINT liberty-count x stone-count one-hot: one weight per
+// (capped libs, capped stones) cell.  The model is additive over its one-hots,
+// so separate liberty and stone features cannot express the interaction — and
+// the interaction is the whole signal.  Two liberties on a 2-stone chain and
+// two liberties on a 20-stone chain are different situations, and their
+// difference is not a sum of "two liberties" and "20 stones".  Liberties per
+// stone is the shape ratio: low means a blob, high means a string.
+const CHAIN_LIBSTONE_SALT = 0x5a2f8b31 | 0;
+function chainLibStoneKey(nLibs, nStones, libCap, stoneCap) {
+  const l = nLibs > libCap ? libCap : nLibs;
+  const s = nStones > stoneCap ? stoneCap : nStones;
+  const k = (Math.imul(l * (stoneCap + 1) + s + 1, 0x9E3779B1) ^ CHAIN_LIBSTONE_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
 
 const CHAIN_LIB_SALT = 0x2f1d3b77 | 0;
 function chainLibCountKey(nLibs, cap) {
@@ -259,14 +274,17 @@ function chainFoeMinHealthKey(p, buckets) {
 function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
                        stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
                        stoneNinecells, libertyNinecells, subjectMaxStones,
-                       maxLibNinecells) {
-  // maxLibNinecells caps the chain's LIBERTY COUNT for the singleton ninecells:
-  // above it the chain emits none.  A chain with many liberties is not in
-  // question, its liberty shapes are all saying the same thing, and the
-  // liberty-count one-hot already says it — so the keys are spent where the
-  // answer is in doubt.  0 means NO CAP (use --liberty-ninecells 0 to turn the
-  // feature off); that differs from the other knobs on purpose, because 0-as-off
-  // is already taken.
+                       maxLibNinecells, libStoneLibCap, libStoneStoneCap,
+                       maxStoneNinecells) {
+  // maxLibNinecells / maxStoneNinecells cap the chain's LIBERTY and STONE count
+  // for their respective singleton ninecells: above the cap the chain emits
+  // none of that half.  A chain with many liberties is not in question and its
+  // liberty shapes are all saying the same thing; a chain with many stones emits
+  // a ninecell per stone, which is where the count comes from.  Either way the
+  // count one-hot already carries "this chain is large", so the keys are spent
+  // where the answer is in doubt.  0 means NO CAP (use --liberty-ninecells 0 or
+  // --stone-ninecells 0 to turn a half off); that differs from the other knobs
+  // on purpose, because 0-as-off is already taken.
   const nl = libs.length;
   const wantSingles = libertyNinecells !== false &&
                       (maxLibNinecells <= 0 || nl <= maxLibNinecells);
@@ -276,7 +294,8 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
       out.push(h === 0 ? 1 : h);
     }
   }
-  if (stoneNinecells !== false) {
+  if (stoneNinecells !== false &&
+      (maxStoneNinecells <= 0 || stones.length <= maxStoneNinecells)) {
     for (const st of stones) {
       const h = (_ncKey(ninecellId(cells, nbr, dnbr, st, owner)) ^ stoneSalt) | 0;
       out.push(h === 0 ? 1 : h);
@@ -291,6 +310,9 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
     let n = 0;
     for (const _ of libs) n++;
     out.push(chainLibCountKey(n, subjectMaxLibs));
+  }
+  if (libStoneLibCap > 0 && libStoneStoneCap > 0) {
+    out.push(chainLibStoneKey(nl, stones.length, libStoneLibCap, libStoneStoneCap));
   }
   if (joinCap > 0) {
     if (_joinMark === null || _joinMark.length < cells.length) _joinMark = new Int32Array(cells.length);
@@ -594,7 +616,8 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
                   model.stoneSalt, _survScratch,
                   model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
                   model.libertyNinecells, model.maxStones,
-                  model.maxLibNinecells);
+                  model.maxLibNinecells, model.libStoneLibs, model.libStoneStones,
+                  model.maxStoneNinecells);
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -636,6 +659,8 @@ function _survIntern(raw) {
            libertyNinecells: raw.libertyNinecells !== false,
            maxStones: raw.maxStones || 0,
            maxLibNinecells: raw.maxLibNinecells || 0,
+           maxStoneNinecells: raw.maxStoneNinecells || 0,
+           libStoneLibs: raw.libStoneLibs || 0, libStoneStones: raw.libStoneStones || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
 }
@@ -712,6 +737,7 @@ const HealthLib = {
   ninecellId,
   chainLibCountKey,
   chainStoneCountKey,
+  chainLibStoneKey,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,

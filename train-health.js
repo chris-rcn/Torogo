@@ -151,9 +151,10 @@ const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
-  ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-join-libs',
+  ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-lib-stone', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
-   'liberty-ninecells', 'max-lib-ninecells', 'iterations', 'min-phase', 'max-phase',
+   'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
+   'iterations', 'min-phase', 'max-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
@@ -183,9 +184,18 @@ irreducible label entropy.
                   bottom of the ablation ladder rather than an error
   --max-stones N  chain SIZE one-hot, capped at N (default 0 = off).  One key
                   per chain, no hashing
+  --max-lib-stone L,S  JOINT liberty x stone one-hot, capped at L and S
+                  (default off).  The model is additive over its one-hots, so
+                  --max-libs and --max-stones cannot express the interaction —
+                  and two liberties on a 2-stone chain is a different situation
+                  from two liberties on a 20-stone chain
   --max-lib-ninecells N  emit the singleton liberty ninecells only for chains
                   with at most N liberties (default 0 = no cap).  Spends the
                   keys where survival is in doubt
+  --max-stone-ninecells N  the same cap on the other half: emit the singleton
+                  stone ninecells only for chains of at most N stones (default
+                  0 = no cap).  A big chain emits a ninecell per stone, so this
+                  is also where the per-position cost goes
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 0 = off)
   --friend-health-max-buckets N  one-hot over the health of the healthiest
@@ -234,6 +244,18 @@ const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
 const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
+// JOINT liberty x stone one-hot, "L,S" (default off).  The model is additive
+// over its one-hots, so --max-libs and --max-stones separately cannot express
+// the interaction, and the interaction is the whole signal: two liberties on a
+// 2-stone chain and two liberties on a 20-stone chain are different situations.
+// Costs one key per chain and no hashing, and (L+1)*(S+1) weights.
+const LIB_STONE = (opts['max-lib-stone'] || '').split(',').map(x => parseInt(x, 10));
+const LIB_STONE_LIBS   = LIB_STONE.length === 2 && LIB_STONE[0] > 0 ? LIB_STONE[0] : 0;
+const LIB_STONE_STONES = LIB_STONE.length === 2 && LIB_STONE[1] > 0 ? LIB_STONE[1] : 0;
+if (opts['max-lib-stone'] !== undefined && !(LIB_STONE_LIBS > 0 && LIB_STONE_STONES > 0)) {
+  console.error(`error: --max-lib-stone wants "<libCap>,<stoneCap>" with both > 0 (got "${opts['max-lib-stone']}")`);
+  process.exit(1);
+}
 const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '0', 10);
 const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
   ? opts['friend-health-max-buckets'] : '0', 10);
@@ -264,6 +286,9 @@ const LIBERTY_NINECELLS = (opts['liberty-ninecells'] !== undefined
 // it the chain emits none.  0 = no cap.  (0-as-off is --liberty-ninecells 0.)
 const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
   ? opts['max-lib-ninecells'] : '0', 10);
+// The same cap on the chain's STONE COUNT for the singleton stone ninecells.
+const MAX_STONE_NINECELLS = parseInt(opts['max-stone-ninecells'] !== undefined
+  ? opts['max-stone-ninecells'] : '0', 10);
 // Same field names a health model uses, so health-lib's neighbourHealthKeys and
 // propagateHealth take this and a scored model interchangeably.
 const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
@@ -302,10 +327,11 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
+            (MAX_STONE_NINECELLS > 0 ? `  max-stone-ninecells ${MAX_STONE_NINECELLS}` : '') +
                         (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
             (FOE_MIN_BUCKETS > 0 ? `  foe-health-min-buckets ${FOE_MIN_BUCKETS}` : '') +
             (NEIGHBOUR_ON ? `  iterations ${ITERATIONS}` : '') +
@@ -368,27 +394,30 @@ function collectObs(game, phase, buf) {
   for (const c of chains) {
     const owner = c.c, libs = c.libs, g0 = c.gid;
     const start = exShapes.length;
-    // health-lib.chainSurvKeys: liberty ninecells first, then stone ninecells
-    // (the latter only when --stone-ninecells is on).
+    // health-lib.chainSurvKeys: liberty ninecells first, then stone ninecells,
+    // each half present only when its knob is on and its cap is not exceeded.
     HL.chainSurvKeys(cells, nbr, dnbr, gid, owner, g0, libs, c.stones,
                        STONE_SALT, exShapes, MAX_LIBS,
                        MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
-                       MAX_STONES, MAX_LIB_NINECELLS);
+                       MAX_STONES, MAX_LIB_NINECELLS,
+                       LIB_STONE_LIBS, LIB_STONE_STONES, MAX_STONE_NINECELLS);
     if (VERBOSE) {
-      if (LIBERTY_NINECELLS) for (let a = 0; a < libs.length; a++) {
+      // What chainSurvKeys actually emitted for each half: the knob turns it off
+      // outright, the cap turns it off for this chain only.
+      const nLibEmit = (LIBERTY_NINECELLS &&
+        (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS)) ? libs.length : 0;
+      const nStoneEmit = (STONE_NINECELLS &&
+        (MAX_STONE_NINECELLS <= 0 || c.stones.length <= MAX_STONE_NINECELLS)) ? c.stones.length : 0;
+      for (let a = 0; a < nLibEmit; a++) {
         const k = exShapes[start + a];
         if (!examples.has(k)) examples.set(k, render(game, libs[a], owner, gid, g0));
       }
-      if (STONE_NINECELLS) {
-        const base = start + (LIBERTY_NINECELLS ? libs.length : 0);
-        for (let a = 0; a < c.stones.length; a++) {
-          const k = exShapes[base + a];
-          if (!examples.has(k)) examples.set(k, 'S:' + render(game, c.stones[a], owner, gid, g0));
-        }
+      for (let a = 0; a < nStoneEmit; a++) {
+        const k = exShapes[start + nLibEmit + a];
+        if (!examples.has(k)) examples.set(k, 'S:' + render(game, c.stones[a], owner, gid, g0));
       }
       // the one-hots trail the ninecells: liberty count, then best-join
-      let oh = start + (LIBERTY_NINECELLS ? libs.length : 0)
-                     + (STONE_NINECELLS ? c.stones.length : 0);
+      let oh = start + nLibEmit + nStoneEmit;
       if (MAX_STONES > 0) {
         const k = exShapes[oh++];
         if (!examples.has(k)) examples.set(k, 'stones=' + Math.min(c.stones.length, MAX_STONES));
@@ -688,7 +717,8 @@ const src = [
   `  // 'iterations' passes) the trainer ran — health-lib.chainHealthAll refuses`,
   `  // such a model rather than score it with the feature missing.`,
   `  stoneNinecells: ${STONE_NINECELLS}, libertyNinecells: ${LIBERTY_NINECELLS}, maxStones: ${MAX_STONES},`,
-  `  maxLibNinecells: ${MAX_LIB_NINECELLS},`,
+  `  maxLibNinecells: ${MAX_LIB_NINECELLS}, maxStoneNinecells: ${MAX_STONE_NINECELLS},`,
+  `  libStoneLibs: ${LIB_STONE_LIBS}, libStoneStones: ${LIB_STONE_STONES},`,
   // Ninecell encoding generation.  1 was the symmetric-combine hash used
   // 2026-09-09..11 (20.6% D4 fidelity at 6 states); 2 is the exact index +
   // canonicalisation table over the 3-state color alphabet.  The key spaces are
