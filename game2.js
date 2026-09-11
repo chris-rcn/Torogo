@@ -738,7 +738,17 @@ class Game2 {
         emptyCount++;
       }
     }
-    return isEye(cells, this._dnbr, base, color, friendCount, emptyCount, sameGroup);
+    // Diagonals are only consulted for the multi-chain wall, so the scan is
+    // skipped for the (much commoner) points that cannot reach that case.
+    let enemyDiag = 0;
+    if (friendCount === 4) {
+      const dnbr = this._dnbr;
+      for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) enemyDiag++;
+    }
+    // The bare name is the module-level RULE below, not this method — a plain
+    // identifier never resolves to a method.  Same name on purpose: this is the
+    // rule applied to a board point.
+    return isTrueEye(friendCount, emptyCount, sameGroup, enemyDiag);
   }
 
   // ── Main move interface ────────────────────────────────────────────────────
@@ -1221,36 +1231,73 @@ function parseBoard(boardStr, toMove = BLACK) {
 }
 
 // THE eye rule, in one place.  Callers that already have the four orthogonal
-// neighbours summarised — Game2.isTrueEye and ppat-lib's playout move filter —
-// pass the counts in rather than rescanning; the hostile-diagonal count is
-// taken only on the branch that needs it.
+// neighbours summarised — the Game2.isTrueEye method above, and isEyelike below
+// on ppat's behalf — pass the counts in rather than rescanning.
 //
-// Keep this shared.  ppat-lib carried its own inlined copy that asked for three
-// FRIENDLY diagonals where this asks for at most one HOSTILE one.  Those differ
-// whenever a diagonal is EMPTY, so the playout filled multi-chain eyes that
-// isTrueEye called eyes, killing live groups and corrupting every survival
-// label derived from it (found 2026-09-10).  c/ppat.c still has that stale
-// copy at its own move filter.
-function isEye(cells, dnbr, base, color, friendCount, emptyCount, sameGroup) {
-  // 3 same-group friends + 1 empty: proto-eye, treat as true eye
+// MAXIMALLY CONSERVATIVE: this prohibits only what a learner cannot see.  The
+// ninecell a policy is trained on encodes each orthogonal as (colour, capped
+// liberty count) and each diagonal as colour; what it does NOT encode is CHAIN
+// IDENTITY.  So the two same-chain cases below are prohibited — a policy could
+// never tell them from their multi-chain lookalikes, and the correct action
+// differs (never fill your own eye; connecting two chains is often right) — and
+// everything else is left to the policy to learn a frequency for.
+//
+// The third case is prohibited for a different reason: not because a learner
+// cannot see it, but because it is PROVABLY never a move.  Four friendly
+// orthogonals and no hostile diagonal means
+//   - it can never capture: no enemy stone is adjacent;
+//   - it can never save a chain: for an adjacent chain to be in atari here,
+//     both diagonals flanking its stone must be friendly (an empty one would
+//     be another liberty, a hostile one is excluded), and those diagonals then
+//     join it to the neighbours on either side — repeat around and all eight
+//     surrounding points are one chain, in which case playing here is suicide,
+//     not a move;
+//   - it can never be an urgent connection: by the same argument the OPPONENT
+//     can only play here if it captures, so in every multi-chain case the
+//     opponent can never play here at all, every adjacent chain keeps an
+//     outside liberty, and the connection stays available forever;
+//   - it can never help a semeai: the point is a liberty of my own chains and
+//     of no enemy chain, so filling it only ever costs me liberties.
+// Note this is a statement about the CURRENT position, not a prediction about
+// the future — which is what made the old "at most one hostile diagonal"
+// heuristic wrong.  That heuristic is still gone: a multi-chain wall WITH a
+// hostile diagonal is left to the policy, because there connecting first can
+// genuinely be right.
+//
+// The filtering is what makes the remainder learnable: once these cases are
+// removed from the candidate set, every surviving point with four friendly
+// orthogonals is multi-chain AND has a hostile diagonal, so the pattern is
+// unambiguous among the candidates the policy actually sees.
+function isTrueEye(friendCount, emptyCount, sameGroup, enemyDiag) {
+  // 3 same-group friends + 1 empty: proto-eye of one chain
   if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
-  if (friendCount < 4) return false;
-  // A wall that is already ONE chain cannot be cut, so the diagonals are
-  // irrelevant — this is deliberately more permissive than the diagonal rule
-  // below and must stay ahead of it.
+  if (friendCount !== 4) return false;
+  // a wall that is already ONE chain cannot be cut; filling is never right
   if (sameGroup === 4) return true;
-  // Otherwise the wall spans several friendly chains and the question is
-  // whether the opponent can cut them apart: count HOSTILE diagonals and allow
-  // one.  (Demanding three FRIENDLY diagonals instead counts an EMPTY diagonal
-  // against the eye and misses ~79% of real eyes in late-game positions.)  The
-  // board is toroidal, so every point is interior and the allowance is one
-  // everywhere; there is no edge case.
-  let hostile = 0;
-  for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) hostile++;
-  return hostile <= 1;
+  // multi-chain wall with no hostile diagonal: provably never a move (above)
+  return enemyDiag === 0;
 }
 
-const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard, isEye };
+// The PLAYOUT rule: everything isTrueEye prohibits, plus one relaxation — a
+// multi-chain wall with a single hostile diagonal.  Defined on top of isTrueEye
+// rather than beside it, so the two can never drift apart.
+//
+// This is the classic Go eye heuristic, and unlike isTrueEye it is NOT proved.
+// Three of the four guarantees survive at one hostile diagonal: the move still
+// cannot capture (no enemy is orthogonally adjacent), cannot save a chain (a
+// chain in atari there must contain all four orthogonals, which makes the move
+// suicide), and cannot help a semeai.  What it loses is margin on the fourth —
+// the prophylactic connection.  At zero hostile diagonals the opponent needs
+// two moves before the point can become a real cut, one to release it from the
+// rule and one to reach the atari; at one, a single move does both.  That is
+// why this is for playouts only, where a rare wrong prune costs a little
+// estimator bias, and isTrueEye is what a root candidate generator may use.
+function isEyelike(friendCount, emptyCount, sameGroup, enemyDiag) {
+  if (isTrueEye(friendCount, emptyCount, sameGroup, enemyDiag)) return true;
+  return friendCount === 4 && enemyDiag === 1;
+}
+
+const _exports = { Game2, PASS, BLACK, WHITE, EMPTY, KOMI, setKomi, coordStr, parseMove, agentMoveToIdx, parseBoard, isTrueEye, isEyelike };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Game2 = _exports;
 

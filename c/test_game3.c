@@ -325,7 +325,7 @@ static void test_true_eye(void) {
         g3_play(g, bstones[i]);
         g3_play(g, G3_PASS);
     }
-    check("eye: all-4-ortho is true eye", g3_is_true_eye(g, c));
+    check("eye: all-4-ortho is true eye", g3_is_true_eye_at(g, c));
     g3_free(g);
 }
 

@@ -47,7 +47,7 @@ static int get_legal_moves(const Game2 *g, int32_t *out) {
     int n = 0;
     for (int i = 0; i < cap; i++) {
         if (g->cells[i] != EMPTY) continue;
-        if (g2_is_true_eye(g, i)) continue;
+        if (g2_is_true_eye_at(g, i)) continue;
         if (g2_is_legal(g, i)) out[n++] = i;
     }
     if (n < cap / 3 || g->consecutive_passes > 0)

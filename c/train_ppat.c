@@ -34,6 +34,15 @@
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
+ *
+ * EARLY PASS: always on.  The playout policy offers PASS as a candidate at
+ * logit 0 and every checkpoint is stamped earlyPass, so a consumer cannot load
+ * the weights without the anchor they were fitted against.  The anchor adds no
+ * parameter — it IDENTIFIES the additive constant on the pattern weights, which
+ * is otherwise unconstrained, because shifting every pattern weight leaves the
+ * softmax unchanged.  With it pinned, the absolute logit level means "how good
+ * a move must be to be worth playing".  Fine-tuning an unflagged model is how
+ * one is converted.
  *     --lib-cap <n>         orthogonal liberty cap in the 3x3 pattern (2..4,
  *                           default 2 = the historical atari-only encoding).
  *                           Higher caps resolve more liberty levels at zero
@@ -147,6 +156,173 @@ static const char *cfg_file;
 static const char *cfg_test_file;      /* NULL = carve the test set from cfg_file's head */
 static int    cfg_test_pos_given;      /* was --test-pos passed explicitly? */
 static const char *cfg_load;           /* path to weights file to load */
+static bool ref_early_pass;            /* the REFERENCE model's own earlyPass, from its file */
+static float ref_pass_weight = 0;      /* and its own learned pass logit.  Used in the
+                                        * match when set; an unflagged reference borrows
+                                        * the run's anchor and pass weight instead. */
+/* The trained pass logit.  SB cannot fit it: the update along the shared level
+ * is Cov(z, passed), which vanishes when an early mutual stop is outcome-
+ * neutral — and under one-step area scoring it largely is.  So it is driven by
+ * a control loop instead: each rollout that CHOSE to stop reports whether the
+ * final board still had unfinished business — a chain in atari (an unresolved
+ * capture) or a dame (a point that counts for neither side until someone takes
+ * it).  Either means it stopped too early.
+ * Either finding means it stopped too early; a clean board means only that it
+ * did not, which is not evidence that it stopped as early as it could have.  So
+ * the two directions carry different weight — see PASS_STEP. */
+/* Chains PROVEN uncapturable in a rollout's START position, and how many of
+ * them were dead at its end.  The proof: an empty point is an eye of a GROUP
+ * when all four orthogonals are stones of one colour, the group being the set
+ * of chains those neighbours belong to; two eye points with the SAME group
+ * cannot both be filled, because the opponent playing either has no liberty and
+ * captures nothing.  Keying on the exact set is what makes that hold — it
+ * guarantees every member touches both points.  Mirrors vpatterns.markLiveChains.
+ *
+ * Measured separation between two real models at these settings: 0.308% for an
+ * untrained policy against 0.040% for one trained with early pass, ten standard
+ * errors apart.  It needs the trials — at 5 playouts per position it produced
+ * two events and looked like no signal at all.
+ *
+ * A live chain that dies is a playout killing a group that cannot be captured,
+ * which corrupts the label outright.  directWR is structurally blind to it:
+ * both sides do it, so it cancels in the match.  Target is exactly 0. */
+static int    live_gids[MAX_G];
+static int    live_reps[MAX_G];
+static int8_t live_cols[MAX_G];
+static int    live_n = 0;
+
+/* A fixed SET of live positions, built once at startup: positions that
+ * actually contain a provably-live chain.  The training positions cannot
+ * serve — they sit at the band the eval data was filtered to (phase 0.60-0.65
+ * here) and a group has not had time to seal two of its own eyes, so a scan
+ * of 3000 of them finds none.
+ * Uniform random play past phase 0.70 yields one about 6% of the time, and every
+ * late position is scanned and the game is abandoned after the first hit, so the
+ * set costs one game per position — about a third of a second for a thousand. */
+#define LIVE_POSITIONS  1000
+#define LIVE_PLAYOUTS     20
+#define LIVE_MIN_PHASE  0.70f
+typedef struct { Game2 g; int n; int reps[8]; int8_t cols[8]; } LivePos;
+static LivePos *live_pos = NULL;
+static int live_pos_n = 0;
+
+static void mark_live_chains(const Game2 *g) {
+    live_n = 0;
+    int eg[MAX_CAP][4], en[MAX_CAP], ne = 0;
+    for (int p = 0; p < g->cap; p++) {
+        if (g->cells[p] != EMPTY) continue;
+        int b4 = p * 4, col = 0, n = 0, ok = 1;
+        int a0 = -1, a1 = -1, a2 = -1, a3 = -1;
+        for (int d = 0; d < 4; d++) {
+            int32_t j = g2_nbr[b4 + d];
+            int8_t c = g->cells[j];
+            if (c == EMPTY) { ok = 0; break; }
+            if (col == 0) col = c; else if (c != col) { ok = 0; break; }
+            int32_t q = g->gid[j];
+            if (q == a0 || q == a1 || q == a2 || q == a3) continue;
+            /* insertion sort into four slots so identical groups compare equal */
+            if (a0 < 0 || q < a0)      { a3 = a2; a2 = a1; a1 = a0; a0 = q; }
+            else if (a1 < 0 || q < a1) { a3 = a2; a2 = a1; a1 = q; }
+            else if (a2 < 0 || q < a2) { a3 = a2; a2 = q; }
+            else                        a3 = q;
+            n++;
+        }
+        /* SHARED eyes only: the group must span more than one chain.  A single
+         * chain's own eye is refused by isTrueEye outright, so it can never be
+         * filled and would contribute a guaranteed zero.  The shared case is the
+         * one the conservative rule leaves legal, so it is the only one that
+         * measures anything about the policy. */
+        if (!ok || n < 2) continue;
+        eg[ne][0] = a0; eg[ne][1] = a1; eg[ne][2] = a2; eg[ne][3] = a3; en[ne] = n; ne++;
+    }
+    for (int i = 0; i < ne; i++)
+        for (int j = i + 1; j < ne; j++) {
+            if (en[j] != en[i]) continue;
+            if (eg[j][0] != eg[i][0] || eg[j][1] != eg[i][1] ||
+                eg[j][2] != eg[i][2] || eg[j][3] != eg[i][3]) continue;
+            for (int k = 0; k < 4; k++) {
+                int q = eg[i][k];
+                if (q < 0) break;
+                int seen = 0;
+                for (int m = 0; m < live_n; m++) if (live_gids[m] == q) { seen = 1; break; }
+                if (seen || live_n >= MAX_G) continue;
+                /* a representative stone, to test survival by colour at the end */
+                for (int c2 = 0; c2 < g->cap; c2++)
+                    if (g->cells[c2] != EMPTY && g->gid[c2] == q) {
+                        live_gids[live_n] = q; live_reps[live_n] = c2;
+                        live_cols[live_n] = g->cells[c2]; live_n++;
+                        break;
+                    }
+            }
+            break;
+        }
+}
+
+/* Fill the live-position set with uniform random play; called once, after
+ * the board size is known. */
+static void build_live_positions(int size) {
+    live_pos = calloc(LIVE_POSITIONS, sizeof(LivePos));
+    if (!live_pos) return;
+    Rng rng; rng_seed(&rng, 0x1CE0DEL);
+    int games = 0;
+    while (live_pos_n < LIVE_POSITIONS && games < 200000) {
+        Game2 g; g2_new(&g, size); games++;
+        int n = 0, lim = 3 * g.empty_count + 20;
+        while (!g.game_over && n < lim && live_pos_n < LIVE_POSITIONS) {
+            g2_play(&g, g2_random_legal_move(&g, &rng));
+            n++;
+            if ((float)(g.cap - g.empty_count) / g.cap < LIVE_MIN_PHASE) continue;
+            mark_live_chains(&g);
+            if (live_n == 0) continue;
+            LivePos *p = &live_pos[live_pos_n++];
+            g2_clone(&p->g, &g);
+            p->n = live_n > 8 ? 8 : live_n;
+            for (int i = 0; i < p->n; i++) { p->reps[i] = live_reps[i]; p->cols[i] = live_cols[i]; }
+            break;   /* one position per game: successive positions in the same
+                      * game are near-duplicates, and taking several would cut
+                      * the effective sample size without cutting the cost */
+        }
+    }
+}
+
+static float run_pass_weight = 0;
+/* Polyak average of the pass weight, on the same window as theta_ema.  The
+ * saved threshold has to be consistent with the saved board weights: it
+ * competes against their log-sum-exp, so pairing averaged patterns with a raw
+ * scalar caught at an excursion gives the file a stopping point neither
+ * iterate had. */
+static float run_pass_weight_ema = 0;
+/* The two directions are not the same kind of evidence.  Unfinished business on
+ * the final board is a KNOWN error — the rollout stopped with points or captures
+ * still on the table — so it moves 10x.  A clean board proves nothing: it is consistent
+ * with stopping at exactly the right moment or far too late, so it only nudges
+ * upward by 1x to keep the weight from sinking forever.  That 10:1 ratio sets
+ * the equilibrium — the weight settles where about 1 chosen termination in 11
+ * leaves an unresolved capture. */
+#define PASS_STEP         0.00001f
+
+/* Fraction of rollouts in which the model's FIRST pass is REJECTED and it is
+ * made to play on.  A rollout that stops early is scored on an unfinished
+ * board, so its outcome is a poor estimate of the position's value and the
+ * board weights are fitted against it; forcing play past the pass makes z a
+ * better target.  The cost is that the gradient goes off-policy — ψ is a score
+ * function assuming the action came from π — so the weights are fitted to a
+ * behaviour policy that half-refuses passes while deployment does not.  The
+ * mismatch scales with this rate; reduce the dose if it hurts.
+ *
+ * A rejected rollout is excluded from the pass-weight controller: it plays on
+ * to a natural finish, which by construction has no dame and no atari, so the
+ * detector would read "clean" and nudge the threshold UP in exactly the case
+ * that should push it down. */
+#define PASS_REJECT_RATE  0.5f
+/* Deliberately small.  This is one scalar governing when EVERY playout stops,
+ * so being wrong by much is expensive in a way no pattern weight is — an error
+ * here mis-scores every label at once.  The dynamics make a small step cheap:
+ * the signal only exists on rollouts that CHOSE to pass, so a too-eager weight
+ * produces a sample almost every rollout and descends fast, while near
+ * equilibrium passes are rare, samples are rare, and the weight hovers.  The
+ * random walk around the equilibrium then has amplitude ~step·sqrt(samples),
+ * i.e. hundredths rather than units. */
 static const char *cfg_save;           /* fixed checkpoint path (else a random out/ name) */
 static const char *cfg_monitor;        /* if set: run as a test-only monitor of this checkpoint */
 
@@ -216,6 +392,15 @@ static int      batch_count = 0;
  * and would shift with libCap for reasons unrelated to training. */
 static double   w_abs_sum = 0;
 static long     w_update_count = 0;
+/* First POLICY pass of each rollout, as board fullness (cap-empty)/cap.  A raw
+ * minimum over an interval is useless — thousands of rollouts pin it to the
+ * uniform-gate floor on the first row and it never moves — so this is the MEAN
+ * over rollouts of when each one first chose to stop.  Forced passes (the move
+ * list running out, PICK_NO_MOVES) are excluded: those are the old behaviour and
+ * would drag the mean toward 1.0.  Rollouts that never pass contribute nothing.
+ * Cumulative, like w_abs_sum, and differenced per printed row. */
+static double   pass_phase_sum = 0;
+static long     pass_phase_count = 0;
 
 static float    rollout_logits[MAX_CAP];
 static float    rollout_probs[MAX_CAP];
@@ -483,13 +668,31 @@ static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx) {
 }
 
 /* ── Policy select (for gradient-tracking rollouts) ────────────────────────── */
-/* Returns chosen index into rollout_feat_st, or -1 for pass.
- * Leaves rollout_feat_st and rollout_probs populated. */
+/* Returns the chosen index into rollout_feat_st, PICK_NO_MOVES when there are no
+ * candidates at all, or PICK_PASSED when the policy CHOSE to pass.  The two are
+ * distinguished because only the second carries a gradient.
+ * Leaves rollout_feat_st and rollout_probs populated; with the pass anchor on,
+ * rollout_probs is normalised over the board moves AND the pass, so the board
+ * probabilities sum to less than 1.  That is what identifies the additive
+ * constant on the pattern weights: without a pass entry, shifting every pattern
+ * weight leaves this softmax unchanged and the direction has no gradient. */
+#define PICK_NO_MOVES (-1)
+#define PICK_PASSED   (-2)
+/* The model being TRAINED always carries the anchor — that is what fits the
+ * absolute logit level.  A loaded model's own flag does not override it:
+ * fine-tuning an unflagged file is how one is converted.  The REFERENCE model
+ * in the directWR match plays its own flag when its file has one, and falls
+ * back to this anchor when it does not — see the note there.
+ *
+ * Every use below is guarded by this: 0 disables the anchor, the controller,
+ * the pass-rejection hack and the subject's pass in the match, and stamps
+ * earlyPass false on saved weights.  The REFERENCE never passes either way. */
+#define RUN_EARLY_PASS 1
 
 static int policy_select(Game2 *g) {
     ppat_extract(g, &rollout_feat_st);
     int n = rollout_feat_st.count;
-    if (n == 0) return -1;
+    if (n == 0) return PICK_NO_MOVES;
 
     for (int i = 0; i < n; i++) {
         float v = 0;
@@ -498,16 +701,21 @@ static int policy_select(Game2 *g) {
         rollout_logits[i] = v;
     }
 
-    /* Softmax */
+    /* Softmax, including the pass at logit 0 when the run trains for it. */
     float mx = rollout_logits[0];
     for (int i = 1; i < n; i++) if (rollout_logits[i] > mx) mx = rollout_logits[i];
+    if (RUN_EARLY_PASS && run_pass_weight > mx) mx = run_pass_weight;
     float sum = 0;
     for (int i = 0; i < n; i++) { rollout_probs[i] = expf(rollout_logits[i] - mx); sum += rollout_probs[i]; }
+    float p_pass = RUN_EARLY_PASS ? expf(run_pass_weight - mx) : 0.0f;
+    sum += p_pass;
     float inv = 1.0f / sum;
     for (int i = 0; i < n; i++) rollout_probs[i] *= inv;
+    p_pass *= inv;
 
     /* Sample */
     float r = rng_float(&g_rng);
+    if (RUN_EARLY_PASS) { r -= p_pass; if (r <= 0) return PICK_PASSED; }
     int chosen = n - 1;
     for (int i = 0; i < n; i++) { r -= rollout_probs[i]; if (r <= 0) { chosen = i; break; } }
     return chosen;
@@ -527,9 +735,12 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
     int pm = ppat_moves;
     int steps = 0;
 
+    int passed_yet = 0, rejected_pass = 0, reject_first = 0;
+    if (RUN_EARLY_PASS && rng_float(&g_rng) < PASS_REJECT_RATE) reject_first = 1;
     for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
         int chosen = policy_select(&sim);
-        if (chosen == -1) {
+        if (chosen == PICK_NO_MOVES) {
+            /* Nothing to choose between — no decision, so no gradient. */
             g2_play(&sim, PASS);
             continue;
         }
@@ -537,14 +748,18 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
         int n = rollout_feat_st.count;
 
         if (grad_acc) {
-            /* ψ(s,a) = φ(s,a) − Σ_b π(b|s)φ(s,b) */
+            /* ψ(s,a) = φ(s,a) − Σ_b π(b|s)φ(s,b).  The pass carries no features,
+             * so a chosen pass contributes only the −Σ term: a uniform downward
+             * push on every board feature, which is exactly the update that
+             * lowers the absolute logit level toward passing more often. */
             for (int i = 0; i < n; i++) {
                 float p = rollout_probs[i];
                 for (int fi = rollout_feat_st.feat_start[i]; fi < rollout_feat_st.feat_start[i + 1]; fi++)
                     grad_acc[rollout_feat_st.feat[fi]] -= p;
             }
-            for (int fi = rollout_feat_st.feat_start[chosen]; fi < rollout_feat_st.feat_start[chosen + 1]; fi++)
-                grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
+            if (chosen != PICK_PASSED)
+                for (int fi = rollout_feat_st.feat_start[chosen]; fi < rollout_feat_st.feat_start[chosen + 1]; fi++)
+                    grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
 
             /* Count this step toward T (all phases) / T_P (masked single phase). */
             if (cfg_phase < 0 ||
@@ -552,12 +767,63 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
                 steps++;
         }
 
+        if (chosen == PICK_PASSED) {
+            if (!passed_yet) {
+                passed_yet = 1;
+                pass_phase_sum += (double)(sim.cap - sim.empty_count) / sim.cap;
+                pass_phase_count++;
+                if (reject_first) {
+                    /* Refuse it and play on: resample among the board moves
+                     * only, so the rollout reaches a finished position and its
+                     * outcome is a usable target.  The ψ term above was already
+                     * accumulated for the pass the policy actually wanted —
+                     * that is the off-policy part. */
+                    rejected_pass = 1;
+                    float r2 = rng_float(&g_rng), tot = 0;
+                    for (int i = 0; i < n; i++) tot += rollout_probs[i];
+                    r2 *= tot;
+                    int alt = n - 1;
+                    for (int i = 0; i < n; i++) { r2 -= rollout_probs[i]; if (r2 <= 0) { alt = i; break; } }
+                    g2_play(&sim, rollout_feat_st.moves[alt]);
+                    continue;
+                }
+            }
+            g2_play(&sim, PASS);
+            continue;
+        }
         int32_t mv = rollout_feat_st.moves[chosen];
         g2_play(&sim, mv);
     }
 
     /* Finish game with uniform random play. */
     while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim, &g_rng));
+
+    /* Pass-weight control loop.  Only rollouts the policy played to the end and
+     * actually chose to stop are evidence: with --train-moves set the tail is
+     * uniform, so the termination is not the policy's decision. */
+    if (RUN_EARLY_PASS && pm < 0 && passed_yet && !rejected_pass) {
+        /* Unfinished business on the final board, of either kind:
+         *   - a chain in atari: an unresolved capture, so the score is unreliable
+         *   - a DAME (empty point touching both colours): it counts for neither
+         *     side under the one-step area score, so whoever plays it gains it —
+         *     leaving one is giving away a point that was there for the taking.
+         * The dame half is what gives the policy any reason to fill them before
+         * stopping; atari alone says nothing about them. */
+        int unresolved = 0;
+        for (int i = 0; i < sim.cap && !unresolved; i++) {
+            if (sim.cells[i] != EMPTY) {
+                if (sim.ls[sim.gid[i]] == 1) unresolved = 1;
+            } else {
+                int b = 0, w = 0;
+                for (int d = 0; d < 4; d++) {
+                    int8_t c = sim.cells[g2_nbr[i * 4 + d]];
+                    if (c == BLACK) b = 1; else if (c == WHITE) w = 1;
+                }
+                if (b && w) unresolved = 1;
+            }
+        }
+        run_pass_weight += unresolved ? -10.0f * PASS_STEP : PASS_STEP;
+    }
 
     if (out_steps) *out_steps = steps;
     return g2_estimate_winner(&sim) == player ? 1 : -1;
@@ -894,6 +1160,7 @@ static void ema_init(void) {
     if (cfg_ema_window <= 0) return;        /* leave theta_ema NULL: save/report raw */
     theta_ema = malloc((size_t)TOTAL * sizeof(float));
     memcpy(theta_ema, theta, (size_t)TOTAL * sizeof(float));
+    run_pass_weight_ema = run_pass_weight;
     ema_last_pos = 0;
 }
 
@@ -906,6 +1173,7 @@ static void ema_update(long agg_pos) {
     if (dpos <= 0) return;
     const float w = expf(-(float)dpos / (float)cfg_ema_window);
     for (int k = 0; k < TOTAL; k++) theta_ema[k] = w * theta_ema[k] + (1.0f - w) * theta[k];
+    run_pass_weight_ema = w * run_pass_weight_ema + (1.0f - w) * run_pass_weight;
     ema_last_pos = agg_pos;
 }
 
@@ -921,14 +1189,15 @@ static void save_weights(int iterations, int total_positions, const char *elapse
      * stay CUMULATIVE and the monitor differences consecutive checkpoints to get
      * a per-interval mean (worker 0's own updates — a representative sample). */
     snprintf(comment, sizeof(comment),
-             "Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s, phases: %d, trainSqSum: %.9g, trainSqCount: %ld, trainPartSum: %.9g, trainPartCount: %ld, wAbsSum: %.9g, wUpdateCount: %ld",
+             "Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s, phases: %d, trainSqSum: %.9g, trainSqCount: %ld, trainPartSum: %.9g, trainPartCount: %ld, wAbsSum: %.9g, wUpdateCount: %ld, passPhaseSum: %.9g, passPhaseCount: %ld",
              iterations, total_positions, elapsed, ppat_phase_count, dsum, dcnt, psum, pcnt,
-             w_abs_sum, w_update_count);
+             w_abs_sum, w_update_count, pass_phase_sum, pass_phase_count);
     /* Atomic: write to a tmp file then rename, so a reader (the monitor) never
      * sees a half-written checkpoint. */
     char tmp[300];
     snprintf(tmp, sizeof(tmp), "%s.tmp", weights_file);
-    ppat_save_weights(tmp, theta_ema ? theta_ema : theta, TOTAL, comment);
+    ppat_save_weights(tmp, theta_ema ? theta_ema : theta, TOTAL, RUN_EARLY_PASS,
+                      theta_ema ? run_pass_weight_ema : run_pass_weight, comment);
     rename(tmp, weights_file);
 }
 
@@ -948,7 +1217,7 @@ static void save_best(const char *ckpt_path, const char *comment) {
     best_path(ckpt_path, best, sizeof best);
     char tmp[330];
     snprintf(tmp, sizeof tmp, "%s.tmp", best);
-    ppat_save_weights(tmp, theta, TOTAL, comment);
+    ppat_save_weights(tmp, theta, TOTAL, RUN_EARLY_PASS, run_pass_weight, comment);
     rename(tmp, best);
 }
 
@@ -974,6 +1243,19 @@ static int ckpt_wsum(const char *path, double *wsum, long *wcnt) {
     while (fgets(buf, sizeof(buf), f)) {
         char *a = strstr(buf, "wAbsSum: "), *b = strstr(buf, "wUpdateCount: ");
         if (a && b) { *wsum = atof(a + 9); *wcnt = atol(b + 14); got = 1; break; }
+    }
+    fclose(f);
+    return got ? 0 : -1;
+}
+
+/* Cumulative first-pass-phase accumulators from a checkpoint comment. */
+static int ckpt_passphase(const char *path, double *psum, long *pcnt) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    char buf[1024]; int got = 0;
+    while (fgets(buf, sizeof(buf), f)) {
+        char *a = strstr(buf, "passPhaseSum: "), *b = strstr(buf, "passPhaseCount: ");
+        if (a && b) { *psum = atof(a + 14); *pcnt = atol(b + 16); got = 1; break; }
     }
     fclose(f);
     return got ? 0 : -1;
@@ -1006,6 +1288,43 @@ static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psu
 static double avg_abs_weight(void) {
     double v = w_update_count > 0 ? w_abs_sum / (double)w_update_count : 0;
     w_abs_sum = 0; w_update_count = 0;
+    return v;
+}
+
+/* Per-interval mean phase of each rollout's FIRST policy pass (see
+ * pass_phase_sum).  Bounded below by the uniform gate, since below it the
+ * playout goes through g2_random_legal_move, which has no pass.  Resets the
+ * accumulators, so it must be called exactly once per printed row. */
+/* Share of provably-alive chains the CURRENT policy kills, measured fresh on
+ * the live-position set.  A live chain that dies is a playout destroying a group that
+ * cannot be captured, which corrupts the label outright — and directWR barely
+ * sees it, because both sides now play the same pass and most of the effect
+ * cancels in the match.  Target is exactly 0. */
+static double live_death_ratio(void) {
+    if (!live_pos || live_pos_n == 0) return 0;
+    static PpatState st;
+    Rng rng; rng_seed(&rng, 0xD1ED1EL);
+    long checked = 0, died = 0;
+    for (int i = 0; i < live_pos_n; i++) {
+        for (int k = 0; k < LIVE_PLAYOUTS; k++) {
+            Game2 sim; g2_clone(&sim, &live_pos[i].g);
+            int n = 0, lim = 3 * sim.empty_count + 20;
+            while (!sim.game_over && n < lim) {
+                g2_play(&sim, ppat_policy_move(&sim, &st, theta, RUN_EARLY_PASS, run_pass_weight, &rng));
+                n++;
+            }
+            for (int j = 0; j < live_pos[i].n; j++) {
+                checked++;
+                if (sim.cells[live_pos[i].reps[j]] != live_pos[i].cols[j]) died++;
+            }
+        }
+    }
+    return checked > 0 ? (double)died / (double)checked : 0;
+}
+
+static double avg_first_pass_phase(void) {
+    double v = pass_phase_count > 0 ? pass_phase_sum / (double)pass_phase_count : 0;
+    pass_phase_sum = 0; pass_phase_count = 0;
     return v;
 }
 
@@ -1090,7 +1409,21 @@ static float direct_match_wr(int games) {
             const float *w;
             if (black_to_move == cur_is_black) { use_run_model(); w = theta; }
             else                               { use_ref_model(); w = ref_theta; }
-            g2_play(&game, ppat_policy_move(&game, &st, w, &rng));
+            /* A reference that carries its own pass plays it — that is its
+             * policy and the match should measure it.  An UNFLAGGED reference
+             * borrows the run's anchor and current pass weight instead, rather
+             * than playing on to the bitter end: never stopping made the match
+             * asymmetric in the one dimension being trained, since the
+             * reference then collected every point the subject left behind and
+             * filled shared eyes at 1.7x the subject's ratio (measured
+             * 2026-09-10: 1.417% vs 0.826% of provably-alive groups).  Those
+             * two biases run in opposite directions and neither is what the
+             * column is meant to measure. */
+            /* The reference never passes early, whatever its own file says;
+             * RUN_EARLY_PASS is the subject's switch, not a global one. */
+            const bool  ep = (w == theta) && RUN_EARLY_PASS;
+            const float pw = (w == theta) ? run_pass_weight : 0.0f;
+            g2_play(&game, ppat_policy_move(&game, &st, w, ep, pw, &rng));
         }
         if ((g2_estimate_winner(&game) == BLACK) == cur_is_black) wins++;
         played++;
@@ -1215,7 +1548,7 @@ static void run_monitor(void) {
                cfg_ref_weights, ref_lib_cap, ref_phases);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
-    printf("  %6s  %7s", "nWts", "avgW");
+    printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
     printf("  %8s  %7s", "elapsedS", "pos/s");
     print_weights_header();
@@ -1242,7 +1575,7 @@ static void run_monitor(void) {
             printf("%9d  %7s", 0, "-");
             if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                    tr.move_match * 100.0f);
-            printf("  %6d  %7s", live_weights(), "-");
+            printf("  %6d  %7s  %6s  %6s", live_weights(), "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             printf("  %8s  %7s", eb, "-");
             print_weights();
@@ -1251,7 +1584,7 @@ static void run_monitor(void) {
             printf("%9d  %7s", 0, "-");
             if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                    tr.move_match * 100.0f);
-            printf("  %6s  %7s", "-", "-");
+            printf("  %6s  %7s  %6s  %6s", "-", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             printf("  %8s  %7s\n", eb, "-");
         }
@@ -1269,6 +1602,7 @@ static void run_monitor(void) {
     double mon_last_test_s = 0;
     /* Previous checkpoint's cumulative avgW accumulators, for per-interval means. */
     double mon_prev_wsum = 0; long mon_prev_wcnt = 0;
+    double mon_prev_psum = 0; long mon_prev_pcnt = 0;
 
     /* Per-interval avgW from two consecutive checkpoints (0 when nothing new). */
     #define MON_AVGW(path) ({ \
@@ -1277,6 +1611,16 @@ static void run_monitor(void) {
             long _dc = _wc - mon_prev_wcnt; \
             if (_dc > 0) _v = (_ws - mon_prev_wsum) / (double)_dc; \
             mon_prev_wsum = _ws; mon_prev_wcnt = _wc; \
+        } \
+        _v; })
+
+    /* Per-interval mean first-pass phase, same differencing. */
+    #define MON_PASS1(path) ({ \
+        double _ps; long _pc; double _v = 0; \
+        if (ckpt_passphase((path), &_ps, &_pc) == 0) { \
+            long _dc = _pc - mon_prev_pcnt; \
+            if (_dc > 0) _v = (_ps - mon_prev_psum) / (double)_dc; \
+            mon_prev_psum = _ps; mon_prev_pcnt = _pc; \
         } \
         _v; })
 
@@ -1295,7 +1639,11 @@ static void run_monitor(void) {
             usleep(500000);
             continue;
         }
-        float *w = ppat_load_weights(cfg_monitor);
+        /* Take the checkpoint's pass weight too: the monitor is a separate
+         * process with its own run_pass_weight, so without this it would score
+         * every row as though the model passed at logit 0 — the most eager
+         * setting there is — regardless of what the worker trained it to. */
+        float *w = ppat_load_weights(cfg_monitor, NULL, &run_pass_weight);
         if (!w) { usleep(200000); continue; }
         mon_last_st = st;
         free(theta); theta = w; TOTAL = ppat_total_weights();
@@ -1329,7 +1677,8 @@ static void run_monitor(void) {
         printf("%9ld  %7s", agg, trbuf);
         if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
                                tr.move_match * 100.0f);
-        printf("  %6d  %7.4f", live_weights(), MON_AVGW(cfg_monitor));
+        printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), MON_AVGW(cfg_monitor),
+               MON_PASS1(cfg_monitor), 100.0 * live_death_ratio());
         if (ref_theta) printf("  %8s", dwbuf);
         printf("  %8s  %7.0f", eb, posps);
         print_weights();
@@ -1366,7 +1715,8 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
      * Polyak average for the duration so the row describes the model that
      * save_weights writes, not the raw iterate that training continues from. */
     float *theta_raw = theta;
-    if (theta_ema) theta = theta_ema;
+    const float pass_raw = run_pass_weight;
+    if (theta_ema) { theta = theta_ema; run_pass_weight = run_pass_weight_ema; }
     int test_n = (test_cap > 0 && test_cap < n_test) ? test_cap : n_test;
     if (test_n < 0) test_n = 0;   /* NOT clamped up to 1: with --test-pos 0 nothing
                                    * is tested, and the column must say so */
@@ -1412,7 +1762,8 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
                               tr.move_match * 100.0f);
         else           printf("  %7s  %5s", "-", "-");
     }
-    printf("  %6d  %7.4f", live_weights(), avg_abs_weight());
+    printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), avg_abs_weight(),
+           avg_first_pass_phase(), 100.0 * live_death_ratio());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.0f",
@@ -1422,6 +1773,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
     fflush(stdout);
 
     theta = theta_raw;                 /* training resumes on the raw iterate */
+    run_pass_weight = pass_raw;        /* and on the raw pass weight */
     save_weights(iterations, total_positions, elapsed_buf);
     /* Without a test set teMSE is identically 0, so "a new minimum" fires once on
      * the baseline row and never again — -best would be frozen at the UNTRAINED
@@ -1537,12 +1889,16 @@ int main(int argc, char **argv) {
     TOTAL = ppat_total_weights();
     theta           = calloc(TOTAL, sizeof(float));
     if (cfg_load) {
-        float *loaded = ppat_load_weights(cfg_load);
+        /* A loaded model's own pass weight carries over — fine-tuning continues
+         * the controller rather than restarting it.  An unflagged file has none,
+         * so conversion starts from 0. */
+        float *loaded = ppat_load_weights(cfg_load, NULL, &run_pass_weight);
         if (!loaded) { fprintf(stderr, "failed to load weights\n"); exit(1); }
         TOTAL = ppat_total_weights();
         free(theta);
         theta = loaded;
     }
+
 
     /* Reference model for the directWR column.  Loaded AFTER the run's own weights,
      * because ppat_load_weights rebuilds the global canon table for the file's
@@ -1553,7 +1909,7 @@ int main(int argc, char **argv) {
     run_phases  = ppat_phase_count;
     if (cfg_ref_weights) {
         const int run_total = TOTAL;
-        ref_theta = ppat_load_weights(cfg_ref_weights);
+        ref_theta = ppat_load_weights(cfg_ref_weights, &ref_early_pass, &ref_pass_weight);
         if (!ref_theta) {
             fprintf(stderr, "WARNING: --ref-weights %s could not be loaded"
                             " — directWR and WR columns disabled\n", cfg_ref_weights);
@@ -1565,6 +1921,12 @@ int main(int argc, char **argv) {
         use_run_model();                        /* put the run's encoding back */
         TOTAL = run_total;
     }
+
+    /* Live-position set for the live% column: unconditional, and after the data load has
+     * fixed topo_size.  Not inside the --ref-weights block — with
+     * --ref-weights none that path is skipped and the set would stay empty,
+     * which reads as a column of zeros rather than as a missing measurement. */
+    build_live_positions(topo_size);
 
     /* Warm-start (--init-phase-scale present): seed phase P's weights from the
      * already-trained phase P+1, scaled by sc (the endgame-first chain). Only the
@@ -1643,7 +2005,7 @@ int main(int argc, char **argv) {
                cfg_ref_weights, ref_lib_cap, ref_phases);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
-    printf("  %6s  %7s", "nWts", "avgW");
+    printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedS", "posMs", "pos/s");

@@ -140,7 +140,7 @@ bool   g3_undo(Game3 *g);                  /* returns false if op stack empty */
 bool   g3_is_legal(const Game3 *g, int32_t idx);              /* uses g->current */
 bool   g3_is_legal_for(const Game3 *g, int32_t idx, int8_t color);
 bool   g3_is_valid_move(const Game3 *g, int32_t idx);         /* legal + not true eye */
-bool   g3_is_true_eye(const Game3 *g, int32_t idx);
+bool   g3_is_true_eye_at(const Game3 *g, int32_t idx);
 
 /* Internal helpers (exposed for inlining at call sites that already know color) */
 bool   g3_is_single_suicide(const Game3 *g, int32_t idx, int8_t color);

@@ -76,18 +76,27 @@ static inline int ppat_total_weights(void) {
 
 /* Extract features for all legal non-true-eye moves into `st`. */
 void     ppat_extract     (const Game2 *g, PpatState *st);
-int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights, Rng *rng);
+/* early_pass: offer PASS as a candidate at logit 0.  It is a property of the
+ * MODEL, not of the process: a model trained without the anchor has an
+ * arbitrary absolute logit level, so the caller passes the flag that travels
+ * with `weights` (ppat_load_weights reports it).  A directWR match plays two
+ * models with different flags through this one function. */
+int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights,
+                           bool early_pass, float pass_logit, Rng *rng);
 
 /* ── Weight file I/O (JS-compatible format) ────────────────────────────────── */
 
 /* Save weights to a JS module file.  comment is optional (NULL ok). */
 void  ppat_save_weights(const char *path, const float *weights, int total,
+                        bool early_pass, float pass_weight,
                         const char *comment);
 
 /* Load weights from a JS module file.  Sets ppat_phase_count from the file.
  * Returns malloc'd float array of size ppat_total_weights(), or NULL on error
  * (including legacy ladder files, which are no longer supported).
  * Caller must free(). */
-float *ppat_load_weights(const char *path);
+/* out_early_pass / out_pass_weight (both nullable) receive the file's earlyPass
+ * declaration and its learned pass logit. */
+float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass_weight);
 
 #endif /* PPAT_H */

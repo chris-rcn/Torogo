@@ -419,10 +419,10 @@ static void test_policy_move(void) {
     float *weights = calloc(total, sizeof(float));
     PpatState st;
     memset(&st, 0, sizeof(st));
-    int32_t m = ppat_policy_move(&g, &st, weights, &rng);
+    int32_t m = ppat_policy_move(&g, &st, weights, false, 0.0f, &rng);
     free(weights);
     check("policy: returns legal move", m == PASS || g2_is_legal(&g, m));
-    check("policy: not a true eye", m == PASS || !g2_is_true_eye(&g, m));
+    check("policy: not a true eye", m == PASS || !g2_is_true_eye_at(&g, m));
 }
 
 static void test_consistency_with_js(void) {
@@ -456,11 +456,11 @@ static void test_save_load_weights(void) {
     for (int i = 0; i < total; i++) weights[i] = (float)i * 0.001f;
 
     const char *path = "/tmp/test_ppat_weights.js";
-    ppat_save_weights(path, weights, total, "test");
+    ppat_save_weights(path, weights, total, false, 0.0f, "test");
 
     int saved_phases = ppat_phase_count;
     ppat_phase_count = 999; /* corrupt it to verify load restores */
-    float *loaded = ppat_load_weights(path);
+    float *loaded = ppat_load_weights(path, NULL, NULL);
     check("save/load: load succeeded", loaded != NULL);
     check("save/load: phases restored", ppat_phase_count == saved_phases);
     check("save/load: total matches", ppat_total_weights() == total);

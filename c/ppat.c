@@ -393,7 +393,17 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
         /* Combined true-eye check + adj_val computation.
          * Reads gid and ls only once per neighbor. */
+        /* Diagonals are read BEFORE the eye check, which needs the hostile
+         * count: these are the same four reads the pattern index needs below,
+         * so sharing them costs nothing but the handful of eye points that used
+         * to skip out first. */
+        int vNE = diag_val(g2_dnbr[b4 + 1], g, cur);
+        int vSE = diag_val(g2_dnbr[b4 + 3], g, cur);
+        int vSW = diag_val(g2_dnbr[b4 + 2], g, cur);
+        int vNW = diag_val(g2_dnbr[b4],     g, cur);
+
         int vN, vS, vW, vE;
+        bool eye;
         {
             int friend_count = 0, empty_count_e = 0;
             int32_t first_gid = -2, same_group = 0;
@@ -423,18 +433,17 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             CHECK_AND_ADJ(c2, ni2, vW);
             CHECK_AND_ADJ(c3, ni3, vE);
             #undef CHECK_AND_ADJ
-            /* THE eye rule lives in g2_is_eye; the counts above are handed to
-             * it so it need not rescan.  This used to be an inlined copy that
-             * had drifted (three FRIENDLY diagonals instead of at most one
-             * HOSTILE), which made the playout fill multi-chain eyes and kill
-             * live groups. */
-            if (g2_is_eye(g, b4, cur, friend_count, empty_count_e, same_group)) continue;
+            eye = g2_is_eyelike(friend_count, empty_count_e, same_group,
+                                (vNE == 2) + (vSE == 2) + (vSW == 2) + (vNW == 2));
         }
-
-        int vNE = diag_val(g2_dnbr[b4 + 1], g, cur);
-        int vSE = diag_val(g2_dnbr[b4 + 3], g, cur);
-        int vSW = diag_val(g2_dnbr[b4 + 2], g, cur);
-        int vNW = diag_val(g2_dnbr[b4],     g, cur);
+        /* THE playout eye rule lives in g2_is_eyelike; the counts above are
+         * handed to it so it need not rescan.  Playouts prune MORE than a root
+         * generator may: g2_is_eyelike adds the multi-chain wall with one
+         * hostile diagonal, which g2_is_true_eye leaves legal because it cannot
+         * prove it is never a move.  This used to be an inlined copy that had
+         * drifted, which made the playout fill multi-chain eyes and kill live
+         * groups. */
+        if (eye) continue;
 
         const int _R = 2 * ppat_lib_cap + 1;
         int raw = vN + _R*(vE + _R*(vS + _R*(vW + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
@@ -535,7 +544,8 @@ static inline float fast_expf(float x) {
     return v.f;
 }
 
-int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights, Rng *rng) {
+int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights,
+                         bool early_pass, float pass_logit, Rng *rng) {
     /* Uniform fast-path: skip feature extraction in the early game where the
      * policy is ≈ uniform.  Threshold is board fullness (cap-empty)/cap in [0,1].
      * g2_random_legal_move only reorders the empty list, so the const-cast is
@@ -559,6 +569,18 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights, Rn
         if (v > mx) mx = v;
     }
 
+    /* PASS as a candidate, at logit 0, only when the model was trained for it
+     * (early_pass, which travels with the weights; ppat-lib.js gates on the same
+     * flag, read from the file).
+     * The anchor adds no parameter — it IDENTIFIES one that already existed and
+     * was unconstrained, since adding a constant to every pattern weight shifts
+     * all logits equally and leaves the softmax unchanged.  With it pinned, the
+     * absolute level of the board logits means "how good a move must be to be
+     * worth playing", and SB fits that like any other weight.  Without it, the
+     * policy can only pass by exhausting the move list, so it must spend its
+     * probability mass on the board however bad the options are. */
+    if (early_pass && pass_logit > mx) mx = pass_logit;
+
     /* Compute unnormalized weights, sum, and sample */
     float sum = 0;
     for (int i = 0; i < n; i++) {
@@ -566,8 +588,11 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights, Rn
         logits_buf[i] = e;
         sum += e;
     }
+    float e_pass = early_pass ? fast_expf(pass_logit - mx) : 0.0f;
+    sum += e_pass;
 
     float r = rng_float(rng) * sum;
+    if (early_pass) { r -= e_pass; if (r <= 0) return PASS; }
     int chosen = n - 1;
     for (int i = 0; i < n; i++) {
         r -= logits_buf[i];
@@ -582,7 +607,7 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights, Rn
 #include <stdlib.h>
 
 void ppat_save_weights(const char *path, const float *weights, int total,
-                       const char *comment) {
+                       bool early_pass, float pass_weight, const char *comment) {
     FILE *f = fopen(path, "w");
     if (!f) { fprintf(stderr, "ppat_save_weights: cannot open %s\n", path); return; }
     fprintf(f, "'use strict';\n");
@@ -592,14 +617,18 @@ void ppat_save_weights(const char *path, const float *weights, int total,
         if (i > 0) fputc(',', f);
         fprintf(f, "%.9g", weights[i]);
     }
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d };\n",
-            ppat_phase_count, ppat_num_patterns, ppat_lib_cap);
+    /* earlyPass travels with the weights: a model trained against the pass
+     * anchor is a different policy from one trained without it, and its
+     * absolute logit level is only meaningful with the anchor in place. */
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g };\n",
+            ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
+            early_pass ? "true" : "false", pass_weight);
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
 }
 
-float *ppat_load_weights(const char *path) {
+float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass_weight) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "ppat_load_weights: cannot open %s\n", path); return NULL; }
     fseek(f, 0, SEEK_END);
@@ -626,6 +655,15 @@ float *ppat_load_weights(const char *path) {
     const char *lc = strstr(buf, "libCap:");
     int file_cap = lc ? atoi(lc + 7) : PPAT_LEGACY_LIB_CAP;
     ppat_init(file_cap);
+    /* earlyPass travels with the model, exactly as in ppat-lib.js: a file that
+     * does not declare it was trained without the pass anchor, so its absolute
+     * logit level is arbitrary and offering the pass would produce a frequency
+     * that is an accident of training.  Reported to the caller rather than
+     * stored: two models with different flags may be played in one process. */
+    const char *ep = strstr(buf, "earlyPass:");
+    if (out_early_pass) *out_early_pass = ep && strncmp(ep + 10, " true", 5) == 0;
+    const char *pw = strstr(buf, "passWeight:");
+    if (out_pass_weight) *out_pass_weight = pw ? (float)atof(pw + 11) : 0.0f;
     if (file_np != ppat_num_patterns) {
         fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected (libCap %d)\n",
                 file_np, ppat_num_patterns, file_cap);

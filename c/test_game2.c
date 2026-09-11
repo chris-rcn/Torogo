@@ -182,7 +182,7 @@ static void test_true_eye(void) {
     int same = (g.gid[n_n] == g.gid[n_s] && g.gid[n_s] == g.gid[n_w] &&
                 g.gid[n_w] == g.gid[n_e]);
     check("eye setup: all same group", same);
-    check("eye: center is true eye", g2_is_true_eye(&g, c));
+    check("eye: center is true eye", g2_is_true_eye_at(&g, c));
 }
 
 static void test_clone(void) {

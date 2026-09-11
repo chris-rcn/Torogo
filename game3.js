@@ -22,7 +22,7 @@ const PASS = -1;
 
 // Import coordStr from game2 for coordinate display
 const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
-const { coordStr } = Util.load('./game2.js', 'Game2');
+const { coordStr, isTrueEye } = Util.load('./game2.js', 'Game2');
 
 // Operation types (integers, not strings)
 const OP_ADD_STONE = 0;
@@ -732,16 +732,17 @@ class Game3 {
   // Returns { black, white } where white already includes komi.
   // ── Eye Detection ─────────────────────────────────────────────────────
 
-  // Check if position is a true eye (solid border, not multi-color)
+  // Check if position is a true eye (solid border, not multi-color).
+  // THE rule lives in game2.isTrueEye — see the note there on what it prohibits.
+  // This scans the four neighbours (and, only where they can matter, the four
+  // diagonals) and defers.
   isTrueEye(idx) {
     const color = this.current;
     const cells = this.cells;
     const gidArr = this._gid;
     const nbr = this._nbr;
-    const dnbr = this._dnbr;
     const base = idx * 4;
 
-    // Check all 4 neighbors
     let firstGid = -2, friendCount = 0, emptyCount = 0, sameGroup = 0;
     for (let i = 0; i < 4; i++) {
       const ni = nbr[base + i];
@@ -755,23 +756,13 @@ class Game3 {
         emptyCount++;
       }
     }
-
-    // 3 same-group friends + 1 empty: proto-eye, treat as true eye
-    if (friendCount === 3 && emptyCount === 1 && sameGroup === 3) return true;
-    if (friendCount < 4) return false;
-    // A wall that is already ONE chain cannot be cut, so the diagonals are
-    // irrelevant — deliberately more permissive than the rule below, and must
-    // stay ahead of it.
-    if (sameGroup === 4) return true;
-
-    // The wall spans several friendly chains: the question is whether the
-    // opponent can cut them apart, so count HOSTILE diagonals and allow one.
-    // (This previously demanded three FRIENDLY diagonals, counting an EMPTY
-    // diagonal against the eye.)  Toroidal board: every point is interior, so
-    // the allowance is one everywhere.  Kept in step with game2.js.
-    let hostile = 0;
-    for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) hostile++;
-    return hostile <= 1;
+    let enemyDiag = 0;
+    if (friendCount === 4) {
+      const dnbr = this._dnbr;
+      for (let i = 0; i < 4; i++) if (cells[dnbr[base + i]] === -color) enemyDiag++;
+    }
+    // The bare name is game2's module-level RULE, not this method.
+    return isTrueEye(friendCount, emptyCount, sameGroup, enemyDiag);
   }
 
   // ── Group Query ────────────────────────────────────────────────────────────

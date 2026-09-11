@@ -9,7 +9,7 @@
 // Positions are ASCII boards parsed by game2's parseBoard: X black, O white,
 // . empty.  The point under test is marked in the comment above each board.
 
-const { parseBoard, BLACK, WHITE } = require('./game2.js');
+const { parseBoard, BLACK, WHITE, isTrueEye, isEyelike } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 
 let pass = 0, fail = 0, known = 0;
@@ -72,13 +72,47 @@ section('same-chain wall');
         'same-chain wall is an eye regardless of the diagonals');
 }
 
-// ── multi-chain walls: the diagonal rule decides ──────────────────────────────
+// ── multi-chain walls: prohibited only with NO hostile diagonal ──────────────
 
 section('multi-chain wall');
 {
+  // Four white stones around the centre, in separate chains, with no hostile
+  // diagonal at all.  Prohibited — not because chain identity hides anything,
+  // but because playing here is PROVABLY never a move: it cannot capture, no
+  // adjacent chain can be in atari here, and the opponent can never play here
+  // either (a black stone would have no liberties and nothing to capture), so
+  // the connection keeps forever.
+  const g = parseBoard(`
+    . . . . .
+    . . O . .
+    . O . O .
+    . . O . .
+    . . . . .`, WHITE);
+  const c = centre(g);
+  const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, gid = g._gid;
+  let friends = 0; const gids = new Set();
+  for (let d = 0; d < 4; d++) { const j = nbr[c * 4 + d]; if (cells[j] === WHITE) { friends++; gids.add(gid[j]); } }
+  let hostileDiag = 0;
+  for (let d = 0; d < 4; d++) if (cells[dnbr[c * 4 + d]] === BLACK) hostileDiag++;
+  check(friends === 4, 'all four orthogonals are friendly');
+  check(gids.size > 1, 'they span more than one chain');
+  check(hostileDiag === 0, 'and no diagonal is hostile');
+  check(g.isLegal(c) === true, 'connecting there is legal');
+  check(g.isTrueEye(c) === true,
+        'multi-chain wall with no hostile diagonal is prohibited');
+  // The proof's load-bearing step: no adjacent chain is in atari here, so
+  // skipping the point can never cost a capture.
+  let inAtari = 0;
+  for (let d = 0; d < 4; d++) if (g._ls[gid[nbr[c * 4 + d]]] === 1) inAtari++;
+  check(inAtari === 0, 'and no adjacent chain is in atari there');
+}
+{
   // Four white stones around the centre, in two chains, with ONE hostile
-  // diagonal and one empty — an eye under the standard rule (at most one
-  // hostile diagonal), which does not care that the wall spans two chains.
+  // diagonal and one empty.  NOT prohibited: the diagonals ARE in the ninecell
+  // a policy trains on, so the policy can learn how often connecting here is
+  // right.  Connecting matters precisely when an EMPTY diagonal is later taken
+  // by the opponent and the eye becomes false — the case a static diagonal
+  // count gets wrong.
   const g = parseBoard(`
     . . . . .
     . . O O .
@@ -93,9 +127,9 @@ section('multi-chain wall');
   for (let d = 0; d < 4; d++) if (cells[dnbr[c * 4 + d]] === BLACK) hostileDiag++;
   check(friends === 4, 'all four orthogonals are friendly');
   check(gids.size > 1, 'they span more than one chain');
-  check(hostileDiag <= 1, 'at most one hostile diagonal — an eye by the standard rule');
-  check(g.isTrueEye(c) === true,
-        'multi-chain wall with one hostile diagonal is an eye');
+  check(hostileDiag === 1, 'exactly one hostile diagonal — an eye under the OLD rule');
+  check(g.isTrueEye(c) === false,
+        'multi-chain wall with a hostile diagonal is left to the policy');
 }
 {
   // A genuine FALSE eye: four friendly orthogonals in separate chains with
@@ -107,6 +141,33 @@ section('multi-chain wall');
     . X O X .
     . . . . .`, WHITE);
   check(g.isTrueEye(centre(g)) === false, 'false eye (hostile diagonals) is not an eye');
+}
+
+// ── isEyelike: the playout rule, a strict superset ───────────────────────────
+// Playouts may prune more than a root generator: isEyelike adds the multi-chain
+// wall with ONE hostile diagonal, which isTrueEye leaves legal.
+
+section('isEyelike');
+{
+  const cases = [];
+  for (let f = 0; f <= 4; f++)
+    for (let e = 0; e <= 4 - f; e++)
+      for (let sg = 0; sg <= f; sg++)
+        for (let d = 0; d <= 4; d++) cases.push([f, e, sg, d]);
+  let superset = true, extra = 0;
+  for (const [f, e, sg, d] of cases) {
+    const a = isTrueEye(f, e, sg, d), b = isEyelike(f, e, sg, d);
+    if (a && !b) superset = false;
+    if (b && !a) { extra++; if (!(f === 4 && d === 1)) superset = false; }
+  }
+  check(superset, 'isEyelike prohibits everything isTrueEye does, and nothing else beyond f=4,d=1');
+  check(extra > 0, 'and it does prohibit strictly more');
+  check(isEyelike(4, 0, 2, 1) === true  && isTrueEye(4, 0, 2, 1) === false,
+        'multi-chain wall, one hostile diagonal: eyelike but not a true eye');
+  check(isEyelike(4, 0, 2, 2) === false && isTrueEye(4, 0, 2, 2) === false,
+        'two hostile diagonals: neither');
+  check(isEyelike(4, 0, 4, 4) === true,
+        'a single-chain wall stays an eye at any diagonal count');
 }
 
 // ── captures are never eye-blocked ────────────────────────────────────────────

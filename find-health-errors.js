@@ -29,6 +29,7 @@ const path = require('path');
 const { Game2, parseMove } = require('./game2.js');
 const Util = require('./util.js');
 const VPat = require('./vpatterns.js');
+const HL = require('./health-lib.js');
 const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
@@ -57,7 +58,7 @@ const MIN_Q = parseFloat(opts['min-q'] !== undefined ? opts['min-q'] : '0');
 const MAX_Q = parseFloat(opts['max-q'] !== undefined ? opts['max-q'] : '1');
 const rng = makeRng(parseInt(opts.seed || '23', 10) || 1);
 
-const health = VPat.resolveHealthModel(opts.health);
+const health = HL.resolveHealthModel(opts.health);
 const raw = require(path.resolve(opts.health));
 // The model records the distribution it was fitted on; sample from that same
 // one, or the errors found would be about a mismatch rather than the model.
@@ -153,8 +154,8 @@ for (let gi = 0; gi < GAMES; gi++) {
   const cells = pos.cells, gid = pos._gid, ls = pos._ls, nbr = pos._nbr, dnbr = pos._dnbr;
 
   // chains of this position, each with the model's prediction
-  const { chains, byGid } = VPat.chainsOf(cells, nbr, gid);
-  VPat.chainHealthAll(health, cells, nbr, dnbr, gid, ls, chains, byGid);
+  const { chains, byGid } = HL.chainsOf(cells, nbr, gid);
+  HL.chainHealthAll(health, cells, nbr, dnbr, gid, ls, chains, byGid);
   const pred = new Float64Array(chains.length);
   for (let i = 0; i < chains.length; i++) pred[i] = chains[i].p;
 

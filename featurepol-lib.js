@@ -99,6 +99,7 @@ const { PASS, BLACK }          = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
 const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
 const VPatterns                = Util.load('./vpatterns.js', 'VPatterns');
+const HealthLib                = Util.load('./health-lib.js', 'HealthLib');
 const { makeIntMap }           = Util.load('./int-map.js', 'IntMap');
 
 // ── 32-bit hashing ────────────────────────────────────────────────────────────
@@ -525,7 +526,7 @@ function _healthLoad() {
   if (!envPath && typeof window === 'undefined') {
     throw new Error('featurepol: the adjHealth<n> feature needs a health model — set FP_HEALTH_DATA to a train-health.js save file');
   }
-  _healthModel = VPatterns.resolveHealthModel(envPath || '');
+  _healthModel = HealthLib.resolveHealthModel(envPath || '');
   return _healthModel;
 }
 let _hpP = new Uint8Array(0);
@@ -535,8 +536,8 @@ function _healthPrepare(ctx) {
   const model = _healthLoad();
   if (_hpP.length < cap) _hpP = new Uint8Array(cap);
   _hpP.fill(0, 0, cap);
-  const { chains, byGid } = VPatterns.chainsOf(cells, nbr, gid);
-  VPatterns.chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid);
+  const { chains, byGid } = HealthLib.chainsOf(cells, nbr, gid);
+  HealthLib.chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid);
   for (let i = 0; i < chains.length; i++) {
     const r = chains[i];
     let v = (r.p * 255) | 0;

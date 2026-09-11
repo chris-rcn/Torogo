@@ -237,7 +237,10 @@ bool g3_is_legal(const Game3 *g, int32_t idx) {
     return g3_is_legal_for(g, idx, g->current);
 }
 
-bool g3_is_true_eye(const Game3 *g, int32_t idx) {
+/* THE rule lives in g2_is_true_eye (c/game2.c) — see the note there.  This scans the
+ * four neighbours (and, only where they can matter, the four diagonals) and
+ * defers. */
+bool g3_is_true_eye_at(const Game3 *g, int32_t idx) {
     const int8_t color = g->current;
     const int32_t base = idx * 4;
     int32_t first_gid = -2;
@@ -254,22 +257,15 @@ bool g3_is_true_eye(const Game3 *g, int32_t idx) {
             empty_count++;
         }
     }
-    if (friend_count == 3 && empty_count == 1 && same_group == 3) return true;
-    if (friend_count < 4) return false;
-    /* Already one chain: nothing to cut, diagonals irrelevant.  Must stay
-     * ahead of the rule below, which is stricter. */
-    if (same_group == 4) return true;
-    /* Multi-chain wall: count HOSTILE diagonals and allow one (previously it
-     * demanded three FRIENDLY diagonals, so an EMPTY diagonal counted against
-     * the eye).  Toroidal board — every point is interior.  In step with
-     * game3.js and c/game2.c. */
-    int hostile = 0;
-    for (int i = 0; i < 4; i++) if (g->cells[g->dnbr[base + i]] == -color) hostile++;
-    return hostile <= 1;
+    int enemy_diag = 0;
+    if (friend_count == 4)
+        for (int i = 0; i < 4; i++)
+            if (g->cells[g->dnbr[base + i]] == -color) enemy_diag++;
+    return g2_is_true_eye(friend_count, empty_count, same_group, enemy_diag);
 }
 
 bool g3_is_valid_move(const Game3 *g, int32_t idx) {
-    return g3_is_legal(g, idx) && !g3_is_true_eye(g, idx);
+    return g3_is_legal(g, idx) && !g3_is_true_eye_at(g, idx);
 }
 
 /* ── Play ──────────────────────────────────────────────────────────────────── */

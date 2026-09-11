@@ -5,7 +5,7 @@
 (function () {
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-const { PASS, isEye } = _isNode ? require('./game2.js') : window.Game2;
+const { PASS, isEyelike } = _isNode ? require('./game2.js') : window.Game2;
 const Util = _isNode ? require('./util.js') : window.Util;
 
 // ── D4 position permutations ──────────────────────────────────────────────────
@@ -451,17 +451,23 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
       if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = s_; }
       else vE2 = _LC + s_; }
 
-    // THE eye rule lives in game2.isEye; the counts above are handed to it so
-    // it need not rescan.  This used to be an inlined copy that had drifted
-    // (three FRIENDLY diagonals instead of at most one HOSTILE), which made the
-    // playout fill multi-chain eyes and kill live groups.
-    if (isEye(cells, dnbr, b4, cur, friendCount, emptyNbr, sameGroup)) continue;
-
-    // Diag values
+    // Diag values.  Read BEFORE the eye check, which needs the hostile-diagonal
+    // count: these are the same four reads the pattern index needs below, so
+    // sharing them costs nothing but the handful of eye points that used to
+    // skip out first.
     const cNE2 = cells[dnbr[b4 + 1]], vNE = cNE2 === 0 ? 0 : (cNE2 === cur ? 1 : 2);
     const cSE2 = cells[dnbr[b4 + 3]], vSE = cSE2 === 0 ? 0 : (cSE2 === cur ? 1 : 2);
     const cSW2 = cells[dnbr[b4 + 2]], vSW = cSW2 === 0 ? 0 : (cSW2 === cur ? 1 : 2);
     const cNW2 = cells[dnbr[b4]],     vNW = cNW2 === 0 ? 0 : (cNW2 === cur ? 1 : 2);
+
+    // THE playout eye rule lives in game2.isEyelike; the counts above are
+    // handed to it so it need not rescan.  Playouts prune MORE than a root
+    // generator may: isEyelike adds the multi-chain wall with one hostile
+    // diagonal, which isTrueEye leaves legal because it cannot prove it is never a
+    // move.  This used to be an inlined copy that had drifted, which made the
+    // playout fill multi-chain eyes and kill live groups.
+    if (isEyelike(friendCount, emptyNbr, sameGroup,
+                  (vNE === 2) + (vSE === 2) + (vSW === 2) + (vNW === 2))) continue;
 
     const rawIdx = vN + _R*(vE2 + _R*(vS2 + _R*(vW2 + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
 
@@ -604,6 +610,21 @@ function ppatMove(game, state, model, rng = Math) {
     if (v > max) max = v;
   }
 
+  // PASS as a candidate, available ONLY to a model whose weights file declares
+  // earlyPass — see loadWeights.  Its logit is the model's LEARNED passWeight:
+  // SB cannot fit it (the update along that direction is Cov(z, passed), which
+  // vanishes when an early mutual stop is outcome-neutral), so train_ppat drives
+  // it with a control loop on whether the final board still had an atari.
+  // Because softmax is shift-invariant it is a threshold against the LOG-SUM-EXP
+  // of the board moves, not the best one, so passing also gets likelier as
+  // candidates run out rather than only as they get worse.
+  // model.passLogit overrides the file's weight, for tuning experiments only.
+  const passOn = model.earlyPass === true;
+  const passLogit = !passOn ? 0
+                  : model.passLogit !== undefined ? model.passLogit
+                  : (model.passWeight || 0);
+  if (passOn && passLogit > max) max = passLogit;
+
   // Compute unnormalized weights and sample in two passes
   let sum = 0;
   for (let i = 0; i < n; i++) {
@@ -611,8 +632,12 @@ function ppatMove(game, state, model, rng = Math) {
     _logits[i] = e;
     sum += e;
   }
+  const ePass = passOn ? _fastExp(passLogit - max) : 0;
+  sum += ePass;
 
-  let r = rng.random() * sum, chosen = n - 1;
+  let r = rng.random() * sum;
+  if (passOn) { r -= ePass; if (r <= 0) return PASS; }
+  let chosen = n - 1;
   for (let i = 0; i < n; i++) { r -= _logits[i]; if (r <= 0) { chosen = i; break; } }
   return state.moves[chosen];
 }
@@ -652,7 +677,16 @@ function loadWeights(pathOrObj) {
   for (let i = phases * nPat; i < raw.weights.length; i++)
     if (raw.weights[i] !== 0) { skipLocal = false; break; }
   if (skipLocal) console.log('ppat loadWeights: local weights all zero, skipping local feature extraction');
-  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal };
+  // Early pass travels with the model and is OFF unless the file says the
+  // model was trained for it.  The pass logit is pinned at 0, so the board
+  // weights' ABSOLUTE level is the threshold — and in a model trained without
+  // the anchor that level is arbitrary, because adding a constant to every
+  // pattern weight shifts all logits equally and leaves the softmax unchanged.
+  // Enabling it on such a model therefore produces a pass frequency that is an
+  // accident of training, not a decision.
+  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
+           earlyPass: raw.earlyPass === true,
+           passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }
 
 const PPatterns = {

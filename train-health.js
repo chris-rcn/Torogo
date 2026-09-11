@@ -148,7 +148,7 @@ const fs = require('fs');
 const path = require('path');
 const { Game2, parseMove } = require('./game2.js');
 const Util = require('./util.js');
-const VPat = require('./vpatterns.js');
+const HL = require('./health-lib.js');
 const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
@@ -232,10 +232,17 @@ const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
 const FOE_MIN_BUCKETS = parseInt(opts['foe-health-min-buckets'] !== undefined
   ? opts['foe-health-min-buckets'] : '5', 10);
 const NEIGHBOUR_ON = FHM_BUCKETS > 0 || FOE_MIN_BUCKETS > 0;
-// Same field names a health model uses, so vpatterns.neighbourHealthKeys takes
-// this and a scored model interchangeably.
-const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS };
 const ITERATIONS = parseInt(opts.iterations !== undefined ? opts.iterations : '2', 10);
+// What a chain's neighbours are assumed to be worth before the first
+// propagation pass.  Measured on the full corpus (friend 7, iterations 2):
+// 0.5 gave exc 0.0302 and the true base rate 0.7541 gave 0.0310, a gap inside
+// the row jitter, so 0.6 splits them.  Recorded in the saved model because
+// inference has to start from the same place.
+const INIT_HEALTH = 0.6;
+// Same field names a health model uses, so health-lib's neighbourHealthKeys and
+// propagateHealth take this and a scored model interchangeably.
+const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
+                 iterations: ITERATIONS, initHealth: INIT_HEALTH };
 // 2 + 2*maxLibs states: empty, the subject chain, then friendly-other and
 // enemy each split by capped liberty count.  Splitting the SUBJECT chain by
 // its own liberty count was tried and measured worse at every learning rate
@@ -244,12 +251,6 @@ const ITERATIONS = parseInt(opts.iterations !== undefined ? opts.iterations : '2
 // while halving the observations behind each key.
 const N_STATES = 2 + 2 * OTHER_MAX_LIBS;
 let FLOOR = opts.floor !== undefined ? parseFloat(opts.floor) : null;
-// What a chain's neighbours are assumed to be worth before the first
-// propagation pass.  Measured on the full corpus (friend 7, iterations 2):
-// 0.5 gave exc 0.0302 and the true base rate 0.7541 gave 0.0310, a gap inside
-// the row jitter, so 0.6 splits them.  Recorded in the saved model because
-// inference has to start from the same place.
-const INIT_HEALTH = 0.6;
 const SAVE = opts.save || `out/health-${Math.random().toString(36).slice(2, 10)}.js`;
 const PHASE_BINS = 4;
 const area = SIZE * SIZE;
@@ -317,9 +318,9 @@ const makeBuf = () => ({ exShapes: [], exStart: [], exLen: [],
 // Propagation scratch: at most one chain per point.  The neighbour relations
 // and the key computation come from vpatterns, so what is trained here and what
 // is scored there cannot drift.
-const _health = new Float64Array(area), _healthNext = new Float64Array(area);
-const NB_SLOTS = 2;   // friendHealthMax, foeHealthMin
-const _nb = VPat.makeNeighbourhoods(), _nbKeys = new Int32Array(NB_SLOTS);
+const _baseZ = new Float64Array(area);
+const NB_SLOTS = HL.NB_SLOTS;   // friendHealthMax, foeHealthMin
+const _nb = HL.makeNeighbourhoods();
 
 // One position's observations: every chain contributes one example — its
 // liberties' ninecells, then its stones'.
@@ -332,19 +333,19 @@ function collectObs(game, phase, buf) {
   // vpatterns, so what is trained here and what is scored there cannot drift.
   // chainsOf's chain order IS the example order, so a record's .idx indexes
   // the example arrays directly.
-  const { chains, byGid } = VPat.chainsOf(cells, nbr, gid);
+  const { chains, byGid } = HL.chainsOf(cells, nbr, gid);
   // Chains PROVEN uncapturable are pinned to health 1 rather than predicted,
   // exactly as vpatterns.chainHealthAll does at scoring time.  Their gradient
   // is then zero on its own (y = p = 1), so they stop dragging the liberty
   // one-hot: a 19-stone group with two eyes is not evidence that 2 liberties
   // is survivable.
-  VPat.markLiveChains(cells, nbr, gid, dnbr, chains, byGid);
+  HL.markLiveChains(cells, nbr, gid, dnbr, chains, byGid);
   for (const c of chains) {
     const owner = c.c, libs = c.libs, g0 = c.gid;
     const start = exShapes.length;
     // Shared with the C family's survival attribute (vpatterns.chainSurvKeys):
     // liberty ninecells first, then stone ninecells.
-    VPat.chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, g0, libs, c.stones,
+    HL.chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, g0, libs, c.stones,
                        OTHER_MAX_LIBS, STONE_SALT, exShapes, MAX_LIBS,
                        MAX_JOIN_LIBS, byGid);
     if (VERBOSE) {
@@ -381,25 +382,17 @@ function collectObs(game, phase, buf) {
 function propagate(buf, cells, nbr, gid, chains, byGid) {
   const { exShapes, exStart, exLen, exNb, exLive } = buf;
   const nCh = exStart.length;
-  VPat.neighbourhoodsOf(cells, nbr, gid, chains, byGid, FHM_BUCKETS > 0, FOE_MIN_BUCKETS > 0, _nb);
-  for (let i = 0; i < nCh; i++) _health[i] = exLive[i] ? 1 : INIT_HEALTH;
-  for (let it = 1; ; it++) {
-    for (let i = 0; i < nCh; i++) {
-      const nk = VPat.neighbourHealthKeys(_nb, i, _health, NB_CFG, _nbKeys);
-      const b = i * NB_SLOTS;
-      for (let k = 0; k < NB_SLOTS; k++) exNb[b + k] = k < nk ? _nbKeys[k] : 0;
-    }
-    if (it >= ITERATIONS) break;
-    for (let i = 0; i < nCh; i++) {
-      if (exLive[i]) { _healthNext[i] = 1; continue; }
-      const lo = exStart[i], hi = lo + exLen[i], b = i * NB_SLOTS;
-      let z = bias;
-      for (let j = lo; j < hi; j++) z += weights.get(exShapes[j]) || 0;
-      for (let k = 0; k < NB_SLOTS; k++) { const key = exNb[b + k]; if (key !== 0) z += weights.get(key) || 0; }
-      _healthNext[i] = 1 / (1 + Math.exp(-z));
-    }
-    for (let i = 0; i < nCh; i++) _health[i] = _healthNext[i];
+  HL.neighbourhoodsOf(cells, nbr, gid, chains, byGid, FHM_BUCKETS > 0, FOE_MIN_BUCKETS > 0, _nb);
+  // The per-chain base logit: bias plus the chain's own ninecells and one-hots.
+  // Fixed for the whole propagation — the weights do not move until this
+  // position has been trained on — so it is summed once rather than per pass.
+  for (let i = 0; i < nCh; i++) {
+    const lo = exStart[i], hi = lo + exLen[i];
+    let z = bias;
+    for (let j = lo; j < hi; j++) z += weights.get(exShapes[j]) || 0;
+    _baseZ[i] = z;
   }
+  HL.propagateHealth(NB_CFG, weights, _baseZ, exLive, nCh, _nb, exNb);
 }
 
 // exc = loss - FLOOR: the only part of the loss a model can influence, since
@@ -498,9 +491,9 @@ printRow(COLS);
 // that bucket.
 if (VERBOSE) {
   for (let b = 0; b < FHM_BUCKETS; b++)
-    examples.set(VPat.chainFriendHealthKey((b + 0.5) / FHM_BUCKETS, FHM_BUCKETS), 'friendHealthMax=' + b);
+    examples.set(HL.chainFriendHealthKey((b + 0.5) / FHM_BUCKETS, FHM_BUCKETS), 'friendHealthMax=' + b);
   for (let b = 0; b < FOE_MIN_BUCKETS; b++)
-    examples.set(VPat.chainFoeMinHealthKey((b + 0.5) / FOE_MIN_BUCKETS, FOE_MIN_BUCKETS), 'foeHealthMin=' + b);
+    examples.set(HL.chainFoeMinHealthKey((b + 0.5) / FOE_MIN_BUCKETS, FOE_MIN_BUCKETS), 'foeHealthMin=' + b);
 }
 
 const t0 = Date.now();

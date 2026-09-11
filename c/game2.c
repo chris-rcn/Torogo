@@ -298,37 +298,54 @@ bool g2_is_capture(const Game2 *g, int32_t idx) {
     return false;
 }
 
-/* THE eye rule, in one place — the C twin of game2.js's isEye().  Callers that
- * already have the four orthogonal neighbours summarised (g2_is_true_eye, and
- * ppat.c's playout move filter) pass the counts in rather than rescanning; the
- * hostile-diagonal count is taken only on the branch that needs it.
+/* THE eye rule, in one place — the C twin of game2.js's isTrueEye().  Callers that
+ * already have the four orthogonal neighbours summarised (g2_is_true_eye_at, and
+ * ppat.c's playout move filter) pass the counts in rather than rescanning.
  *
- * Keep this shared.  ppat.c carried its own inlined copy that asked for three
- * FRIENDLY diagonals where this asks for at most one HOSTILE one.  Those differ
- * whenever a diagonal is EMPTY, so the playout filled multi-chain eyes that
- * g2_is_true_eye called eyes, killing live groups and corrupting every survival
- * label derived from it (found 2026-09-10, same drift as ppat-lib.js). */
-bool g2_is_eye(const Game2 *g, int base, int8_t color,
-               int friend_count, int empty_count, int same_group) {
+ * MAXIMALLY CONSERVATIVE: it prohibits only what a learner cannot see.  The
+ * ninecell a policy is trained on encodes each orthogonal as (colour, capped
+ * liberty count) and each diagonal as colour; it does NOT encode CHAIN
+ * IDENTITY.  So the two same-chain cases are prohibited — a policy could never
+ * tell them from their multi-chain lookalikes and the correct action differs.
+ *
+ * The third case is prohibited because it is PROVABLY never a move: with four
+ * friendly orthogonals and no hostile diagonal, playing here cannot capture (no
+ * enemy stone is adjacent), cannot save a chain (a chain in atari here forces
+ * all eight surrounding points to be one chain, making the move suicide),
+ * cannot be an urgent connection (by the same argument the opponent can never
+ * play here either, so the connection keeps forever), and cannot help a semeai
+ * (the point is a liberty of my own chains and of no enemy chain).  See the
+ * long note in game2.js.  The old "at most one hostile diagonal" heuristic
+ * stays gone: a multi-chain wall WITH a hostile diagonal is left to the policy,
+ * because there connecting first can genuinely be right.  Kept in step with
+ * game2.js. */
+bool g2_is_true_eye(int friend_count, int empty_count, int same_group, int enemy_diag) {
+    /* 3 same-group friends + 1 empty: proto-eye of one chain */
     if (friend_count == 3 && empty_count == 1 && same_group == 3) return true;
-    if (friend_count < 4) return false;
-    /* A wall that is already ONE chain cannot be cut, so the diagonals are
-     * irrelevant — deliberately more permissive than the rule below, and must
-     * stay ahead of it. */
+    if (friend_count != 4) return false;
+    /* a wall that is already ONE chain cannot be cut; filling is never right */
     if (same_group == 4) return true;
-    /* The wall spans several friendly chains: the question is whether the
-     * opponent can cut them apart, so count HOSTILE diagonals and allow one.
-     * (This previously demanded three FRIENDLY diagonals, counting an EMPTY
-     * diagonal against the eye, which missed ~79% of real eyes in late-game
-     * positions.)  Toroidal board: every point is interior, so the allowance
-     * is one everywhere.  Kept in step with game2.js. */
-    int hostile = 0;
-    for (int i = 0; i < 4; i++)
-        if (g->cells[g2_dnbr[base + i]] == -color) hostile++;
-    return hostile <= 1;
+    /* multi-chain wall with no hostile diagonal: provably never a move */
+    return enemy_diag == 0;
 }
 
-bool g2_is_true_eye(const Game2 *g, int32_t idx) {
+/* The PLAYOUT rule — the C twin of game2.js's isEyelike().  Everything
+ * g2_is_true_eye prohibits, plus one relaxation: a multi-chain wall with a single
+ * hostile diagonal.  Built on top of g2_is_true_eye so the two cannot drift apart.
+ *
+ * Unlike g2_is_true_eye this is NOT proved.  At one hostile diagonal the move still
+ * cannot capture, cannot save a chain (a chain in atari there must contain all
+ * four orthogonals, making the move suicide) and cannot help a semeai; what it
+ * loses is margin on the prophylactic connection — at zero hostile diagonals
+ * the opponent needs two moves to turn the point into a real cut, at one a
+ * single move does both.  Playouts only; a root candidate generator uses
+ * g2_is_true_eye.  See the long note in game2.js. */
+bool g2_is_eyelike(int friend_count, int empty_count, int same_group, int enemy_diag) {
+    if (g2_is_true_eye(friend_count, empty_count, same_group, enemy_diag)) return true;
+    return friend_count == 4 && enemy_diag == 1;
+}
+
+bool g2_is_true_eye_at(const Game2 *g, int32_t idx) {
     int8_t color = g->current;
     int base = idx * 4;
     int32_t first_gid = -2;
@@ -345,7 +362,13 @@ bool g2_is_true_eye(const Game2 *g, int32_t idx) {
             empty_count++;
         }
     }
-    return g2_is_eye(g, base, color, friend_count, empty_count, same_group);
+    /* Diagonals only matter for the multi-chain wall, so the scan is skipped
+     * for the (much commoner) points that cannot reach that case. */
+    int enemy_diag = 0;
+    if (friend_count == 4)
+        for (int i = 0; i < 4; i++)
+            if (g->cells[g2_dnbr[base + i]] == -color) enemy_diag++;
+    return g2_is_true_eye(friend_count, empty_count, same_group, enemy_diag);
 }
 
 /* ── Initialization ────────────────────────────────────────────────────────── */
@@ -578,7 +601,7 @@ int32_t g2_random_legal_move(Game2 *g, Rng *rng) {
     for (int end = ec - 1; end >= 0; end--) {
         int ri  = rng_below(rng, end + 1);
         int32_t idx = g->empty_cells[ri];
-        if (!g2_is_true_eye(g, idx) && g2_is_legal(g, idx)) return idx;
+        if (!g2_is_true_eye_at(g, idx) && g2_is_legal(g, idx)) return idx;
         int32_t t = g->empty_cells[end];
         g->empty_cells[ri]  = t;
         g->empty_cells[end] = idx;
