@@ -43,10 +43,10 @@ function makeWeights(minCap) {
 // arrangement, and 4×4 on its four corner 3×3 sub-windows (deliberately
 // lossy above 2×2 — distinct shapes may share weights, the trade hpatterns
 // measured at ~83% key fidelity for 3-state 3×3).
-// Colour canonicalisation compares the hash of the board against the hash of
-// the colour-inverted board: equal → colour-twin (zero value by symmetry,
+// Color canonicalisation compares the hash of the board against the hash of
+// the color-inverted board: equal → color-twin (zero value by symmetry,
 // dropped — all-empty and self-inverse-under-D4 patterns); else key = min,
-// polarity says which colouring won.  Leaves enter as raw + maxLibs + 1 (≥ 1: uh has an
+// polarity says which coloring won.  Leaves enter as raw + maxLibs + 1 (≥ 1: uh has an
 // absorbing element at -1, and 0 is unsafe as a map key downstream).
 function uh(a, b) {
   return (1234567 + a + b + Math.imul(a, b)) | 0;
@@ -58,9 +58,9 @@ function uh(a, b) {
 // each pairing opposite cells, giving D4 invariance.  Shared by the E
 // (eye-pair) family and train-health.js.
 //
-// Three-state alphabet by default (empty / owner's colour / enemy).  Pass
+// Three-state alphabet by default (empty / owner's color / enemy).  Pass
 // gid and chainGid for the FOUR-state alphabet, which splits the owner's
-// colour into "this chain" and "friendly but a different chain" — the
+// color into "this chain" and "friendly but a different chain" — the
 // distinction the strict eye rule needs, since four friendly stones around a
 // point make an eye only when they are all the SAME chain.
 //
@@ -71,53 +71,78 @@ function uh(a, b) {
 // state: splitting it too was measured worse, since its liberty count is
 // already implicit in how many liberty ninecells the chain emits.
 // Layout: 1 empty, then this-chain, friendly-other, enemy, each 1..maxLibs.
-function ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs) {
-  const b4 = l * 4;
-  const subj = 2;
-  const base2 = 2;                                         // friendly-other base
-  // No closures here: this runs once per liberty and per stone of every chain
-  // — order 900 calls per position — so the cell coders are module-level
-  // functions and the eight neighbours are read straight from the tables.
-  // xh4 pairs opposite cells; nbr order is N,S,W,E and dnbr NW,NE,SW,SE.
-  const n0 = nbr[b4], n1 = nbr[b4 + 1], n2 = nbr[b4 + 2], n3 = nbr[b4 + 3];
-  const m0 = dnbr[b4], m1 = dnbr[b4 + 1], m2 = dnbr[b4 + 2], m3 = dnbr[b4 + 3];
-  let o, d;
-  if (gid === undefined) {
-    o = xh4(_c3(cells, n0, owner), _c3(cells, n2, owner), _c3(cells, n3, owner), _c3(cells, n1, owner));
-    d = xh4(_c3(cells, m0, owner), _c3(cells, m1, owner), _c3(cells, m2, owner), _c3(cells, m3, owner));
-  } else if (ls === undefined) {
-    o = xh4(_c4(cells, gid, n0, owner, chainGid), _c4(cells, gid, n2, owner, chainGid),
-            _c4(cells, gid, n3, owner, chainGid), _c4(cells, gid, n1, owner, chainGid));
-    d = xh4(_c4(cells, gid, m0, owner, chainGid), _c4(cells, gid, m1, owner, chainGid),
-            _c4(cells, gid, m2, owner, chainGid), _c4(cells, gid, m3, owner, chainGid));
-  } else {
-    o = xh4(_cL(cells, gid, ls, n0, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, n2, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, n3, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, n1, owner, chainGid, subj, base2, maxLibs));
-    d = xh4(_cL(cells, gid, ls, m0, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, m1, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, m2, owner, chainGid, subj, base2, maxLibs),
-            _cL(cells, gid, ls, m3, owner, chainGid, subj, base2, maxLibs));
+// Exact index + canonicalisation table, the scheme ppat-lib has always used
+// (see its _buildTables): encode the eight cells in a fixed radix, then look the
+// raw index up in a table that maps it to its D4 orbit, built once per alphabet.
+//
+// This REPLACES a symmetric-combine hash used from 2026-09-09 to 2026-09-11.
+// That scheme paired opposite orthogonals and opposite diagonals through uh(),
+// which is symmetric, so it discarded the order within each pair
+// unconditionally — four order-discards on top of D4.  Measured against true D4
+// orbits: 46.2% fidelity at 3 states, 34.6% at 4, and 20.6% at the 6 states
+// every deployed health model used.  A table is both exact and faster.
+//
+// Positions in encoding order: N, E, S, W, NE, SE, SW, NW.  game2's nbr is
+// N,S,W,E and dnbr is NW,NE,SW,SE, so the reads below are permuted to match.
+const _D4 = (() => {
+  // index order: 0 N, 1 E, 2 S, 3 W, 4 NE, 5 SE, 6 SW, 7 NW
+  const ROT = [1, 2, 3, 0, 5, 6, 7, 4];   // 90 degrees: N->E, NE->SE, ...
+  const REF = [0, 3, 2, 1, 7, 6, 5, 4];   // mirror: E<->W, NE<->NW, SE<->SW
+  const ap = (p, q) => q.map(i => p[i]);
+  const out = [];
+  let cur = [0, 1, 2, 3, 4, 5, 6, 7];
+  for (let r = 0; r < 4; r++) { out.push(cur.slice()); out.push(ap(cur, REF)); cur = ap(cur, ROT); }
+  return out;
+})();
+
+// raw index -> D4 orbit id.  3^8 = 6561 entries canonicalising to 954 orbits,
+// built once at load: one pass, eight transforms each.
+const NC_STATES = 3, NC_RAW = 6561;
+const _CANON = (() => {
+  const S = NC_STATES, rawSize = NC_RAW;
+  const canonId = new Int32Array(rawSize);
+  const v = new Int32Array(8), tv = new Int32Array(8);
+  const idMap = new Map();
+  let next = 0;
+  for (let raw = 0; raw < rawSize; raw++) {
+    let r = raw;
+    for (let i = 0; i < 8; i++) { v[i] = r % S; r = (r / S) | 0; }
+    let minV = raw;
+    for (let d = 0; d < 8; d++) {
+      const p = _D4[d];
+      for (let i = 0; i < 8; i++) tv[p[i]] = v[i];
+      let enc = 0;
+      for (let i = 7; i >= 0; i--) enc = enc * S + tv[i];
+      if (enc < minV) minV = enc;
+    }
+    let id = idMap.get(minV);
+    if (id === undefined) { id = next++; idMap.set(minV, id); }
+    canonId[raw] = id;
   }
-  return uh(o, Math.imul(d, 31));
+  return canonId;
+})();
+
+
+// Canonical ninecell id for the point l, coded relative to `owner`: 3 states per
+// cell — empty, owner's colour, the other colour.  The chain-identity and
+// liberty-split alphabets were dropped 2026-09-11: color matched them on loss
+// with 2.6x fewer keys, and it is the one that keeps the canonicalisation table
+// at 3^8 = 6561 raw entries (954 orbits) instead of 1.68M.
+function ninecellId(cells, nbr, dnbr, l, owner) {
+  const b4 = l * 4;
+  const n0 = nbr[b4], n1 = nbr[b4 + 1], n2 = nbr[b4 + 2], n3 = nbr[b4 + 3];      // N,S,W,E
+  const m0 = dnbr[b4], m1 = dnbr[b4 + 1], m2 = dnbr[b4 + 2], m3 = dnbr[b4 + 3];  // NW,NE,SW,SE
+  // Encoding order N, E, S, W, NE, SE, SW, NW, to match _D4 above.
+  const c0 = _c3(cells, n0, owner) - 1, c1 = _c3(cells, n3, owner) - 1;
+  const c2 = _c3(cells, n1, owner) - 1, c3 = _c3(cells, n2, owner) - 1;
+  const c4 = _c3(cells, m1, owner) - 1, c5 = _c3(cells, m3, owner) - 1;
+  const c6 = _c3(cells, m2, owner) - 1, c7 = _c3(cells, m0, owner) - 1;
+  const raw = c0 + 3*(c1 + 3*(c2 + 3*(c3 + 3*(c4 + 3*(c5 + 3*(c6 + 3*c7))))));
+  return _CANON[raw];
 }
 // Cell coders for the three alphabets: 3-state, 4-state (chain-relative),
 // and the liberty-split alphabet.
 function _c3(cells, i, owner) { const c = cells[i]; return c === 0 ? 1 : c === owner ? 2 : 3; }
-function _c4(cells, gid, i, owner, chainGid) {
-  const c = cells[i];
-  return c === 0 ? 1 : c !== owner ? 4 : gid[i] === chainGid ? 2 : 3;
-}
-function _cL(cells, gid, ls, i, owner, chainGid, subj, base2, maxLibs) {
-  const c = cells[i];
-  if (c === 0) return 1;
-  const g = gid[i];
-  if (c === owner && g === chainGid) return subj;
-  let lib = ls[g];
-  if (lib > maxLibs) lib = maxLibs;
-  return (c === owner ? base2 : base2 + maxLibs) + lib;
-}
 
 function xh4(tl, tr, bl, br) {
   return uh(uh(tl, br), uh(tr, bl));
@@ -155,6 +180,14 @@ let _joinMark = null, _joinGen = 0;
 // HOW MANY they emit, which a sum cannot separate from a smaller chain whose
 // points happen to score higher.  One weight per capped count, its own salt to
 // stay clear of the liberty one-hot's key space.
+// Dense canonical id -> weight-map key.  Its own salt keeps the ninecells clear
+// of the one-hots' key space.
+const NINECELL_SALT = 0x1b873593 | 0;
+function _ncKey(id) {
+  const k = (Math.imul(id + 1, 0x27220A95) ^ NINECELL_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
 const CHAIN_STONE_SALT = 0x71c3a5d9 | 0;
 function chainStoneCountKey(nStones, cap) {
   const b = nStones > cap ? cap : nStones;
@@ -162,38 +195,6 @@ function chainStoneCountKey(nStones, cap) {
   return k === 0 ? 1 : k;
 }
 
-// PHASE salt, folded into every ninecell key so each shape gets its own weight
-// per phase bucket.  Buckets are BAND-MATCHED: they span the range of ENDPOINT
-// phases the model is actually fitted on, [minPhase + delta, maxPhase + delta],
-// not [0, 1].  The endpoint is what gets bucketed — the example is collected
-// after a delta-long prefix — so absolute bucketing put the boundaries in
-// arbitrary places: at max-phase 0.4 and delta 0.2 the data spans [0.20, 0.60],
-// which a 2-bucket [0,1] split cut 75/25 and a 4-bucket split left one bucket
-// empty and another a sliver.  Band-matched also makes the knob independent of
-// --delta, which otherwise shifts the whole range.  An additive phase term was tried first and bought nothing:
-// survival's phase dependence is not a shift, it is a change in what a shape
-// MEANS — two liberties early is a different proposition from two liberties
-// late — and only an interaction can express that.  Costs no time at all (the
-// same keys, differently valued); it costs key SPACE, multiplying the model by
-// the bucket count, which is affordable here in a way it was not for the
-// 195k-weight vpat patterns that shelved the same idea.
-const CHAIN_PHASE_SALT = 0x3d5b17a3 | 0;
-function chainPhaseSalt(bin, bins) {
-  if (bins <= 0) return 0;
-  let b = bin; if (b >= bins) b = bins - 1; if (b < 0) b = 0;
-  return (Math.imul(b + 1, 0xC2B2AE35) ^ CHAIN_PHASE_SALT) | 0;
-}
-// Endpoint phase -> band-matched bucket.  lo/hi are the endpoint range; a model
-// queried outside its band clamps to the end buckets rather than inventing new
-// ones.
-function phaseBinOf(phase, bins, lo, hi) {
-  if (bins <= 0) return 0;
-  const span = hi - lo;
-  if (!(span > 0)) return 0;
-  let b = Math.floor(((phase - lo) / span) * bins);
-  if (b >= bins) b = bins - 1; if (b < 0) b = 0;
-  return b;
-}
 
 const CHAIN_LIB_SALT = 0x2f1d3b77 | 0;
 function chainLibCountKey(nLibs, cap) {
@@ -255,20 +256,19 @@ function chainFoeMinHealthKey(p, buckets) {
 // always did.  Dropping BOTH is allowed and is the bottom of the ablation
 // ladder: the model is then the one-hots plus whatever neighbour propagation is
 // configured, which is the baseline the ninecells have to beat.
-function chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, chainGid, libs, stones,
-                       maxLibs, stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
+function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
+                       stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
                        stoneNinecells, libertyNinecells, subjectMaxStones,
-                       phaseBin, phaseBins) {
-  const phSalt = chainPhaseSalt(phaseBin, phaseBins);
+                       ) {
   if (libertyNinecells !== false) {
     for (const l of libs) {
-      const h = (ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs) ^ phSalt) | 0;
+      const h = _ncKey(ninecellId(cells, nbr, dnbr, l, owner));
       out.push(h === 0 ? 1 : h);
     }
   }
   if (stoneNinecells !== false) {
     for (const st of stones) {
-      const h = (ninecellHash(cells, nbr, dnbr, st, owner, gid, chainGid, ls, maxLibs) ^ stoneSalt ^ phSalt) | 0;
+      const h = (_ncKey(ninecellId(cells, nbr, dnbr, st, owner)) ^ stoneSalt) | 0;
       out.push(h === 0 ? 1 : h);
     }
   }
@@ -460,7 +460,7 @@ function neighbourHealthKeys(nb, i, health, cfg, out) {
 // without touching chainHealthAll.
 //
 // The proof implemented is TWO EYES OF A GROUP.  An empty point is an eye of a
-// group when all four of its orthogonal neighbours are stones of one colour;
+// group when all four of its orthogonal neighbours are stones of one color;
 // the group is the set of chains those neighbours belong to (one chain when a
 // single chain owns all four — the classic case — up to four).  Two eye points
 // with the SAME group are a proof of life for every chain in it: the opponent
@@ -550,23 +550,17 @@ let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Ar
 const _nb = makeNeighbourhoods(), _nbKeys = new Int32Array(2);
 function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
   const n = chains.length, w = model.weights;
-  // Phase from the chain records — no board scan needed, and it must match the
-  // 1 - empty/area the trainer used.
-  let _stones = 0;
-  for (let i = 0; i < n; i++) _stones += chains[i].stones.length;
-  const _phaseBin = phaseBinOf(_stones / cells.length, model.phaseBins,
-                               model.minPhase + model.delta, model.maxPhase + model.delta);
   if (_baseZ.length < n) {
     _baseZ = new Float64Array(n * 2);
   }
   for (let i = 0; i < n; i++) {
     const r = chains[i];
     _survScratch.length = 0;
-    chainSurvKeys(cells, nbr, dnbr, gid, ls, r.c, r.gid, r.libs, r.stones,
-                  model.otherMaxLibs, model.stoneSalt, _survScratch,
+    chainSurvKeys(cells, nbr, dnbr, gid, r.c, r.gid, r.libs, r.stones,
+                  model.stoneSalt, _survScratch,
                   model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
                   model.libertyNinecells, model.maxStones,
-                  _phaseBin, model.phaseBins);
+                  );
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -598,25 +592,15 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
 // lookups this costs per position.
 function _survIntern(raw) {
   if (!(raw.weights instanceof Map)) return raw;
-  // Field names follow train-health.js's CLI: maxLibs is the SUBJECT chain's
-  // liberty-count one-hot cap, otherMaxLibs the OTHER chains' alphabet cap.
-  // Files written before that swap used maxLibs for the alphabet cap and had
-  // no otherMaxLibs, so reading them here would silently re-interpret both —
-  // refuse instead.
-  if (raw.otherMaxLibs === undefined) {
-    throw new Error('health-lib: this health model predates the maxLibs/otherMaxLibs rename ' +
-                    '(no otherMaxLibs field) — retrain it with train-health.js');
-  }
   const w = makeWeights(raw.weights.size * 2);
   raw.weights.forEach((v, k) => w.set(k, v));
-  return { bias: raw.bias, otherMaxLibs: raw.otherMaxLibs, maxLibs: raw.maxLibs || 0,
+  return { bias: raw.bias, maxLibs: raw.maxLibs || 0,
            maxJoinLibs: raw.maxJoinLibs || 0, friendHealthMaxBuckets: raw.friendHealthMaxBuckets || 0,
            foeHealthMinBuckets: raw.foeHealthMinBuckets || 0, iterations: raw.iterations || 1,
            initHealth: raw.initHealth !== undefined ? raw.initHealth : 0.5,
            stoneNinecells: raw.stoneNinecells !== false,
            libertyNinecells: raw.libertyNinecells !== false,
            maxStones: raw.maxStones || 0,
-           phaseBins: raw.phaseBins || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
 }
@@ -690,11 +674,9 @@ const HealthLib = {
   makeWeights,
   uh,
   xh4,
-  ninecellHash,
+  ninecellId,
   chainLibCountKey,
   chainStoneCountKey,
-  chainPhaseSalt,
-  phaseBinOf,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,

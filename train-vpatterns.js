@@ -173,20 +173,6 @@ if (opts.spec) {
       }
       return phaseBins > 1 ? { size: 5, maxLibs: 0, phaseBins } : { size: 5, maxLibs: 0 };
     }
-    if (tok[0] === 'E') {
-      let body = tok.slice(1);
-      let phaseBins = 0;
-      const pm = /p(\d+)$/.exec(body);
-      if (pm) { phaseBins = parseInt(pm[1], 10); body = body.slice(0, -pm[0].length); }
-      const libGate = body === '' ? 8 : parseInt(body, 10);
-      if (!(libGate >= 2 && libGate <= 30)) {
-        console.error(`--spec: bad E token '${tok}' (expected E[<libGate 2-30>][pN])`);
-        process.exit(1);
-      }
-      const specE = { size: 6, maxLibs: 0, libGate };
-      if (phaseBins > 1) specE.phaseBins = phaseBins;
-      return specE;
-    }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
     const frozen = /f$/.test(mRaw);

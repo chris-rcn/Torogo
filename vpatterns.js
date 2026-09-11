@@ -16,7 +16,7 @@ const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
 // Chain health lives in health-lib.js — see the note at its head for why the
 // ninecell hash and its x-hash primitives went with it.
 const HL = _isNode ? require('./health-lib.js') : window.HealthLib;
-const { makeWeights, uh, xh4, ninecellHash,
+const { makeWeights, uh, xh4, ninecellId,
         chainsOf, chainHealthAll, resolveHealthModel } = HL;
 
 
@@ -30,16 +30,6 @@ const { makeWeights, uh, xh4, ninecellHash,
 
 
 
-// Unordered eye-pair key over two ninecellHash values (uh is symmetric).
-// Shared by the E family and train-health.js.  The optional rel code
-// types the pair by the two points' toroidal relationship (same-eyespace
-// neighbours mean something different from separated liberties); rel 0 is
-// the untyped key.
-function pairKey(ha, hb, rel) {
-  let k = (Math.imul(uh(ha, hb) + 1, 2654435761) ^ 0x3E9A17) | 0;
-  if (rel) k = (k ^ Math.imul(rel, 0x27d4eb2d)) | 0;
-  return k === 0 ? 1 : k;
-}
 
 // Fold the spec tag ((maxLibs << 3) | sizeCode) into a window hash so
 // different spec spaces cannot collide in the shared weight map.
@@ -58,7 +48,6 @@ function mixTag(h, tag) {
 function specToken(sp) {
   const ph = sp.phaseBins > 1 ? 'p' + sp.phaseBins : '';
   if (sp.size === 5) return 't' + ph;
-  if (sp.size === 6) return 'E' + (sp.libGate || 8) + ph;
   const body = sp.maxLibs === 0 ? 'L'
              : sp.maxLibs < 0 ? 'H' + (-sp.maxLibs)
              : String(sp.maxLibs);
@@ -183,15 +172,6 @@ function prepareSpecs(specs, opts) {
                     'removed on 2026-09-11 — retrain it without the C term');
   }
   const byMaxLibs = new Map();
-  // size 6 = the eye-pair family (token 'E[<libGate>][pN]'): for each chain
-  // with at most libGate liberties, one feature per unordered pair of
-  // NON-ADJACENT liberties, keyed by the pair of owner-relative t-hashed
-  // 3x3 neighbourhoods.  Two-eye safety is a conjunction of two separated
-  // local shapes; no window family can see conjunctions.  Non-incremental.
-  const eyeSpec = specs.find(sp => sp.size === 6);
-  const hasEyePairs = eyeSpec !== undefined;
-  const eyePairGate = hasEyePairs ? (eyeSpec.libGate || 8) : 0;
-  const eyePairPhaseBins = hasEyePairs ? (eyeSpec.phaseBins || 1) : 1;
   // Per-PATTERN-spec phase bins (token suffix pN on size:maxLibs): emitted
   // keys are salted by floor(phase * N), giving each spec its own phase-
   // conditioned weight planes.  Non-incremental (bucket crossings invalidate
@@ -213,7 +193,7 @@ function prepareSpecs(specs, opts) {
   const turnPhaseBins = hasTurn ? (turnSpec.phaseBins || 1) : 1;
   if (turnPhaseBins > 1) { patPhaseBins[TURN_TAG] = turnPhaseBins; hasPhasedPatterns = true; }
   for (const spec of specs) {
-    if (spec.size === 5 || spec.size === 6) continue;
+    if (spec.size === 5) continue;
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
@@ -238,9 +218,9 @@ function prepareSpecs(specs, opts) {
   // 'size:H<N>' families.
   const healthModel = hasHealth ? resolveHealthModel(opts && opts.health) : null;
   return { byMaxLibs, sortedMaxLibs, healthModel,
-           totalSizes: totalSizes + (hasEyePairs ? 4 : 0) + (hasTurn ? 1 : 0),
+           totalSizes: totalSizes + (hasTurn ? 1 : 0),
            hasLadder, hasHealth, patPhaseBins, hasPhasedPatterns,
-           hasEyePairs, eyePairGate, eyePairPhaseBins, hasTurn };
+           hasTurn };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -273,9 +253,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   }
   if (doSetNext && prepSpecs.hasHealth) {
     throw new Error('vpatterns: health-coded specs (size:H<N>) do not support speculative extraction (doSetNext)');
-  }
-  if (doSetNext && prepSpecs.hasEyePairs) {
-    throw new Error('vpatterns: eye-pair specs (E) do not support speculative extraction (doSetNext)');
   }
   // A speculative mutation is the position AFTER the move, where the side to
   // move is the opponent — game.current still says otherwise.
@@ -556,57 +533,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     count++;
   }
 
-  // Eye-pair family (spec 'E'): for each chain with <= libGate liberties,
-  // one antisymmetric feature per unordered pair of NON-ADJACENT liberties,
-  // keyed by the two owner-relative t-hashed 3x3 neighbourhoods (uh makes
-  // the pair unordered; each region hash is D4-invariant by construction,
-  // t-hash fidelity caveats as usual).  Pair geometry beyond non-adjacency
-  // is deliberately discarded: two real eyes anywhere alive the chain.
-  if (prepSpecs.hasEyePairs) {
-    const gid = game._gid, nbr = game._nbr, dnbr = game._dnbr;
-    const gate = prepSpecs.eyePairGate;
-    let phSaltE = 0;
-    const eBins = prepSpecs.eyePairPhaseBins;
-    if (eBins > 1) {
-      const ph = 1 - game.emptyCount / cap;
-      let b = Math.floor(ph * eBins);
-      if (b >= eBins) b = eBins - 1;
-      phSaltE = Math.imul(b + 1, 0x85ebca6b) | 0;
-    }
-    const r3 = (l, owner) => ninecellHash(cells, nbr, dnbr, l, owner);
-    const seenG = new Set();
-    const libs = [];
-    for (let idx = 0; idx < cap; idx++) {
-      const c = cells[idx];
-      if (c === 0) continue;
-      const g0 = gid[idx];
-      if (seenG.has(g0)) continue;
-      seenG.add(g0);
-      // collect this chain's liberties (walk its cells via gid match)
-      libs.length = 0;
-      for (let j = 0; j < cap; j++) {
-        if (cells[j] !== 0) continue;
-        const b4 = j * 4;
-        for (let d = 0; d < 4; d++) if (gid[nbr[b4 + d]] === g0 && cells[nbr[b4 + d]] !== 0) { libs.push(j); break; }
-      }
-      if (libs.length < 2 || libs.length > gate) continue;
-      for (let a = 0; a < libs.length; a++) {
-        const ha = r3(libs[a], c);
-        for (let b = a + 1; b < libs.length; b++) {
-          const la = libs[a], lb = libs[b];
-          // non-adjacent only: orthogonally adjacent liberties are one eyespace
-          const b4 = la * 4;
-          if (nbr[b4] === lb || nbr[b4 + 1] === lb || nbr[b4 + 2] === lb || nbr[b4 + 3] === lb) continue;
-          let key = pairKey(ha, r3(lb, c)) ^ phSaltE;
-          if (key === 0) key = 1;
-          outKeys[count] = key;
-          outPols[count] = c;
-          outTags[count] = 6;
-          count++;
-        }
-      }
-    }
-  }
 
   return { keys: outKeys, pols: outPols, tags: outTags, count, val: 0.5 };
 }
@@ -637,9 +563,6 @@ function deltaZ(game, prepSpecs, weights, move) {
   }
   if (prepSpecs.hasHealth) {
     throw new Error('vpatterns deltaZ: health-coded specs (size:H<N>) are not incremental');
-  }
-  if (prepSpecs.hasEyePairs) {
-    throw new Error('vpatterns deltaZ: eye-pair specs (E) are not incremental');
   }
   if (prepSpecs.hasPhasedPatterns) {
     throw new Error('vpatterns deltaZ: phase-binned pattern specs (pN) are not incremental');
@@ -978,7 +901,7 @@ function loadWeights(filePath, health) {
 // the bucket boundaries and are reported loudly.
 function checkHealthMatch(want, filePath, got) {
   const fatal = [];
-  for (const k of ['otherMaxLibs', 'maxLibs', 'maxJoinLibs', 'friendHealthMaxBuckets',
+  for (const k of ['maxLibs', 'maxJoinLibs', 'friendHealthMaxBuckets',
                    'foeHealthMinBuckets', 'stoneSalt']) {
     if (want[k] !== undefined && want[k] !== got[k]) fatal.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
   }
@@ -1009,7 +932,7 @@ function saveWeights(filePath, model) {
   if (model.specs.some(sp => sp.maxLibs < 0)) {
     const h = model.preparedSpecs.healthModel;
     healthStr = `, health: { minPhase: ${h.minPhase}, maxPhase: ${h.maxPhase}, delta: ${h.delta}, ` +
-                `otherMaxLibs: ${h.otherMaxLibs}, maxLibs: ${h.maxLibs}, maxJoinLibs: ${h.maxJoinLibs}, ` +
+                `maxLibs: ${h.maxLibs}, maxJoinLibs: ${h.maxJoinLibs}, ` +
                 `friendHealthMaxBuckets: ${h.friendHealthMaxBuckets}, ` +
                 `foeHealthMinBuckets: ${h.foeHealthMinBuckets}, iterations: ${h.iterations}, ` +
                 `initHealth: ${h.initHealth}, ` +
@@ -1045,8 +968,7 @@ const Patterns = {
   saveWeights,
   specToken,
   specString,
-  ninecellHash,
-  pairKey,
+  ninecellId,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;

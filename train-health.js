@@ -59,7 +59,6 @@
 //   --max-libs N    add a chain-level LIBERTY-COUNT one-hot for the chain
 //                   being predicted, capped at N (default 8 — measured: 7 is
 //                   worse, 9 no better; 0 = off).  Distinct from
-//                   --other-max-libs, which caps OTHER chains' liberty counts
 //                   in the ninecell alphabet.  The ninecell sum moves only
 //                   linearly with liberty count, while survival is sharply
 //                   non-linear in it, so this one weight per capped count
@@ -111,7 +110,6 @@
 //                   neighbours, less the point itself.  Unlike the other
 //                   aggregates this is COUNTERFACTUAL: no sum over current
 //                   neighbourhoods can compute it at any window size.
-//   --other-max-libs N  liberty-count cap for OTHER chains' stone states in
 //                   the ninecell alphabet (default 2).  It does not apply to
 //                   the subject chain, which is a single state.
 //   --min-phase F   leaf-sample band lower bound (default 0)
@@ -153,19 +151,17 @@ const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
-  ['corpus', 'games', 'size', 'lr', 'other-max-libs', 'max-libs', 'max-stones', 'max-join-libs',
-   'phase-bins',
+  ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
    'liberty-ninecells', 'iterations', 'min-phase', 'max-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
 
-Chain-survival logistic regression over the ninecells (3x3 regions) of a chain's liberties
-and stones (six-state alphabet: empty, then friendly-other and enemy stones
-each split by liberty count capped at --max-libs; the subject chain is one
-state), at standard-playout endpoints descended 0.2 in fullness from leaves
-sampled in [0, 0.4].  One iid example stream; the reported loss is prequential
+Chain-survival logistic regression over the ninecells (3x3 regions) of a chain's
+liberties and stones, each cell coded by COLOR alone (empty / the chain's color /
+the other color), exact-indexed and canonicalised over D4, at standard-playout
+endpoints descended --delta in fullness from leaves sampled in the band.  One iid example stream; the reported loss is prequential
 (scored before each update), so it needs no test set, and 'exc' subtracts the
 irreducible label entropy.
 
@@ -186,10 +182,6 @@ irreducible label entropy.
                   redundant; at least one must stay on
   --max-stones N  chain SIZE one-hot, capped at N (default 0 = off).  One key
                   per chain, no hashing
-  --phase-bins N  key the ninecells by phase bucket, so each shape gets its own
-                  weight per bucket (default 0 = off).  Buckets are band-matched:
-                  they span the ENDPOINT range [min-phase + delta, max-phase +
-                  delta].  Costs no time; multiplies the key space by N
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 10; 0 = off)
   --friend-health-max-buckets N  one-hot over the health of the healthiest
@@ -202,8 +194,6 @@ irreducible label entropy.
   --iterations N  forward propagation passes (default 2); all chains start at
                   INIT_HEALTH and the last pass's neighbour values are fixed
                   inputs to the gradient step
-  --other-max-libs N  liberty cap for OTHER chains' stone states (default 2);
-                  the subject chain is one state and is unaffected
   --floor F       irreducible label entropy for the 'exc' column (default
                   0.4493, measured on this band/delta)
   --save PATH     output data file (default out/health-<random>.js)
@@ -236,19 +226,10 @@ const SIZE = parseInt(opts.size || '13', 10);
 const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 
 const LR = parseFloat(opts.lr || '0.02');
-const OTHER_MAX_LIBS = parseInt(opts['other-max-libs'] || '2', 10);
 const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8', 10);
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
 const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
-// PHASE bucketing of the ninecell keys: each shape gets its own weight per
-// bucket of board fullness, so the model can learn that a shape means different
-// things early and late.  An additive phase one-hot was tried first and bought
-// nothing.  Buckets are BAND-MATCHED — they span the ENDPOINT range
-// [min-phase + delta, max-phase + delta], because the example is collected
-// after the prefix, so a [0,1] split put the boundaries in arbitrary places.
-// Costs no time, multiplies the key space by N.  Default 0 = off.
-const PHASE_FEATURE_BINS = parseInt(opts['phase-bins'] !== undefined ? opts['phase-bins'] : '0', 10);
 const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '10', 10);
 const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
   ? opts['friend-health-max-buckets'] : '7', 10);
@@ -285,7 +266,6 @@ const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_M
 // (exc 0.0539 vs 0.0515) — its liberty count is already implicit in how many
 // liberty ninecells the chain emits, so the split re-encodes known information
 // while halving the observations behind each key.
-const N_STATES = 2 + 2 * OTHER_MAX_LIBS;
 let FLOOR = opts.floor !== undefined ? parseFloat(opts.floor) : null;
 const SAVE = opts.save || `out/health-${Math.random().toString(36).slice(2, 10)}.js`;
 const PHASE_BINS = 4;
@@ -314,7 +294,7 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  other-max-libs ${OTHER_MAX_LIBS} (${N_STATES}-state)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${PHASE_FEATURE_BINS > 0 ? `  phase-bins ${PHASE_FEATURE_BINS}` : ''}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
@@ -337,9 +317,7 @@ function render(g, l, owner, gid, chainGid) {
     const c = cells[i];
     if (c === 0) return '.';
     const gg = gid[i];
-    const lib = Math.min(ls[gg], OTHER_MAX_LIBS);
-    if (c === owner && gg === chainGid) return 'X';
-    return String.fromCharCode((c === owner ? 97 : 65) + lib - 1);
+    return c === owner ? 'x' : 'O';
   };
   return ch(dnbr[b4]) + ch(nbr[b4]) + ch(dnbr[b4 + 1]) + '/' +
          ch(nbr[b4 + 2]) + '.' + ch(nbr[b4 + 3]) + '/' +
@@ -367,9 +345,6 @@ function collectObs(game, phase, buf) {
   const { exShapes, exStart, exLen, exOwner, exStone, exBin, exNb, exLive } = buf;
   let bin = Math.floor(phase * PHASE_BINS);
   if (bin >= PHASE_BINS) bin = PHASE_BINS - 1;
-  // Separate from the report's fixed bins: this one is the FEATURE's, and it is
-  // band-matched over the ENDPOINT range the run produces.
-  const featBin = HL.phaseBinOf(phase, PHASE_FEATURE_BINS, MIN_PH + DELTA, MAX_PH + DELTA);
   // Chain enumeration, the friend relation and the key set all come from
   // vpatterns, so what is trained here and what is scored there cannot drift.
   // chainsOf's chain order IS the example order, so a record's .idx indexes
@@ -386,10 +361,10 @@ function collectObs(game, phase, buf) {
     const start = exShapes.length;
     // health-lib.chainSurvKeys: liberty ninecells first, then stone ninecells
     // (the latter only when --stone-ninecells is on).
-    HL.chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, g0, libs, c.stones,
-                       OTHER_MAX_LIBS, STONE_SALT, exShapes, MAX_LIBS,
+    HL.chainSurvKeys(cells, nbr, dnbr, gid, owner, g0, libs, c.stones,
+                       STONE_SALT, exShapes, MAX_LIBS,
                        MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
-                       MAX_STONES, featBin, PHASE_FEATURE_BINS);
+                       MAX_STONES);
     if (VERBOSE) {
       if (LIBERTY_NINECELLS) for (let a = 0; a < libs.length; a++) {
         const k = exShapes[start + a];
@@ -684,20 +659,18 @@ const src = [
   "'use strict';",
   '// Auto-generated by train-health.js — do not edit by hand.',
   `// corpus ${CORPUS}  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}`,
-  `// P(chain survives) = sigmoid(bias + sum of weights[ninecellHash(lib)] over the`,
+  `// P(chain survives) = sigmoid(bias + sum of weights[ninecellId(lib)] over the`,
   `// chain's liberties` + (STONE_NINECELLS
-     ? ` + sum of weights[ninecellHash(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its stones`
+     ? ` + sum of weights[ninecellId(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its stones`
      : ` (stone ninecells OFF)`) + `,`,
-  `// on the ${N_STATES}-state alphabet: empty, this chain (one`,
-  `// state), then friendly-other and enemy each split by liberty count capped`,
-  `// at maxLibs ${OTHER_MAX_LIBS})`,
+  `// on the 3-state alphabet: empty, the chain's color, the other color)`,
   `const chainSurvModel = { corpus: ${JSON.stringify(CORPUS)}, size: ${SIZE},`,
   `  // The endpoint distribution this model was fitted on: leaves sampled in`,
   `  // [minPhase, maxPhase], descended delta in fullness.  Outside it the model`,
   `  // extrapolates and its survival estimates degrade sharply, so a consumer`,
   `  // that sees every phase (ab-search, rank features) needs a full-range fit.`,
   `  minPhase: ${MIN_PH}, maxPhase: ${MAX_PH}, delta: ${DELTA}, floor: ${+FLOOR.toFixed(5)},`,
-  `  examples: ${nEx}, stoneSalt: ${STONE_SALT}, otherMaxLibs: ${OTHER_MAX_LIBS},`,
+  `  examples: ${nEx}, stoneSalt: ${STONE_SALT},`,
   `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS},`,
   `  // Neighbour-health features: friendHealthMax over the healthiest joinable`,
   `  // friend, foeHealthMin over the weakest enemy chain in contact, both`,
@@ -706,7 +679,11 @@ const src = [
   `  // 'iterations' passes) the trainer ran — health-lib.chainHealthAll refuses`,
   `  // such a model rather than score it with the feature missing.`,
   `  stoneNinecells: ${STONE_NINECELLS}, libertyNinecells: ${LIBERTY_NINECELLS}, maxStones: ${MAX_STONES},`,
-  `  phaseBins: ${PHASE_FEATURE_BINS},`,
+  // Ninecell encoding generation.  1 was the symmetric-combine hash used
+  // 2026-09-09..11 (20.6% D4 fidelity at 6 states); 2 is the exact index +
+  // canonicalisation table over the 3-state color alphabet.  The key spaces are
+  // unrelated, so a generation-1 model scored by this code reads other weights.
+  `  ninecellScheme: 2,`,
   `  friendHealthMaxBuckets: ${FHM_BUCKETS}, foeHealthMinBuckets: ${FOE_MIN_BUCKETS},`,
   `  iterations: ${ITERATIONS}, initHealth: ${INIT_HEALTH},`,
   `  bias: ${+bias.toFixed(5)},`,
