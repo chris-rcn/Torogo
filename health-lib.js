@@ -188,24 +188,6 @@ function _ncKey(id) {
   return k === 0 ? 1 : k;
 }
 
-// Key for a LIBERTY PAIR: one feature per unordered pair of NON-ADJACENT
-// liberties of the chain, keyed by their two ninecell ids.  Two real eyes mean
-// the chain lives, and that is a CONJUNCTION of two separated local shapes — a
-// sum over per-liberty ninecells is additive and structurally cannot express
-// it, so the pair is the only way that signal gets in.  Non-adjacency is the
-// filter that stops one two-point eyespace counting as two eyes; geometry
-// beyond that is deliberately discarded, since two eyes anywhere will do.
-//
-// uh() is symmetric, which makes the pair unordered — the one place that
-// property is wanted rather than a defect.  This lived in vpatterns as the E
-// family until 2026-09-11; it belongs here, where the liberty ids are already
-// computed and chain survival is what is being predicted.
-const CHAIN_PAIR_SALT = 0x3e9a1773 | 0;
-function chainPairKey(ida, idb) {
-  const k = (Math.imul(uh(ida, idb) + 1, 2654435761) ^ CHAIN_PAIR_SALT) | 0;
-  return k === 0 ? 1 : k;
-}
-
 const CHAIN_STONE_SALT = 0x71c3a5d9 | 0;
 function chainStoneCountKey(nStones, cap) {
   const b = nStones > cap ? cap : nStones;
@@ -277,32 +259,21 @@ function chainFoeMinHealthKey(p, buckets) {
 function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
                        stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
                        stoneNinecells, libertyNinecells, subjectMaxStones,
-                       pairGate) {
-  // The liberty ids are wanted twice when pairs are on, so compute them once.
-  // pairGate caps the chain's liberty count: pairs go as n^2, and a chain with
-  // many liberties is not the one whose life is in question.
+                       maxLibNinecells) {
+  // maxLibNinecells caps the chain's LIBERTY COUNT for the singleton ninecells:
+  // above it the chain emits none.  A chain with many liberties is not in
+  // question, its liberty shapes are all saying the same thing, and the
+  // liberty-count one-hot already says it — so the keys are spent where the
+  // answer is in doubt.  0 means NO CAP (use --liberty-ninecells 0 to turn the
+  // feature off); that differs from the other knobs on purpose, because 0-as-off
+  // is already taken.
   const nl = libs.length;
-  const wantPairs = pairGate > 0 && nl >= 2 && nl <= pairGate;
-  if (libertyNinecells !== false || wantPairs) {
-    if (wantPairs && _pairIds.length < nl) _pairIds = new Int32Array(nl * 2);
+  const wantSingles = libertyNinecells !== false &&
+                      (maxLibNinecells <= 0 || nl <= maxLibNinecells);
+  if (wantSingles) {
     for (let a = 0; a < nl; a++) {
-      const id = ninecellId(cells, nbr, dnbr, libs[a], owner);
-      if (wantPairs) _pairIds[a] = id;
-      if (libertyNinecells !== false) {
-        const h = _ncKey(id);
-        out.push(h === 0 ? 1 : h);
-      }
-    }
-  }
-  if (wantPairs) {
-    for (let a = 0; a < nl; a++) {
-      const la = libs[a], b4 = la * 4;
-      for (let b = a + 1; b < nl; b++) {
-        const lb = libs[b];
-        // non-adjacent only: orthogonally adjacent liberties are one eyespace
-        if (nbr[b4] === lb || nbr[b4 + 1] === lb || nbr[b4 + 2] === lb || nbr[b4 + 3] === lb) continue;
-        out.push(chainPairKey(_pairIds[a], _pairIds[b]));
-      }
+      const h = _ncKey(ninecellId(cells, nbr, dnbr, libs[a], owner));
+      out.push(h === 0 ? 1 : h);
     }
   }
   if (stoneNinecells !== false) {
@@ -608,7 +579,6 @@ function markLiveChains(cells, nbr, gid, dnbr, chains, byGid) {
 // computed once per chain and reused across passes; only the one neighbour
 // weight moves.  The model carries its own alphabet parameters, so a model
 // trained with different settings still scores correctly.
-let _pairIds = new Int32Array(64);
 const _survScratch = [];
 let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Array(0);
 const _nb = makeNeighbourhoods(), _nbKeys = new Int32Array(2);
@@ -624,7 +594,7 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
                   model.stoneSalt, _survScratch,
                   model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
                   model.libertyNinecells, model.maxStones,
-                  model.libertyPairs);
+                  model.maxLibNinecells);
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -665,7 +635,7 @@ function _survIntern(raw) {
            stoneNinecells: raw.stoneNinecells !== false,
            libertyNinecells: raw.libertyNinecells !== false,
            maxStones: raw.maxStones || 0,
-           libertyPairs: raw.libertyPairs || 0,
+           maxLibNinecells: raw.maxLibNinecells || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
 }
@@ -742,7 +712,6 @@ const HealthLib = {
   ninecellId,
   chainLibCountKey,
   chainStoneCountKey,
-  chainPairKey,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,

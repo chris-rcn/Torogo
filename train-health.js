@@ -153,7 +153,7 @@ const { makeRng } = require('./xorshift.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
   ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
-   'liberty-ninecells', 'liberty-pairs', 'iterations', 'min-phase', 'max-phase',
+   'liberty-ninecells', 'max-lib-ninecells', 'iterations', 'min-phase', 'max-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
@@ -179,21 +179,22 @@ irreducible label entropy.
   --stone-ninecells 0|1  emit a ninecell per STONE (default 1)
   --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 1).  The two
                   halves are the bulk of this model's cost and are partly
-                  redundant; at least one must stay on
+                  redundant; turning both off leaves the one-hots, which is the
+                  bottom of the ablation ladder rather than an error
   --max-stones N  chain SIZE one-hot, capped at N (default 0 = off).  One key
                   per chain, no hashing
-  --liberty-pairs N  one key per unordered pair of NON-ADJACENT liberties, for
-                  chains with at most N liberties (default 0 = off).  The two-eye
-                  signal is a conjunction and cannot come from the additive sum
+  --max-lib-ninecells N  emit the singleton liberty ninecells only for chains
+                  with at most N liberties (default 0 = no cap).  Spends the
+                  keys where survival is in doubt
   --max-join-libs N  best-single-join liberty one-hot for the chain being
-                  predicted, capped at N (default 10; 0 = off)
+                  predicted, capped at N (default 0 = off)
   --friend-health-max-buckets N  one-hot over the health of the healthiest
                   joinable friend, bucketed uniformly in p into N levels
-                  (default 7 — monotone in N, saturated by 7-8; 0 = off);
+                  (default 0 = off; monotone in N, saturated by 7-8);
                   needs --iterations >= 2 to say anything
   --foe-health-min-buckets N  one-hot over the health of the weakest enemy
                   chain in contact, bucketed uniformly in p into N levels
-                  (default 5 — saturated by 5; 0 = off)
+                  (default 0 = off; saturated by 5)
   --iterations N  forward propagation passes (default 2); all chains start at
                   INIT_HEALTH and the last pass's neighbour values are fixed
                   inputs to the gradient step
@@ -233,11 +234,11 @@ const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
 const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
-const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '10', 10);
+const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '0', 10);
 const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
-  ? opts['friend-health-max-buckets'] : '7', 10);
+  ? opts['friend-health-max-buckets'] : '0', 10);
 const FOE_MIN_BUCKETS = parseInt(opts['foe-health-min-buckets'] !== undefined
-  ? opts['foe-health-min-buckets'] : '5', 10);
+  ? opts['foe-health-min-buckets'] : '0', 10);
 const NEIGHBOUR_ON = FHM_BUCKETS > 0 || FOE_MIN_BUCKETS > 0;
 const ITERATIONS = parseInt(opts.iterations !== undefined ? opts.iterations : '2', 10);
 // What a chain's neighbours are assumed to be worth before the first
@@ -259,12 +260,10 @@ const STONE_NINECELLS = (opts['stone-ninecells'] !== undefined
 // the two apart.
 const LIBERTY_NINECELLS = (opts['liberty-ninecells'] !== undefined
   ? parseInt(opts['liberty-ninecells'], 10) : 1) !== 0;
-// One key per unordered pair of NON-ADJACENT liberties, for chains with at most
-// this many liberties (0 = off).  Two eyes mean life, which is a conjunction of
-// two separated shapes; a sum over per-liberty ninecells is additive and cannot
-// express it.  The gate matters because pairs grow as n^2 and a chain with many
-// liberties is not one whose life is in question.
-const LIBERTY_PAIRS = parseInt(opts['liberty-pairs'] !== undefined ? opts['liberty-pairs'] : '0', 10);
+// Cap on the chain's LIBERTY COUNT for the singleton liberty ninecells: above
+// it the chain emits none.  0 = no cap.  (0-as-off is --liberty-ninecells 0.)
+const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
+  ? opts['max-lib-ninecells'] : '0', 10);
 // Same field names a health model uses, so health-lib's neighbourHealthKeys and
 // propagateHealth take this and a scored model interchangeably.
 const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
@@ -306,8 +305,8 @@ const ppatState = PPat.createState(SIZE);
 console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
-            (LIBERTY_PAIRS > 0 ? `  liberty-pairs ${LIBERTY_PAIRS}` : '') +
-            (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
+            (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
+                        (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
             (FOE_MIN_BUCKETS > 0 ? `  foe-health-min-buckets ${FOE_MIN_BUCKETS}` : '') +
             (NEIGHBOUR_ON ? `  iterations ${ITERATIONS}` : '') +
             `  save ${SAVE}`);
@@ -374,7 +373,7 @@ function collectObs(game, phase, buf) {
     HL.chainSurvKeys(cells, nbr, dnbr, gid, owner, g0, libs, c.stones,
                        STONE_SALT, exShapes, MAX_LIBS,
                        MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
-                       MAX_STONES, LIBERTY_PAIRS);
+                       MAX_STONES, MAX_LIB_NINECELLS);
     if (VERBOSE) {
       if (LIBERTY_NINECELLS) for (let a = 0; a < libs.length; a++) {
         const k = exShapes[start + a];
@@ -689,7 +688,7 @@ const src = [
   `  // 'iterations' passes) the trainer ran — health-lib.chainHealthAll refuses`,
   `  // such a model rather than score it with the feature missing.`,
   `  stoneNinecells: ${STONE_NINECELLS}, libertyNinecells: ${LIBERTY_NINECELLS}, maxStones: ${MAX_STONES},`,
-  `  libertyPairs: ${LIBERTY_PAIRS},`,
+  `  maxLibNinecells: ${MAX_LIB_NINECELLS},`,
   // Ninecell encoding generation.  1 was the symmetric-combine hash used
   // 2026-09-09..11 (20.6% D4 fidelity at 6 states); 2 is the exact index +
   // canonicalisation table over the 3-state color alphabet.  The key spaces are
