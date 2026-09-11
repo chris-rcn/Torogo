@@ -188,6 +188,24 @@ function _ncKey(id) {
   return k === 0 ? 1 : k;
 }
 
+// Key for a LIBERTY PAIR: one feature per unordered pair of NON-ADJACENT
+// liberties of the chain, keyed by their two ninecell ids.  Two real eyes mean
+// the chain lives, and that is a CONJUNCTION of two separated local shapes — a
+// sum over per-liberty ninecells is additive and structurally cannot express
+// it, so the pair is the only way that signal gets in.  Non-adjacency is the
+// filter that stops one two-point eyespace counting as two eyes; geometry
+// beyond that is deliberately discarded, since two eyes anywhere will do.
+//
+// uh() is symmetric, which makes the pair unordered — the one place that
+// property is wanted rather than a defect.  This lived in vpatterns as the E
+// family until 2026-09-11; it belongs here, where the liberty ids are already
+// computed and chain survival is what is being predicted.
+const CHAIN_PAIR_SALT = 0x3e9a1773 | 0;
+function chainPairKey(ida, idb) {
+  const k = (Math.imul(uh(ida, idb) + 1, 2654435761) ^ CHAIN_PAIR_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
 const CHAIN_STONE_SALT = 0x71c3a5d9 | 0;
 function chainStoneCountKey(nStones, cap) {
   const b = nStones > cap ? cap : nStones;
@@ -259,11 +277,32 @@ function chainFoeMinHealthKey(p, buckets) {
 function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
                        stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
                        stoneNinecells, libertyNinecells, subjectMaxStones,
-                       ) {
-  if (libertyNinecells !== false) {
-    for (const l of libs) {
-      const h = _ncKey(ninecellId(cells, nbr, dnbr, l, owner));
-      out.push(h === 0 ? 1 : h);
+                       pairGate) {
+  // The liberty ids are wanted twice when pairs are on, so compute them once.
+  // pairGate caps the chain's liberty count: pairs go as n^2, and a chain with
+  // many liberties is not the one whose life is in question.
+  const nl = libs.length;
+  const wantPairs = pairGate > 0 && nl >= 2 && nl <= pairGate;
+  if (libertyNinecells !== false || wantPairs) {
+    if (wantPairs && _pairIds.length < nl) _pairIds = new Int32Array(nl * 2);
+    for (let a = 0; a < nl; a++) {
+      const id = ninecellId(cells, nbr, dnbr, libs[a], owner);
+      if (wantPairs) _pairIds[a] = id;
+      if (libertyNinecells !== false) {
+        const h = _ncKey(id);
+        out.push(h === 0 ? 1 : h);
+      }
+    }
+  }
+  if (wantPairs) {
+    for (let a = 0; a < nl; a++) {
+      const la = libs[a], b4 = la * 4;
+      for (let b = a + 1; b < nl; b++) {
+        const lb = libs[b];
+        // non-adjacent only: orthogonally adjacent liberties are one eyespace
+        if (nbr[b4] === lb || nbr[b4 + 1] === lb || nbr[b4 + 2] === lb || nbr[b4 + 3] === lb) continue;
+        out.push(chainPairKey(_pairIds[a], _pairIds[b]));
+      }
     }
   }
   if (stoneNinecells !== false) {
@@ -311,7 +350,7 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
         if (gj === chainGid) continue;
         hasFriend = true;
         // that friend's liberties join mine — looked up, never rescanned
-        const fl = chainsByGid.get(gj).libs;
+        const fl = chainsByGid[gj].libs;
         for (let i = 0; i < fl.length; i++) {
           const q = fl[i];
           if (q === p) continue;
@@ -330,15 +369,39 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
 // record.  Every health consumer needs exactly this pass — the H family, the C
 // family's health bucket, featurepol's adjHealth, the error tool and the
 // trainer each used to open-code it — so it lives here once.
+// byGid is a gid -> chain-record array, not a Map: game2 allocates gids densely
+// from 0 with reuse (MAX_G = area + 4), so a plain array indexed by gid replaces
+// a Map.get in the innermost loops — one per stone and up to four per empty
+// point.  Measured 2026-09-11: chainsOf 6.5us -> 4.4us per evaluation.
+//
+// The array is MODULE-LEVEL and reused across calls, and it is never cleared.
+// Freshness comes from stamping each record with this call's `chains` array:
+// a record whose stamp is a different array is left over from a previous
+// position and is rebuilt.  Clearing MAX_G slots per call would cost more than
+// the Map did, and a stale entry can never be read, because the only gids read
+// are ones this call has already written.
+//
+// Two consequences the old Map did not have:
+//   - chain records now OUTLIVE the call that made them.  Every consumer today
+//     uses them within one scoring pass; holding a record across a later
+//     chainsOf on the same board size would see it rebuilt underneath.
+//   - byGid is no longer a Map, so it has no .get.  Only health-lib dereferences
+//     it (chainSurvKeys, friendsOfChain, foesOfChain, markLiveChains); every
+//     other caller passes it through opaquely.
+let _byGid = [];
 function chainsOf(cells, nbr, gid) {
   const area = cells.length;
-  const chains = [], byGid = new Map();
+  const chains = [];
+  const byGid = _byGid;
   for (let i = 0; i < area; i++) {
     const c = cells[i];
     if (c === 0) continue;
     const g = gid[i];
-    let r = byGid.get(g);
-    if (!r) { r = { gid: g, c, idx: chains.length, stones: [], libs: [], p: 0, live: false }; byGid.set(g, r); chains.push(r); }
+    let r = byGid[g];
+    if (r === undefined || r.stamp !== chains) {
+      r = { gid: g, c, idx: chains.length, stones: [], libs: [], p: 0, live: false, stamp: chains };
+      byGid[g] = r; chains.push(r);
+    }
     r.stones.push(i);
   }
   for (let l = 0; l < area; l++) {
@@ -353,7 +416,7 @@ function chainsOf(cells, nbr, gid) {
       const gj = gid[j];
       if (gj === s0 || gj === s1 || gj === s2) continue;
       if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
-      byGid.get(gj).libs.push(l);
+      byGid[gj].libs.push(l);
     }
   }
   return { chains, byGid };
@@ -373,7 +436,7 @@ function friendsOfChain(cells, nbr, gid, byGid, r, out) {
       if (cells[j] !== owner) continue;
       const gj = gid[j];
       if (gj === chainGid) continue;
-      const k = byGid.get(gj).idx;
+      const k = byGid[gj].idx;
       let dup = false;
       for (let q = start; q < out.length; q++) if (out[q] === k) { dup = true; break; }
       if (!dup) out.push(k);
@@ -391,7 +454,7 @@ function foesOfChain(cells, nbr, gid, byGid, r, out) {
       const j = nbr[b4 + d];
       const c = cells[j];
       if (c === 0 || c === owner) continue;
-      const k = byGid.get(gid[j]).idx;
+      const k = byGid[gid[j]].idx;
       let dup = false;
       for (let q = start; q < out.length; q++) if (out[q] === k) { dup = true; break; }
       if (!dup) out.push(k);
@@ -524,7 +587,7 @@ function markLiveChains(cells, nbr, gid, dnbr, chains, byGid) {
       for (let k = 0; k < 4; k++) {
         const q = _eyeG[bi + k];
         if (q < 0) break;
-        byGid.get(q).live = true;
+        byGid[q].live = true;
       }
       break;
     }
@@ -545,6 +608,7 @@ function markLiveChains(cells, nbr, gid, dnbr, chains, byGid) {
 // computed once per chain and reused across passes; only the one neighbour
 // weight moves.  The model carries its own alphabet parameters, so a model
 // trained with different settings still scores correctly.
+let _pairIds = new Int32Array(64);
 const _survScratch = [];
 let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Array(0);
 const _nb = makeNeighbourhoods(), _nbKeys = new Int32Array(2);
@@ -560,7 +624,7 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
                   model.stoneSalt, _survScratch,
                   model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
                   model.libertyNinecells, model.maxStones,
-                  );
+                  model.libertyPairs);
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -601,6 +665,7 @@ function _survIntern(raw) {
            stoneNinecells: raw.stoneNinecells !== false,
            libertyNinecells: raw.libertyNinecells !== false,
            maxStones: raw.maxStones || 0,
+           libertyPairs: raw.libertyPairs || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
 }
@@ -677,6 +742,7 @@ const HealthLib = {
   ninecellId,
   chainLibCountKey,
   chainStoneCountKey,
+  chainPairKey,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,
