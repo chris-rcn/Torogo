@@ -153,8 +153,10 @@ const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
-  ['corpus', 'games', 'size', 'lr', 'other-max-libs', 'max-libs', 'max-join-libs',
-   'friend-health-max-buckets', 'foe-health-min-buckets', 'iterations', 'min-phase', 'max-phase',
+  ['corpus', 'games', 'size', 'lr', 'other-max-libs', 'max-libs', 'max-stones', 'max-join-libs',
+   'phase-bins',
+   'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
+   'liberty-ninecells', 'iterations', 'min-phase', 'max-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
@@ -178,6 +180,16 @@ irreducible label entropy.
   --delta F       playout descent to the graded endpoint (default 0.2)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
                   at N (default 8 — 7 measured worse, 9 no better; 0 = off)
+  --stone-ninecells 0|1  emit a ninecell per STONE (default 1)
+  --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 1).  The two
+                  halves are the bulk of this model's cost and are partly
+                  redundant; at least one must stay on
+  --max-stones N  chain SIZE one-hot, capped at N (default 0 = off).  One key
+                  per chain, no hashing
+  --phase-bins N  key the ninecells by phase bucket, so each shape gets its own
+                  weight per bucket (default 0 = off).  Buckets are band-matched:
+                  they span the ENDPOINT range [min-phase + delta, max-phase +
+                  delta].  Costs no time; multiplies the key space by N
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 10; 0 = off)
   --friend-health-max-buckets N  one-hot over the health of the healthiest
@@ -226,6 +238,17 @@ const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 const LR = parseFloat(opts.lr || '0.02');
 const OTHER_MAX_LIBS = parseInt(opts['other-max-libs'] || '2', 10);
 const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8', 10);
+// Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
+// hashing, so it is free next to the ninecells; default 0 (off).
+const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
+// PHASE bucketing of the ninecell keys: each shape gets its own weight per
+// bucket of board fullness, so the model can learn that a shape means different
+// things early and late.  An additive phase one-hot was tried first and bought
+// nothing.  Buckets are BAND-MATCHED — they span the ENDPOINT range
+// [min-phase + delta, max-phase + delta], because the example is collected
+// after the prefix, so a [0,1] split put the boundaries in arbitrary places.
+// Costs no time, multiplies the key space by N.  Default 0 = off.
+const PHASE_FEATURE_BINS = parseInt(opts['phase-bins'] !== undefined ? opts['phase-bins'] : '0', 10);
 const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '10', 10);
 const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
   ? opts['friend-health-max-buckets'] : '7', 10);
@@ -239,6 +262,19 @@ const ITERATIONS = parseInt(opts.iterations !== undefined ? opts.iterations : '2
 // the row jitter, so 0.6 splits them.  Recorded in the saved model because
 // inference has to start from the same place.
 const INIT_HEALTH = 0.6;
+// Whether a chain emits a ninecell per STONE as well as per liberty.  Profiled
+// 2026-09-11: the ninecell hashing is ~13% of an evaluator's total run time and
+// the stone hashes are most of it — a chain emits one per stone, and stones
+// outnumber liberties on a full board.  0 keeps only the liberty ninecells.
+// Recorded in the saved model, since scoring must emit the same key set.
+const STONE_NINECELLS = (opts['stone-ninecells'] !== undefined
+  ? parseInt(opts['stone-ninecells'], 10) : 1) !== 0;
+// The mirror: keep only the per-STONE ninecells.  Dropping stones while keeping
+// liberties was measured near-free, which says stones are redundant GIVEN
+// liberties — not that liberties carry the signal.  This is the knob that tells
+// the two apart.
+const LIBERTY_NINECELLS = (opts['liberty-ninecells'] !== undefined
+  ? parseInt(opts['liberty-ninecells'], 10) : 1) !== 0;
 // Same field names a health model uses, so health-lib's neighbourHealthKeys and
 // propagateHealth take this and a scored model interchangeably.
 const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
@@ -278,7 +314,9 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  other-max-libs ${OTHER_MAX_LIBS} (${N_STATES}-state)  max-libs ${MAX_LIBS}  max-join-libs ${MAX_JOIN_LIBS}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  other-max-libs ${OTHER_MAX_LIBS} (${N_STATES}-state)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${PHASE_FEATURE_BINS > 0 ? `  phase-bins ${PHASE_FEATURE_BINS}` : ''}` +
+            (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
+            (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
             (FOE_MIN_BUCKETS > 0 ? `  foe-health-min-buckets ${FOE_MIN_BUCKETS}` : '') +
             (NEIGHBOUR_ON ? `  iterations ${ITERATIONS}` : '') +
@@ -329,13 +367,16 @@ function collectObs(game, phase, buf) {
   const { exShapes, exStart, exLen, exOwner, exStone, exBin, exNb, exLive } = buf;
   let bin = Math.floor(phase * PHASE_BINS);
   if (bin >= PHASE_BINS) bin = PHASE_BINS - 1;
+  // Separate from the report's fixed bins: this one is the FEATURE's, and it is
+  // band-matched over the ENDPOINT range the run produces.
+  const featBin = HL.phaseBinOf(phase, PHASE_FEATURE_BINS, MIN_PH + DELTA, MAX_PH + DELTA);
   // Chain enumeration, the friend relation and the key set all come from
   // vpatterns, so what is trained here and what is scored there cannot drift.
   // chainsOf's chain order IS the example order, so a record's .idx indexes
   // the example arrays directly.
   const { chains, byGid } = HL.chainsOf(cells, nbr, gid);
   // Chains PROVEN uncapturable are pinned to health 1 rather than predicted,
-  // exactly as vpatterns.chainHealthAll does at scoring time.  Their gradient
+  // exactly as health-lib.chainHealthAll does at scoring time.  Their gradient
   // is then zero on its own (y = p = 1), so they stop dragging the liberty
   // one-hot: a 19-stone group with two eyes is not evidence that 2 liberties
   // is survivable.
@@ -343,22 +384,31 @@ function collectObs(game, phase, buf) {
   for (const c of chains) {
     const owner = c.c, libs = c.libs, g0 = c.gid;
     const start = exShapes.length;
-    // Shared with the C family's survival attribute (vpatterns.chainSurvKeys):
-    // liberty ninecells first, then stone ninecells.
+    // health-lib.chainSurvKeys: liberty ninecells first, then stone ninecells
+    // (the latter only when --stone-ninecells is on).
     HL.chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, g0, libs, c.stones,
                        OTHER_MAX_LIBS, STONE_SALT, exShapes, MAX_LIBS,
-                       MAX_JOIN_LIBS, byGid);
+                       MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
+                       MAX_STONES, featBin, PHASE_FEATURE_BINS);
     if (VERBOSE) {
-      for (let a = 0; a < libs.length; a++) {
+      if (LIBERTY_NINECELLS) for (let a = 0; a < libs.length; a++) {
         const k = exShapes[start + a];
         if (!examples.has(k)) examples.set(k, render(game, libs[a], owner, gid, g0));
       }
-      for (let a = 0; a < c.stones.length; a++) {
-        const k = exShapes[start + libs.length + a];
-        if (!examples.has(k)) examples.set(k, 'S:' + render(game, c.stones[a], owner, gid, g0));
+      if (STONE_NINECELLS) {
+        const base = start + (LIBERTY_NINECELLS ? libs.length : 0);
+        for (let a = 0; a < c.stones.length; a++) {
+          const k = exShapes[base + a];
+          if (!examples.has(k)) examples.set(k, 'S:' + render(game, c.stones[a], owner, gid, g0));
+        }
       }
       // the one-hots trail the ninecells: liberty count, then best-join
-      let oh = start + libs.length + c.stones.length;
+      let oh = start + (LIBERTY_NINECELLS ? libs.length : 0)
+                     + (STONE_NINECELLS ? c.stones.length : 0);
+      if (MAX_STONES > 0) {
+        const k = exShapes[oh++];
+        if (!examples.has(k)) examples.set(k, 'stones=' + Math.min(c.stones.length, MAX_STONES));
+      }
       if (MAX_LIBS > 0) {
         const k = exShapes[oh++];
         if (!examples.has(k)) examples.set(k, 'libs=' + Math.min(libs.length, MAX_LIBS));
@@ -635,8 +685,10 @@ const src = [
   '// Auto-generated by train-health.js — do not edit by hand.',
   `// corpus ${CORPUS}  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}`,
   `// P(chain survives) = sigmoid(bias + sum of weights[ninecellHash(lib)] over the`,
-  `// chain's liberties + sum of weights[ninecellHash(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its`,
-  `// stones, all on the ${N_STATES}-state alphabet: empty, this chain (one`,
+  `// chain's liberties` + (STONE_NINECELLS
+     ? ` + sum of weights[ninecellHash(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its stones`
+     : ` (stone ninecells OFF)`) + `,`,
+  `// on the ${N_STATES}-state alphabet: empty, this chain (one`,
   `// state), then friendly-other and enemy each split by liberty count capped`,
   `// at maxLibs ${OTHER_MAX_LIBS})`,
   `const chainSurvModel = { corpus: ${JSON.stringify(CORPUS)}, size: ${SIZE},`,
@@ -650,9 +702,11 @@ const src = [
   `  // Neighbour-health features: friendHealthMax over the healthiest joinable`,
   `  // friend, foeHealthMin over the weakest enemy chain in contact, both`,
   `  // bucketed uniformly in p.  Their keys depend on the OTHER chains' health, so`,
-  `  // scoring needs the same iterative propagation (all chains from 0.5,`,
-  `  // 'iterations' passes) the trainer ran — vpatterns.chainSurvivalP refuses`,
+  `  // scoring needs the same iterative propagation (all chains from initHealth,`,
+  `  // 'iterations' passes) the trainer ran — health-lib.chainHealthAll refuses`,
   `  // such a model rather than score it with the feature missing.`,
+  `  stoneNinecells: ${STONE_NINECELLS}, libertyNinecells: ${LIBERTY_NINECELLS}, maxStones: ${MAX_STONES},`,
+  `  phaseBins: ${PHASE_FEATURE_BINS},`,
   `  friendHealthMaxBuckets: ${FHM_BUCKETS}, foeHealthMinBuckets: ${FOE_MIN_BUCKETS},`,
   `  iterations: ${ITERATIONS}, initHealth: ${INIT_HEALTH},`,
   `  bias: ${+bias.toFixed(5)},`,

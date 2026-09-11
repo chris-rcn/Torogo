@@ -162,15 +162,6 @@ const FROZEN = new Set();
 const HEALTH_PATH = (typeof process !== 'undefined' && process.env.HEALTH_DATA) || '';   // spec tags ((maxLibs << 3) | size) excluded from updates
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
-    // 'C' = the chain-attribute family (per-chain keyed features; not
-    // incremental), internally {size: 0, maxLibs: 0}.  Optional caps:
-    // 'C<stones>.<libs>.<adjE>.<sec>' (default C8.8.4.8); trailing 'f' freezes.
-    // 'E[<libGate>][pN]' = the eye-pair family (unordered non-adjacent
-    // liberty-pair 3x3 conjunctions per chain, libs <= gate; default 8).
-    // 't[pN]' = the TURN family: one antisymmetric feature per position, +1
-    // when BLACK is to move, keyed by phase bucket (z has no tempo term
-    // otherwise).  Not incremental — a move flips it — so deltaZ and
-    // speculative extraction refuse it.
     if (tok[0] === 't') {
       let body = tok.slice(1);
       let phaseBins = 0;
@@ -195,30 +186,6 @@ if (opts.spec) {
       const specE = { size: 6, maxLibs: 0, libGate };
       if (phaseBins > 1) specE.phaseBins = phaseBins;
       return specE;
-    }
-    if (tok[0] === 'C') {
-      const frozenC = /f$/.test(tok);
-      let body = frozenC ? tok.slice(1, -1) : tok.slice(1);
-      // optional phase-bucket suffix pN (e.g. C8.16.2.2.3p2)
-      let phaseBins = 0;
-      const pm = /p(\d+)$/.exec(body);
-      if (pm) { phaseBins = parseInt(pm[1], 10); body = body.slice(0, -pm[0].length); }
-      if (frozenC) FROZEN.add(specTag({ size: 0, maxLibs: 0 }));
-      if (body === '') return phaseBins > 1 ? { size: 0, maxLibs: 0, phaseBins } : { size: 0, maxLibs: 0 };
-      const caps = body.split('.').map(x => parseInt(x, 10));
-      // Slots 1-12 are CAPS (packed with radix cap+1, core four also folded
-      // into capCode, hence 31); slot 13 is a BUCKET COUNT and wants real
-      // resolution, so it takes a much larger range.
-      const capsOk = caps.slice(0, 12).every(x => x >= 0 && x <= 31) &&
-                     caps.slice(0, 4).every(x => x >= 1) &&
-                     (caps.length < 13 || (caps[12] >= 0 && caps[12] <= 255));
-      if (caps.length < 4 || caps.length > 13 || !capsOk) {
-        console.error(`--spec: bad C token '${tok}' (expected C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>[.<sharedLibs>[.<bestFriendLibs>[.<connPoints>[.<density>[.<interior>[.<healthBuckets>]]]]]]]]], core caps 1-31, optional caps 0-31 with 0=off; the LAST slot is a BUCKET COUNT, not a cap — 2 = two health buckets, range 0-255 — and needs HEALTH_DATA)`);
-        process.exit(1);
-      }
-      const specC = { size: 0, maxLibs: 0, caps };
-      if (phaseBins > 1) specC.phaseBins = phaseBins;
-      return specC;
     }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);

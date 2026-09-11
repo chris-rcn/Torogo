@@ -48,7 +48,7 @@ function mixTag(h, tag) {
 }
 // Spec size → 3-bit tag code.  Sizes 1-4 are themselves; the rectangle pairs
 // take the free codes — 34 (the 3×4 ∪ 4×3 pair) is 5, 23 (the 2×3 ∪ 3×2 pair)
-// is 7, with 0 and 6 already spoken for by the C and E families.  maxLibs 0 is the
+// is 7, with 6 already spoken for by the E family.  maxLibs 0 is the
 // LADDER-CODED family ('size:L' in the trainers): raw is vlibpat's 7-state
 // turn-independent tactical alphabet (0 empty, ±1 alive, ±2 dead, ±3
 // unsettled) instead of capped liberty counts — structurally identical to
@@ -57,7 +57,6 @@ function mixTag(h, tag) {
 // --spec parser, so what a run prints can be pasted into the next one.
 function specToken(sp) {
   const ph = sp.phaseBins > 1 ? 'p' + sp.phaseBins : '';
-  if (sp.size === 0) return 'C' + (sp.caps ? sp.caps.join('.') : '') + ph;
   if (sp.size === 5) return 't' + ph;
   if (sp.size === 6) return 'E' + (sp.libGate || 8) + ph;
   const body = sp.maxLibs === 0 ? 'L'
@@ -175,18 +174,15 @@ let _libStampVal = 0;
 //   lut2/lut3: Map<maxLibs, { keys: Int32Array, pols: Int8Array, base, b2, b3[, ...], ml }>
 //   Index = Σ (cell[i]+maxLibs) * base^i.  pols[i]===0 → skip (symmetric/empty).
 function prepareSpecs(specs, opts) {
+  // size 0 was the chain-attribute family (spec token 'C'), removed 2026-09-11.
+  // Models trained with one still carry it in their specs array, and without
+  // this they would fall through into the window machinery as a size-0 pattern
+  // spec and score silently wrong.
+  if (specs.some(sp => sp.size === 0)) {
+    throw new Error('vpatterns: this model uses the chain-attribute family (spec C), which was ' +
+                    'removed on 2026-09-11 — retrain it without the C term');
+  }
   const byMaxLibs = new Map();
-  // size 0 = the chain-attribute family (spec token 'C', optionally
-  // 'C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>
-  // [.<sharedLibs>[.<bestFriendLibs>]]]]]'
-  // caps, default 8.8.4.8; a fifth cap enables joinable-friendly-chains, a
-  // sixth weakest-adjacent-enemy (min liberties over adjacent enemy chains,
-  // 0 = none — the race signal), a seventh true-eye liberties (the life
-  // signal; game2's eye rule replicated for the CHAIN's colour)): per-chain
-  // keyed features, not windowed — kept out of the window machinery
-  // entirely.  One C spec per model (the first wins).
-  const chainSpec = specs.find(sp => sp.size === 0);
-  const hasChains = chainSpec !== undefined;
   // size 6 = the eye-pair family (token 'E[<libGate>][pN]'): for each chain
   // with at most libGate liberties, one feature per unordered pair of
   // NON-ADJACENT liberties, keyed by the pair of owner-relative t-hashed
@@ -196,11 +192,6 @@ function prepareSpecs(specs, opts) {
   const hasEyePairs = eyeSpec !== undefined;
   const eyePairGate = hasEyePairs ? (eyeSpec.libGate || 8) : 0;
   const eyePairPhaseBins = hasEyePairs ? (eyeSpec.phaseBins || 1) : 1;
-  const chainCaps = hasChains ? (chainSpec.caps || [8, 8, 4, 8]) : null;
-  // Optional phase bucketing (token suffix pN): chain keys additionally
-  // keyed by floor(phase * N) over [0, 1] — every chain in a position
-  // shares the bucket.
-  const chainPhaseBins = hasChains ? (chainSpec.phaseBins || 1) : 1;
   // Per-PATTERN-spec phase bins (token suffix pN on size:maxLibs): emitted
   // keys are salted by floor(phase * N), giving each spec its own phase-
   // conditioned weight planes.  Non-incremental (bucket crossings invalidate
@@ -222,7 +213,7 @@ function prepareSpecs(specs, opts) {
   const turnPhaseBins = hasTurn ? (turnSpec.phaseBins || 1) : 1;
   if (turnPhaseBins > 1) { patPhaseBins[TURN_TAG] = turnPhaseBins; hasPhasedPatterns = true; }
   for (const spec of specs) {
-    if (spec.size === 0 || spec.size === 5 || spec.size === 6) continue;
+    if (spec.size === 5 || spec.size === 6) continue;
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
@@ -244,13 +235,11 @@ function prepareSpecs(specs, opts) {
   const hasHealth = sortedMaxLibs.some(m => m < 0);
 
   // Health model, resolved once per prepared-specs object: needed by the
-  // 'size:H<N>' families and by the C survival attribute.
-  const needHealth = sortedMaxLibs.some(m => m < 0) ||
-                     (hasChains && chainCaps.length > 12 && chainCaps[12] >= 2);
-  const healthModel = needHealth ? resolveHealthModel(opts && opts.health) : null;
+  // 'size:H<N>' families.
+  const healthModel = hasHealth ? resolveHealthModel(opts && opts.health) : null;
   return { byMaxLibs, sortedMaxLibs, healthModel,
-           totalSizes: totalSizes + (hasChains ? 1 : 0) + (hasEyePairs ? 4 : 0) + (hasTurn ? 1 : 0),
-           hasLadder, hasHealth, hasChains, chainCaps, chainPhaseBins, patPhaseBins, hasPhasedPatterns,
+           totalSizes: totalSizes + (hasEyePairs ? 4 : 0) + (hasTurn ? 1 : 0),
+           hasLadder, hasHealth, patPhaseBins, hasPhasedPatterns,
            hasEyePairs, eyePairGate, eyePairPhaseBins, hasTurn };
 }
 
@@ -292,9 +281,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
   // move is the opponent — game.current still says otherwise.
   if (doSetNext && prepSpecs.hasTurn) {
     throw new Error('vpatterns: the turn spec (t) does not support speculative extraction (doSetNext)');
-  }
-  if (doSetNext && prepSpecs.hasChains) {
-    throw new Error('vpatterns: chain-attribute specs (C) do not support speculative extraction (doSetNext) — the group structures are stale under the mutation');
   }
   let captures;
   if (doSetNext) {
@@ -560,12 +546,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     }
     cells[nextMove] = EMPTY;
   }
-  // Chain-attribute family (spec 'C'): one antisymmetric feature per chain,
-  // keyed by (stones, liberties, adjacent enemy chains, secondary liberties),
-  // each clamped.  Secondary liberties = distinct empties adjacent to the
-  // chain's liberties that are not themselves liberties (a cheap eye-space
-  // proxy).  Polarity = the owner, so a WHITE chain with the same attributes
-  // contributes -w — the antisymmetric convention the komi machinery needs.
   // Turn: one feature for the whole position, polarity by side to move, keyed
   // by phase bucket.  A colour flip flips the sign, so it obeys the same
   // antisymmetric convention the pattern families do.
@@ -574,132 +554,6 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
     outPols[count] = game.current === BLACK ? 1 : -1;
     outTags[count] = TURN_TAG;
     count++;
-  }
-  if (prepSpecs.hasChains) {
-    const gid = game._gid, nbr = game._nbr;
-    const { chains, byGid } = chainsOf(cells, nbr, gid);
-    const [CS, CL, CA, CE] = prepSpecs.chainCaps;
-    const phBins = prepSpecs.chainPhaseBins;
-    let phSalt = 0;
-    if (phBins > 1) {
-      const ph = 1 - game.emptyCount / cap;
-      let b = Math.floor(ph * phBins);
-      if (b >= phBins) b = phBins - 1;
-      phSalt = Math.imul(b + 1, 0x9E3779B1) | 0;
-    }
-    const capCode = CS + 32 * (CL + 32 * (CA + 32 * CE));
-    const CJ = prepSpecs.chainCaps.length > 4 ? prepSpecs.chainCaps[4] : -1;
-    const CW = prepSpecs.chainCaps.length > 5 ? prepSpecs.chainCaps[5] : -1;
-    const CY = prepSpecs.chainCaps.length > 6 ? prepSpecs.chainCaps[6] : -1;
-    const CH = prepSpecs.chainCaps.length > 7 ? prepSpecs.chainCaps[7] : -1;   // shared (enemy-contested) liberties
-    const CF = prepSpecs.chainCaps.length > 8 ? prepSpecs.chainCaps[8] : -1;   // strongest joinable friend's liberties
-    const CP = prepSpecs.chainCaps.length > 9 ? prepSpecs.chainCaps[9] : -1;   // connection points (liberties adjacent to another friendly chain)
-    const CD = prepSpecs.chainCaps.length > 10 ? prepSpecs.chainCaps[10] : -1; // density: floor(4*libs/stones) bucketed (blob low, string high)
-    const CI = prepSpecs.chainCaps.length > 11 ? prepSpecs.chainCaps[11] : -1; // interior stones (all 4 neighbours same chain)
-    // Slot 13 is the only one in the dot-list that is a COUNT, not a cap:
-    // it is the NUMBER OF HEALTH BUCKETS the frozen chain-survival model's
-    // P(survive) is split into (2 = two buckets, either side of p = 0.5).
-    // 0 or 1 = off.
-    const CV = prepSpecs.chainCaps.length > 12 ? prepSpecs.chainCaps[12] : 0;
-    const survModel = CV >= 2 ? prepSpecs.healthModel : null;
-    const ls = game._ls, dnbr = game._dnbr;
-    // Health is a POSITION-level quantity — with a neighbour feature on, the
-    // model iterates over the whole board — so every chain's p is computed
-    // once here, before the attribute loop reads it.
-    if (survModel) chainHealthAll(survModel, cells, nbr, dnbr, gid, ls, chains, byGid);
-    // Eye rule for the per-chain attribute (Chris, 2026-09-08): a liberty
-    // is an eye of THIS chain iff all 4 orthogonals belong to this chain.
-    // Multi-chain eyes are not counted — whether those chains connect is
-    // the joinable attribute's department — and no diagonal heuristic.
-    const trueEyeFor = (idx, g) => {
-      const base = idx * 4;
-      for (let i = 0; i < 4; i++) if (gid[nbr[base + i]] !== g) return false;
-      return true;
-    };
-    for (const r of chains) {
-      const g = r.gid;
-      const libSet = new Set(r.libs), adj = new Set();
-      for (const idx of r.stones) {
-        const base = idx * 4;
-        for (let d = 0; d < 4; d++) {
-          const n = nbr[base + d], nc = cells[n];
-          if (nc !== 0 && nc !== r.c) adj.add(gid[n]);
-        }
-      }
-      let sec = 0;
-      const secSeen = new Set(), friends = new Set();
-      for (const l of libSet) {
-        const base = l * 4;
-        for (let d = 0; d < 4; d++) {
-          const n = nbr[base + d], nc = cells[n];
-          if (nc === 0) { if (!libSet.has(n) && !secSeen.has(n)) { secSeen.add(n); sec++; } }
-          else if (CJ >= 0 && nc === r.c && gid[n] !== g) friends.add(gid[n]);
-        }
-      }
-      const nStones = r.stones.length;
-      const stones = nStones > CS ? CS : nStones;
-      const libs   = libSet.size > CL ? CL : libSet.size;
-      const adjE   = adj.size > CA ? CA : adj.size;
-      const secL   = sec > CE ? CE : sec;
-      const joinF  = CJ >= 0 ? (friends.size > CJ ? CJ : friends.size) : 0;
-      let weakest = 0;
-      if (CW >= 0 && adj.size > 0) {
-        weakest = Infinity;
-        for (const eg of adj) { const el = ls[eg]; if (el < weakest) weakest = el; }
-        if (weakest > CW) weakest = CW;
-      }
-      let eyes = 0;
-      // >= 1, not >= 0: these count-and-break attributes would otherwise
-      // leave a stray 1 at cap 0, since the first hit satisfies `>= 0`.  Cap 0
-      // must mean OFF, exactly as it does for the clamp-after-loop attributes.
-      if (CY >= 1) {
-        for (const l of libSet) if (trueEyeFor(l, g)) { eyes++; if (eyes >= CY) break; }
-      }
-      let shared = 0;
-      if (CH >= 0) {
-        for (const l of libSet) {
-          const base = l * 4;
-          for (let d = 0; d < 4; d++) { const nc = cells[nbr[base + d]]; if (nc !== 0 && nc !== r.c) { shared++; break; } }
-        }
-        if (shared > CH) shared = CH;
-      }
-      let bestF = 0;
-      if (CF >= 0) {
-        for (const fg of friends) { const fl = ls[fg]; if (fl > bestF) bestF = fl; }
-        if (bestF > CF) bestF = CF;
-      }
-      let interior = 0;
-      if (CI >= 1) {   // see the eyes note above: cap 0 means off
-        for (const idx of r.stones) {
-          const base = idx * 4;
-          let own = 0;
-          for (let d = 0; d < 4; d++) if (gid[nbr[base + d]] === g && cells[nbr[base + d]] !== 0) own++;
-          if (own === 4) { interior++; if (interior >= CI) break; }
-        }
-      }
-      let connP = 0;
-      if (CP >= 0) {
-        for (const l of libSet) {
-          const base = l * 4;
-          for (let d = 0; d < 4; d++) { const n = nbr[base + d]; if (cells[n] === r.c && gid[n] !== g) { connP++; break; } }
-        }
-        if (connP > CP) connP = CP;
-      }
-      let dens = 0;
-      if (CD >= 0) { dens = Math.floor(4 * libSet.size / nStones); if (dens > CD) dens = CD; }
-      let surv = 0;
-      if (CV >= 2) {
-        surv = Math.floor(r.p * CV);        // CV buckets: 0 .. CV-1
-        if (surv > CV - 1) surv = CV - 1;
-      }
-      const pack   = stones + (CS + 1) * (libs + (CL + 1) * (adjE + (CA + 1) * (secL + (CE + 1) * (joinF + (CJ >= 0 ? CJ + 1 : 1) * (weakest + (CW >= 0 ? CW + 1 : 1) * (eyes + (CY >= 0 ? CY + 1 : 1) * (shared + (CH >= 0 ? CH + 1 : 1) * (bestF + (CF >= 0 ? CF + 1 : 1) * (connP + (CP >= 0 ? CP + 1 : 1) * (dens + (CD >= 0 ? CD + 1 : 1) * (interior + (CI >= 0 ? CI + 1 : 1) * surv))))))))))); 
-      let key = (Math.imul(pack + 1, 2654435761) ^ Math.imul(capCode + 1, 0x45d9f3b) ^ phSalt) | 0;
-      if (key === 0) key = 1;    // int-map reserves key 0
-      outKeys[count] = key;
-      outPols[count] = r.c;
-      outTags[count] = 0;        // specTag({size:0, maxLibs:0})
-      count++;
-    }
   }
 
   // Eye-pair family (spec 'E'): for each chain with <= libGate liberties,
@@ -780,9 +634,6 @@ function deltaZ(game, prepSpecs, weights, move) {
   // path), so the incremental contract cannot hold — fail loudly.
   if (prepSpecs.hasLadder) {
     throw new Error('vpatterns deltaZ: ladder-coded specs (size:L) are not incremental');
-  }
-  if (prepSpecs.hasChains) {
-    throw new Error('vpatterns deltaZ: chain-attribute specs (C) are not incremental');
   }
   if (prepSpecs.hasHealth) {
     throw new Error('vpatterns deltaZ: health-coded specs (size:H<N>) are not incremental');

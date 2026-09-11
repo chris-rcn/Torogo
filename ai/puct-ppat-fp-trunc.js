@@ -1,7 +1,8 @@
 'use strict';
 
 // puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  A playout runs
-// for the turn's fixed prefix length (TRUNC_PHASE_DELTA * area moves); if
+// for the prefix length set by TRUNC_PHASE_DELTA (a move count, or a fullness
+// advance under LEGACY_PHASE_DELTA); if
 // the position's phase is then below TRUNC_MAX_PHASE, the playout stops and
 // the leaf value is a static vpatterns evaluation (TRUNC_VPAT_DATA, a
 // train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
@@ -106,6 +107,15 @@ function create(cfg) {
   // this; at or above it the playout runs to the end (late playouts are short
   // and nearly exact, so substitution there is pure downside).
   const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 1);
+  // How the truncation prefix is measured.  Default: descend a fixed number of
+  // MOVES, ceil(TRUNC_PHASE_DELTA * area), so every truncated playout goes the
+  // same distance whatever it captures.  LEGACY_PHASE_DELTA=true restores the
+  // pre-2026-09-10 method: descend until the net empty count has dropped by
+  // that much, which captures push further away.  The two put the endpoint in
+  // different places, so TRUNC_VALUE_OFFSET is fitted per method and does NOT
+  // transfer between them — set this to match the artifact the model's offset
+  // was fitted on.
+  const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
   // Gate ramp: truncation probability is 1 at or below _A, 0 at or above _B,
   // linear between (drawn once per playout, anchored on the leaf — the
   // endpoint phase is leaf + delta by construction).  Both default to
@@ -190,7 +200,7 @@ function create(cfg) {
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}, trunc-max-phase: ` +
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
      : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`) +
@@ -275,13 +285,18 @@ function create(cfg) {
 
     _ensurePpatState(N);
 
-    // Truncation trigger, in MOVES: the turn's fixed prefix length, so every
-    // truncated playout descends the same distance whatever it captures along
-    // the way.  A pass counts as a move, as it must for a move count.
+    // Truncation trigger, two methods — see LEGACY_PHASE_DELTA.  Both use the
+    // same magnitude, ceil(TRUNC_PHASE_DELTA * area); they differ only in what
+    // is counted.  MOVES: descend a fixed number of moves, so every truncated
+    // playout goes the same distance whatever it captures (a pass counts, as it
+    // must for a move count).  FULLNESS: descend until the net empty count has
+    // dropped by that much, which captures push further away.
     const truncMoves = _prefixLen;
+    const truncEmpty = game2.emptyCount - _prefixLen;
     // Gate, decided up front from the leaf.  The endpoint phase is the leaf's
-    // plus the prefix, exact when the prefix captures nothing and an upper
-    // bound otherwise.  p = 1 at/below _A, 0 at/above _B, linear ramp
+    // plus the prefix — exact under FULLNESS (the trigger fires at precisely
+    // that empty count), an upper bound under MOVES when the prefix captures.
+    // p = 1 at/below _A, 0 at/above _B, linear ramp
     // between; the cliff (_A === _B) takes the no-draw paths, leaving the rng
     // stream untouched.
     const epPhase = (cap - (game2.emptyCount - truncMoves)) / cap;
@@ -310,7 +325,8 @@ function create(cfg) {
       game2.play(idx);
       moves++;
       weight -= weightStep;
-      if (truncArmed && moves >= truncMoves) {
+      if (truncArmed && (LEGACY_PHASE_DELTA ? game2.emptyCount <= truncEmpty
+                                            : moves >= truncMoves)) {
         // The gate itself was decided at playout start (leaf-anchored draw).
         if (!game2.gameOver) return vpatValueB(game2);
         truncArmed = false;

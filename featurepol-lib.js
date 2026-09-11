@@ -31,6 +31,13 @@
 //               outright.  Needs FP_HEALTH_DATA.  A descriptor.
 //   adjLib<n>   D4-canonical 4 orthogonal neighbours, each a stone encoded with its
 //               chain's liberty count capped at n (radix 2n+1).  A descriptor.
+//   stoneExpand<N>  Adaptive-radius shape: starts at the stones8 region and adds
+//               the next D4-closed shell (→12, →20) until at least N of the
+//               cells seen hold a stone, own or enemy.  N is a STONE count, not
+//               a cell count.  The region size is folded into the key, so the
+//               same canonical pattern reached at a different extent is a
+//               distinct feature.  Larger N reaches further and yields more,
+//               rarer keys.  A descriptor.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.

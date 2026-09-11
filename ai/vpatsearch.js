@@ -13,7 +13,8 @@
  * Move selection: full-width alpha-beta, BLACK maximises V, WHITE minimises V.
  *
  * Weights and specs are loaded from a JS file specified by the VPAT_DATA
- * environment variable (Node) or by calling loadWeights() directly.
+ * environment variable (Node) or by calling loadWeights() directly.  A
+ * health-coded model (size:H<N> specs) additionally needs HEALTH_DATA.
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -28,6 +29,9 @@ const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
 const SEARCH_DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
 const DITHER   = Util.envFloat('DITHER',       0.002);
 const VPAT_DATA = Util.envStr ('VPAT_DATA',    'out/ref13.js');
+// Health-coded specs (size:H<N>) need a frozen health model; vpatterns no
+// longer reads the environment itself, so the caller supplies it.
+const HEALTH_DATA = Util.envStr ('HEALTH_DATA', '');
 
 // ── Agent state ───────────────────────────────────────────────────────────────
 
@@ -57,7 +61,7 @@ function search(game, m, depth = 1, dither = 0) {
 // the same conditions, terminal PASS scored exactly.
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
-  const incremental = !(prep.hasLadder || prep.hasChains || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
+  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
   const f = extractFeatures(game, prep);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;
@@ -106,7 +110,7 @@ function valueB(game) {
 
 // Auto-load weights and specs if VPAT_DATA env var is set.
 if (_isNode && VPAT_DATA) {
-  model = loadWeights(VPAT_DATA);
+  model = loadWeights(VPAT_DATA, HEALTH_DATA);
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────

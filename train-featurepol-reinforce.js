@@ -25,7 +25,8 @@ if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
                     (required unless --load is given, which supplies its spec)
-                    term types: stones{4,8,12,20}  adjLib<n>  stone8AdjLib<n>  capture<n>  atari<n>  selfAtari<n>  lib<n>  joins  flags  ko  anyKo  local  koSolve  dist<n>
+                    term types: stones{4,8,12,20}  stones12b  stones24  stoneExpand<n>  adjLib<n>  adjHealth<n>  stone8AdjLib<n>
+                                capture<n>  atari<n>  selfAtari<n>  lib<n>  joins  flags  ko  anyKo  local  localAlways  koSolve  dist<n>
                                 ladderStatus  {urgentKill,urgentSave,wastedExtend,wastedAttack}<n>
                                 vpat<n>: rank of the move under an external vpatterns value model
                                 (loaded from FP_VPAT_DATA; never trained here)

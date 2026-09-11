@@ -5,7 +5,7 @@
 // leaves.  Probes whether search depth can substitute for the evaluator's
 // missing tactics at low time scales (the mc-ppat vote frontier's rival).
 //
-// Every node: featurepol ranks the legal moves, the top AB_TOP_K are
+// Every node: featurepol ranks the legal moves, the top AB_WIDTH are
 // searched best-first (ordering doubles as pruning — alpha-beta over a
 // K-wide tree).  Leaves: the vpat evaluator's P(BLACK wins); terminals:
 // estimateWinner.  Game2 clones per child — at K=3, depth 3 that is ~40
@@ -13,7 +13,13 @@
 //
 // Config (cfg reader, slot-aware):
 //   AB_DEPTH    plies of lookahead (1 = score own moves' results) (default 2)
-//   AB_TOP_K    fp candidates searched per node                   (default 3)
+//   AB_WIDTH    fp candidates searched at the ROOT                (default 3)
+//   AB_WIDTH_SHRINK  subtracted from the width per ply of depth  (default 0)
+//               Root searches AB_WIDTH, the next ply AB_WIDTH - SHRINK, and so
+//               on, floored at 1 — a width-1 ply extends the principal line
+//               rather than branching.
+//               Deep nodes are the many, and fp's ordering is most trustworthy
+//               about its top two, so narrowing with depth buys plies cheaply.
 //   FPOL_DATA   featurepol weights          (default featurepol-cbk7wa32.js)
 //   VPAT_DATA   leaf evaluator              (default ref/ref-ab-fp-vpat-data.js)
 //   DITHER      uniform noise on root values                    (default 0.005)
@@ -44,7 +50,17 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const AB_DEPTH = Math.max(1, cfg.int('AB_DEPTH', 2));
-  const AB_TOP_K = Math.max(1, cfg.int('AB_TOP_K', 3));
+  const AB_WIDTH = Math.max(1, cfg.int('AB_WIDTH', 3));
+  const AB_WIDTH_SHRINK = Math.max(0, cfg.int('AB_WIDTH_SHRINK', 0));
+  // ply 0 is the root; a node reached with `depth` remaining sits at
+  // AB_DEPTH - depth.  Floored at 1: below the root a width-1 node chooses
+  // nothing, but it still extends the principal line one ply instead of
+  // stopping, which beats the static eval it replaces.  Only the ROOT is
+  // degenerate at width 1, and the root uses AB_WIDTH directly.
+  function widthAt(ply) {
+    const w = AB_WIDTH - ply * AB_WIDTH_SHRINK;
+    return w < 1 ? 1 : w;
+  }
   const DITHER   = cfg.float('DITHER', 0.005);
   const AB_TEMP  = cfg.float('AB_TEMP', 0.002);
   const FP_SOFTMAX_MOVES = cfg.int('FP_SOFTMAX_MOVES', 3);
@@ -54,7 +70,8 @@ function create(cfg) {
   const vpatModel = VPat.loadWeights(cfg.str('VPAT_DATA',
     path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')), cfg.str('HEALTH_DATA', ''));
 
-  console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} top-K=${AB_TOP_K}` +
+  console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH}` +
+              (AB_WIDTH_SHRINK > 0 ? ` shrink=${AB_WIDTH_SHRINK} (${[...Array(AB_DEPTH).keys()].map(widthAt).join('/')})` : '') +
               (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
               (FP_SOFTMAX_MOVES > 0 ? ` fp-softmax<${FP_SOFTMAX_MOVES}st` : '') + `  ` +
               `fp=${fpWeights.map.size}w  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${VPat.specString(vpatModel.specs)})`);
@@ -64,7 +81,7 @@ function create(cfg) {
 
   // fp's top-K moves of g, best-first.  The shared fpState is overwritten on
   // every call, so the indices are copied out before any recursion.
-  function fpTopK(g, out) {
+  function fpTopK(g, out, width) {
     const N = g.N;
     if (!fpState || fpState.moves.length < N * N) {
       fpState  = FeaturePol.createState(N, fpWeights.spec);
@@ -74,7 +91,7 @@ function create(cfg) {
     FeaturePol.extractFeatures(g, fpState, fpWeights, game3);
     const n = FeaturePol.scoreAll(fpState, fpWeights, fpScores);
     if (n === 0) return 0;
-    const k = Math.min(AB_TOP_K, n);
+    const k = Math.min(width, n);
     const order = new Array(n);
     for (let i = 0; i < n; i++) order[i] = i;
     order.sort((a, b) => fpScores[b] - fpScores[a]);
@@ -90,8 +107,8 @@ function create(cfg) {
   // Alpha-beta over fp's top-K, BLACK maximises.
   function ab(g, depth, alpha, beta) {
     if (g.gameOver || depth === 0) return evaluate(g);
-    const cand = new Int32Array(AB_TOP_K);
-    const k = fpTopK(g, cand);
+    const cand = new Int32Array(AB_WIDTH);
+    const k = fpTopK(g, cand, widthAt(AB_DEPTH - depth));
     if (k === 0) return evaluate(g);
     const maxing = g.current === BLACK;
     let best = maxing ? -Infinity : Infinity;
@@ -122,8 +139,8 @@ function create(cfg) {
       const m = FeaturePol.policyMove(game, fpState, fpWeights, r, game3, 1).move;
       return { move: m, info: 'fp-softmax (opening)' };
     }
-    const cand = new Int32Array(AB_TOP_K);
-    const k = fpTopK(game, cand);
+    const cand = new Int32Array(AB_WIDTH);
+    const k = fpTopK(game, cand, AB_WIDTH);
     if (k === 0) return { move: PASS };
     const mover = game.current;
     const vals = new Float64Array(k);
@@ -142,9 +159,9 @@ function create(cfg) {
       const w = new Float64Array(k);
       for (let j = 0; j < k; j++) { w[j] = Math.exp((vals[j] - bestV) / temp); sum += w[j]; }
       let u = r.random() * sum;
-      for (let j = 0; j < k; j++) { u -= w[j]; if (u <= 0) return { move: cand[j], info: `ab~=${vals[j].toFixed(3)} d${AB_DEPTH}k${AB_TOP_K}t${AB_TEMP}` }; }
+      for (let j = 0; j < k; j++) { u -= w[j]; if (u <= 0) return { move: cand[j], info: `ab~=${vals[j].toFixed(3)} d${AB_DEPTH}k${AB_WIDTH}t${AB_TEMP}` }; }
     }
-    return { move: best, info: `ab=${bestV.toFixed(3)} d${AB_DEPTH}k${AB_TOP_K}` };
+    return { move: best, info: `ab=${bestV.toFixed(3)} d${AB_DEPTH}k${AB_WIDTH}` };
   }
 
   return { getMove };

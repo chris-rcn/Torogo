@@ -121,21 +121,12 @@ const EVAL_KOMI = KOMI(EVAL_SIZE);
 
 // vpatterns spec grammar: "size:maxLibs[f]" (see train-vpatterns).
 let specs;
-const FROZEN = new Set();
+const FROZEN = new Set();   // spec tags ((maxLibs << 3) | size) excluded from updates
 // Health model for health-coded specs / the C survival attribute; the library
 // no longer reads the environment itself.
-const HEALTH_PATH = (typeof process !== 'undefined' && process.env.HEALTH_DATA) || '';   // spec tags ((maxLibs << 3) | size) excluded from updates
+const HEALTH_PATH = (typeof process !== 'undefined' && process.env.HEALTH_DATA) || '';
 if (opts.spec) {
   specs = opts.spec.split(',').map(tok => {
-    // 'C' = the chain-attribute family (per-chain keyed features; not
-    // incremental), internally {size: 0, maxLibs: 0}.  Optional caps:
-    // 'C<stones>.<libs>.<adjE>.<sec>' (default C8.8.4.8); trailing 'f' freezes.
-    // 'E[<libGate>][pN]' = the eye-pair family (unordered non-adjacent
-    // liberty-pair 3x3 conjunctions per chain, libs <= gate; default 8).
-    // 't[pN]' = the TURN family: one antisymmetric feature per position, +1
-    // when BLACK is to move, keyed by phase bucket (z has no tempo term
-    // otherwise).  Not incremental — a move flips it — so deltaZ and
-    // speculative extraction refuse it.
     if (tok[0] === 't') {
       let body = tok.slice(1);
       let phaseBins = 0;
@@ -160,30 +151,6 @@ if (opts.spec) {
       const specE = { size: 6, maxLibs: 0, libGate };
       if (phaseBins > 1) specE.phaseBins = phaseBins;
       return specE;
-    }
-    if (tok[0] === 'C') {
-      const frozenC = /f$/.test(tok);
-      let body = frozenC ? tok.slice(1, -1) : tok.slice(1);
-      // optional phase-bucket suffix pN (e.g. C8.16.2.2.3p2)
-      let phaseBins = 0;
-      const pm = /p(\d+)$/.exec(body);
-      if (pm) { phaseBins = parseInt(pm[1], 10); body = body.slice(0, -pm[0].length); }
-      if (frozenC) FROZEN.add(specTag({ size: 0, maxLibs: 0 }));
-      if (body === '') return phaseBins > 1 ? { size: 0, maxLibs: 0, phaseBins } : { size: 0, maxLibs: 0 };
-      const caps = body.split('.').map(x => parseInt(x, 10));
-      // Slots 1-12 are CAPS (packed with radix cap+1, core four also folded
-      // into capCode, hence 31); slot 13 is a BUCKET COUNT and wants real
-      // resolution, so it takes a much larger range.
-      const capsOk = caps.slice(0, 12).every(x => x >= 0 && x <= 31) &&
-                     caps.slice(0, 4).every(x => x >= 1) &&
-                     (caps.length < 13 || (caps[12] >= 0 && caps[12] <= 255));
-      if (caps.length < 4 || caps.length > 13 || !capsOk) {
-        console.error(`--spec: bad C token '${tok}' (expected C<stones>.<libs>.<adjE>.<sec>[.<joinable>[.<weakestAdj>[.<eyes>[.<sharedLibs>[.<bestFriendLibs>[.<connPoints>[.<density>[.<interior>[.<healthBuckets>]]]]]]]]], core caps 1-31, optional caps 0-31 with 0=off; the LAST slot is a BUCKET COUNT, not a cap — 2 = two health buckets, range 0-255 — and needs HEALTH_DATA)`);
-        process.exit(1);
-      }
-      const specC = { size: 0, maxLibs: 0, caps };
-      if (phaseBins > 1) specC.phaseBins = phaseBins;
-      return specC;
     }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
@@ -541,12 +508,12 @@ function evalVsReference(N, refGetMove, nGames) {
 // ── Columns ───────────────────────────────────────────────────────────────────
 
 const COLS = ['T', 'pos', 'epoch', 'LR', 'tPos', 'nWts', 'avgW', 'trMSE', 'teMSE',
-              ...(biasPairs ? ['b2', 'bias', 'varB'] : []),
+              ...(biasPairs ? ['b2', 'bias', 'varB', 'varB×t'] : []),
               ...(evalGetMove ? ['winRatio'] : []),
               ...(ladderCases ? ['ladr'] : []),
               ...(mdPositions ? ['mdRms'] : [])];
 const COLW = [5, 5, 5, 7, 5, 4, 6, 6, 7,
-              ...(biasPairs ? [8, 7, 8] : []),
+              ...(biasPairs ? [8, 7, 8, 7] : []),
               ...(evalGetMove ? [21] : []),
               ...(ladderCases ? [4] : []),
               ...(mdPositions ? [5] : [])];
@@ -557,7 +524,7 @@ printRow(COLS);
 
 const t0 = Date.now();
 // Print schedule: geometric in POSITIONS — first row at 10k, then total
-// position count grows 1.4x per row, with a 4h time backstop.
+// position count grows 1.5x per row, with a 4h time backstop.
 const PRINT_START_POS  = 10000;
 const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;
 const MAX_EVAL_GAMES = 2000;
@@ -633,6 +600,14 @@ function statusPrint() {
     // bias file is loaded it is the -best selector, so the '*' lives here.
     cols.push(bs.b2.toFixed(5), (bs.lean >= 0 ? '+' : '') + bs.lean.toFixed(3),
               varB.toFixed(5) + (isBest ? '*' : ' '));
+    // varB x tPos in MICROSECONDS: the accuracy-per-millisecond figure of
+    // merit.  One truncated eval is worth 0.25/varB playouts of MSE, so value
+    // per unit time goes as 1/(varB * t) and the product is what to minimise —
+    // a cheaper evaluator wins at equal product.  NOTE tPos is the TRAINER's
+    // per-position cost (gradient work included), not the deployed eval cost,
+    // so this is a proxy: comparable between rows and between runs on the same
+    // machine, not an absolute.
+    cols.push((varB * tPosMs * 1000).toFixed(4));
   }
   if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
                              `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
@@ -642,7 +617,7 @@ function statusPrint() {
 
   saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs });
   if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs });
-  nextPrintPos = Math.max(Math.ceil(nPos * 1.4), nPos + 1);
+  nextPrintPos = Math.max(Math.ceil(nPos * 1.5), nPos + 1);
   nextPrintAt  = Date.now() + MAX_PRINT_GAP_MS;
 }
 

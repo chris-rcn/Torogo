@@ -2,8 +2,8 @@
 
 // health-lib.js — CHAIN HEALTH: P(this chain is still on the board when the
 // playout ends).  Lifted out of vpatterns.js, which is where it grew up, so
-// that the one implementation serves both consumers: vpatterns' C family and
-// health-coded specs score with it, and train-health.js fits it.  The
+// that the one implementation serves both consumers: vpatterns' health-coded
+// specs score with it, and train-health.js fits it.  The
 // propagation used to exist twice, once in each, which is why INIT_HEALTH and
 // the live pin each had to be changed in two places.
 //
@@ -149,6 +149,52 @@ function chainJoinLibsKey(nLibs, cap) {
 // Generation-stamped scratch for the union counts: no allocation, no clearing.
 let _joinMark = null, _joinGen = 0;
 
+// Key for the chain-level STONE-COUNT one-hot, the sibling of the liberty one.
+// Chain SIZE is not derivable from the ninecell sum at any window: two chains
+// with identical local shapes emit the same keys per point and differ only in
+// HOW MANY they emit, which a sum cannot separate from a smaller chain whose
+// points happen to score higher.  One weight per capped count, its own salt to
+// stay clear of the liberty one-hot's key space.
+const CHAIN_STONE_SALT = 0x71c3a5d9 | 0;
+function chainStoneCountKey(nStones, cap) {
+  const b = nStones > cap ? cap : nStones;
+  const k = (Math.imul(b + 1, 0x85EBCA6B) ^ CHAIN_STONE_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
+// PHASE salt, folded into every ninecell key so each shape gets its own weight
+// per phase bucket.  Buckets are BAND-MATCHED: they span the range of ENDPOINT
+// phases the model is actually fitted on, [minPhase + delta, maxPhase + delta],
+// not [0, 1].  The endpoint is what gets bucketed — the example is collected
+// after a delta-long prefix — so absolute bucketing put the boundaries in
+// arbitrary places: at max-phase 0.4 and delta 0.2 the data spans [0.20, 0.60],
+// which a 2-bucket [0,1] split cut 75/25 and a 4-bucket split left one bucket
+// empty and another a sliver.  Band-matched also makes the knob independent of
+// --delta, which otherwise shifts the whole range.  An additive phase term was tried first and bought nothing:
+// survival's phase dependence is not a shift, it is a change in what a shape
+// MEANS — two liberties early is a different proposition from two liberties
+// late — and only an interaction can express that.  Costs no time at all (the
+// same keys, differently valued); it costs key SPACE, multiplying the model by
+// the bucket count, which is affordable here in a way it was not for the
+// 195k-weight vpat patterns that shelved the same idea.
+const CHAIN_PHASE_SALT = 0x3d5b17a3 | 0;
+function chainPhaseSalt(bin, bins) {
+  if (bins <= 0) return 0;
+  let b = bin; if (b >= bins) b = bins - 1; if (b < 0) b = 0;
+  return (Math.imul(b + 1, 0xC2B2AE35) ^ CHAIN_PHASE_SALT) | 0;
+}
+// Endpoint phase -> band-matched bucket.  lo/hi are the endpoint range; a model
+// queried outside its band clamps to the end buckets rather than inventing new
+// ones.
+function phaseBinOf(phase, bins, lo, hi) {
+  if (bins <= 0) return 0;
+  const span = hi - lo;
+  if (!(span > 0)) return 0;
+  let b = Math.floor(((phase - lo) / span) * bins);
+  if (b >= bins) b = bins - 1; if (b < 0) b = 0;
+  return b;
+}
+
 const CHAIN_LIB_SALT = 0x2f1d3b77 | 0;
 function chainLibCountKey(nLibs, cap) {
   const b = nLibs > cap ? cap : nLibs;
@@ -199,13 +245,37 @@ function chainFoeMinHealthKey(p, buckets) {
 // are looked up rather than rescanned.  Shared by the trainer and by the C
 // family's survival attribute so the two can never drift apart.  libs/stones
 // may be any iterable of cells.
+// stoneNinecells / libertyNinecells === false drop the per-STONE and
+// per-LIBERTY ninecells respectively.  Together they are the bulk of the cost —
+// a chain emits one hash per stone and one per liberty — so these are the main
+// levers on this model's price, and they are separate because the two halves
+// are partly redundant: dropping stones while keeping liberties was measured
+// near-free, and the mirror is the open question.  Anything other than false
+// keeps a half, so a model saved before these options existed behaves as it
+// always did.  Dropping BOTH is allowed and is the bottom of the ablation
+// ladder: the model is then the one-hots plus whatever neighbour propagation is
+// configured, which is the baseline the ninecells have to beat.
 function chainSurvKeys(cells, nbr, dnbr, gid, ls, owner, chainGid, libs, stones,
-                       maxLibs, stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid) {
-  for (const l of libs)
-    out.push(ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs));
-  for (const st of stones) {
-    const h = (ninecellHash(cells, nbr, dnbr, st, owner, gid, chainGid, ls, maxLibs) ^ stoneSalt) | 0;
-    out.push(h === 0 ? 1 : h);
+                       maxLibs, stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
+                       stoneNinecells, libertyNinecells, subjectMaxStones,
+                       phaseBin, phaseBins) {
+  const phSalt = chainPhaseSalt(phaseBin, phaseBins);
+  if (libertyNinecells !== false) {
+    for (const l of libs) {
+      const h = (ninecellHash(cells, nbr, dnbr, l, owner, gid, chainGid, ls, maxLibs) ^ phSalt) | 0;
+      out.push(h === 0 ? 1 : h);
+    }
+  }
+  if (stoneNinecells !== false) {
+    for (const st of stones) {
+      const h = (ninecellHash(cells, nbr, dnbr, st, owner, gid, chainGid, ls, maxLibs) ^ stoneSalt ^ phSalt) | 0;
+      out.push(h === 0 ? 1 : h);
+    }
+  }
+  if (subjectMaxStones > 0) {
+    let n = 0;
+    for (const _ of stones) n++;
+    out.push(chainStoneCountKey(n, subjectMaxStones));
   }
   if (subjectMaxLibs > 0) {
     let n = 0;
@@ -480,6 +550,12 @@ let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Ar
 const _nb = makeNeighbourhoods(), _nbKeys = new Int32Array(2);
 function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
   const n = chains.length, w = model.weights;
+  // Phase from the chain records — no board scan needed, and it must match the
+  // 1 - empty/area the trainer used.
+  let _stones = 0;
+  for (let i = 0; i < n; i++) _stones += chains[i].stones.length;
+  const _phaseBin = phaseBinOf(_stones / cells.length, model.phaseBins,
+                               model.minPhase + model.delta, model.maxPhase + model.delta);
   if (_baseZ.length < n) {
     _baseZ = new Float64Array(n * 2);
   }
@@ -488,7 +564,9 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
     _survScratch.length = 0;
     chainSurvKeys(cells, nbr, dnbr, gid, ls, r.c, r.gid, r.libs, r.stones,
                   model.otherMaxLibs, model.stoneSalt, _survScratch,
-                  model.maxLibs, model.maxJoinLibs, byGid);
+                  model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
+                  model.libertyNinecells, model.maxStones,
+                  _phaseBin, model.phaseBins);
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -526,7 +604,7 @@ function _survIntern(raw) {
   // no otherMaxLibs, so reading them here would silently re-interpret both —
   // refuse instead.
   if (raw.otherMaxLibs === undefined) {
-    throw new Error('vpatterns: this health model predates the maxLibs/otherMaxLibs rename ' +
+    throw new Error('health-lib: this health model predates the maxLibs/otherMaxLibs rename ' +
                     '(no otherMaxLibs field) — retrain it with train-health.js');
   }
   const w = makeWeights(raw.weights.size * 2);
@@ -535,6 +613,10 @@ function _survIntern(raw) {
            maxJoinLibs: raw.maxJoinLibs || 0, friendHealthMaxBuckets: raw.friendHealthMaxBuckets || 0,
            foeHealthMinBuckets: raw.foeHealthMinBuckets || 0, iterations: raw.iterations || 1,
            initHealth: raw.initHealth !== undefined ? raw.initHealth : 0.5,
+           stoneNinecells: raw.stoneNinecells !== false,
+           libertyNinecells: raw.libertyNinecells !== false,
+           maxStones: raw.maxStones || 0,
+           phaseBins: raw.phaseBins || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
 }
@@ -555,8 +637,8 @@ function resolveHealthModel(pathOrModel) {
     return m;
   }
   if (typeof window !== 'undefined' && window.chainSurvModel) return _survIntern(window.chainSurvModel);
-  throw new Error('vpatterns: health-coded specs (size:H<N>) and the C family\'s health-bucket ' +
-                  'slot need a health model, and none was supplied.  From the trainers, set ' +
+  throw new Error('health-lib: health-coded specs (size:H<N>) need a health model, and none ' +
+                  'was supplied.  From the trainers, set ' +
                   'HEALTH_DATA to a train-health.js save file (e.g. HEALTH_DATA=out/health-xxxx.js ' +
                   'node train-vpatterns.js ...); featurepol reads FP_HEALTH_DATA.  In code, pass ' +
                   'prepareSpecs(specs, { health: <path or model> }) or loadWeights(file, health).');
@@ -610,6 +692,9 @@ const HealthLib = {
   xh4,
   ninecellHash,
   chainLibCountKey,
+  chainStoneCountKey,
+  chainPhaseSalt,
+  phaseBinOf,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,

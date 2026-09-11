@@ -12,14 +12,14 @@ const { performance } = require('perf_hooks');
  *   --size    <n>        Board size: 9, 13, or 19    (default 13)
  *   --budget  <ms>       Time budget per move in ms  (required)
  *   --limit   <n>        Stop after this many games and print final stats
- *   --rand-moves <n>     Play n random moves at the start of each position (default 4).
+ *   --rand-moves <n>     Play n random moves at the start of each position (default 0).
  *                        A randomised opening (this or --rand-mirror-pairs) starts
  *                        from an EMPTY board — the free centre stone is a
  *                        first-move time-saver, and the random opening supplies
  *                        that move itself.  --rand-moves 0 keeps the free stone.
- *                        Defaults to 0 when --rand-mirror-pairs is set, so a
- *                        balanced opening stays balanced; pass it explicitly to
- *                        add symmetry-breaking moves on top.
+ *                        Defaults to 0 so the default balanced opening stays
+ *                        balanced; pass it explicitly to add symmetry-breaking
+ *                        moves on top.
  *                        The default of 4 reproduces the old opening exactly: the
  *                        free centre stone plus 3 random moves was 4 stones with
  *                        black to move, and 4 random moves is the same position
@@ -87,11 +87,10 @@ alternate between games; per-agent env config uses the P1_/P2_ prefixes
   --budget MS       per-move time budget in ms (default 1)
   --limit N         stop after N games (default: run indefinitely)
 
-  --rand-moves N    random opening moves per game for diversity (default 4;
-                    0 when --rand-mirror-pairs is set)
+  --rand-moves N    random opening moves per game for diversity (default 0)
   --rand-mirror-pairs N
                     balanced opening: N random black/white stone pairs placed
-                    at mirrored positions (antisymmetric start)
+                    at mirrored positions (antisymmetric start) (default 3)
 
   --min-phase F     p1/p2 play only at board fullness >= F; the fallback agent
                     plays both sides before that.  The opening is built once
@@ -129,12 +128,12 @@ const p1Name    = opts.p1   || 'prod';
 const p2Name    = opts.p2   || p1Name;
 const boardSize = parseInt(opts.size || '13', 10);
 const budgetMs  = parseInt(opts.budget || '1', 10);
-const randMirrorPairs = parseInt(opts['rand-mirror-pairs'] || '0', 10);
-// --rand-moves defaults to 0 once mirror pairs are requested: those extra stones
-// are unbalanced and would undo the antisymmetry the pairs just established (and
+const randMirrorPairs = parseInt(opts['rand-mirror-pairs'] ?? '3', 10);
+// --rand-moves defaults to 0: the default opening is the balanced one, and extra
+// unpaired stones would undo the antisymmetry the mirror pairs establish (and
 // silently deepen the opening, which is not what "balanced opening" should mean).
 // Pass --rand-moves explicitly to compose the two deliberately.
-const randMoves = parseInt(opts['rand-moves'] ?? (randMirrorPairs > 0 ? '0' : '4'), 10);
+const randMoves = parseInt(opts['rand-moves'] ?? '0', 10);
 
 // Phase window: p1/p2 only play moves with phase (= 1 − empty/area) in
 // [min-phase, max-phase]; the fallback agent plays both sides outside it.  The
