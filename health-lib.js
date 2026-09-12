@@ -309,7 +309,14 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
   if (stoneNinecells !== false &&
       (maxLibNinecells <= 0 || nl <= maxLibNinecells) &&
       (maxStoneNinecells <= 0 || stones.length <= maxStoneNinecells)) {
+    // Only stones ADJACENT TO A LIBERTY are coded.  An interior stone — one with
+    // no empty orthogonal neighbour — cannot be where the chain lives or dies:
+    // its own surround says nothing about the chain's boundary, and it costs a
+    // ninecell each on exactly the big solid chains that emit the most of them.
     for (const st of stones) {
+      const b4 = st * 4;
+      if (cells[nbr[b4]] !== 0 && cells[nbr[b4 + 1]] !== 0 &&
+          cells[nbr[b4 + 2]] !== 0 && cells[nbr[b4 + 3]] !== 0) continue;
       const h = (_ncKey(ninecellId(cells, nbr, dnbr, st, owner)) ^ stoneSalt) | 0;
       out.push(h === 0 ? 1 : h);
     }

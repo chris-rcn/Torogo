@@ -437,16 +437,22 @@ function collectObs(game, phase, buf) {
       // outright, the cap turns it off for this chain only.
       const nLibEmit = (LIBERTY_NINECELLS &&
         (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS)) ? libs.length : 0;
-      const nStoneEmit = (STONE_NINECELLS &&
+      const stonesOn = STONE_NINECELLS &&
         (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS) &&
-        (MAX_STONE_NINECELLS <= 0 || c.stones.length <= MAX_STONE_NINECELLS)) ? c.stones.length : 0;
+        (MAX_STONE_NINECELLS <= 0 || c.stones.length <= MAX_STONE_NINECELLS);
       for (let a = 0; a < nLibEmit; a++) {
         const k = exShapes[start + a];
         if (!examples.has(k)) examples.set(k, render(game, libs[a], owner, gid, g0));
       }
-      for (let a = 0; a < nStoneEmit; a++) {
-        const k = exShapes[start + nLibEmit + a];
-        if (!examples.has(k)) examples.set(k, 'S:' + render(game, c.stones[a], owner, gid, g0));
+      // chainSurvKeys skips stones with no empty orthogonal neighbour, so walk
+      // the same filter to stay aligned with what it pushed.
+      let nStoneEmit = 0;
+      if (stonesOn) for (const st of c.stones) {
+        const b4 = st * 4;
+        if (cells[nbr[b4]] !== 0 && cells[nbr[b4 + 1]] !== 0 &&
+            cells[nbr[b4 + 2]] !== 0 && cells[nbr[b4 + 3]] !== 0) continue;
+        const k = exShapes[start + nLibEmit + nStoneEmit++];
+        if (!examples.has(k)) examples.set(k, 'S:' + render(game, st, owner, gid, g0));
       }
       // the one-hots trail the ninecells: liberty count, then best-join
       let oh = start + nLibEmit + nStoneEmit;
