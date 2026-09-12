@@ -20,7 +20,7 @@ const { Game2, PASS } = require('./game2.js');
 const VPat = require('./vpatterns.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'file', 'fit', 'bin']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'file', 'fit', 'bin', 'delta']);
 if (opts.help || !opts.model || !opts.file) {
   console.error(`Usage: node score-bias-curve.js --model <vpat.js> --file <bias-pairs.txt> [options]
 
@@ -34,6 +34,14 @@ return product) and varB (E[b2] - bias^2) per bin.
                  [A, B] (use the DEPLOYED band, not the training band);
                  prints the line as TRUNC_VALUE_OFFSET=a,b
   --bin W        phase bin width (default 0.05)
+  --delta D      rescore the artifact AT DELTA D: truncate both recorded
+                 prefixes ceil(D * area) moves past the start and evaluate
+                 there (sound for any D up to the artifact's own delta — the
+                 references belong to the START and are delta-independent).
+                 Rows are then binned by the TRUNCATED endpoint's phase, so
+                 the natural fit band is [D, gate].  D=0 evaluates the start
+                 itself.  Offsets are per (model, delta, band) — a D fitted
+                 here pairs only with TRUNC_PHASE_DELTA=D
   --help         show this message`);
   process.exit(opts.help ? 0 : 1);
 }
@@ -45,13 +53,21 @@ if (opts.fit !== undefined) {
   if (FIT.length !== 2 || !(FIT[0] < FIT[1])) { console.error('--fit: expected A,B with A < B'); process.exit(1); }
 }
 const files = Array.isArray(opts.file) ? opts.file : [opts.file];
+const DELTA = opts.delta !== undefined ? parseFloat(opts.delta) : null;   // null = the artifact's own
+if (DELTA !== null && !(DELTA >= 0 && DELTA < 1)) { console.error('--delta: bad value'); process.exit(1); }
 
 const model = VPat.loadWeights(opts.model, process.env.HEALTH_DATA || '');
-console.log(`model: ${opts.model}`);
+console.log(`model: ${opts.model}` + (DELTA !== null ? `  delta: ${DELTA}` : ''));
 
-function replay(size, moves) {
+function replay(size, moves, limit) {
   const g = new Game2(size);
-  for (const t of moves.split(',')) {
+  const toks = moves.split(',');
+  const n = limit === undefined ? toks.length : limit;
+  if (n > toks.length) {
+    throw new Error(`--delta wants ${n} moves but the row has ${toks.length} — above the artifact's own delta`);
+  }
+  for (let i = 0; i < n; i++) {
+    const t = toks[i];
     const m = t[0] === 'p' ? PASS : (parseInt(t.slice(1), 10) - 1) * size + (t.charCodeAt(0) - 97);
     if (!g.play(m)) throw new Error('bias-pair replay failed — artifact/engine mismatch');
   }
@@ -64,9 +80,23 @@ for (const file of files) {
     if (!line || line[0] === '#') continue;
     const p = line.split(/\s+/);
     if (p.length !== 7) continue;
-    const size = +p[0], ph = +p[1], pa = +p[5], pb = +p[6];
-    const v1 = VPat.evaluate(replay(size, p[3]), model);
-    const v2 = VPat.evaluate(replay(size, p[4]), model);
+    const size = +p[0], pa = +p[5], pb = +p[6];
+    let ph = +p[1], v1, v2;
+    if (DELTA === null) {
+      v1 = VPat.evaluate(replay(size, p[3]), model);
+      v2 = VPat.evaluate(replay(size, p[4]), model);
+    } else {
+      // Truncated rescoring: the emit ran a FIXED move count, ceil(delta *
+      // area), so ceil(D * area) moves past the start is exactly the position
+      // a D-delta descent would have reached.  The recorded endpointPhase
+      // belongs to the artifact's own delta, so bin by the truncated E1's.
+      const n0 = p[2] === '-' ? 0 : p[2].split(',').length;
+      const cut = n0 + Math.ceil(DELTA * size * size);
+      const g1 = replay(size, p[3], cut);
+      ph = 1 - g1.emptyCount / (size * size);
+      v1 = VPat.evaluate(g1, model);
+      v2 = DELTA === 0 ? v1 : VPat.evaluate(replay(size, p[4], cut), model);
+    }
     const key = (Math.floor(ph / BIN) * BIN).toFixed(3);
     const b = bins.get(key) || { n: 0, prod: 0, lean: 0 };
     b.n++; b.prod += (v1 - pa) * (v2 - pb); b.lean += (v1 + v2) / 2 - (pa + pb) / 2;
