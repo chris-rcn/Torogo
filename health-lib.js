@@ -129,20 +129,44 @@ const _CANON = (() => {
 // with 2.6x fewer keys, and it is the one that keeps the canonicalisation table
 // at 3^8 = 6561 raw entries (954 orbits) instead of 1.68M.
 function ninecellId(cells, nbr, dnbr, l, owner) {
+  const raw = ninecellRaw(cells, nbr, dnbr, l);
+  return owner === 1 ? _CANON[raw] : _CANON_NEG[raw];
+}
+
+// The same eight cells coded in ABSOLUTE colours — empty 0, black 1, white 2 —
+// so ONE encode serves both owners: black reads its orbit out of _CANON, white
+// out of _CANON_NEG.  This is what lets the board scan encode a liberty shared
+// by two chains once instead of once per chain, and it is exact rather than an
+// approximation: for owner black the absolute trits already equal the relative
+// ones, and for owner white they are the relative ones with 1 and 2 exchanged,
+// which is precisely what _CANON_NEG undoes.
+function ninecellRaw(cells, nbr, dnbr, l) {
   const b4 = l * 4;
   const n0 = nbr[b4], n1 = nbr[b4 + 1], n2 = nbr[b4 + 2], n3 = nbr[b4 + 3];      // N,S,W,E
   const m0 = dnbr[b4], m1 = dnbr[b4 + 1], m2 = dnbr[b4 + 2], m3 = dnbr[b4 + 3];  // NW,NE,SW,SE
   // Encoding order N, E, S, W, NE, SE, SW, NW, to match _D4 above.
-  const c0 = _c3(cells, n0, owner) - 1, c1 = _c3(cells, n3, owner) - 1;
-  const c2 = _c3(cells, n1, owner) - 1, c3 = _c3(cells, n2, owner) - 1;
-  const c4 = _c3(cells, m1, owner) - 1, c5 = _c3(cells, m3, owner) - 1;
-  const c6 = _c3(cells, m2, owner) - 1, c7 = _c3(cells, m0, owner) - 1;
-  const raw = c0 + 3*(c1 + 3*(c2 + 3*(c3 + 3*(c4 + 3*(c5 + 3*(c6 + 3*c7))))));
-  return _CANON[raw];
+  const c0 = _cA(cells, n0), c1 = _cA(cells, n3);
+  const c2 = _cA(cells, n1), c3 = _cA(cells, n2);
+  const c4 = _cA(cells, m1), c5 = _cA(cells, m3);
+  const c6 = _cA(cells, m2), c7 = _cA(cells, m0);
+  return c0 + 3*(c1 + 3*(c2 + 3*(c3 + 3*(c4 + 3*(c5 + 3*(c6 + 3*c7))))));
 }
-// Cell coders for the three alphabets: 3-state, 4-state (chain-relative),
-// and the liberty-split alphabet.
-function _c3(cells, i, owner) { const c = cells[i]; return c === 0 ? 1 : c === owner ? 2 : 3; }
+function _cA(cells, i) { const c = cells[i]; return c === 0 ? 0 : c === 1 ? 1 : 2; }
+
+// _CANON read through the 1<->2 trit swap: the orbit of the same ninecell seen
+// by a WHITE owner.  Built once at load, 6561 entries.
+const _CANON_NEG = (() => {
+  const out = new Int32Array(NC_RAW);
+  for (let raw = 0; raw < NC_RAW; raw++) {
+    let r = raw, sw = 0, pw = 1;
+    for (let i = 0; i < 8; i++) {
+      const t = r % 3; r = (r / 3) | 0;
+      sw += (t === 1 ? 2 : t === 2 ? 1 : 0) * pw; pw *= 3;
+    }
+    out[raw] = _CANON[sw];
+  }
+  return out;
+})();
 
 function xh4(tl, tr, bl, br) {
   return uh(uh(tl, br), uh(tr, bl));
@@ -271,68 +295,29 @@ function chainFoeMinHealthKey(p, buckets) {
 // always did.  Dropping BOTH is allowed and is the bottom of the ablation
 // ladder: the model is then the one-hots plus whatever neighbour propagation is
 // configured, which is the baseline the ninecells have to beat.
-function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
-                       stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
-                       stoneNinecells, libertyNinecells, subjectMaxStones,
-                       maxLibNinecells, libStoneLibCap, libStoneStoneCap,
-                       maxStoneNinecells, joinLibGate) {
-  // maxLibNinecells / maxStoneNinecells cap the chain's LIBERTY and STONE count
-  // for the singleton ninecells.  They are not symmetric: the LIBERTY cap gates
-  // both halves, so a chain with too many liberties emits no ninecells at all,
-  // while the STONE cap gates only the stone half.  A chain with many liberties
-  // is not in question — nothing about its shape is worth a key — whereas a
-  // short-of-liberties chain with many stones still wants its liberty shapes,
-  // just not one key per stone.  Either count one-hot already carries "this
-  // chain is large", so the keys are spent where the answer is in doubt.
-  // 0 means NO CAP (use --liberty-ninecells 0 or --stone-ninecells 0 to turn a
-  // half off); that differs from the other knobs on purpose, because 0-as-off
-  // is already taken.
-  //
-  // joinLibGate is the same idea for the best-join count, whose scan walks the
-  // chain's liberties and then every adjacent friend's liberty list.  Its two
-  // siblings, friendLibGate and foeLibGate, gate the health features over in
-  // neighbourhoodsOf.  Each cross-chain feature gets its own gate because their
-  // costs scale with different things — join and friend with liberty count, foe
-  // with stone count — so their break-even caps have no reason to coincide.
-  // Also 0 = no cap.
+// The ninecells are NOT here — scanBoard emits those, because they are a
+// property of a point on the board rather than of a chain, and a point can
+// belong to several chains.  What is left is the per-chain half: the count
+// one-hots, and the best-single-join count, which is the only feature that has
+// to read other chains' liberty lists and so cannot be settled during the scan.
+//
+// joinLibGate gates the join feature on the subject's own liberty count (0 =
+// no gate), for the same reason the ninecell caps exist: its walk covers the
+// chain's liberties and then every adjacent friend's liberty list, so it costs
+// the most on chains whose survival was never in question.
+function chainCountKeys(cells, nbr, gid, owner, chainGid, libs, nStones,
+                        out, subjectMaxLibs, joinCap, chainsByGid,
+                        subjectMaxStones, libStoneLibCap, libStoneStoneCap,
+                        joinLibGate) {
   const nl = libs.length;
-  const wantSingles = libertyNinecells !== false &&
-                      (maxLibNinecells <= 0 || nl <= maxLibNinecells);
-  if (wantSingles) {
-    for (let a = 0; a < nl; a++) {
-      const h = _ncKey(ninecellId(cells, nbr, dnbr, libs[a], owner));
-      out.push(h === 0 ? 1 : h);
-    }
-  }
-  // The liberty cap gates BOTH halves: a chain with more liberties than
-  // maxLibNinecells emits no ninecells at all, stones included.
-  if (stoneNinecells !== false &&
-      (maxLibNinecells <= 0 || nl <= maxLibNinecells) &&
-      (maxStoneNinecells <= 0 || stones.length <= maxStoneNinecells)) {
-    // Only stones ADJACENT TO A LIBERTY are coded.  An interior stone — one with
-    // no empty orthogonal neighbour — cannot be where the chain lives or dies:
-    // its own surround says nothing about the chain's boundary, and it costs a
-    // ninecell each on exactly the big solid chains that emit the most of them.
-    for (const st of stones) {
-      const b4 = st * 4;
-      if (cells[nbr[b4]] !== 0 && cells[nbr[b4 + 1]] !== 0 &&
-          cells[nbr[b4 + 2]] !== 0 && cells[nbr[b4 + 3]] !== 0) continue;
-      const h = (_ncKey(ninecellId(cells, nbr, dnbr, st, owner)) ^ stoneSalt) | 0;
-      out.push(h === 0 ? 1 : h);
-    }
-  }
   if (subjectMaxStones > 0) {
-    let n = 0;
-    for (const _ of stones) n++;
-    out.push(chainStoneCountKey(n, subjectMaxStones));
+    out.push(chainStoneCountKey(nStones, subjectMaxStones));
   }
   if (subjectMaxLibs > 0) {
-    let n = 0;
-    for (const _ of libs) n++;
-    out.push(chainLibCountKey(n, subjectMaxLibs));
+    out.push(chainLibCountKey(nl, subjectMaxLibs));
   }
   if (libStoneLibCap > 0 && libStoneStoneCap > 0) {
-    out.push(chainLibStoneKey(nl, stones.length, libStoneLibCap, libStoneStoneCap));
+    out.push(chainLibStoneKey(nl, nStones, libStoneLibCap, libStoneStoneCap));
   }
   if (joinCap > 0 && (joinLibGate <= 0 || nl <= joinLibGate)) {
     if (_joinMark === null || _joinMark.length < cells.length) _joinMark = new Int32Array(cells.length);
@@ -401,8 +386,33 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
 //   - byGid is no longer a Map, so it has no .get.  Only health-lib dereferences
 //     it (chainSurvKeys, friendsOfChain, foesOfChain, markLiveChains); every
 //     other caller passes it through opaquely.
+// The position's liberty points, filled by chainsOf and consumed by scanBoard.
+// _lpPt[i] is the point and _lpEye[i] the enclosing colour when all four of its
+// neighbours are stones of one colour (0 otherwise); the chains it is a liberty
+// of are _lpFlat[_lpStart[i] ... +_lpCnt[i]].  CSR rather than a fixed four
+// slots because the great majority of points have one or two chains, and the
+// padding was read on every one of them.  Module-level and overwritten by the
+// next chainsOf, exactly like _byGid.
 let _byGid = [];
-function chainsOf(cells, nbr, gid) {
+let _lpPt = new Int32Array(0), _lpEye = new Int32Array(0);
+let _lpStart = new Int32Array(0), _lpCnt = new Int32Array(0), _lpFlat = new Int32Array(0);
+let _lpN = 0, _lpFlatN = 0;
+// collectStones (default true): with it false the per-chain stone LISTS are not
+// built -- only nStones and stone0.  The lists' sole consumers are the stone
+// ninecells and the foe relation, so a caller whose model uses neither skips
+// ~80 pushes per position; scanBoard hard-fails if the model disagrees.
+function chainsOf(cells, nbr, gid, collectStones) {
+  const noStones = collectStones === false;
+  _lpN = 0; _lpFlatN = 0;
+  const areaLp = cells.length;
+  if (_lpPt.length < areaLp) {
+    // Typed, and holding chain INDICES rather than records: an array of object
+    // references costs a GC write barrier on every store, and this one takes
+    // ~190 stores per position.
+    _lpPt = new Int32Array(areaLp); _lpEye = new Int32Array(areaLp);
+    _lpStart = new Int32Array(areaLp); _lpCnt = new Int32Array(areaLp);
+    _lpFlat = new Int32Array(areaLp * 4);
+  }
   const area = cells.length;
   const chains = [];
   const byGid = _byGid;
@@ -412,10 +422,19 @@ function chainsOf(cells, nbr, gid) {
     const g = gid[i];
     let r = byGid[g];
     if (r === undefined || r.stamp !== chains) {
-      r = { gid: g, c, idx: chains.length, stones: [], libs: [], p: 0, live: false, stamp: chains };
+      // A FRESH record and fresh arrays every position, which looks like churn
+      // and measures as the opposite: reusing them in place cost 3.2us/position
+      // here (5.5 -> 8.7), because a long-lived array takes a GC write barrier
+      // on every store while a nursery one does not.  keys/friends/foes are
+      // left null for scanBoard to fill in only when a feature needs them.
+      r = { gid: g, c, idx: chains.length, stones: noStones ? null : [], libs: [],
+            nStones: 0, stone0: i,
+            keys: null, friends: null, foes: null, p: 0, live: false, stamp: chains,
+            wantLib: false, wantStone: false, wantFriend: false, wantFoe: false };
       byGid[g] = r; chains.push(r);
     }
-    r.stones.push(i);
+    r.nStones++;
+    if (!noStones) r.stones.push(i);
   }
   for (let l = 0; l < area; l++) {
     if (cells[l] !== 0) continue;
@@ -423,14 +442,30 @@ function chainsOf(cells, nbr, gid) {
     // At most four distinct chains touch an empty point, and once three are
     // held the fourth cannot repeat one of them, so three slots dedupe exactly.
     let s0 = -1, s1 = -1, s2 = -1;
+    let occ = 0, col = 0, mono = true;
+    const flatStart = _lpFlatN;
     for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d];
-      if (cells[j] === 0) continue;
+      const j = nbr[b4 + d], cj = cells[j];
+      if (cj === 0) { mono = false; continue; }
+      occ++;
+      if (col === 0) col = cj; else if (cj !== col) mono = false;
       const gj = gid[j];
       if (gj === s0 || gj === s1 || gj === s2) continue;
       if (s0 < 0) s0 = gj; else if (s1 < 0) s1 = gj; else s2 = gj;
-      byGid[gj].libs.push(l);
+      const rj = byGid[gj];
+      rj.libs.push(l);
+      _lpFlat[_lpFlatN++] = rj.idx;
     }
+    if (_lpFlatN === flatStart) continue;
+    // The LIBERTY POINTS of the position, each with the chains it belongs to,
+    // so the board scan never has to rediscover them: it would otherwise repeat
+    // this loop's neighbour reads and its dedup over the whole board.  _lpEye
+    // carries the colour of a point enclosed by four stones of one colour (0
+    // otherwise), which is the only kind of point the life proof can use.
+    _lpPt[_lpN] = l;
+    _lpStart[_lpN] = flatStart; _lpCnt[_lpN] = _lpFlatN - flatStart;
+    _lpEye[_lpN] = (mono && occ === 4) ? col : 0;
+    _lpN++;
   }
   return { chains, byGid };
 }
@@ -440,75 +475,146 @@ function chainsOf(cells, nbr, gid) {
 // make them one chain — so the relation runs through a SHARED LIBERTY, the
 // same neighbour set the best-single-join one-hot considers.  Shared with
 // train-health.js so the trained and the scored friend set cannot drift.
-function friendsOfChain(cells, nbr, gid, byGid, r, out) {
-  const start = out.length, owner = r.c, chainGid = r.gid, libs = r.libs;
-  for (let a = 0; a < libs.length; a++) {
-    const b4 = libs[a] * 4;
-    for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d];
-      if (cells[j] !== owner) continue;
-      const gj = gid[j];
-      if (gj === chainGid) continue;
-      const k = byGid[gj].idx;
-      let dup = false;
-      for (let q = start; q < out.length; q++) if (out[q] === k) { dup = true; break; }
-      if (!dup) out.push(k);
-    }
-  }
+// The final weight key of the ninecell at `l` as seen by `owner`: salt 0 for a
+// liberty, the model's stoneSalt for a stone.  Only the trainer's diagnostics
+// call this — the scan computes its keys inline — but it has to compute them
+// the same way, so it lives next to the code that does.
+function ninecellKey(cells, nbr, dnbr, l, owner, salt) {
+  const k = (_ncKey(ninecellId(cells, nbr, dnbr, l, owner)) ^ salt) | 0;
+  return k === 0 ? 1 : k;
 }
 
-// The enemy chains in CONTACT with a chain, as indices into `chains`, appended
-// to `out`.  Shared with train-health.js.
-function foesOfChain(cells, nbr, gid, byGid, r, out) {
-  const start = out.length, owner = r.c, stones = r.stones;
-  for (let a = 0; a < stones.length; a++) {
-    const b4 = stones[a] * 4;
-    for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d];
-      const c = cells[j];
-      if (c === 0 || c === owner) continue;
-      const k = byGid[gid[j]].idx;
-      let dup = false;
-      for (let q = start; q < out.length; q++) if (out[q] === k) { dup = true; break; }
-      if (!dup) out.push(k);
-    }
-  }
+function _pushUniq(list, k) {
+  for (let q = 0; q < list.length; q++) if (list[q] === k) return;
+  list.push(k);
+}
+// Two chains sharing the empty point under inspection.  Same colour makes them
+// joinable friends; different colours means nothing here, since enemy contact
+// runs through adjacent STONES and is collected at the stone instead.
+function _friendPair(a, b) {
+  if (a === null || b === null || a.c !== b.c) return;
+  if (a.wantFriend) _pushUniq(a.friends, b.idx);
+  if (b.wantFriend) _pushUniq(b.friends, a.idx);
 }
 
-// Scratch for one position's neighbour relations, reused across propagation
-// passes (they are a function of the POSITION, not of the health estimates) and
-// across positions.  Callers own their own instance so the trainer and the
-// scorer cannot tread on each other.
-function makeNeighbourhoods() {
-  return { frFlat: [], frStart: [], frLen: [],
-           foFlat: [], foStart: [], foLen: [] };
-}
-function neighbourhoodsOf(cells, nbr, gid, chains, byGid, wantFriends, wantFoes, nb,
-                          friendLibGate, foeLibGate) {
-  nb.frFlat.length = 0; nb.frStart.length = 0; nb.frLen.length = 0;
-  nb.foFlat.length = 0; nb.foStart.length = 0; nb.foLen.length = 0;
-  for (let i = 0; i < chains.length; i++) {
+// ── The board scan ────────────────────────────────────────────────────────────
+// ONE pass over the board, producing everything the per-chain walks used to
+// produce separately: the ninecell key of every stone and of every liberty, the
+// friendly chains each chain can join, the enemy chains it is in contact with,
+// and the eye points that prove life.  It replaces five traversals — a liberty
+// walk, a stone walk, a friend walk and a foe walk per chain, plus a pass over
+// the empties for the eye proof — with one, and the reads at a point serve all
+// of its consumers at once: the eight cells of the ninecell window are the same
+// eight isTrueEye wants, and the four orthogonals that tell a stone whether it
+// touches a liberty are the four that find its enemies.
+//
+// chainsOf still runs first.  It is the cheap pass — four reads per empty point,
+// no window, no encode, no table lookup — and the liberty and stone counts it
+// produces are exactly what the --max-lib-ninecells and --max-stone-ninecells
+// gates test, so they must be known before this pass can decide what to emit.
+// The gates are resolved once per chain here, into wantLib / wantStone, and a
+// gated-out chain then costs this pass nothing.
+//
+// A liberty shared by several chains is encoded ONCE; each chain reads its own
+// orbit from the table for its colour, and two chains of the SAME colour share
+// the key and its weight lookup as well.  Under the old per-chain walk every
+// one of them re-read the window and re-encoded it.
+//
+// `weights` non-null accumulates the logit into r.z (what the scorer wants);
+// `keysOn` collects the keys into r.keys (what the trainer needs for its
+// gradient).  Both may be on; neither may be, which is how a caller asks only
+// for the relations.
+const _eg4 = new Int32Array(4);
+// Pooled per-chain key arrays for the keysOn (trainer) path, reused across
+// positions by chain INDEX; a fresh array per chain per position measured as
+// allocation churn in the trainer's tPos.
+const _keyPool = [];
+function scanBoard(model, cells, nbr, dnbr, gid, chains, byGid, weights, keysOn, zOut) {
+  const nChains = chains.length;
+  const stoneNC = model.stoneNinecells !== false;
+  const libNC = model.libertyNinecells !== false;
+  const mln = model.maxLibNinecells, msn = model.maxStoneNinecells;
+  const fhb = model.friendHealthMaxBuckets, fnb = model.foeHealthMinBuckets;
+  const fGate = model.friendLibGate, oGate = model.foeLibGate;
+  const salt = model.stoneSalt;
+  if ((stoneNC || fnb > 0) && nChains > 0 && chains[0].stones === null) {
+    throw new Error('health-lib.scanBoard: the model wants stone ninecells or foe-health ' +
+                    'but chainsOf was called with collectStones false');
+  }
+  for (let i = 0; i < nChains; i++) {
     const r = chains[i];
-    // Gated out: the list stays EMPTY rather than absent, so neighbourHealthKeys
-    // finds no neighbour and emits nothing, with no test of its own.  The gate
-    // is here rather than at key time so that what it saves is the SCAN.
     const nl = r.libs.length;
-    if (wantFriends) {
-      const s = nb.frFlat.length;
-      if (friendLibGate <= 0 || nl <= friendLibGate) {
-        friendsOfChain(cells, nbr, gid, byGid, r, nb.frFlat);
+    // The liberty cap gates BOTH ninecell halves: a chain with that many
+    // liberties is not in question, so nothing about its shape is worth a key.
+    const inQuestion = mln <= 0 || nl <= mln;
+    r.wantLib = libNC && inQuestion;
+    r.wantStone = stoneNC && inQuestion && (msn <= 0 || r.nStones <= msn);
+    r.wantFriend = fhb > 0 && (fGate <= 0 || nl <= fGate);
+    r.wantFoe = fnb > 0 && (oGate <= 0 || nl <= oGate);
+    if (zOut !== null) zOut[i] = 0;
+    if (keysOn) { let ka = _keyPool[i]; if (ka === undefined) ka = _keyPool[i] = []; ka.length = 0; r.keys = ka; }
+    if (r.wantFriend) r.friends = [];
+    if (r.wantFoe) r.foes = [];
+  }
+  // The stones, chain by chain.  A chain wanting neither its ninecells nor its
+  // enemy contacts never has its stones walked at all.
+  for (let i = 0; i < nChains; i++) {
+    const r = chains[i];
+    const wantStone = r.wantStone, wantFoe = r.wantFoe;
+    if (!wantStone && !wantFoe) continue;
+    const c = r.c, stones = r.stones;
+    for (let a = 0; a < stones.length; a++) {
+      const st = stones[a], b4 = st * 4;
+      let touchesEmpty = false;
+      for (let d = 0; d < 4; d++) {
+        const j = nbr[b4 + d], cj = cells[j];
+        if (cj === 0) { touchesEmpty = true; continue; }
+        if (cj === c || !wantFoe) continue;
+        _pushUniq(r.foes, byGid[gid[j]].idx);
       }
-      nb.frStart.push(s); nb.frLen.push(nb.frFlat.length - s);
-    }
-    if (wantFoes) {
-      const s = nb.foFlat.length;
-      if (foeLibGate <= 0 || nl <= foeLibGate) {
-        foesOfChain(cells, nbr, gid, byGid, r, nb.foFlat);
-      }
-      nb.foStart.push(s); nb.foLen.push(nb.foFlat.length - s);
+      // A stone with no empty orthogonal neighbour is interior: not where the
+      // chain lives or dies, and its surround says nothing about the boundary.
+      if (!touchesEmpty || !wantStone) continue;
+      const raw = ninecellRaw(cells, nbr, dnbr, st);
+      let k = (_ncKey(c === 1 ? _CANON[raw] : _CANON_NEG[raw]) ^ salt) | 0;
+      if (k === 0) k = 1;
+      if (keysOn) r.keys.push(k);
+      if (weights !== null) zOut[r.idx] += weights.get(k) || 0;
     }
   }
-  return nb;
+  // The liberty points, each already carrying the chains it belongs to.
+  _eyeG.length = 0; _eyeN.length = 0;
+  for (let i = 0; i < _lpN; i++) {
+    const s = _lpStart[i], n = _lpCnt[i];
+    // The window is encoded on FIRST demand and reused by every chain here;
+    // _ncKey never returns 0, so 0 is a safe "not computed yet" for each
+    // colour's key.  Two friendly chains sharing this liberty therefore cost
+    // one encode, one table lookup and one weight lookup between them.
+    let raw = -1, kb = 0, kw = 0;
+    for (let a = 0; a < n; a++) {
+      const r = chains[_lpFlat[s + a]];
+      if (!r.wantLib) continue;
+      if (raw < 0) raw = ninecellRaw(cells, nbr, dnbr, _lpPt[i]);
+      let k;
+      if (r.c === 1) { if (kb === 0) kb = _ncKey(_CANON[raw]); k = kb; }
+      else { if (kw === 0) kw = _ncKey(_CANON_NEG[raw]); k = kw; }
+      if (keysOn) r.keys.push(k);
+      if (weights !== null) zOut[r.idx] += weights.get(k) || 0;
+    }
+    if (n > 1) {
+      for (let a = 0; a < n; a++) {
+        for (let b = a + 1; b < n; b++) _friendPair(chains[_lpFlat[s + a]], chains[_lpFlat[s + b]]);
+      }
+    }
+    const eyeCol = _lpEye[i];
+    if (eyeCol !== 0) {
+      const b4 = _lpPt[i] * 4;
+      for (let d = 0; d < 4; d++) _eg4[d] = gid[nbr[b4 + d]];
+      _eyeCandidate(cells, dnbr, b4, eyeCol);
+    }
+  }
+  _markLiveFromEyes(byGid);
+  return chains;
 }
 
 // The neighbour-health keys for chain i under the current health estimates,
@@ -519,21 +625,23 @@ function neighbourhoodsOf(cells, nbr, gid, chains, byGid, wantFriends, wantFoes,
 // family — absence is distinguishable from any bucket by the weight not being
 // there.  The trainer and the scorer both go through this, so what is trained
 // and what is scored cannot drift.
-function neighbourHealthKeys(nb, i, health, cfg, out) {
+function neighbourHealthKeys(chains, i, health, cfg, out) {
   const friendBuckets = cfg.friendHealthMaxBuckets;
   const foeMinBuckets = cfg.foeHealthMinBuckets;
+  const r = chains[i];
   let n = 0;
   if (friendBuckets > 0) {
-    const s = nb.frStart[i], len = nb.frLen[i];
+    const fr = r.friends;
     let best = -1;
-    for (let a = 0; a < len; a++) { const v = health[nb.frFlat[s + a]]; if (v > best) best = v; }
+    if (fr !== null) for (let a = 0; a < fr.length; a++) { const v = health[fr[a]]; if (v > best) best = v; }
     if (best >= 0) out[n++] = chainFriendHealthKey(best, friendBuckets);
   }
   if (foeMinBuckets > 0) {
-    const s = nb.foStart[i], len = nb.foLen[i];
-    let worst = 2;
-    for (let a = 0; a < len; a++) { const v = health[nb.foFlat[s + a]]; if (v < worst) worst = v; }
-    if (len > 0) out[n++] = chainFoeMinHealthKey(worst, foeMinBuckets);
+    const fo = r.foes;
+    let worst = 2, nf = 0;
+    if (fo !== null) { nf = fo.length;
+      for (let a = 0; a < nf; a++) { const v = health[fo[a]]; if (v < worst) worst = v; } }
+    if (nf > 0) out[n++] = chainFoeMinHealthKey(worst, foeMinBuckets);
   }
   return n;
 }
@@ -563,41 +671,38 @@ function neighbourHealthKeys(nb, i, health, cfg, out) {
 // model rated 5% of provably-alive chains below 0.9, one 19-stone group with
 // two eyes at 0.504, because at 2 liberties the liberty one-hot dominates and
 // nothing contradicts it.  One pass over the empty points, ~7us on 13x13
-// against ~180us for the scoring it guards.
+// against ~180us for the scoring it guards.  The collection now rides along
+// with scanBoard, which is already at the point with all eight neighbours in
+// hand; _eyeCandidate is the per-point half and _markLiveFromEyes the pairing.
 const _eyeG = [], _eyeN = [];
-function markLiveChains(cells, nbr, gid, dnbr, chains, byGid) {
-  const area = cells.length;
-  _eyeG.length = 0; _eyeN.length = 0;
-  for (let p = 0; p < area; p++) {
-    if (cells[p] !== 0) continue;
-    const b4 = p * 4;
-    let col = 0, n = 0, ok = true, firstGid = -2, sameGroup = 0;
-    let a0 = -1, a1 = -1, a2 = -1, a3 = -1;
-    for (let d = 0; d < 4; d++) {
-      const j = nbr[b4 + d], c = cells[j];
-      if (c === 0) { ok = false; break; }
-      if (col === 0) col = c; else if (c !== col) { ok = false; break; }
-      const q = gid[j];
-      if (firstGid === -2) { firstGid = q; sameGroup = 1; } else if (q === firstGid) sameGroup++;
-      if (q === a0 || q === a1 || q === a2 || q === a3) continue;
-      // insertion sort into the four slots, so identical groups compare equal
-      if (q < a0 || a0 < 0) { a3 = a2; a2 = a1; a1 = a0; a0 = q; }
-      else if (q < a1 || a1 < 0) { a3 = a2; a2 = a1; a1 = q; }
-      else if (q < a2 || a2 < 0) { a3 = a2; a2 = q; }
-      else a3 = q;
-      n++;
-    }
-    if (!ok) continue;
-    // The opponent can never fill it, but the OWNER can unless the playout
-    // policy declines to — so the point must also be an eye by THE rule
-    // (game2.isTrueEye), which ppat-lib's move filter now shares.  A first version
-    // of this check omitted the test entirely and 2.4% of the chains it marked
-    // died in playouts.
-    let enemyDiag = 0;
-    for (let d = 0; d < 4; d++) if (cells[dnbr[b4 + d]] === -col) enemyDiag++;
-    if (!isTrueEye(4, 0, sameGroup, enemyDiag)) continue;
-    _eyeG.push(a0, a1, a2, a3); _eyeN.push(n);
+// The point at b4/4 is empty with four occupied neighbours, all of colour
+// `col` — scanBoard's caller has established that much.  _eg4 holds their gids.
+function _eyeCandidate(cells, dnbr, b4, col) {
+  const firstGid = _eg4[0];
+  let sameGroup = 0, n = 0;
+  let a0 = -1, a1 = -1, a2 = -1, a3 = -1;
+  for (let d = 0; d < 4; d++) {
+    const q = _eg4[d];
+    if (q === firstGid) sameGroup++;
+    if (q === a0 || q === a1 || q === a2 || q === a3) continue;
+    // insertion sort into the four slots, so identical groups compare equal
+    if (q < a0 || a0 < 0) { a3 = a2; a2 = a1; a1 = a0; a0 = q; }
+    else if (q < a1 || a1 < 0) { a3 = a2; a2 = a1; a1 = q; }
+    else if (q < a2 || a2 < 0) { a3 = a2; a2 = q; }
+    else a3 = q;
+    n++;
   }
+  // The opponent can never fill it, but the OWNER can unless the playout
+  // policy declines to — so the point must also be an eye by THE rule
+  // (game2.isTrueEye), which ppat-lib's move filter now shares.  A first version
+  // of this check omitted the test entirely and 2.4% of the chains it marked
+  // died in playouts.
+  let enemyDiag = 0;
+  for (let d = 0; d < 4; d++) if (cells[dnbr[b4 + d]] === -col) enemyDiag++;
+  if (!isTrueEye(4, 0, sameGroup, enemyDiag)) return;
+  _eyeG.push(a0, a1, a2, a3); _eyeN.push(n);
+}
+function _markLiveFromEyes(byGid) {
   const m = _eyeN.length;
   for (let i = 0; i < m; i++) {
     const bi = i * 4;
@@ -632,36 +737,34 @@ function markLiveChains(cells, nbr, gid, dnbr, chains, byGid) {
 // trained with different settings still scores correctly.
 const _survScratch = [];
 let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Array(0);
-const _nb = makeNeighbourhoods(), _nbKeys = new Int32Array(2);
 function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
   const n = chains.length, w = model.weights;
   if (_baseZ.length < n) {
     _baseZ = new Float64Array(n * 2);
   }
+  // The ninecell half of every chain's logit, plus the friend and foe relations
+  // and the life proof, in one pass over the board.  The scorer takes the sum
+  // rather than the keys, so nothing per-key is materialised.
+  scanBoard(model, cells, nbr, dnbr, gid, chains, byGid, w, false, _baseZ);
   for (let i = 0; i < n; i++) {
     const r = chains[i];
     _survScratch.length = 0;
-    chainSurvKeys(cells, nbr, dnbr, gid, r.c, r.gid, r.libs, r.stones,
-                  model.stoneSalt, _survScratch,
-                  model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
-                  model.libertyNinecells, model.maxStones,
-                  model.maxLibNinecells, model.libStoneLibs, model.libStoneStones,
-                  model.maxStoneNinecells, model.joinLibGate);
-    let z = model.bias;
+    chainCountKeys(cells, nbr, gid, r.c, r.gid, r.libs, r.nStones,
+                   _survScratch, model.maxLibs, model.maxJoinLibs, byGid,
+                   model.maxStones, model.libStoneLibs, model.libStoneStones,
+                   model.joinLibGate);
+    let z = model.bias + _baseZ[i];
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
   }
-  markLiveChains(cells, nbr, gid, dnbr, chains, byGid);
   const fhb = model.friendHealthMaxBuckets, fnb = model.foeHealthMinBuckets;
   if (fhb <= 0 && fnb <= 0) {
     for (let i = 0; i < n; i++) chains[i].p = chains[i].live ? 1 : 1 / (1 + Math.exp(-_baseZ[i]));
     return chains;
   }
-  neighbourhoodsOf(cells, nbr, gid, chains, byGid, fhb > 0, fnb > 0, _nb,
-                   model.friendLibGate, model.foeLibGate);
   if (_live.length < n) { _live = new Uint8Array(n * 2); _keys = new Int32Array(n * 2 * NB_SLOTS); }
   for (let i = 0; i < n; i++) _live[i] = chains[i].live ? 1 : 0;
-  propagateHealth(model, w, _baseZ, _live, n, _nb, _keys);
+  propagateHealth(model, w, _baseZ, _live, n, chains, _keys);
   // The propagation leaves the final neighbour keys; the probability is one
   // more sigmoid over them, which is also exactly what the trainer scores.
   for (let i = 0; i < n; i++) {
@@ -740,12 +843,12 @@ function resolveHealthModel(pathOrModel) {
 const NB_SLOTS = 2;                     // friendHealthMax, foeHealthMin
 const _propKeys = new Int32Array(NB_SLOTS);
 let _pCur = new Float64Array(0), _pNext = new Float64Array(0);
-function propagateHealth(model, weights, baseZ, live, n, nb, outKeys) {
+function propagateHealth(model, weights, baseZ, live, n, chains, outKeys) {
   if (_pCur.length < n) { _pCur = new Float64Array(n * 2); _pNext = new Float64Array(n * 2); }
   for (let i = 0; i < n; i++) _pCur[i] = live[i] ? 1 : model.initHealth;
   for (let it = 1; ; it++) {
     for (let i = 0; i < n; i++) {
-      const nk = neighbourHealthKeys(nb, i, _pCur, model, _propKeys);
+      const nk = neighbourHealthKeys(chains, i, _pCur, model, _propKeys);
       const b = i * NB_SLOTS;
       for (let k = 0; k < NB_SLOTS; k++) outKeys[b + k] = k < nk ? _propKeys[k] : 0;
     }
@@ -768,19 +871,17 @@ const HealthLib = {
   uh,
   xh4,
   ninecellId,
+  ninecellRaw,
+  ninecellKey,
   chainLibCountKey,
   chainStoneCountKey,
   chainLibStoneKey,
   chainJoinLibsKey,
   chainFriendHealthKey,
   chainFoeMinHealthKey,
-  chainSurvKeys,
+  chainCountKeys,
+  scanBoard,
   chainsOf,
-  markLiveChains,
-  friendsOfChain,
-  foesOfChain,
-  makeNeighbourhoods,
-  neighbourhoodsOf,
   neighbourHealthKeys,
   propagateHealth,
   chainHealthAll,

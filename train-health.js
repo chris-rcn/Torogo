@@ -401,7 +401,15 @@ const makeBuf = () => ({ exShapes: [], exStart: [], exLen: [],
 // is scored there cannot drift.
 const _baseZ = new Float64Array(area);
 const NB_SLOTS = HL.NB_SLOTS;   // friendHealthMax, foeHealthMin
-const _nb = HL.makeNeighbourhoods();
+// What health-lib.scanBoard reads, under the field names a saved health model
+// uses, so the trainer's board pass and the scorer's are the same pass.
+// Stone LISTS are only read by the stone ninecells and the foe relation.
+const COLLECT_STONES = STONE_NINECELLS || FOE_MIN_BUCKETS > 0;
+const SCAN_CFG = { stoneNinecells: STONE_NINECELLS, libertyNinecells: LIBERTY_NINECELLS,
+                   maxLibNinecells: MAX_LIB_NINECELLS, maxStoneNinecells: MAX_STONE_NINECELLS,
+                   friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
+                   friendLibGate: FRIEND_LIB_GATE, foeLibGate: FOE_LIB_GATE,
+                   stoneSalt: STONE_SALT };
 
 // One position's observations: every chain contributes one example — its
 // liberties' ninecells, then its stones'.
@@ -414,64 +422,57 @@ function collectObs(game, phase, buf) {
   // vpatterns, so what is trained here and what is scored there cannot drift.
   // chainsOf's chain order IS the example order, so a record's .idx indexes
   // the example arrays directly.
-  const { chains, byGid } = HL.chainsOf(cells, nbr, gid);
+  const { chains, byGid } = HL.chainsOf(cells, nbr, gid, COLLECT_STONES);
   // Chains PROVEN uncapturable are pinned to health 1 rather than predicted,
   // exactly as health-lib.chainHealthAll does at scoring time.  Their gradient
   // is then zero on its own (y = p = 1), so they stop dragging the liberty
   // one-hot: a 19-stone group with two eyes is not evidence that 2 liberties
   // is survivable.
-  HL.markLiveChains(cells, nbr, gid, dnbr, chains, byGid);
+  // ONE pass over the board for every chain's ninecell keys, the friend and foe
+  // relations, and the life proof — health-lib.scanBoard, the same pass the
+  // scorer makes, so what is trained and what is scored cannot drift.
+  HL.scanBoard(SCAN_CFG, cells, nbr, dnbr, gid, chains, byGid, null, true, null);
   for (const c of chains) {
     const owner = c.c, libs = c.libs, g0 = c.gid;
     const start = exShapes.length;
-    // health-lib.chainSurvKeys: liberty ninecells first, then stone ninecells,
-    // each half present only when its knob is on and its cap is not exceeded.
-    HL.chainSurvKeys(cells, nbr, dnbr, gid, owner, g0, libs, c.stones,
-                       STONE_SALT, exShapes, MAX_LIBS,
-                       MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
-                       MAX_STONES, MAX_LIB_NINECELLS,
-                       LIB_STONE_LIBS, LIB_STONE_STONES, MAX_STONE_NINECELLS,
-                       JOIN_LIB_GATE);
+    const keys = c.keys;
+    for (let a = 0; a < keys.length; a++) exShapes.push(keys[a]);
+    HL.chainCountKeys(cells, nbr, gid, owner, g0, libs, c.nStones,
+                      exShapes, MAX_LIBS, MAX_JOIN_LIBS, byGid,
+                      MAX_STONES, LIB_STONE_LIBS, LIB_STONE_STONES, JOIN_LIB_GATE);
     if (VERBOSE) {
-      // What chainSurvKeys actually emitted for each half: the knob turns it off
-      // outright, the cap turns it off for this chain only.
-      const nLibEmit = (LIBERTY_NINECELLS &&
-        (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS)) ? libs.length : 0;
-      const stonesOn = STONE_NINECELLS &&
-        (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS) &&
-        (MAX_STONE_NINECELLS <= 0 || c.stones.length <= MAX_STONE_NINECELLS);
-      for (let a = 0; a < nLibEmit; a++) {
-        const k = exShapes[start + a];
-        if (!examples.has(k)) examples.set(k, render(game, libs[a], owner, gid, g0));
+      // Labels are computed from the chain, not by walking exShapes by offset:
+      // the scan emits in BOARD order, and an offset walk was a standing source
+      // of mislabelling even when it was in chain order.
+      if (c.wantLib) for (const l of libs) {
+        const k = HL.ninecellKey(cells, nbr, dnbr, l, owner, 0);
+        if (!examples.has(k)) examples.set(k, render(game, l, owner, gid, g0));
       }
-      // chainSurvKeys skips stones with no empty orthogonal neighbour, so walk
-      // the same filter to stay aligned with what it pushed.
-      let nStoneEmit = 0;
-      if (stonesOn) for (const st of c.stones) {
+      if (c.wantStone) for (const st of c.stones) {
         const b4 = st * 4;
         if (cells[nbr[b4]] !== 0 && cells[nbr[b4 + 1]] !== 0 &&
             cells[nbr[b4 + 2]] !== 0 && cells[nbr[b4 + 3]] !== 0) continue;
-        const k = exShapes[start + nLibEmit + nStoneEmit++];
+        const k = HL.ninecellKey(cells, nbr, dnbr, st, owner, STONE_SALT);
         if (!examples.has(k)) examples.set(k, 'S:' + render(game, st, owner, gid, g0));
       }
-      // the one-hots trail the ninecells: liberty count, then best-join
-      let oh = start + nLibEmit + nStoneEmit;
       if (MAX_STONES > 0) {
-        const k = exShapes[oh++];
-        if (!examples.has(k)) examples.set(k, 'stones=' + Math.min(c.stones.length, MAX_STONES));
+        const k = HL.chainStoneCountKey(c.nStones, MAX_STONES);
+        if (!examples.has(k)) examples.set(k, 'stones=' + Math.min(c.nStones, MAX_STONES));
       }
       if (MAX_LIBS > 0) {
-        const k = exShapes[oh++];
+        const k = HL.chainLibCountKey(libs.length, MAX_LIBS);
         if (!examples.has(k)) examples.set(k, 'libs=' + Math.min(libs.length, MAX_LIBS));
       }
-      if (LIB_STONE_LIBS > 0 && LIB_STONE_STONES > 0) oh++;
-      if (MAX_JOIN_LIBS > 0 && (JOIN_LIB_GATE <= 0 || libs.length <= JOIN_LIB_GATE) &&
-          !examples.has(exShapes[oh])) examples.set(exShapes[oh], 'joinLibs');
+      // the join key is the last thing chainCountKeys pushed, when it pushed one
+      if (MAX_JOIN_LIBS > 0 && (JOIN_LIB_GATE <= 0 || libs.length <= JOIN_LIB_GATE)) {
+        const k = exShapes[exShapes.length - 1];
+        if (!examples.has(k)) examples.set(k, 'joinLibs');
+      }
     }
     for (let k = 0; k < NB_SLOTS; k++) exNb.push(0);
     exLive.push(c.live);
     exStart.push(start); exLen.push(exShapes.length - start);
-    exOwner.push(owner); exStone.push(c.stones[0]); exBin.push(bin);
+    exOwner.push(owner); exStone.push(c.stone0); exBin.push(bin);
   }
   if (NEIGHBOUR_ON) propagate(buf, cells, nbr, gid, chains, byGid);
 }
@@ -485,8 +486,8 @@ function collectObs(game, phase, buf) {
 function propagate(buf, cells, nbr, gid, chains, byGid) {
   const { exShapes, exStart, exLen, exNb, exLive } = buf;
   const nCh = exStart.length;
-  HL.neighbourhoodsOf(cells, nbr, gid, chains, byGid, FHM_BUCKETS > 0, FOE_MIN_BUCKETS > 0, _nb,
-                      FRIEND_LIB_GATE, FOE_LIB_GATE);
+  // The friend and foe relations were collected by the board scan; chainsOf's
+  // chain order is the example order, so chains[i] is example i.
   // The per-chain base logit: bias plus the chain's own ninecells and one-hots.
   // Fixed for the whole propagation — the weights do not move until this
   // position has been trained on — so it is summed once rather than per pass.
@@ -496,7 +497,7 @@ function propagate(buf, cells, nbr, gid, chains, byGid) {
     for (let j = lo; j < hi; j++) z += weights.get(exShapes[j]) || 0;
     _baseZ[i] = z;
   }
-  HL.propagateHealth(NB_CFG, weights, _baseZ, exLive, nCh, _nb, exNb);
+  HL.propagateHealth(NB_CFG, weights, _baseZ, exLive, nCh, chains, exNb);
 }
 
 // exc = loss - FLOOR: the only part of the loss a model can influence, since

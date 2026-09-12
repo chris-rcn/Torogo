@@ -313,6 +313,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       raw = new Int8Array(cap);
       if (survChains === null) {
         const gidH = game._gid, lsH = game._ls, nbrH = game._nbr, dnbrH = game._dnbr;
+        // Always collect stone lists: the H family paints its bucket onto
+        // r.stones below, regardless of whether the HEALTH MODEL's own
+        // features read them.
         const cs = chainsOf(cells, nbrH, gidH);
         survChains = cs.chains;
         chainHealthAll(prepSpecs.healthModel, cells, nbrH, dnbrH, gidH, lsH, cs.chains, cs.byGid);
