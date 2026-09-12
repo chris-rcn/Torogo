@@ -53,9 +53,9 @@
 //   --corpus PATH   gen-games corpus ("<size> <move1,...>" lines), required
 //   --games N       corpus games to consume (default: all)
 //   --size N        board size (default 13)
-//   --lr F          SGD step, constant (default 0.02).  0.05 won a 40k-game
-//                   ladder, but over the full corpus the smaller step settles
-//                   lower — more data, less end-state jitter.
+//   --lr F          SGD step, constant (default 0.01).  Larger steps win
+//                   40k-game ladders, but over the full corpus the smaller
+//                   step settles lower — more data, less end-state jitter.
 //   --max-libs N    add a chain-level LIBERTY-COUNT one-hot for the chain
 //                   being predicted, capped at N (default 8 — measured: 7 is
 //                   worse, 9 no better; 0 = off).  Distinct from
@@ -112,16 +112,15 @@
 //                   neighbourhoods can compute it at any window size.
 //                   the ninecell alphabet (default 2).  It does not apply to
 //                   the subject chain, which is a single state.
-//   --min-phase F   leaf-sample band lower bound (default 0)
-//   --max-phase F   leaf-sample band upper bound (default 0.8).  With --delta
-//                   this fixes the ENDPOINT distribution: the default pair
-//                   gives endpoints spanning [0.2, 1.0], i.e. every phase, so
-//                   the model is usable wherever it is asked — ab-search
-//                   leaves, featurepol's rank feature, H-coded patterns.
-//                   Outside its training band a health model extrapolates and
-//                   degrades sharply, so narrow this only for a model that
-//                   will be used behind a matching gate (e.g. --max-phase 0.4
-//                   for a truncation evaluator gated at phase 0.6).
+//   --eval-phase A,B  the ENDPOINT phase band to train — the positions the
+//                   model's consumers will evaluate; the leaf-sample band is
+//                   derived as [A - delta, B - delta].  The default spans
+//                   every reachable phase, so the model is usable wherever it
+//                   is asked — ab-search leaves, featurepol's rank feature,
+//                   H-coded patterns.  Outside its training band a health
+//                   model extrapolates and degrades sharply, so narrow this
+//                   only for a model used behind a matching gate (e.g.
+//                   --eval-phase 0.5,0.55 for the late-band arm).
 //   --delta F       playout descent in fullness from leaf to graded endpoint
 //                   (default 0.2, the deployed truncation delta)
 //   --floor F       irreducible label entropy subtracted in the 'exc' column
@@ -155,7 +154,7 @@ const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
    'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
    'join-lib-gate', 'friend-lib-gate', 'foe-lib-gate',
-   'iterations', 'min-phase', 'max-phase',
+   'iterations', 'eval-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
@@ -170,11 +169,14 @@ irreducible label entropy.
   --corpus PATH   gen-games corpus ("<size> <move1,...>" lines)
   --games N       corpus games to consume (default: all)
   --size N        board size (default 13)
-  --lr F          SGD step, constant (default 0.02; 0.05 is better only on
+  --lr F          SGD step, constant (default 0.01; larger steps win only on
                   short runs)
-  --min-phase F   leaf band lower bound (default 0)
-  --max-phase F   leaf band upper bound (default 0.8 = endpoints at every
-                  phase; narrow it only for a gated consumer)
+  --eval-phase A,B  the ENDPOINT phase band to train — the band the model's
+                  consumers will evaluate.  Leaf sampling is derived as
+                  [A - delta, B - delta]; A below delta is unreachable and an
+                  error.  Default delta,delta+0.8 = endpoints at every phase;
+                  narrow it only for a gated consumer (e.g. 0.5,0.55 for the
+                  late-band arm)
   --delta F       playout descent to the graded endpoint (default 0.2)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
                   at N (default 8 — 7 measured worse, 9 no better; 0 = off)
@@ -238,9 +240,27 @@ irreducible label entropy.
 const CORPUS = opts.corpus;
 // Leaf band and descent fix the ENDPOINT distribution, and the floor belongs
 // to that distribution, so it is measured per run rather than hardcoded.
-const MIN_PH = parseFloat(opts['min-phase'] !== undefined ? opts['min-phase'] : '0');
-const MAX_PH = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase'] : '0.8');
 const DELTA = parseFloat(opts.delta !== undefined ? opts.delta : '0.2');
+// --eval-phase names the band of ENDPOINT positions — the positions actually
+// trained — and the leaf sampling band is derived from it ([A - delta,
+// B - delta]).  The old --min-phase/--max-phase named the LEAF band, which
+// meant every command line carried a mental delta-shift; they are gone and
+// the parser rejects them.  Default reproduces the old default exactly:
+// endpoints [delta, delta + 0.8] = leaf band [0, 0.8].
+const _epRaw = (opts['eval-phase'] !== undefined
+  ? opts['eval-phase'] : `${DELTA},${DELTA + 0.8}`).split(',').map(parseFloat);
+if (_epRaw.length !== 2 || _epRaw.some(x => !Number.isFinite(x)) || !(_epRaw[0] < _epRaw[1])) {
+  console.error('error: --eval-phase wants "A,B" with A < B (the ENDPOINT band to train)');
+  process.exit(1);
+}
+if (_epRaw[0] < DELTA - 1e-9) {
+  console.error(`error: --eval-phase lower bound ${_epRaw[0]} is unreachable — endpoints sit ` +
+    `delta (${DELTA}) above their leaves, so the band cannot start below ${DELTA}`);
+  process.exit(1);
+}
+const EVAL_MIN = _epRaw[0], EVAL_MAX = _epRaw[1];
+const MIN_PH = EVAL_MIN - DELTA;
+const MAX_PH = EVAL_MAX - DELTA;
 // Floor sample size: the label is a stochastic playout outcome, so no model
 // can beat the mean entropy of the per-chain survival probability.  Costs a
 // few seconds at startup.  More COMPLETIONS is what buys accuracy — the
@@ -256,7 +276,7 @@ const SIZE = parseInt(opts.size || '13', 10);
 // (ai/puct-ppat-fp-trunc.js) exactly.
 const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 
-const LR = parseFloat(opts.lr || '0.02');
+const LR = parseFloat(opts.lr || '0.01');
 const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8', 10);
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
@@ -354,7 +374,7 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
@@ -738,7 +758,7 @@ const entries = [...weights.entries()].map(([h, w]) => `[${h},${+w.toFixed(5)}]`
 const src = [
   "'use strict';",
   '// Auto-generated by train-health.js — do not edit by hand.',
-  `// corpus ${CORPUS}  leaf-band [${MIN_PH}, ${MAX_PH}]  delta ${DELTA}  size ${SIZE}  lr ${LR}`,
+  `// corpus ${CORPUS}  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}`,
   `// P(chain survives) = sigmoid(bias + sum of weights[ninecellId(lib)] over the`,
   `// chain's liberties` + (STONE_NINECELLS
      ? ` + sum of weights[ninecellId(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its stones`
@@ -749,7 +769,7 @@ const src = [
   `  // [minPhase, maxPhase], descended delta in fullness.  Outside it the model`,
   `  // extrapolates and its survival estimates degrade sharply, so a consumer`,
   `  // that sees every phase (ab-search, rank features) needs a full-range fit.`,
-  `  minPhase: ${MIN_PH}, maxPhase: ${MAX_PH}, delta: ${DELTA}, floor: ${+FLOOR.toFixed(5)},`,
+  `  minPhase: ${+MIN_PH.toFixed(3)}, maxPhase: ${+MAX_PH.toFixed(3)}, evalMinPhase: ${EVAL_MIN}, evalMaxPhase: ${EVAL_MAX}, delta: ${DELTA}, floor: ${+FLOOR.toFixed(5)},`,
   `  examples: ${nEx}, stoneSalt: ${STONE_SALT},`,
   `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS},`,
   `  joinLibGate: ${JOIN_LIB_GATE}, friendLibGate: ${FRIEND_LIB_GATE}, foeLibGate: ${FOE_LIB_GATE},`,
