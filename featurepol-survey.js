@@ -1,6 +1,6 @@
 'use strict';
 
-// survey-features.js — rank a featurepol model's spec spaces by how much each
+// featurepol-survey.js — rank a featurepol model's spec spaces by how much each
 // one actually influences move SELECTION, to surface the least useful term.
 //
 // Plays softmax self-play with the full loaded model.  At every position, for
@@ -23,7 +23,7 @@
 //   keys    distinct keys this space emitted over the run
 //
 // Usage:
-//   node survey-features.js --data <featurepol.js> [--games N]   (no --games: run forever)
+//   node featurepol-survey.js --data <featurepol.js> [--games N]   (no --games: run forever)
 //
 //   Reports fire on an EXPONENTIAL cadence: the threshold of scored positions
 //   doubles after each report, plus one final table at the end.
@@ -37,7 +37,27 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['data', 'games']);
 if (opts.help || !opts.data) {
-  console.log('Usage: node survey-features.js --data <featurepol.js> [--games N]');
+  console.log(`Usage: node featurepol-survey.js --data <featurepol.js> [options]
+
+Rank a featurepol model's spec spaces by how much each one actually
+influences move SELECTION, to surface the least useful term.  Plays softmax
+self-play with the full model; at every position each space is ablated
+(its partial logit subtracted from every candidate) and the policy shift is
+measured.  Reports fire on an exponential cadence (threshold of scored
+positions doubles each report) plus a final table, spaces sorted least
+useful first.
+
+Columns, averaged over positions with >1 candidate:
+  KL      mean KL(P_full || P_ablated) — primary; policy shift from removal
+  flip%   % of positions where the greedy (argmax) move changes when removed
+  spread  mean std-dev of the space's partial logit across candidates
+  |dev|   mean abs deviation of that partial logit from its per-position mean
+  keys    distinct keys the space emitted over the run
+
+  --data PATH     featurepol model to survey (required)
+  --games N       self-play games to run (default: run forever); the final
+                  table prints when the games are exhausted
+  --help          show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 const N        = 13;
@@ -45,7 +65,7 @@ const MAXGAMES = opts.games !== undefined ? parseInt(opts.games, 10) : Infinity;
 const SEED     = 1;
 const MTEMP    = 1;   // softmax temperature (must be > 0 for KL)
 
-const { weights: model } = FP.loadModel({ name: 'survey-features', path: opts.data });
+const { weights: model } = FP.loadModel({ name: 'featurepol-survey', path: opts.data });
 const rng        = makeRng(SEED);
 const modelState = FP.createState(N, model.spec);
 const needLadder = model.spec.needsLadder;
@@ -162,7 +182,7 @@ function report(tag) {
   console.log(`spec: ${rows.map(r => r.str).reverse().join(',')}`);
 }
 
-console.error(`survey-features: model ${model.size}w, ${spaces.length} spaces from ${path.basename(opts.data)}  size=${N} seed=${SEED}`);
+console.error(`featurepol-survey: model ${model.size}w, ${spaces.length} spaces from ${path.basename(opts.data)}  size=${N} seed=${SEED}`);
 
 let nextReport = 1000;
 for (let g = 0; g < MAXGAMES; g++) {
