@@ -275,7 +275,7 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
                        stoneSalt, out, subjectMaxLibs, joinCap, chainsByGid,
                        stoneNinecells, libertyNinecells, subjectMaxStones,
                        maxLibNinecells, libStoneLibCap, libStoneStoneCap,
-                       maxStoneNinecells, maxLibJoin) {
+                       maxStoneNinecells, joinLibGate) {
   // maxLibNinecells / maxStoneNinecells cap the chain's LIBERTY and STONE count
   // for the singleton ninecells.  They are not symmetric: the LIBERTY cap gates
   // both halves, so a chain with too many liberties emits no ninecells at all,
@@ -288,9 +288,9 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
   // half off); that differs from the other knobs on purpose, because 0-as-off
   // is already taken.
   //
-  // maxLibJoin is the same idea for the best-join count, whose scan walks the
+  // joinLibGate is the same idea for the best-join count, whose scan walks the
   // chain's liberties and then every adjacent friend's liberty list.  Its two
-  // siblings, maxLibFriend and maxLibFoe, gate the health features over in
+  // siblings, friendLibGate and foeLibGate, gate the health features over in
   // neighbourhoodsOf.  Each cross-chain feature gets its own gate because their
   // costs scale with different things — join and friend with liberty count, foe
   // with stone count — so their break-even caps have no reason to coincide.
@@ -327,7 +327,7 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
   if (libStoneLibCap > 0 && libStoneStoneCap > 0) {
     out.push(chainLibStoneKey(nl, stones.length, libStoneLibCap, libStoneStoneCap));
   }
-  if (joinCap > 0 && (maxLibJoin <= 0 || nl <= maxLibJoin)) {
+  if (joinCap > 0 && (joinLibGate <= 0 || nl <= joinLibGate)) {
     if (_joinMark === null || _joinMark.length < cells.length) _joinMark = new Int32Array(cells.length);
     const mark = _joinMark;
     // Stamp my own liberties once; each candidate join point then counts the
@@ -477,7 +477,7 @@ function makeNeighbourhoods() {
            foFlat: [], foStart: [], foLen: [] };
 }
 function neighbourhoodsOf(cells, nbr, gid, chains, byGid, wantFriends, wantFoes, nb,
-                          maxLibFriend, maxLibFoe) {
+                          friendLibGate, foeLibGate) {
   nb.frFlat.length = 0; nb.frStart.length = 0; nb.frLen.length = 0;
   nb.foFlat.length = 0; nb.foStart.length = 0; nb.foLen.length = 0;
   for (let i = 0; i < chains.length; i++) {
@@ -488,14 +488,14 @@ function neighbourhoodsOf(cells, nbr, gid, chains, byGid, wantFriends, wantFoes,
     const nl = r.libs.length;
     if (wantFriends) {
       const s = nb.frFlat.length;
-      if (maxLibFriend <= 0 || nl <= maxLibFriend) {
+      if (friendLibGate <= 0 || nl <= friendLibGate) {
         friendsOfChain(cells, nbr, gid, byGid, r, nb.frFlat);
       }
       nb.frStart.push(s); nb.frLen.push(nb.frFlat.length - s);
     }
     if (wantFoes) {
       const s = nb.foFlat.length;
-      if (maxLibFoe <= 0 || nl <= maxLibFoe) {
+      if (foeLibGate <= 0 || nl <= foeLibGate) {
         foesOfChain(cells, nbr, gid, byGid, r, nb.foFlat);
       }
       nb.foStart.push(s); nb.foLen.push(nb.foFlat.length - s);
@@ -639,7 +639,7 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
                   model.maxLibs, model.maxJoinLibs, byGid, model.stoneNinecells,
                   model.libertyNinecells, model.maxStones,
                   model.maxLibNinecells, model.libStoneLibs, model.libStoneStones,
-                  model.maxStoneNinecells, model.maxLibJoin);
+                  model.maxStoneNinecells, model.joinLibGate);
     let z = model.bias;
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -651,7 +651,7 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
     return chains;
   }
   neighbourhoodsOf(cells, nbr, gid, chains, byGid, fhb > 0, fnb > 0, _nb,
-                   model.maxLibFriend, model.maxLibFoe);
+                   model.friendLibGate, model.foeLibGate);
   if (_live.length < n) { _live = new Uint8Array(n * 2); _keys = new Int32Array(n * 2 * NB_SLOTS); }
   for (let i = 0; i < n; i++) _live[i] = chains[i].live ? 1 : 0;
   propagateHealth(model, w, _baseZ, _live, n, _nb, _keys);
@@ -683,9 +683,9 @@ function _survIntern(raw) {
            maxStones: raw.maxStones || 0,
            maxLibNinecells: raw.maxLibNinecells || 0,
            maxStoneNinecells: raw.maxStoneNinecells || 0,
-           maxLibJoin: raw.maxLibJoin || 0,
-           maxLibFriend: raw.maxLibFriend || 0,
-           maxLibFoe: raw.maxLibFoe || 0,
+           joinLibGate: raw.joinLibGate || 0,
+           friendLibGate: raw.friendLibGate || 0,
+           foeLibGate: raw.foeLibGate || 0,
            libStoneLibs: raw.libStoneLibs || 0, libStoneStones: raw.libStoneStones || 0,
            stoneSalt: raw.stoneSalt, minPhase: raw.minPhase, maxPhase: raw.maxPhase,
            delta: raw.delta, weights: w };
