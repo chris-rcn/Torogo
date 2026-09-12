@@ -26,7 +26,18 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'max-phase', 'min-phase']);
 if (opts.help || !opts.in) {
-  console.error('Usage: node filter-movedetails.js --in <file> [--min-phase F] [--max-phase F] > out.ndjson');
+  console.error(`Usage: node filter-movedetails.js --in <file> [options] > out.ndjson
+
+Filter a movedetails (ndjson) file by sample: surviving lines go to stdout
+verbatim (no reserialization), '#' header lines pass through, and a
+provenance comment recording the filter is appended.  Stats go to stderr so
+stdout stays pure data.  Phase = board fullness (1 - emptyCount/area),
+computed by replaying each sample's history.
+
+  --in PATH        input movedetails file (required)
+  --min-phase F    keep samples with phase >= F (default 0)
+  --max-phase F    keep samples with phase <= F (default 1)
+  --help           show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 

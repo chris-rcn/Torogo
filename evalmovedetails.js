@@ -16,7 +16,7 @@
 //
 //   --agent       ai agent name under ai/                   (required)
 //   --file        positions file from createmovedetails.js  (required)
-//   --budget      ms per move                               (default: 2000)
+//   --budget      ms per move                               (default: 1000)
 //   --limit       evaluate only the first n positions       (default: all)
 //   --index       evaluate only the position at 0-based index n, with the
 //                 seed it had in a full sweep
@@ -101,7 +101,24 @@ if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
-    console.log('Usage: node evalmovedetails.js --agent <name> --file <path> [--budget <ms>] [--limit <n>] [--index <n>] [--seed <n>] [--oversample <n>] [--show-phases <P>] [--verbose]');
+    console.log(`Usage: node evalmovedetails.js --agent <name> --file <path> [options]
+
+Evaluate an agent against pre-computed move details (createmovedetails.js
+output): replay each position, ask the agent for a move, and charge it the
+win-ratio gap to the file's top-rated move.  Reports the RMS gap.
+
+  --agent NAME      ai/<name>.js (required)
+  --file PATH       positions file from createmovedetails.js (required)
+  --budget MS       per-move budget (default 1000)
+  --limit N         evaluate only the first N positions (default: all)
+  --index N         evaluate only the position at 0-based index N, with the
+                    agent seed it had in a full sweep
+  --seed N          starting agent rng seed (overrides default/per-index seed)
+  --oversample N    evaluate each position N times, distinct seeds (default 1)
+  --show-phases P   at the end, print a P-row phase-band -> RMS table
+                    (phase = board fullness in [0,1])
+  --verbose         per-position comparison table
+  --help            show this message`);
     process.exit(opts.help ? 0 : 1);
   }
 
