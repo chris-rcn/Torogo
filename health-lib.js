@@ -277,14 +277,16 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
                        maxLibNinecells, libStoneLibCap, libStoneStoneCap,
                        maxStoneNinecells) {
   // maxLibNinecells / maxStoneNinecells cap the chain's LIBERTY and STONE count
-  // for their respective singleton ninecells: above the cap the chain emits
-  // none of that half.  A chain with many liberties is not in question and its
-  // liberty shapes are all saying the same thing; a chain with many stones emits
-  // a ninecell per stone, which is where the count comes from.  Either way the
-  // count one-hot already carries "this chain is large", so the keys are spent
-  // where the answer is in doubt.  0 means NO CAP (use --liberty-ninecells 0 or
-  // --stone-ninecells 0 to turn a half off); that differs from the other knobs
-  // on purpose, because 0-as-off is already taken.
+  // for the singleton ninecells.  They are not symmetric: the LIBERTY cap gates
+  // both halves, so a chain with too many liberties emits no ninecells at all,
+  // while the STONE cap gates only the stone half.  A chain with many liberties
+  // is not in question — nothing about its shape is worth a key — whereas a
+  // short-of-liberties chain with many stones still wants its liberty shapes,
+  // just not one key per stone.  Either count one-hot already carries "this
+  // chain is large", so the keys are spent where the answer is in doubt.
+  // 0 means NO CAP (use --liberty-ninecells 0 or --stone-ninecells 0 to turn a
+  // half off); that differs from the other knobs on purpose, because 0-as-off
+  // is already taken.
   const nl = libs.length;
   const wantSingles = libertyNinecells !== false &&
                       (maxLibNinecells <= 0 || nl <= maxLibNinecells);
@@ -294,7 +296,10 @@ function chainSurvKeys(cells, nbr, dnbr, gid, owner, chainGid, libs, stones,
       out.push(h === 0 ? 1 : h);
     }
   }
+  // The liberty cap gates BOTH halves: a chain with more liberties than
+  // maxLibNinecells emits no ninecells at all, stones included.
   if (stoneNinecells !== false &&
+      (maxLibNinecells <= 0 || nl <= maxLibNinecells) &&
       (maxStoneNinecells <= 0 || stones.length <= maxStoneNinecells)) {
     for (const st of stones) {
       const h = (_ncKey(ninecellId(cells, nbr, dnbr, st, owner)) ^ stoneSalt) | 0;

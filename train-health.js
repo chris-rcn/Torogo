@@ -189,13 +189,16 @@ irreducible label entropy.
                   --max-libs and --max-stones cannot express the interaction —
                   and two liberties on a 2-stone chain is a different situation
                   from two liberties on a 20-stone chain
-  --max-lib-ninecells N  emit the singleton liberty ninecells only for chains
-                  with at most N liberties (default 0 = no cap).  Spends the
-                  keys where survival is in doubt
-  --max-stone-ninecells N  the same cap on the other half: emit the singleton
-                  stone ninecells only for chains of at most N stones (default
-                  0 = no cap).  A big chain emits a ninecell per stone, so this
-                  is also where the per-position cost goes
+  --max-lib-ninecells N  emit ninecells only for chains with at most N
+                  liberties (default 0 = no cap) — BOTH halves, stones included.
+                  A chain with that many liberties is not in question, so
+                  nothing about its shape is worth a key
+  --max-stone-ninecells N  emit the singleton stone ninecells only for chains
+                  of at most N stones (default 0 = no cap).  Narrower than the
+                  liberty cap: it leaves the liberty half alone, since a chain
+                  short of liberties still wants its liberty shapes, just not
+                  one key per stone.  A big chain emits a ninecell per stone,
+                  so this is also where the per-position cost goes
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 0 = off)
   --friend-health-max-buckets N  one-hot over the health of the healthiest
@@ -407,6 +410,7 @@ function collectObs(game, phase, buf) {
       const nLibEmit = (LIBERTY_NINECELLS &&
         (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS)) ? libs.length : 0;
       const nStoneEmit = (STONE_NINECELLS &&
+        (MAX_LIB_NINECELLS <= 0 || libs.length <= MAX_LIB_NINECELLS) &&
         (MAX_STONE_NINECELLS <= 0 || c.stones.length <= MAX_STONE_NINECELLS)) ? c.stones.length : 0;
       for (let a = 0; a < nLibEmit; a++) {
         const k = exShapes[start + a];
