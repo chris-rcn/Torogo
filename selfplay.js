@@ -72,7 +72,7 @@ const VERBOSE = Util.envInt('VERBOSE', 0);
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'rand-mirror-pairs', 'stop-tol', 'stop-min',
-   'min-phase', 'max-phase', 'fallback', 'fallback-playouts']);
+   'min-phase', 'max-phase', 'fallback', 'adjudication-playouts']);
 
 if (opts.help) {
   console.log(`Usage: node selfplay.js [options]
@@ -99,7 +99,7 @@ alternate between games; per-agent env config uses the P1_/P2_ prefixes
                     gate).  Defaults (0,1) = whole game, no fallback
   --fallback AGENT  agent for moves outside the phase window
                     (default ref-featurepol-softmax)
-  --fallback-playouts N
+  --adjudication-playouts N
                     adjudicate instead of playing out past max-phase: run N
                     standard playouts (mc-ppat) from the handoff position and
                     score the game to the side whose win-ratio exceeds 0.5
@@ -145,9 +145,9 @@ const randMoves = parseInt(opts['rand-moves'] ?? '0', 10);
 const minPhase     = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
 const maxPhase     = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
 const fallbackName = opts.fallback || 'ref-featurepol-softmax';
-const fallbackPlayouts = parseInt(opts['fallback-playouts'] || '0', 10);
-if (!(fallbackPlayouts >= 0)) {
-  console.error('--fallback-playouts must be a non-negative integer');
+const adjudicationPlayouts = parseInt(opts['adjudication-playouts'] || '0', 10);
+if (!(adjudicationPlayouts >= 0)) {
+  console.error('--adjudication-playouts must be a non-negative integer');
   process.exit(1);
 }
 if (minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
@@ -194,7 +194,7 @@ const p2Budget = slotBudget(2);
 const usePhaseWindow = minPhase > 0 || maxPhase < 1;
 const fallback       = usePhaseWindow ? loadAgent(fallbackName, 'F') : null;
 const fallbackBudget = slotBudget('F');
-// Post-max-phase adjudicator (--fallback-playouts): an mc-ppat instance whose
+// Post-max-phase adjudicator (--adjudication-playouts): an mc-ppat instance whose
 // valueB runs the votes.  Judge config uses slot 'J' (PJ_* overrides, plain
 // env fallback), so judge-only knobs cannot leak into the contestants'
 // plain-env reads.  Votes default to PURE-UNIFORM playouts
@@ -203,16 +203,16 @@ const fallbackBudget = slotBudget('F');
 // knob under test (measured cost vs ppat-flavoured votes: ~3x the games —
 // 1k-vs-2k calibration, 2026-09-06).  PJ_PPAT_MIN_PHASE opts back into
 // ppat-flavoured votes; the PLAYOUTS override pins the count.
-const adjudicator = usePhaseWindow && fallbackPlayouts > 0
+const adjudicator = usePhaseWindow && adjudicationPlayouts > 0
   ? require('./ai/mc-ppat.js').create(Util.makeCfg('J', {
-      PLAYOUTS: String(fallbackPlayouts),
+      PLAYOUTS: String(adjudicationPlayouts),
       PPAT_MIN_PHASE: process.env.PJ_PPAT_MIN_PHASE !== undefined ? process.env.PJ_PPAT_MIN_PHASE : '1',
     }))
   : null;
 let adjCount = 0, adjCloseCount = 0, adjAbsSum = 0;   // adjudication margin stats
 if (usePhaseWindow)
   console.log(`phase window: [${minPhase}, ${maxPhase}]  fallback: ${fallbackName} (budget ${fallbackBudget}ms)` +
-    (adjudicator ? `  adjudication: ${fallbackPlayouts} standard playouts past max-phase` : ''));
+    (adjudicator ? `  adjudication: ${adjudicationPlayouts} standard playouts past max-phase` : ''));
 
 // Board fullness used to gate the window: 1 − empty/area, per the canonical
 // "phase" definition.  Not strictly monotonic (captures lower it), which is fine
@@ -412,7 +412,7 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
   if (VERBOSE) console.log(`${names[0]} ● vs ${names[1]} ○`);
 
   const game = startGame.clone();
-  let adjP = null;   // adjudicated P(BLACK wins), when --fallback-playouts ends the game
+  let adjP = null;   // adjudicated P(BLACK wins), when --adjudication-playouts ends the game
 
   while (!game.gameOver) {
     const isBlackTurn = game.current === BLACK;
