@@ -129,10 +129,16 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
  *             point is EXACT, not estimated: with identical weights both seats
  *             play the same game, so each colour-swapped pair scores one win and
  *             one loss by construction and the self-match cannot drift off 50. */
-#define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp, ~3s at size 10 */
+#define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp (~3s at size 10, ~3x that at 13) */
 #define MATCH_GROWTH       1.1   /* match effort grows this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */
 #define MATCH_UNIFORM_BELOW 0.6f /* both sides play uniform below this fullness, as the u6 rungs do */
+#define MATCH_BOARD_SIZE    13   /* directWR plays at the DEPLOYMENT size, whatever size the
+                                  * training data is: small-board verdicts must be re-validated
+                                  * at 13 anyway, so the trusted indicator now measures there
+                                  * directly.  The topology is swapped around the match (a
+                                  * microsecond rebuild); live% and teMSE stay at the training
+                                  * size, whose positions their records replay. */
 
 /* Polyak-Ruppert weight averaging.  The window is in AGGREGATE POSITIONS, not in
  * sync rounds: --sync-every is a comms/round-error knob that should scale with lr
@@ -1358,7 +1364,6 @@ static int live_weights(void) {
  * reference cannot be evaluated without rebuilding it every move.  On mismatch
  * the column is disabled at startup rather than silently comparing nonsense. */
 static float *ref_theta = NULL;        /* reference weights, NULL = column off */
-static int    ref_board_size = 0;
 static int    match_truncated;         /* set when a match stopped at MATCH_MAX_S */
 
 /* The reference may be built at a different libCap / phase count than the run.
@@ -1381,6 +1386,9 @@ static float direct_match_wr(int games) {
      * pairing consecutive rows instead of redrawing the games each time. */
     const float saved_ubp = ppat_uniform_below_phase;
     ppat_uniform_below_phase = MATCH_UNIFORM_BELOW;
+    /* Deployment-size board for the match; the training size's topology is
+     * restored on exit for the other monitor instruments. */
+    g2_init_topology(MATCH_BOARD_SIZE);
     static PpatState st;
     Rng rng;
     const double t0 = wall_now();
@@ -1403,7 +1411,7 @@ static float direct_match_wr(int games) {
         rng_seed(&rng, 0x5eed1234L + (g >> 1));
         const int cur_is_black = (g & 1) == 0;   /* the pair's two colour assignments */
         Game2 game;
-        g2_new(&game, ref_board_size);
+        g2_new(&game, MATCH_BOARD_SIZE);
         while (!game.game_over) {
             const int black_to_move = (game.current == BLACK);
             const float *w;
@@ -1430,6 +1438,7 @@ static float direct_match_wr(int games) {
     }
     use_run_model();
     ppat_uniform_below_phase = saved_ubp;
+    g2_init_topology(topo_size);
     return played > 0 ? (float)wins / (float)played : 0.0f;
 }
 
@@ -1916,7 +1925,6 @@ int main(int argc, char **argv) {
         } else {
             ref_lib_cap = ppat_lib_cap;
             ref_phases  = ppat_phase_count;
-            ref_board_size = topo_size;
         }
         use_run_model();                        /* put the run's encoding back */
         TOTAL = run_total;
