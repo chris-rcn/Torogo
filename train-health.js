@@ -153,7 +153,7 @@ const { makeRng } = require('./xorshift.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
   ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-lib-stone', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
-   'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
+   'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells', 'max-lib-neighbors',
    'iterations', 'min-phase', 'max-phase',
    'delta', 'floor', 'save', 'seed']);
 if (opts.help || !opts.corpus) {
@@ -201,6 +201,16 @@ irreducible label entropy.
                   so this is also where the per-position cost goes
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 0 = off)
+  --max-lib-neighbors N  emit the features that reach OTHER chains — the
+                  best-single-join count and the friend-health bucket — only
+                  for chains with at most N liberties (default 0 = no cap).
+                  Both scan the chain's liberties to find its neighbours, so
+                  this drops the chains they cost the most on, which are also
+                  the chains whose survival was never in question.  The
+                  foe-health bucket is NOT gated by it: that one scans stones,
+                  so a liberty gate would lose the key without saving the work.
+                  Keep N below --max-libs and the liberty one-hot still tells
+                  the model which absences are the gate's doing
   --friend-health-max-buckets N  one-hot over the health of the healthiest
                   joinable friend, bucketed uniformly in p into N levels
                   (default 0 = off; monotone in N, saturated by 7-8);
@@ -292,6 +302,10 @@ const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
 // The same cap on the chain's STONE COUNT for the singleton stone ninecells.
 const MAX_STONE_NINECELLS = parseInt(opts['max-stone-ninecells'] !== undefined
   ? opts['max-stone-ninecells'] : '0', 10);
+// Liberty-count gate on the features that scan liberties to reach OTHER chains:
+// best-single-join and friend-health.  Not foe-health, which scans stones.
+const MAX_LIB_NEIGHBORS = parseInt(opts['max-lib-neighbors'] !== undefined
+  ? opts['max-lib-neighbors'] : '0', 10);
 // Same field names a health model uses, so health-lib's neighbourHealthKeys and
 // propagateHealth take this and a scored model interchangeably.
 const NB_CFG = { friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
@@ -335,6 +349,7 @@ console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
             (MAX_STONE_NINECELLS > 0 ? `  max-stone-ninecells ${MAX_STONE_NINECELLS}` : '') +
+            (MAX_LIB_NEIGHBORS > 0 ? `  max-lib-neighbors ${MAX_LIB_NEIGHBORS}` : '') +
                         (FHM_BUCKETS > 0 ? `  friend-health-max-buckets ${FHM_BUCKETS}` : '') +
             (FOE_MIN_BUCKETS > 0 ? `  foe-health-min-buckets ${FOE_MIN_BUCKETS}` : '') +
             (NEIGHBOUR_ON ? `  iterations ${ITERATIONS}` : '') +
@@ -403,7 +418,8 @@ function collectObs(game, phase, buf) {
                        STONE_SALT, exShapes, MAX_LIBS,
                        MAX_JOIN_LIBS, byGid, STONE_NINECELLS, LIBERTY_NINECELLS,
                        MAX_STONES, MAX_LIB_NINECELLS,
-                       LIB_STONE_LIBS, LIB_STONE_STONES, MAX_STONE_NINECELLS);
+                       LIB_STONE_LIBS, LIB_STONE_STONES, MAX_STONE_NINECELLS,
+                       MAX_LIB_NEIGHBORS);
     if (VERBOSE) {
       // What chainSurvKeys actually emitted for each half: the knob turns it off
       // outright, the cap turns it off for this chain only.
@@ -430,7 +446,9 @@ function collectObs(game, phase, buf) {
         const k = exShapes[oh++];
         if (!examples.has(k)) examples.set(k, 'libs=' + Math.min(libs.length, MAX_LIBS));
       }
-      if (MAX_JOIN_LIBS > 0 && !examples.has(exShapes[oh])) examples.set(exShapes[oh], 'joinLibs');
+      if (LIB_STONE_LIBS > 0 && LIB_STONE_STONES > 0) oh++;
+      if (MAX_JOIN_LIBS > 0 && (MAX_LIB_NEIGHBORS <= 0 || libs.length <= MAX_LIB_NEIGHBORS) &&
+          !examples.has(exShapes[oh])) examples.set(exShapes[oh], 'joinLibs');
     }
     for (let k = 0; k < NB_SLOTS; k++) exNb.push(0);
     exLive.push(c.live);
@@ -449,7 +467,8 @@ function collectObs(game, phase, buf) {
 function propagate(buf, cells, nbr, gid, chains, byGid) {
   const { exShapes, exStart, exLen, exNb, exLive } = buf;
   const nCh = exStart.length;
-  HL.neighbourhoodsOf(cells, nbr, gid, chains, byGid, FHM_BUCKETS > 0, FOE_MIN_BUCKETS > 0, _nb);
+  HL.neighbourhoodsOf(cells, nbr, gid, chains, byGid, FHM_BUCKETS > 0, FOE_MIN_BUCKETS > 0, _nb,
+                      MAX_LIB_NEIGHBORS);
   // The per-chain base logit: bias plus the chain's own ninecells and one-hots.
   // Fixed for the whole propagation — the weights do not move until this
   // position has been trained on — so it is summed once rather than per pass.
@@ -713,7 +732,7 @@ const src = [
   `  // that sees every phase (ab-search, rank features) needs a full-range fit.`,
   `  minPhase: ${MIN_PH}, maxPhase: ${MAX_PH}, delta: ${DELTA}, floor: ${+FLOOR.toFixed(5)},`,
   `  examples: ${nEx}, stoneSalt: ${STONE_SALT},`,
-  `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS},`,
+  `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS}, maxLibNeighbors: ${MAX_LIB_NEIGHBORS},`,
   `  // Neighbour-health features: friendHealthMax over the healthiest joinable`,
   `  // friend, foeHealthMin over the weakest enemy chain in contact, both`,
   `  // bucketed uniformly in p.  Their keys depend on the OTHER chains' health, so`,
