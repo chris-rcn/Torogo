@@ -46,6 +46,13 @@
 //               one shared key.  Invariant by construction at every level, so
 //               unlike stoneExpand it scales past 20 cells (radius 3/4/5/6 =
 //               25/41/61/85 cells).  A descriptor.
+//   emptyDepth<R>  emptyExpand's stacking half: a cumulative thermometer over
+//               how many levels were fully empty before the pattern appeared
+//               (level j fires when the radius-j diamond is empty), so the
+//               shared per-level weights carry the distance-to-stone prior and
+//               the rare deep pattern keys learn residuals.  Spec
+//               "emptyExpand3,emptyDepth3" is the stacked pair; same R shares
+//               one computation.  A gated event: depth 0 emits nothing.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -397,15 +404,19 @@ function _eeEmpty(k) {
 // key if non-empty, the all-empty key otherwise), and level k overwrites
 // exactly the cells whose level k-1 was empty and level k is not, so a cell
 // empty through R keeps the all-empty initialisation with no final pass.
-// st is PER TERM (closed over in parseTerm), so two emptyExpand terms with
-// different R in one spec keep separate buffers.
+// st is shared PER R via _eeShared, so emptyExpand<R> and emptyDepth<R> with
+// the same R run one computation (parseSpec dedupes prepares by identity) and
+// terms with different R keep separate buffers.  Alongside each key, depth[idx]
+// records how many levels were fully empty (reached level − 1; R when empty all
+// the way out) — emptyDepth's thermometer size — riding the same assignments.
 function _eePrepare(ctx, R, st) {
   const game = ctx.game, area = game.N * game.N, cur = ctx.cur;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
   if (!st.key || st.key.length < area) {
-    st.key = new Int32Array(area); st.a = new Int32Array(area); st.b = new Int32Array(area);
+    st.key = new Int32Array(area); st.depth = new Int32Array(area);
+    st.a = new Int32Array(area); st.b = new Int32Array(area);
   }
-  const key = st.key, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
+  const key = st.key, depth = st.depth, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
   let a = st.a, b = st.b;
   {
     const eCur = _eeEmpty(1);
@@ -418,7 +429,8 @@ function _eePrepare(ctx, R, st) {
       const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
       const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
       a[idx] = v;
-      key[idx] = v !== eCur ? _hashCombine(v, 1) | 0 : allEmptyKey;
+      if (v !== eCur) { key[idx] = _hashCombine(v, 1) | 0; depth[idx] = 0; }
+      else            { key[idx] = allEmptyKey;            depth[idx] = R; }
     }
   }
   for (let k = 2; k <= R; k++) {
@@ -428,10 +440,23 @@ function _eePrepare(ctx, R, st) {
       const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
                                  _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
       b[idx] = v;
-      if (a[idx] === ePrev && v !== eCur) key[idx] = _hashCombine(v, k) | 0;
+      if (a[idx] === ePrev && v !== eCur) { key[idx] = _hashCombine(v, k) | 0; depth[idx] = k - 1; }
     }
     const t = a; a = b; b = t;
   }
+}
+
+// One shared { st, prepare } per R, so same-R emptyExpand/emptyDepth terms
+// dedupe to a single prepare run.
+const _eeByR = new Map();
+function _eeShared(R) {
+  let sh = _eeByR.get(R);
+  if (!sh) {
+    const st = { key: null, depth: null, a: null, b: null };
+    sh = { st, prepare: ctx => _eePrepare(ctx, R, st) };
+    _eeByR.set(R, sh);
+  }
+  return sh;
 }
 
 (function () {
@@ -793,11 +818,26 @@ function _makeTerm(str) {
       // shared key.  A descriptor — all work is in prepare, one read per move.
       if (param === null || param < 2) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, got "${str}"`);
       {
-        const R = param;
         maxNear = 4;
-        const st = { key: null, a: null, b: null };
-        prepare = ctx => _eePrepare(ctx, R, st);
+        const sh = _eeShared(param), st = sh.st;
+        prepare = sh.prepare;
         evalFn = (ctx, idx) => st.key[idx];
+      }
+      break;
+    }
+    case 'emptyDepth': {
+      // emptyExpand's stacking half: thermometer over the fully-empty levels
+      // (size = reached level − 1, R when empty through R), so "the radius-j
+      // diamond was empty" is one shared weight per j carrying the
+      // distance-to-stone prior additively under the pattern key.  Same-R
+      // emptyExpand/emptyDepth share one prepare.  Gated: depth 0 emits nothing.
+      if (param === null || param < 2) throw new Error(`featurepol: emptyDepth<R> needs a max radius R >= 2, got "${str}"`);
+      {
+        maxNear = 4;
+        const sh = _eeShared(param), st = sh.st;
+        prepare = sh.prepare;
+        cumulative = true;
+        sizeFn = (ctx, idx) => st.depth[idx];
       }
       break;
     }
