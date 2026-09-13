@@ -18,7 +18,7 @@ const { loadCases, evalCases } = require('./evalladders2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'],
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
    'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'ladder-file', 'md-file', 'load', 'max-weights', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
@@ -72,7 +72,13 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --no-add          fine-tune ONLY the keys already in the loaded model:
                     unknown keys contribute zero, get no gradient, and are
                     never interned (requires --load)
-  --save PATH       where to save (default out/featurepol-<rand>.js)`);
+  --save PATH       where to save (default out/featurepol-<rand>.js)
+  --save-zeros      write every interned key, including those whose weight
+                    quantizes to zero (normally dropped).  For models whose
+                    KEY SET is the payload — e.g. enumerating a removed
+                    feature's keys over a corpus for featurepol-subtract.js,
+                    where untrained keys are exact zeros and the default
+                    save would write an empty model`);
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -86,6 +92,7 @@ const EVAL_AGENT  = opts.eval || opts['eval-agent'] || null;   // no default —
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored each status print (ladr column)
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdRms column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
+const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
 const LOAD_PATH   = opts.load || null;
 // Eval may shortlist the rank-feature ranking; self-play never does (see the usage note).
 const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '0', 10);
@@ -212,7 +219,7 @@ const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 
 function saveWeights() {
   fs.mkdirSync(path.dirname(SAVE_PATH), { recursive: true });
-  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }));
+  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }, SAVE_ZEROS));
 }
 
 // ── Mirror-pair openings (ported from selfplay.js) ────────────────────────────

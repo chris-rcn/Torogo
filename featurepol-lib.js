@@ -1667,20 +1667,23 @@ function modelWeights(raw) {
   return { count, forEach(cb) { for (let i = 0; i < count; i++) cb(keys[i] >>> 0, qvals[i] * inv); } };
 }
 
-function serialize(weights, meta = {}) {
+function serialize(weights, meta = {}, saveZeros = false) {
   let maxAbs = 0;
   weights.map.forEach((k, d) => { const a = Math.abs(weights.vals[d]); if (a > maxAbs) maxAbs = a; });
   const scale = maxAbs > 0 ? 32767 / maxAbs : 1;
   // Keys whose weight quantizes to 0 are NOT written: they contribute
   // nothing on load and would bloat both the file and the reloaded table
   // (at stones20 scale the sub-floor tail was ~70% of all keys).
+  // saveZeros keeps them — for models whose KEY SET is the payload, like the
+  // orphans file featurepol-subtract.js consumes: an enumeration pass interns
+  // keys at exact zero, and the default path would write an empty model.
   let count = 0;
-  weights.map.forEach((k, d) => { if (Math.round(weights.vals[d] * scale) !== 0) count++; });
+  weights.map.forEach((k, d) => { if (saveZeros || Math.round(weights.vals[d] * scale) !== 0) count++; });
   const keys = new Int32Array(count), qvals = new Int16Array(count);
   let i = 0;
   weights.map.forEach((key, d) => {
     let q = Math.round(weights.vals[d] * scale);
-    if (q === 0) return;
+    if (q === 0 && !saveZeros) return;
     if (q > 32767) q = 32767; else if (q < -32768) q = -32768;
     keys[i] = key | 0;
     qvals[i] = q;
