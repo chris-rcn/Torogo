@@ -57,8 +57,7 @@
 //                   40k-game ladders, but over the full corpus the smaller
 //                   step settles lower — more data, less end-state jitter.
 //   --max-libs N    add a chain-level LIBERTY-COUNT one-hot for the chain
-//                   being predicted, capped at N (default 8 — measured: 7 is
-//                   worse, 9 no better; 0 = off).  Distinct from
+//                   being predicted, capped at N (default 10; 0 = off).  Distinct from
 //                   in the ninecell alphabet.  The ninecell sum moves only
 //                   linearly with liberty count, while survival is sharply
 //                   non-linear in it, so this one weight per capped count
@@ -66,7 +65,7 @@
 //                   per example — it does not touch any ninecell key.
 //   --friend-health-max-buckets N  friendHealthMax: a one-hot over the health
 //                   of the HEALTHIEST joinable friend, bucketed uniformly in p
-//                   into N levels (default 7; 0 = off).  Measured on the full
+//                   into N levels (default 0 = off).  Measured on the full
 //                   corpus at leaf-band [0, 0.8]: exc 0.0295 at 7 buckets
 //                   against 0.0336 with the feature off, 12% of the excess
 //                   loss for seven extra weights.  The ladder is monotone in
@@ -82,7 +81,7 @@
 //                   the ninecell key space is untouched.
 //   --foe-health-min-buckets N  foeHealthMin: a one-hot over the health of the
 //                   WEAKEST enemy chain in contact, bucketed uniformly in p
-//                   into N levels (default 5; 0 = off).  Measured on the full
+//                   into N levels (default 0 = off).  Measured on the full
 //                   corpus at leaf-band [0, 0.8], on top of friend 7: exc
 //                   0.0285 against 0.0306 without it, saturating at 5 buckets
 //                   (4 gives 0.0287, 8 gives 0.0285).  A different channel from
@@ -103,7 +102,7 @@
 //                   bucket is constant and the feature is just a second bias;
 //                   N=2 is the first setting that propagates anything.
 //   --max-join-libs N  BEST-SINGLE-JOIN liberty one-hot for the chain being
-//                   predicted, capped at N (default 10; 0 = off): the
+//                   predicted, capped at N (default 0 = off): the
 //                   liberty count it would have after its most favourable
 //                   connecting move — my liberties, plus those of every friend
 //                   adjacent to the join point, plus that point's empty
@@ -179,8 +178,9 @@ irreducible label entropy.
                   late-band arm)
   --delta F       playout descent to the graded endpoint (default 0.2)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
-                  at N (default 8 — 7 measured worse, 9 no better; 0 = off)
-  --stone-ninecells 0|1  emit a ninecell per STONE (default 1)
+                  at N (default 10; 0 = off)
+  --stone-ninecells 0|1  emit a ninecell per STONE (default 0 — the winning
+                  2026-09-12 recipe carries the band on liberty shapes alone)
   --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 1).  The two
                   halves are the bulk of this model's cost and are partly
                   redundant; turning both off leaves the one-hots, which is the
@@ -191,9 +191,9 @@ irreducible label entropy.
                   (default off).  The model is additive over its one-hots, so
                   --max-libs and --max-stones cannot express the interaction —
                   and two liberties on a 2-stone chain is a different situation
-                  from two liberties on a 20-stone chain
+                  from two liberties on a 20-stone chain.  Default 9,9; "0" = off
   --max-lib-ninecells N  emit ninecells only for chains with at most N
-                  liberties (default 0 = no cap) — BOTH halves, stones included.
+                  liberties (default 7; 0 = no cap) — BOTH halves, stones included.
                   A chain with that many liberties is not in question, so
                   nothing about its shape is worth a key
   --max-stone-ninecells N  emit the singleton stone ninecells only for chains
@@ -277,7 +277,7 @@ const SIZE = parseInt(opts.size || '13', 10);
 const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 
 const LR = parseFloat(opts.lr || '0.01');
-const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '8', 10);
+const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '10', 10);
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
 const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
@@ -286,11 +286,12 @@ const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'
 // the interaction, and the interaction is the whole signal: two liberties on a
 // 2-stone chain and two liberties on a 20-stone chain are different situations.
 // Costs one key per chain and no hashing, and (L+1)*(S+1) weights.
-const LIB_STONE = (opts['max-lib-stone'] || '').split(',').map(x => parseInt(x, 10));
+const LIB_STONE = (opts['max-lib-stone'] !== undefined ? opts['max-lib-stone'] : '9,9').split(',').map(x => parseInt(x, 10));
 const LIB_STONE_LIBS   = LIB_STONE.length === 2 && LIB_STONE[0] > 0 ? LIB_STONE[0] : 0;
 const LIB_STONE_STONES = LIB_STONE.length === 2 && LIB_STONE[1] > 0 ? LIB_STONE[1] : 0;
-if (opts['max-lib-stone'] !== undefined && !(LIB_STONE_LIBS > 0 && LIB_STONE_STONES > 0)) {
-  console.error(`error: --max-lib-stone wants "<libCap>,<stoneCap>" with both > 0 (got "${opts['max-lib-stone']}")`);
+if (opts['max-lib-stone'] !== undefined && opts['max-lib-stone'] !== '0' &&
+    !(LIB_STONE_LIBS > 0 && LIB_STONE_STONES > 0)) {
+  console.error(`error: --max-lib-stone wants "<libCap>,<stoneCap>" with both > 0, or "0" for off (got "${opts['max-lib-stone']}")`);
   process.exit(1);
 }
 const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '0', 10);
@@ -312,7 +313,7 @@ const INIT_HEALTH = 0.6;
 // outnumber liberties on a full board.  0 keeps only the liberty ninecells.
 // Recorded in the saved model, since scoring must emit the same key set.
 const STONE_NINECELLS = (opts['stone-ninecells'] !== undefined
-  ? parseInt(opts['stone-ninecells'], 10) : 1) !== 0;
+  ? parseInt(opts['stone-ninecells'], 10) : 0) !== 0;
 // The mirror: keep only the per-STONE ninecells.  Dropping stones while keeping
 // liberties was measured near-free, which says stones are redundant GIVEN
 // liberties — not that liberties carry the signal.  This is the knob that tells
@@ -322,7 +323,7 @@ const LIBERTY_NINECELLS = (opts['liberty-ninecells'] !== undefined
 // Cap on the chain's LIBERTY COUNT for the singleton liberty ninecells: above
 // it the chain emits none.  0 = no cap.  (0-as-off is --liberty-ninecells 0.)
 const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
-  ? opts['max-lib-ninecells'] : '0', 10);
+  ? opts['max-lib-ninecells'] : '7', 10);
 // The same cap on the chain's STONE COUNT for the singleton stone ninecells.
 const MAX_STONE_NINECELLS = parseInt(opts['max-stone-ninecells'] !== undefined
   ? opts['max-stone-ninecells'] : '0', 10);
