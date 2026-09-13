@@ -1,28 +1,27 @@
-#!/bin/bash
-# featurepol-show.sh — render a position with the featurepol policy's move
-# likelihoods.  Board size and an eval-file move sequence (comma-separated
-# coordinate moves, e.g. "h10,e7,e8") replay from the standard start (free
-# initial stone, black to move first); the board prints stones as circles and
-# every legal move as a 2-digit softmax percentage (temperature 1, clamped to
-# 99).  Empty cells that are not legal moves (illegal or true eyes) print a dot.
-#
-# Usage: featurepol-show.sh <size> [moves]
-#   FPOL_DATA   featurepol model to load (same env the agent uses)
-#
-# Example: FPOL_DATA=out/featurepol-xyz.js ./featurepol-show.sh 9 e5,c3,g7
-
-FPSHOW_DIR="$(cd "$(dirname "$0")" && pwd)" exec node - "$@" <<'EOF'
 'use strict';
+
+// featurepol-show.js — render a position with the featurepol policy's move
+// likelihoods.  Board size and an eval-file move sequence (comma-separated
+// coordinate moves, e.g. "h10,e7,e8") replay from the standard start (free
+// initial stone, black at the centre, so the first listed move is white's);
+// the board prints stones as circles and every legal move as a 2-digit
+// softmax percentage (temperature 1, clamped to 99).  Empty cells that are
+// not legal moves (illegal or true eyes) print a dot.
+//
+// Usage: node featurepol-show.js <size> [moves]
+//   FPOL_DATA   featurepol model to load (same env the agent uses)
+//
+// Example: FPOL_DATA=out/featurepol-xyz.js node featurepol-show.js 9 c3,g7,e3
+
 const path = require('path');
-const dir = process.env.FPSHOW_DIR;
-const FeaturePol = require(path.join(dir, 'featurepol-lib.js'));
-const { Game2, parseMove, PASS, BLACK } = require(path.join(dir, 'game2.js'));
+const FeaturePol = require('./featurepol-lib.js');
+const { Game2, parseMove, PASS, BLACK } = require('./game2.js');
 
 const [sizeArg, movesArg] = process.argv.slice(2);
-if (!sizeArg) { console.error('usage: featurepol-show.sh <size> [moves]'); process.exit(1); }
+if (!sizeArg) { console.error('usage: node featurepol-show.js <size> [moves]'); process.exit(1); }
 const N = parseInt(sizeArg, 10);
 
-const FPOL_DATA = process.env.FPOL_DATA || path.join(dir, 'featurepol-cbk7wa32.js');
+const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, 'featurepol-cbk7wa32.js');
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 
 const game = new Game2(N);
@@ -64,4 +63,3 @@ for (let y = N - 1; y >= 0; y--) {
   }
   console.log(String(y + 1).padStart(2) + ' ' + cells.join(' '));
 }
-EOF
