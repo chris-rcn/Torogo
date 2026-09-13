@@ -91,6 +91,51 @@ function _buildTables(libCap) {
 const _T2 = _buildTables(2);
 const NUM_PATTERNS = _T2.numPatterns;
 
+// ── Twelvecell extension ──────────────────────────────────────────────────────
+// When a candidate's NINECELL is entirely empty the pattern feature cannot tell
+// one open-area move from another: every such candidate shares a single weight,
+// so the policy picks among them uniformly.  The extension emits a SECOND key
+// describing the four DISTANCE-2 orthogonals — the twelvecell's arms — coded
+// empty / mine / theirs.
+//
+// It STACKS on the ninecell rather than replacing it: the all-empty pattern key
+// is still emitted, so an existing model fine-tunes into the extension with its
+// weights untouched and the new keys starting at zero.
+//
+// Canonicalising the arms under the full D4 is EXACT here, not the usual
+// lossy shortcut: the feature fires only when the inner ninecell is all-empty,
+// and that inner pattern is fixed by every element of D4, so any transform that
+// canonicalises the arms is a symmetry of the whole twelvecell.  81 raw
+// configurations collapse to 21 orbits.
+const T12_RAW = 81;
+const _T12 = (() => {
+  // Arm order N, E, S, W — the ninecell's D4 restricted to the orthogonals.
+  const ROT = [1, 2, 3, 0];   // 90 degrees: N->E, E->S, S->W, W->N
+  const REF = [0, 3, 2, 1];   // mirror: E<->W
+  const ap = (p, q) => q.map(i => p[i]);
+  const perms = [];
+  let cur = [0, 1, 2, 3];
+  for (let r = 0; r < 4; r++) { perms.push(cur.slice()); perms.push(ap(cur, REF)); cur = ap(cur, ROT); }
+  const canonId = new Int32Array(T12_RAW);
+  const v = new Int32Array(4), tv = new Int32Array(4);
+  const idMap = new Map();
+  let nextId = 0;
+  for (let raw = 0; raw < T12_RAW; raw++) {
+    let r = raw;
+    for (let i = 0; i < 4; i++) { v[i] = r % 3; r = (r / 3) | 0; }
+    let minV = raw;
+    for (const p of perms) {
+      for (let i = 0; i < 4; i++) tv[p[i]] = v[i];
+      const enc = tv[0] + 3 * (tv[1] + 3 * (tv[2] + 3 * tv[3]));
+      if (enc < minV) minV = enc;
+    }
+    if (!idMap.has(minV)) idMap.set(minV, nextId++);
+    canonId[raw] = idMap.get(minV);
+  }
+  return { canonId, numPatterns: nextId };
+})();
+const NUM_T12 = _T12.numPatterns;
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 // Iterate the liberty bitset of gid; return the first liberty index, or -1.
@@ -236,15 +281,18 @@ function createState(N) {
   const cap = N * N;
   return {
     moves:          new Int32Array(cap),
-    feat:           new Int32Array(cap * 8),  // flat feature keys (1 pat + 7 prev)
+    feat:           new Int32Array(cap * 9),  // flat feature keys (1 pat + 7 prev + 1 twelvecell)
     featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
     prevNeighborSet: new Uint8Array(cap),
     count:          0,
   };
 }
 
-function totalWeights(phaseCount, libCap = 2) {
-  return phaseCount * (_buildTables(libCap).numPatterns + 7);
+// The twelvecell block is APPENDED after the pattern and local blocks, so every
+// pre-extension weight index keeps its meaning and an old file loads unchanged.
+function totalWeights(phaseCount, libCap = 2, twelvecell = false) {
+  return phaseCount * (_buildTables(libCap).numPatterns + 7) +
+         (twelvecell ? phaseCount * NUM_T12 : 0);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -264,7 +312,7 @@ function totalWeights(phaseCount, libCap = 2) {
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false) {
+function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, twelvecell = false) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -286,6 +334,8 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const phase = phaseCount * (cap - game.emptyCount) / cap | 0;
   const patOffset = phase * _NPAT;
   const prevOffset = phaseCount * _NPAT + phase * 7;
+  const t12Offset = phaseCount * (_NPAT + 7) + phase * NUM_T12;
+  const _T12C = _T12.canonId;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -477,6 +527,18 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
     // Pattern feature
     state.feat[nf++] = patOffset + _CANON[rawIdx];
 
+    // Twelvecell extension: an all-empty ninecell (rawIdx 0 — every cell codes
+    // 0 when empty) gets a second key for the four distance-2 orthogonals.
+    if (twelvecell && rawIdx === 0) {
+      const a0 = cells[nbr[niN * 4 + 0]], a1 = cells[nbr[niE * 4 + 3]];
+      const a2 = cells[nbr[niS * 4 + 1]], a3 = cells[nbr[niW * 4 + 2]];
+      const t12 = (a0 === 0 ? 0 : a0 === cur ? 1 : 2) +
+              3 * ((a1 === 0 ? 0 : a1 === cur ? 1 : 2) +
+              3 * ((a2 === 0 ? 0 : a2 === cur ? 1 : 2) +
+              3 *  (a3 === 0 ? 0 : a3 === cur ? 1 : 2)));
+      state.feat[nf++] = t12Offset + _T12C[t12];
+    }
+
     // ── Previous-move features ────────────────────────────────────────────────
     let mask = 0;
     if (hasPrev && prevNeighborSet[idx]) mask = 1;
@@ -545,7 +607,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.twelvecell);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -591,7 +653,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.twelvecell);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -673,8 +735,12 @@ function loadWeights(pathOrObj) {
   // local weights are also all zero, and a trainer that skipped them would pin
   // their gradients at zero forever.
   const phases = raw.phases || 1;
+  const twelvecell = raw.twelvecell === true;
+  // Scan the LOCAL block only — the twelvecell block is appended after it, and
+  // a nonzero twelvecell weight says nothing about features 1-7.
   let skipLocal = true;
-  for (let i = phases * nPat; i < raw.weights.length; i++)
+  const localEnd = phases * (nPat + 7);
+  for (let i = phases * nPat; i < localEnd && i < raw.weights.length; i++)
     if (raw.weights[i] !== 0) { skipLocal = false; break; }
   if (skipLocal) console.log('ppat loadWeights: local weights all zero, skipping local feature extraction');
   // Early pass travels with the model and is OFF unless the file says the
@@ -684,7 +750,7 @@ function loadWeights(pathOrObj) {
   // pattern weight shifts all logits equally and leaves the softmax unchanged.
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
-  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
+  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal, twelvecell,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }
@@ -692,7 +758,7 @@ function loadWeights(pathOrObj) {
 const PPatterns = {
   createState, extractFeatures, evaluate, ppatMove,
   totalWeights, loadWeights,
-  NUM_PATTERNS,
+  NUM_PATTERNS, NUM_T12,
 };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;

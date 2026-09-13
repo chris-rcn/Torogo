@@ -11,6 +11,51 @@
 
 /* Active canonical-ID table, plus the per-cap cache behind it (see ppat.h). */
 const int32_t *ppat_canon_id = NULL;
+
+/* ── Twelvecell extension ──────────────────────────────────────────────────── */
+/* Canonicalising the four arms under the full D4 is EXACT here rather than the
+ * usual lossy shortcut: the feature fires only when the inner ninecell is
+ * all-empty, and that inner pattern is fixed by every element of D4, so any
+ * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
+bool ppat_twelvecell = false;
+bool ppat_file_twelvecell = false;     /* set by ppat_load_weights from the file */
+static int32_t t12_table[PPAT_T12_RAW];
+static bool    t12_built = false;
+const int32_t *ppat_t12_canon = t12_table;
+
+static void ppat_build_t12(void) {
+    if (t12_built) return;
+    /* Arm order N, E, S, W — the ninecell's D4 restricted to the orthogonals. */
+    static const int ROT[4] = {1, 2, 3, 0};   /* 90 degrees: N->E->S->W */
+    static const int REF[4] = {0, 3, 2, 1};   /* mirror: E<->W */
+    int perms[8][4], cur[4] = {0, 1, 2, 3};
+    for (int r = 0; r < 4; r++) {
+        for (int i = 0; i < 4; i++) { perms[2*r][i] = cur[i]; perms[2*r+1][i] = cur[REF[i]]; }
+        int nxt[4];
+        for (int i = 0; i < 4; i++) nxt[i] = cur[ROT[i]];
+        for (int i = 0; i < 4; i++) cur[i] = nxt[i];
+    }
+    int next_id = 0, id_of[PPAT_T12_RAW];
+    for (int i = 0; i < PPAT_T12_RAW; i++) id_of[i] = -1;
+    for (int raw = 0; raw < PPAT_T12_RAW; raw++) {
+        int v[4], r = raw;
+        for (int i = 0; i < 4; i++) { v[i] = r % 3; r /= 3; }
+        int min_v = raw;
+        for (int d = 0; d < 8; d++) {
+            int tv[4];
+            for (int i = 0; i < 4; i++) tv[perms[d][i]] = v[i];
+            int enc = tv[0] + 3*(tv[1] + 3*(tv[2] + 3*tv[3]));
+            if (enc < min_v) min_v = enc;
+        }
+        if (id_of[min_v] < 0) id_of[min_v] = next_id++;
+        t12_table[raw] = id_of[min_v];
+    }
+    if (next_id != PPAT_T12_PATTERNS) {
+        fprintf(stderr, "ppat: twelvecell orbits %d != %d\n", next_id, PPAT_T12_PATTERNS);
+        exit(1);
+    }
+    t12_built = true;
+}
 static int32_t *canon_by_cap[PPAT_MAX_LIB_CAP + 1];
 static int32_t  np_by_cap   [PPAT_MAX_LIB_CAP + 1];
 static int32_t  raw_by_cap  [PPAT_MAX_LIB_CAP + 1];
@@ -40,6 +85,7 @@ static int encode8(const int *v, int R) {
 }
 
 void ppat_init(int lib_cap) {
+    ppat_build_t12();                          /* cheap, idempotent, cap-independent */
     if (lib_cap < PPAT_MIN_LIB_CAP || lib_cap > PPAT_MAX_LIB_CAP) {
         fprintf(stderr, "ppat_init: lib_cap %d out of range [%d,%d]\n",
                 lib_cap, PPAT_MIN_LIB_CAP, PPAT_MAX_LIB_CAP);
@@ -294,6 +340,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int phase = ppat_phase_count * (g->cap - g->empty_count) / g->cap;
     const int pat_offset = phase * ppat_num_patterns;
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
+    const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * PPAT_T12_PATTERNS;
 
     /* The 7 hand-coded previous-move features are disabled — both the
      * emission AND the pre-scan/mask work that feeds it.  A/B at equal time
@@ -453,6 +500,20 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
         /* Pattern feature */
         st->feat[nf++] = pat_offset + ppat_canon_id[raw];
+
+        /* Twelvecell extension: an all-empty ninecell (raw 0 — every cell codes
+         * 0 when empty) gets a second key for the four distance-2 orthogonals. */
+        if (ppat_twelvecell && raw == 0) {
+            const int8_t a0 = g->cells[g2_nbr[ni0 * 4 + 0]];
+            const int8_t a1 = g->cells[g2_nbr[ni3 * 4 + 3]];
+            const int8_t a2 = g->cells[g2_nbr[ni1 * 4 + 1]];
+            const int8_t a3 = g->cells[g2_nbr[ni2 * 4 + 2]];
+            const int t12 = (a0 == EMPTY ? 0 : a0 == cur ? 1 : 2) +
+                        3 * ((a1 == EMPTY ? 0 : a1 == cur ? 1 : 2) +
+                        3 * ((a2 == EMPTY ? 0 : a2 == cur ? 1 : 2) +
+                        3 *  (a3 == EMPTY ? 0 : a3 == cur ? 1 : 2)));
+            st->feat[nf++] = t12_offset + ppat_t12_canon[t12];
+        }
 
         /* Previous-move features disabled — see the note at the pre-scan
          * above. */
@@ -620,9 +681,10 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g };\n",
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s };\n",
             ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
-            early_pass ? "true" : "false", pass_weight);
+            early_pass ? "true" : "false", pass_weight,
+            ppat_twelvecell ? "true" : "false");
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -682,6 +744,11 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
         }
     }
 
+    /* Does the FILE carry the twelvecell block?  Recorded for the caller; the
+     * run's own setting governs ppat_twelvecell (a file without the block
+     * fine-tunes into it, its 21 new weights starting at zero — that is what
+     * the appended layout buys). */
+    ppat_file_twelvecell = strstr(buf, "twelvecell: true") != NULL;
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
 

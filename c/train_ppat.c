@@ -43,6 +43,13 @@
  * softmax unchanged.  With it pinned, the absolute logit level means "how good
  * a move must be to be worth playing".  Fine-tuning an unflagged model is how
  * one is converted.
+ *     --twelvecell          extend an ALL-EMPTY ninecell with a second key for
+ *                           the four distance-2 orthogonals (21 D4 orbits).  In
+ *                           open areas the ninecell is one shared weight, so the
+ *                           policy picks uniformly there; this differentiates.
+ *                           The block is APPENDED, so --load of a model without
+ *                           it fine-tunes (old weights keep their indices, the
+ *                           new ones start at zero).
  *     --lib-cap <n>         orthogonal liberty cap in the 3x3 pattern (2..4,
  *                           default 2 = the historical atari-only encoding).
  *                           Higher caps resolve more liberty levels at zero
@@ -1830,7 +1837,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--no-local] [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         return 1;
     }
@@ -1916,6 +1923,11 @@ int main(int argc, char **argv) {
     /* --load resolves the cap from the file (ppat_load_weights calls ppat_init);
      * a fresh run takes it from --lib-cap. */
     int cfg_lib_cap = get_int_arg(argc, argv, "--lib-cap", 2);   /* default: historical encoding */
+    /* Twelvecell extension: a second key for the four distance-2 orthogonals
+     * when the ninecell is all-empty.  Its block is APPENDED, so --load of a
+     * model without it is a fine-tune: the old weights keep their indices and
+     * the 21 new ones start at zero. */
+    ppat_twelvecell = has_flag(argc, argv, "--twelvecell") != 0;
     check_unknown_args(argc, argv);
     ppat_init(cfg_lib_cap);
 

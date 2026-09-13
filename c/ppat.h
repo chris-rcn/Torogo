@@ -50,8 +50,8 @@ extern int     ppat_phase_count;       /* number of game phases (default 1 = no 
 extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_move plays uniform random while board fullness (cap-empty)/cap < this fraction [0,1] */
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
-/* Max features per candidate: 1 pattern + 7 prev-move */
-#define PPAT_MAX_FEAT 8
+/* Max features per candidate: 1 pattern + 7 prev-move + 1 twelvecell */
+#define PPAT_MAX_FEAT 9
 
 /* ── Feature state (reusable across calls) ─────────────────────────────────── */
 typedef struct {
@@ -69,9 +69,23 @@ typedef struct {
  * before any extraction, and again if a loaded model uses a different cap. */
 void     ppat_init(int lib_cap);
 
-/* Total weight count: phase_count * (num_patterns + 7) */
+/* Twelvecell extension (see ppat.c): when a candidate's ninecell is entirely
+ * empty, a SECOND key describes the four distance-2 orthogonals, coded
+ * empty/mine/theirs and canonicalised under D4 into 21 orbits.  It STACKS on
+ * the ninecell key and its block is APPENDED after the pattern and local
+ * blocks, so every pre-extension weight index keeps its meaning and an old
+ * model fine-tunes into the extension with its weights untouched. */
+#define PPAT_T12_RAW      81
+#define PPAT_T12_PATTERNS 21
+extern bool ppat_twelvecell;           /* off unless the model/run enables it */
+extern bool ppat_file_twelvecell;      /* whether the last loaded file carried the block */
+extern const int32_t *ppat_t12_canon;  /* PPAT_T12_RAW -> orbit id */
+
+/* Total weight count: phase_count * (num_patterns + 7), plus the twelvecell
+ * block when enabled. */
 static inline int ppat_total_weights(void) {
-    return ppat_phase_count * (ppat_num_patterns + 7);
+    return ppat_phase_count * (ppat_num_patterns + 7) +
+           (ppat_twelvecell ? ppat_phase_count * PPAT_T12_PATTERNS : 0);
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */
