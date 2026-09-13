@@ -7,8 +7,8 @@
 // the full-move-list convention — this tool adopts it first; today's eval
 // files still OMIT the free stone, so prepend the centre coord when pasting
 // a sequence from one of them;
-// the board prints stones as circles and every legal move as a 2-digit
-// softmax percentage (temperature 1, clamped to 99).  Empty cells that are
+// the board prints stones as circles and every legal move as a 3-digit
+// softmax per-mille (temperature 1, clamped to 999).  Empty cells that are
 // not legal moves (illegal or true eyes) print a dot.
 //
 // Usage: node featurepol-show.js <size> [moves]
@@ -39,13 +39,13 @@ const state = FeaturePol.createState(N, weights.spec);
 FeaturePol.extractFeatures(game, state, weights);
 FeaturePol.computeSoftmax(state, weights, 1);
 
-// pct[idx] = clamped 2-digit percentage for each candidate move
-// pct: rounded, clamped to 99; a probability of exactly zero renders blank,
-// while a small-but-nonzero one still shows " 0".
+// pct: per-mille, rounded, clamped to 999 (three digits of precision); a
+// probability of exactly zero renders blank, while a small-but-nonzero one
+// still shows "  0".
 const pct = new Map();
 for (let i = 0; i < state.count; i++) {
   const p = state.probs[i];
-  pct.set(state.moves[i], p === 0 ? '  ' : String(Math.min(99, Math.round(p * 100))).padStart(2));
+  pct.set(state.moves[i], p === 0 ? '   ' : String(Math.min(999, Math.round(p * 1000))).padStart(3));
 }
 
 console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
@@ -55,16 +55,16 @@ console.log(game.current === BLACK ? 'black(●) to move' : 'white(○) to move'
 // Column letters across the top, row numbers down the left; rows print
 // top-to-bottom as N..1, matching parseBoard/coordStr orientation.
 const colHdr = [];
-for (let x = 0; x < N; x++) colHdr.push(String.fromCharCode(97 + x).padStart(2));
+for (let x = 0; x < N; x++) colHdr.push(String.fromCharCode(97 + x).padStart(3));
 console.log('   ' + colHdr.join(' '));
 for (let y = N - 1; y >= 0; y--) {
   const cells = [];
   for (let x = 0; x < N; x++) {
     const idx = y * N + x, c = game.cells[idx];
-    if (c === BLACK) cells.push(' ●');
-    else if (c !== 0) cells.push(' ○');
+    if (c === BLACK) cells.push('  ●');
+    else if (c !== 0) cells.push('  ○');
     else if (pct.has(idx)) cells.push(pct.get(idx));
-    else cells.push(' ·');
+    else cells.push('  ·');
   }
   console.log(String(y + 1).padStart(2) + ' ' + cells.join(' '));
 }
