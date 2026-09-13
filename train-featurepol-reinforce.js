@@ -123,6 +123,7 @@ const EVAL_KOMI = KOMI(EVAL_SIZE);
 const KOMI_WINDOW = 500;
 let komiGames = 0, komiBlackWins = 0;
 let komiSum = 0, komiSumGames = 0;   // per-interval mean komi (avgK column)
+let featSum = 0, candSum = 0;        // per-interval keys and candidates (avgF column)
 
 // Load the saved model up front (if present) so it can supply the spec when
 // --spec is omitted — i.e. just continue training the model as it stands.
@@ -259,6 +260,7 @@ function trainGame(N) {
     if (choice.index >= 0) {
       const n = state.count;
       const nk = state.keyOff[n];
+      featSum += nk; candSum += n;
       const keys = new Int32Array(nk);
       keys.set(state.keys.subarray(0, nk));
       const keyOff = new Int32Array(n + 1);
@@ -345,9 +347,9 @@ console.log();
 // line up regardless of the individual formatters' string lengths.
 // winRatio column: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game
 // counts (this interval's, and the rolling-half window).  Fixed 21 chars wide.
-const COLS = ['elapsed', 'game', 'tMv', 'nWts', 'avgW', 'maxP', 'avgK',
+const COLS = ['elapsed', 'game', 'tMv', 'nWts', 'avgW', 'maxP', 'avgK', 'avgF',
   ...(EVAL_AGENT ? ['winRatio'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
-const COLW = [7, 5, 6, 6, 7, 5, 6,
+const COLW = [7, 5, 6, 6, 7, 5, 6, 6,
   ...(EVAL_AGENT ? [21] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
 printRow(COLS);
@@ -391,6 +393,7 @@ while (true) {
       avgW.toFixed(4),
       Util.fmtRatio4(maxPN > 0 ? maxPSum / maxPN : 0),
       Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),
+      Util.fmt4(candSum > 0 ? featSum / candSum : 0),
     ];
     if (EVAL_AGENT) {
       // Eval always runs at EVAL_KOMI so the column stays comparable while the
@@ -428,6 +431,7 @@ while (true) {
     saveWeights();
     maxPSum = 0; maxPN = 0; elapsedAcc = 0; movesAcc = 0;
     komiSum = 0; komiSumGames = 0;
+    featSum = 0; candSum = 0;
     const nowMs = Date.now();
     nextPrintAt = Math.min(t0 + Math.round((nowMs - t0) * 1.4), nowMs + MAX_PRINT_GAP_MS);
     lastPrintAt = Date.now();
