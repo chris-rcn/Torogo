@@ -39,10 +39,12 @@ const state = FeaturePol.createState(N, weights.spec);
 FeaturePol.extractFeatures(game, state, weights);
 FeaturePol.computeSoftmax(state, weights, 1);
 
-// pct: per-mille, rounded, clamped to 999 (three digits of precision).
+// pct: per-mille, rounded, clamped to 999 (three digits of precision).  A
+// cell that rounds to 0 renders blank — the '0' glyph reads like a stone.
 const pct = new Map();
 for (let i = 0; i < state.count; i++) {
-  pct.set(state.moves[i], String(Math.min(999, Math.round(state.probs[i] * 1000))).padStart(3));
+  const v = Math.min(999, Math.round(state.probs[i] * 1000));
+  pct.set(state.moves[i], v === 0 ? '   ' : String(v).padStart(3));
 }
 
 console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
