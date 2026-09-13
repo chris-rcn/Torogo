@@ -1,9 +1,12 @@
 'use strict';
 
 // featurepol-show.js — render a position with the featurepol policy's move
-// likelihoods.  Board size and an eval-file move sequence (comma-separated
-// coordinate moves, e.g. "h10,e7,e8") replay from the standard start (free
-// initial stone, black at the centre, so the first listed move is white's);
+// likelihoods.  Board size and a move sequence (comma-separated coordinate
+// moves, e.g. "g7,h10,e7") replay from an EMPTY board: the list carries every
+// stone, auto-stone included, so the first listed move is black's.  This is
+// the full-move-list convention — this tool adopts it first; today's eval
+// files still OMIT the free stone, so prepend the centre coord when pasting
+// a sequence from one of them;
 // the board prints stones as circles and every legal move as a 2-digit
 // softmax percentage (temperature 1, clamped to 99).  Empty cells that are
 // not legal moves (illegal or true eyes) print a dot.
@@ -24,7 +27,7 @@ const N = parseInt(sizeArg, 10);
 const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, 'featurepol-cbk7wa32.js');
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 
-const game = new Game2(N, true);
+const game = new Game2(N, false);   // empty board: the move list carries every stone
 const moves = movesArg ? movesArg.split(',').map(s => s.trim()).filter(Boolean) : [];
 for (const m of moves) {
   const idx = parseMove(m, N);
