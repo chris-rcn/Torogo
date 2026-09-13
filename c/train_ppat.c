@@ -116,8 +116,9 @@ static int    cfg_train_moves;         /* -1 = unlimited; else ppat for first N 
 static int    cfg_phase;               /* -1 = all phases; >= 0 = train/test only this phase */
 static int    cfg_no_local;            /* 1 = freeze the 7 previous-move ("local") features at 0 */
 /* Board size of the training positions; global because topology is (g2_init_topology). */
-static int    topo_init = 0;
-static int    topo_size = 0;
+static int    topo_size = 0;        /* board size of the TRAIN file — training's topology */
+static int    test_board_size = 0;  /* board size of --test-file (== topo_size when unset) */
+static int    last_loaded_size = 0; /* size of the file load_positions_from() just read */
 static const char *cfg_ref_weights;    /* reference model for the directWR column (NULL = off) */
 
 /* Match-column calibration.  Constants rather than CLI flags: these are
@@ -512,8 +513,10 @@ static void load_positions_from(const char *path, int test_head) {
     int lineno = 0;
     int skipped = 0;       /* unparseable lines */
     int filtered = 0;      /* valid positions dropped by --no-extreme / --phase */
-    /* Topology is global and must agree across BOTH files (--test-file), so these
-     * persist between calls rather than resetting per file. */
+    /* One size per FILE (the records are replayed here for their phase, which
+     * needs this file's topology active).  The train and test files may differ:
+     * measure_test swaps the topology the same way direct_match_wr does. */
+    int file_size = 0;
     float extreme_threshold = 1.0f - 2.0f * cfg_no_extreme;
 
     while (fgets(buf, sizeof(buf), f) && n_all < MAX_LINES) {
@@ -534,10 +537,10 @@ static void load_positions_from(const char *path, int test_head) {
         /* Init topology on first valid position; the board size is global, so all
          * positions must share it — mixed sizes would index the wrong neighbour
          * tables (a segfault).  Throw on the first discrepancy instead. */
-        if (!topo_init) { g2_init_topology(pos.board_size); topo_size = pos.board_size; topo_init = 1; }
-        else if (pos.board_size != topo_size) {
-            fprintf(stderr, "error: mixed board sizes in %s (line %d: size %d, expected %d; train one size per file)\n",
-                    path, lineno, pos.board_size, topo_size);
+        if (!file_size) { file_size = pos.board_size; g2_init_topology(file_size); }
+        else if (pos.board_size != file_size) {
+            fprintf(stderr, "error: mixed board sizes in %s (line %d: size %d, expected %d; one size per file)\n",
+                    path, lineno, pos.board_size, file_size);
             exit(1);
         }
 
@@ -563,6 +566,7 @@ static void load_positions_from(const char *path, int test_head) {
         all_positions[n_all++] = pos;
     }
     fclose(f);
+    last_loaded_size = file_size;
     if (skipped > 5)
         fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
     if (n_all == base) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", path, skipped); exit(1); }
@@ -583,10 +587,18 @@ static void load_positions(void) {
         /* Test file first: every one of its records is test, filters excluded. */
         load_positions_from(cfg_test_file, MAX_LINES);
         n_test_file = n_all;
+        test_board_size = last_loaded_size;
         load_positions_from(cfg_file, 0);   /* all of it is training data */
+        topo_size = last_loaded_size;
+        if (test_board_size != topo_size)
+            printf("test set is size %d, training size %d — teMSE measures at the TEST size\n",
+                   test_board_size, topo_size);
     } else {
         load_positions_from(cfg_file, cfg_test_pos);
+        topo_size = test_board_size = last_loaded_size;
     }
+    /* The test file may have left ITS topology active; training owns the global. */
+    g2_init_topology(topo_size);
 }
 
 static void split_data(void) {
@@ -1085,6 +1097,11 @@ static TestResult measure_test(int use_uniform, int n) {
      * noise).  Save/restore g_rng so training's own stream is untouched. */
     Rng saved_rng = g_rng;
     rng_seed(&g_rng, TEST_RNG_SEED);
+    /* A test set of a different size than the training data scores at ITS size:
+     * the records carry their own board_size for g2_new, and this swaps the
+     * global neighbour tables to match (restored before every return). */
+    const int swap_topo = test_board_size != topo_size;
+    if (swap_topo) g2_init_topology(test_board_size);
     float abs_sum = 0, sq_sum = 0, prob_sum = 0;
     int count = 0, prob_n = 0;
     for (int ti = 0; ti < n; ti++) {
@@ -1115,6 +1132,7 @@ static TestResult measure_test(int use_uniform, int n) {
     }
     float mp = prob_n > 0 ? prob_sum / prob_n : 0;
     g_rng = saved_rng;   /* restore training's RNG stream */
+    if (swap_topo) g2_init_topology(topo_size);
     if (count == 0) return (TestResult){0, 0, mp};
     return (TestResult){ abs_sum / count, sq_sum / count, mp };   /* mse = mean squared error */
 }
