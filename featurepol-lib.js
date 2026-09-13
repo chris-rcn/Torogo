@@ -734,7 +734,7 @@ function _makeTerm(str) {
   // the trailing-digit split cannot tell, so match the exact token.
   const kind = str === 'stones24' ? 'stones24' : m[1];
   const param = kind === 'stones24' ? null : (m[2] ? parseInt(m[2], 10) : null);
-  const salt = _hashStr(str);
+  let salt = _hashStr(str);
   // A size<n> term is CUMULATIVE: it carries sizeFn (the raw size) and is expanded
   // by parseSpec into n additive "≥k present" indicator spaces (thermometer
   // encoding) so the logit sums over size, like npat's tactical slots.  Other
@@ -839,6 +839,15 @@ function _makeTerm(str) {
       if (param === null || param === 1) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, or 0 = board maximum, got "${str}"`);
       {
         maxNear = 4;
+        // R is NOT part of the key namespace: the salts hash 'emptyExpand' /
+        // 'emptyDepth' with the R stripped (the space salt strips it too, in
+        // parseSpec), so retraining with a different R keeps every weight the
+        // two caps agree on — pattern levels up to min(Rold, Rnew) and the
+        // thermometer below it; only the deeper levels and the all-empty key
+        // (whose VALUE folds R+1) orphan.  Corollary: two emptyExpand terms
+        // with different R in one spec would silently share a memo slot, so
+        // parseSpec forbids that.
+        salt = _hashStr('emptyExpand');
         const sh = _eeShared(param), st = sh.st;
         prepare = sh.prepare;
         evalFn = (ctx, idx) => st.key[idx];
@@ -854,7 +863,7 @@ function _makeTerm(str) {
         // from emptyExpand — the 4-informative-cell level-1 pattern carries
         // almost no information, and absence is the gated-event reference.
         // The minimum emission is therefore the 12-cell level-2 pattern.
-        stacked = { str: `emptyDepth${param}`, salt: _hashStr(`emptyDepth${param}`),
+        stacked = { str: `emptyDepth${param}`, saltStr: 'emptyDepth', salt: _hashStr('emptyDepth'),
                     cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
                     prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
       }
@@ -1142,6 +1151,7 @@ function parseSpec(specStr) {
     return slot;
   }
   const stackedTerms = [];    // synthetic companion terms (emptyExpand's depth thermometer), deduped by salt
+  let eeR = null;             // the one emptyExpand R this spec may use (R-free salts share slots)
   for (const spaceStr of str.split(',').map(s => s.trim()).filter(Boolean)) {
     const terms = spaceStr.split('+').map(t => t.trim()).filter(Boolean).map(_makeTerm);
     if (terms.length === 0) throw new Error(`featurepol: empty feature space in "${spaceStr}"`);
@@ -1149,6 +1159,11 @@ function parseSpec(specStr) {
     const baseTerms = [];   // descriptors (bin:false, fold value) + binary events (bin:true, fold level 1)
     const cumTerms = [];    // cumulative size terms (thermometer cross-product)
     for (const t of terms) {
+      if (t.kind === 'emptyExpand') {
+        if (eeR !== null && t.param !== eeR)
+          throw new Error(`featurepol: one spec cannot mix emptyExpand radii (${eeR} and ${t.param}) — the R-free salts would share a memo slot`);
+        eeR = t.param;
+      }
       if (t.needsLadder) needsLadder = true;
       if (t.maxNear > nearMax) nearMax = t.maxNear;
       const slot = slotFor(t);
@@ -1168,7 +1183,10 @@ function parseSpec(specStr) {
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= c.maxLevel;
     const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
-    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesRank });
+    // The space salt strips emptyExpand's R (matching its R-free term salt),
+    // so a retrain at a different R lands on the same weight space.
+    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr.replace(/emptyExpand\d+/g, 'emptyExpand')),
+                  gate, baseTerms, cumTerms, maxKeys, usesRank });
   }
   // A keyword is not limited to one key family: `stacked` is an additional
   // weight space the keyword emits into (emptyExpand's per-level emptiness
@@ -1183,7 +1201,7 @@ function parseSpec(specStr) {
     const slot = slotFor(t);
     const unbounded = t.maxLevel === 0;
     if (unbounded) boardMaxSpaces++;
-    spaces.push({ str: t.str, salt: _hashStr('space:' + t.str), gate: [slot], baseTerms: [],
+    spaces.push({ str: t.str, salt: _hashStr('space:' + (t.saltStr || t.str)), gate: [slot], baseTerms: [],
                   cumTerms: [{ salt: t.salt, slot, maxLevel: unbounded ? Infinity : t.maxLevel }],
                   maxKeys: unbounded ? 0 : t.maxLevel, usesRank: false });
   }
