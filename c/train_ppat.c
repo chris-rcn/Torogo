@@ -50,6 +50,10 @@
  *                           The block is APPENDED, so --load of a model without
  *                           it fine-tunes (old weights keep their indices, the
  *                           new ones start at zero).
+ *     --twelvecell2         the same key on a LOOSER trigger: the four ADJACENT
+ *                           points empty, whatever the diagonals hold.  Fires
+ *                           strictly more often.  Mutually exclusive with
+ *                           --twelvecell — they share the one weight block.
  *     --lib-cap <n>         orthogonal liberty cap in the 3x3 pattern (2..4,
  *                           default 2 = the historical atari-only encoding).
  *                           Higher caps resolve more liberty levels at zero
@@ -1837,7 +1841,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell] [--no-local] [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         return 1;
     }
@@ -1927,7 +1931,14 @@ int main(int argc, char **argv) {
      * when the ninecell is all-empty.  Its block is APPENDED, so --load of a
      * model without it is a fine-tune: the old weights keep their indices and
      * the 21 new ones start at zero. */
-    ppat_twelvecell = has_flag(argc, argv, "--twelvecell") != 0;
+    const int t12_1 = has_flag(argc, argv, "--twelvecell");
+    const int t12_2 = has_flag(argc, argv, "--twelvecell2");
+    if (t12_1 && t12_2) {
+        fprintf(stderr, "error: --twelvecell and --twelvecell2 are mutually exclusive"
+                        " (they share one weight block; a model uses one trigger or the other)\n");
+        exit(1);
+    }
+    ppat_twelvecell = t12_2 ? 2 : t12_1 ? 1 : 0;
     check_unknown_args(argc, argv);
     ppat_init(cfg_lib_cap);
 

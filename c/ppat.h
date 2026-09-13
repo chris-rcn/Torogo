@@ -70,22 +70,27 @@ typedef struct {
 void     ppat_init(int lib_cap);
 
 /* Twelvecell extension (see ppat.c): when a candidate's ninecell is entirely
- * empty, a SECOND key describes the four distance-2 orthogonals, coded
- * empty/mine/theirs and canonicalised under D4 into 21 orbits.  It STACKS on
+ * empty (or, in mode 2, when just its four ADJACENT points are), a SECOND key
+ * describes the four distance-2 orthogonals, coded empty/mine/theirs and
+ * canonicalised under D4 into 21 orbits.  The canonicalisation is exact in
+ * mode 1 and loses diagonal-to-arm alignment in mode 2 — see ppat-lib.js.  It STACKS on
  * the ninecell key and its block is APPENDED after the pattern and local
  * blocks, so every pre-extension weight index keeps its meaning and an old
  * model fine-tunes into the extension with its weights untouched. */
 #define PPAT_T12_RAW      81
 #define PPAT_T12_PATTERNS 21
-extern bool ppat_twelvecell;           /* off unless the model/run enables it */
-extern bool ppat_file_twelvecell;      /* whether the last loaded file carried the block */
+/* 0 = off, 1 = --twelvecell (whole ninecell empty), 2 = --twelvecell2 (the four
+ * ADJACENT points empty, whatever the diagonals hold; fires strictly more
+ * often).  Both share the single appended block. */
+extern int  ppat_twelvecell;
+extern int  ppat_file_twelvecell;      /* the mode the last loaded file carried */
 extern const int32_t *ppat_t12_canon;  /* PPAT_T12_RAW -> orbit id */
 
 /* Total weight count: phase_count * (num_patterns + 7), plus the twelvecell
  * block when enabled. */
 static inline int ppat_total_weights(void) {
     return ppat_phase_count * (ppat_num_patterns + 7) +
-           (ppat_twelvecell ? ppat_phase_count * PPAT_T12_PATTERNS : 0);
+           (ppat_twelvecell != 0 ? ppat_phase_count * PPAT_T12_PATTERNS : 0);
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */

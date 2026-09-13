@@ -98,15 +98,26 @@ const NUM_PATTERNS = _T2.numPatterns;
 // describing the four DISTANCE-2 orthogonals — the twelvecell's arms — coded
 // empty / mine / theirs.
 //
-// It STACKS on the ninecell rather than replacing it: the all-empty pattern key
-// is still emitted, so an existing model fine-tunes into the extension with its
-// weights untouched and the new keys starting at zero.
+// It STACKS on the ninecell rather than replacing it: the pattern key is still
+// emitted, so an existing model fine-tunes into the extension with its weights
+// untouched and the new keys starting at zero.
 //
-// Canonicalising the arms under the full D4 is EXACT here, not the usual
-// lossy shortcut: the feature fires only when the inner ninecell is all-empty,
-// and that inner pattern is fixed by every element of D4, so any transform that
-// canonicalises the arms is a symmetry of the whole twelvecell.  81 raw
-// configurations collapse to 21 orbits.
+// TWO mutually exclusive triggers, both sharing this one 21-weight block:
+//   mode 1 (--twelvecell)   the whole NINECELL is empty — orthogonals and
+//                           diagonals alike.
+//   mode 2 (--twelvecell2)  the four ADJACENT points are empty, whatever the
+//                           diagonals hold.  Fires strictly more often.
+//
+// Canonicalising the arms under the full D4 is EXACT in mode 1: the inner
+// pattern is all-empty, hence fixed by every element of D4, so any transform
+// that canonicalises the arms is a symmetry of the whole twelvecell.  In mode 2
+// the diagonals may be occupied, so the pair (ninecell key, arm key) stays D4-
+// INVARIANT — both halves are canonical — but loses the RELATIVE alignment
+// between the diagonals and the arms: two positions sharing a ninecell and an
+// arm orbit collide even when the arms sit differently against the diagonals.
+// That is the usual additive-feature trade, not a defect; an exact mode-2 key
+// would have to canonicalise diagonals and arms jointly (954 orbits, not 21).
+// 81 raw arm configurations collapse to 21 orbits.
 const T12_RAW = 81;
 const _T12 = (() => {
   // Arm order N, E, S, W — the ninecell's D4 restricted to the orthogonals.
@@ -290,6 +301,8 @@ function createState(N) {
 
 // The twelvecell block is APPENDED after the pattern and local blocks, so every
 // pre-extension weight index keeps its meaning and an old file loads unchanged.
+// Both twelvecell modes share the single appended block, so the size is the
+// same either way; only which positions emit into it differs.
 function totalWeights(phaseCount, libCap = 2, twelvecell = false) {
   return phaseCount * (_buildTables(libCap).numPatterns + 7) +
          (twelvecell ? phaseCount * NUM_T12 : 0);
@@ -312,7 +325,7 @@ function totalWeights(phaseCount, libCap = 2, twelvecell = false) {
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, twelvecell = false) {
+function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -527,9 +540,10 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
     // Pattern feature
     state.feat[nf++] = patOffset + _CANON[rawIdx];
 
-    // Twelvecell extension: an all-empty ninecell (rawIdx 0 — every cell codes
-    // 0 when empty) gets a second key for the four distance-2 orthogonals.
-    if (twelvecell && rawIdx === 0) {
+    // Twelvecell extension.  Mode 1 needs the whole ninecell empty (rawIdx 0 —
+    // every cell codes 0 when empty); mode 2 only the four adjacent points,
+    // which emptyNbr already counts.
+    if (t12mode === 1 ? rawIdx === 0 : t12mode === 2 && emptyNbr === 4) {
       const a0 = cells[nbr[niN * 4 + 0]], a1 = cells[nbr[niE * 4 + 3]];
       const a2 = cells[nbr[niS * 4 + 1]], a3 = cells[nbr[niW * 4 + 2]];
       const t12 = (a0 === 0 ? 0 : a0 === cur ? 1 : 2) +
@@ -607,7 +621,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.twelvecell);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -653,7 +667,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.twelvecell);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -735,11 +749,16 @@ function loadWeights(pathOrObj) {
   // local weights are also all zero, and a trainer that skipped them would pin
   // their gradients at zero forever.
   const phases = raw.phases || 1;
-  const twelvecell = raw.twelvecell === true;
+  const twelvecell = raw.twelvecell === true, twelvecell2 = raw.twelvecell2 === true;
+  if (twelvecell && twelvecell2) {
+    console.error('ppat loadWeights: twelvecell and twelvecell2 are mutually exclusive');
+    return null;
+  }
+  const t12mode = twelvecell ? 1 : twelvecell2 ? 2 : 0;
   // Scan the LOCAL block only — the twelvecell block is appended after it, and
   // a nonzero twelvecell weight says nothing about features 1-7.
   let skipLocal = true;
-  const localEnd = phases * (nPat + 7);
+  const localEnd = phases * (nPat + 7);   // the twelvecell block starts here
   for (let i = phases * nPat; i < localEnd && i < raw.weights.length; i++)
     if (raw.weights[i] !== 0) { skipLocal = false; break; }
   if (skipLocal) console.log('ppat loadWeights: local weights all zero, skipping local feature extraction');
@@ -750,7 +769,8 @@ function loadWeights(pathOrObj) {
   // pattern weight shifts all logits equally and leaves the softmax unchanged.
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
-  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal, twelvecell,
+  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
+           twelvecell, twelvecell2, t12mode,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }

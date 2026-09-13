@@ -17,8 +17,8 @@ const int32_t *ppat_canon_id = NULL;
  * usual lossy shortcut: the feature fires only when the inner ninecell is
  * all-empty, and that inner pattern is fixed by every element of D4, so any
  * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
-bool ppat_twelvecell = false;
-bool ppat_file_twelvecell = false;     /* set by ppat_load_weights from the file */
+int ppat_twelvecell = 0;
+int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
 static int32_t t12_table[PPAT_T12_RAW];
 static bool    t12_built = false;
 const int32_t *ppat_t12_canon = t12_table;
@@ -451,6 +451,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
         int vN, vS, vW, vE;
         bool eye;
+        int empty_nbr_count = 0;   /* mode-2 twelvecell trigger */
         {
             int friend_count = 0, empty_count_e = 0;
             int32_t first_gid = -2, same_group = 0;
@@ -480,6 +481,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             CHECK_AND_ADJ(c2, ni2, vW);
             CHECK_AND_ADJ(c3, ni3, vE);
             #undef CHECK_AND_ADJ
+            empty_nbr_count = empty_count_e;
             eye = g2_is_eyelike(friend_count, empty_count_e, same_group,
                                 (vNE == 2) + (vSE == 2) + (vSW == 2) + (vNW == 2));
         }
@@ -503,7 +505,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
         /* Twelvecell extension: an all-empty ninecell (raw 0 — every cell codes
          * 0 when empty) gets a second key for the four distance-2 orthogonals. */
-        if (ppat_twelvecell && raw == 0) {
+        if (ppat_twelvecell == 1 ? raw == 0
+                                 : ppat_twelvecell == 2 && empty_nbr_count == 4) {
             const int8_t a0 = g->cells[g2_nbr[ni0 * 4 + 0]];
             const int8_t a1 = g->cells[g2_nbr[ni3 * 4 + 3]];
             const int8_t a2 = g->cells[g2_nbr[ni1 * 4 + 1]];
@@ -681,10 +684,11 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s };\n",
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s };\n",
             ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
             early_pass ? "true" : "false", pass_weight,
-            ppat_twelvecell ? "true" : "false");
+            ppat_twelvecell == 1 ? "true" : "false",
+            ppat_twelvecell == 2 ? "true" : "false");
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -748,7 +752,8 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
      * run's own setting governs ppat_twelvecell (a file without the block
      * fine-tunes into it, its 21 new weights starting at zero — that is what
      * the appended layout buys). */
-    ppat_file_twelvecell = strstr(buf, "twelvecell: true") != NULL;
+    ppat_file_twelvecell = strstr(buf, "twelvecell2: true") != NULL ? 2
+                         : strstr(buf, "twelvecell: true")  != NULL ? 1 : 0;
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
 
