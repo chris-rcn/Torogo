@@ -45,14 +45,12 @@
 //               level is folded into the key; an all-empty radius-R diamond is
 //               one shared key.  Invariant by construction at every level, so
 //               unlike stoneExpand it scales past 20 cells (radius 3/4/5/6 =
-//               25/41/61/85 cells).  A descriptor.
-//   emptyDepth<R>  emptyExpand's stacking half: a cumulative thermometer over
-//               how many levels were fully empty before the pattern appeared
-//               (level j fires when the radius-j diamond is empty), so the
-//               shared per-level weights carry the distance-to-stone prior and
-//               the rare deep pattern keys learn residuals.  Spec
-//               "emptyExpand3,emptyDepth3" is the stacked pair; same R shares
-//               one computation.  A gated event: depth 0 emits nothing.
+//               25/41/61/85 cells).  STACKS: alongside the pattern key it
+//               emits one shared "the radius-j diamond was empty" key per
+//               level expanded through (a thermometer riding the same
+//               computation), so those weights carry the distance-to-stone
+//               prior and the rare deep pattern keys learn residuals — the
+//               twelvecell-on-ninecell logic.  A descriptor plus its stack.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -722,7 +720,7 @@ function _makeTerm(str) {
   // maxNear: how many of the nearest cells this term reads from the nearNbr table
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
   let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
-  let prepare = null;
+  let prepare = null, stacked = null;   // stacked: a synthetic companion term parseSpec appends as its own space
   switch (kind) {
     case 'vpat': {
       // Rank under the external value model as a cumulative size: rank r ->
@@ -822,22 +820,15 @@ function _makeTerm(str) {
         const sh = _eeShared(param), st = sh.st;
         prepare = sh.prepare;
         evalFn = (ctx, idx) => st.key[idx];
-      }
-      break;
-    }
-    case 'emptyDepth': {
-      // emptyExpand's stacking half: thermometer over the fully-empty levels
-      // (size = reached level − 1, R when empty through R), so "the radius-j
-      // diamond was empty" is one shared weight per j carrying the
-      // distance-to-stone prior additively under the pattern key.  Same-R
-      // emptyExpand/emptyDepth share one prepare.  Gated: depth 0 emits nothing.
-      if (param === null || param < 2) throw new Error(`featurepol: emptyDepth<R> needs a max radius R >= 2, got "${str}"`);
-      {
-        maxNear = 4;
-        const sh = _eeShared(param), st = sh.st;
-        prepare = sh.prepare;
-        cumulative = true;
-        sizeFn = (ctx, idx) => st.depth[idx];
+        // The stack: a synthetic cumulative term parseSpec appends as its own
+        // additive space — a thermometer over the fully-empty levels (size =
+        // reached level − 1, R when empty through R), one shared weight per
+        // "the radius-j diamond was empty".  Same prepare object, so the
+        // identity-dedupe runs the computation once; depth 0 emits nothing
+        // (the gated-event reference: stones already adjacent).
+        stacked = { str: `emptyDepth${param}`, salt: _hashStr(`emptyDepth${param}`),
+                    cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
+                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx] };
       }
       break;
     }
@@ -1086,7 +1077,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -1122,6 +1113,7 @@ function parseSpec(specStr) {
     if (slot === undefined) { slot = computers.length; slotOf.set(t.salt, slot); computers.push(t.cumulative ? t.sizeFn : t.evalFn); }
     return slot;
   }
+  const stackedTerms = [];    // synthetic companion terms (emptyExpand's depth thermometer), deduped by salt
   for (const spaceStr of str.split(',').map(s => s.trim()).filter(Boolean)) {
     const terms = spaceStr.split('+').map(t => t.trim()).filter(Boolean).map(_makeTerm);
     if (terms.length === 0) throw new Error(`featurepol: empty feature space in "${spaceStr}"`);
@@ -1136,11 +1128,20 @@ function parseSpec(specStr) {
       if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel }); }
       else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
+      if (t.stacked && !stackedTerms.some(s => s.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
     }
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= c.maxLevel;
     const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
     spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesRank });
+  }
+  // Each stacked term becomes its own additive single-term space, exactly as if
+  // it had been written comma-separated in the spec.  Its prepare is the parent
+  // term's object, so the includes() dedupe above already covered it.
+  for (const t of stackedTerms) {
+    const slot = slotFor(t);
+    spaces.push({ str: t.str, salt: _hashStr('space:' + t.str), gate: [slot], baseTerms: [],
+                  cumTerms: [{ salt: t.salt, slot, maxLevel: t.maxLevel }], maxKeys: t.maxLevel, usesRank: false });
   }
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
