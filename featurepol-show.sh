@@ -1,0 +1,66 @@
+#!/bin/bash
+# featurepol-show.sh — render a position with the featurepol policy's move
+# likelihoods.  Board size and an eval-file move sequence (comma-separated
+# coordinate moves, e.g. "h10,e7,e8") replay from the standard start (free
+# initial stone, black to move first); the board prints stones as circles and
+# every legal move as a 2-digit softmax percentage (temperature 1, clamped to
+# 99).  Empty cells that are not legal moves (illegal or true eyes) print a dot.
+#
+# Usage: featurepol-show.sh <size> [moves]
+#   FPOL_DATA   featurepol model to load (same env the agent uses)
+#
+# Example: FPOL_DATA=out/featurepol-xyz.js ./featurepol-show.sh 9 e5,c3,g7
+
+FPSHOW_DIR="$(cd "$(dirname "$0")" && pwd)" exec node - "$@" <<'EOF'
+'use strict';
+const path = require('path');
+const dir = process.env.FPSHOW_DIR;
+const FeaturePol = require(path.join(dir, 'featurepol-lib.js'));
+const { Game2, parseMove, PASS, BLACK } = require(path.join(dir, 'game2.js'));
+
+const [sizeArg, movesArg] = process.argv.slice(2);
+if (!sizeArg) { console.error('usage: featurepol-show.sh <size> [moves]'); process.exit(1); }
+const N = parseInt(sizeArg, 10);
+
+const FPOL_DATA = process.env.FPOL_DATA || path.join(dir, 'featurepol-cbk7wa32.js');
+const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
+
+const game = new Game2(N);
+const moves = movesArg ? movesArg.split(',').map(s => s.trim()).filter(Boolean) : [];
+for (const m of moves) {
+  const idx = parseMove(m, N);
+  if (idx !== PASS && (idx < 0 || idx >= N * N)) { console.error(`bad move "${m}" for size ${N}`); process.exit(1); }
+  if (!game.play(idx)) { console.error(`illegal move "${m}" (move ${moves.indexOf(m) + 1})`); process.exit(1); }
+}
+
+const state = FeaturePol.createState(N, weights.spec);
+FeaturePol.extractFeatures(game, state, weights);
+FeaturePol.computeSoftmax(state, weights, 1);
+
+// pct[idx] = clamped 2-digit percentage for each candidate move
+const pct = new Map();
+for (let i = 0; i < state.count; i++) {
+  const p = Math.min(99, Math.round(state.probs[i] * 100));
+  pct.set(state.moves[i], p);
+}
+
+console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
+console.log(`size: ${N}  moves: ${moves.length}  to move: ${game.current === BLACK ? 'black' : 'white'}`);
+console.log();
+// Column letters across the top, row numbers down the left; rows print
+// top-to-bottom as N..1, matching parseBoard/coordStr orientation.
+const colHdr = [];
+for (let x = 0; x < N; x++) colHdr.push(String.fromCharCode(97 + x).padStart(2));
+console.log('   ' + colHdr.join(' '));
+for (let y = N - 1; y >= 0; y--) {
+  const cells = [];
+  for (let x = 0; x < N; x++) {
+    const idx = y * N + x, c = game.cells[idx];
+    if (c === BLACK) cells.push(' ●');
+    else if (c !== 0) cells.push(' ○');
+    else if (pct.has(idx)) cells.push(String(pct.get(idx)).padStart(2));
+    else cells.push(' ·');
+  }
+  console.log(String(y + 1).padStart(2) + ' ' + cells.join(' '));
+}
+EOF
