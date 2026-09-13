@@ -41,7 +41,10 @@
 //   emptyExpand<R>  Adaptive-diamond opening shape: the smallest L1 diamond
 //               around the move that is NOT completely empty, hashed with the
 //               stones12b recursion (level 1 = the 5-point plus, level k = a
-//               plus of five level-(k-1) hashes), radius capped at R.  The
+//               plus of five level-(k-1) hashes), radius capped at R.  A move
+//               with a stone in its level-1 diamond emits NOTHING (that
+//               4-informative-cell pattern carries almost no information), so
+//               the minimum emission is the 12-cell level-2 pattern.  The
 //               level is folded into the key; an all-empty radius-R diamond is
 //               one shared key.  Invariant by construction at every level, so
 //               unlike stoneExpand it scales past 20 cells (radius 3/4/5/6 =
@@ -846,9 +849,14 @@ function _makeTerm(str) {
         // own weight space.  Same prepare object, so the identity-dedupe runs
         // the computation once; depth 0 emits nothing (the gated-event
         // reference: stones already adjacent).
+        // gatesHost: the depth slot also gates the pattern space, so a move
+        // whose level-1 diamond already holds a stone (depth 0) emits NOTHING
+        // from emptyExpand — the 4-informative-cell level-1 pattern carries
+        // almost no information, and absence is the gated-event reference.
+        // The minimum emission is therefore the 12-cell level-2 pattern.
         stacked = { str: `emptyDepth${param}`, salt: _hashStr(`emptyDepth${param}`),
                     cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
-                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx] };
+                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
       }
       break;
     }
@@ -1148,7 +1156,14 @@ function parseSpec(specStr) {
       if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel }); }
       else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
-      if (t.stacked && !stackedTerms.some(s => s.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
+      if (t.stacked) {
+        if (!stackedTerms.some(s => s.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
+        // A stacked term may gate its host's space too (emptyExpand: the
+        // pattern key is emitted only when the depth slot is >= 1, i.e. the
+        // move actually expanded).  slotFor is idempotent by salt, so the
+        // synthetic-space loop below reuses this slot.
+        if (t.stacked.gatesHost) gate.push(slotFor(t.stacked));
+      }
     }
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= c.maxLevel;
