@@ -78,7 +78,7 @@ function meanPlayout(base, move, mover, count) {
 
 // Agent epsilon-greedy self-play; returns the move sequence (flat indices / PASS).
 function selfPlayGame() {
-  const game = new Game2(SIZE);
+  const game = new Game2(SIZE, true);
   const moves = [];
   const options = { rng };
   while (!game.gameOver && moves.length < MAXMV) {
@@ -93,7 +93,7 @@ function selfPlayGame() {
 // Evaluate the position reached by replaying `prefix`: pass baseline (3N) and each
 // candidate's diff (N).  Returns { diffs: [[move, diff], ...] } or null if no candidates.
 function evaluatePosition(prefix) {
-  const base = new Game2(SIZE);
+  const base = new Game2(SIZE, true);
   for (const m of prefix) base.play(m);
   const mover = base.current;
   const cands = [];

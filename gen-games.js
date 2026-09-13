@@ -113,7 +113,7 @@ function progressRow() {
 }
 
 while (emitted < limit) {
-  const game  = new Game2(size);     // free initial centre stone; replay with Game2(size)
+  const game  = new Game2(size, true);     // free initial centre stone; replay with Game2(size)
   const moves = [];
 
   // Random opening moves for diversity.

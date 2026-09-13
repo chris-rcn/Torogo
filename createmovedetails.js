@@ -97,7 +97,7 @@ while (true) {
 
   // Play a full self-play game, recording each move and which positions
   // (identified by the number of moves played before them) were eligible.
-  const game     = new Game2(boardSize);
+  const game     = new Game2(boardSize, true);
   const moves    = [];
   const eligible = [];
 
@@ -117,7 +117,7 @@ while (true) {
 
   // Return to one random eligible position for the deep analysis.
   const k = eligible[Math.floor(Math.random() * eligible.length)];
-  const position = new Game2(boardSize);
+  const position = new Game2(boardSize, true);
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
 

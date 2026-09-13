@@ -29,7 +29,7 @@ function runMatch(p1Name, p2Name, games, size, budget) {
   let p1Wins = 0, p2Wins = 0;
 
   for (let i = 0; i < games; i++) {
-    const g = new Game2(size);
+    const g = new Game2(size, true);
     const blackAgent = i % 2 === 0 ? p1 : p2;
     const whiteAgent = i % 2 === 0 ? p2 : p1;
     const p1IsBlack = i % 2 === 0;
@@ -53,7 +53,7 @@ function runMatch(p1Name, p2Name, games, size, budget) {
 
 section('MC playout throughput (7x7)', () => {
   const { getMove: mc } = require('./ai/mc.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const budgetMs = 200;
   const t0 = performance.now();
   const move = mc(g, budgetMs, { rng });
@@ -65,7 +65,7 @@ section('MC playout throughput (7x7)', () => {
 
 section('MCTS playout throughput (7x7)', () => {
   const { getMove: mcts } = require('./ai/mcts.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const budgetMs = 200;
   const t0 = performance.now();
   const move = mcts(g, budgetMs, { rng });
@@ -139,7 +139,7 @@ section('AI legality stress test (all agents, 3 full games each)', () => {
   for (const name of agents) {
     const { getMove: agent } = require(`./ai/${name}.js`);
     for (let i = 0; i < 3; i++) {
-      const g = new Game2(5);
+      const g = new Game2(5, true);
       let moveNum = 0;
       while (!g.gameOver && moveNum < 200) {
         const move = agent(g, 20, { rng });

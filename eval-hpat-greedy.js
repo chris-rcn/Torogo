@@ -44,7 +44,7 @@ let wins = 0;
 const t0 = Date.now();
 for (let g = 0; g < GAMES; g++) {
   const policyIsBlack = (g % 2 === 0);
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());
   let m = 0;
   while (!game.gameOver && m++ < N * N * 4) {

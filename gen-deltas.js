@@ -66,7 +66,7 @@ function stats(base, move, mover, count) {
 
 // Agent epsilon-greedy self-play; returns the move sequence (flat indices / PASS).
 function selfPlayGame() {
-  const game = new Game2(SIZE), moves = [], options = { rng };
+  const game = new Game2(SIZE, true), moves = [], options = { rng };
   while (!game.gameOver && moves.length < MAXMV) {
     const mv = rng.random() < EPSILON ? game.randomLegalMove(rng) : agent.getMove(game, 0, options).move;
     game.play(mv); moves.push(mv);
@@ -77,7 +77,7 @@ function selfPlayGame() {
 // Evaluate the position reached by replaying `prefix`: pass baseline (3N) and each candidate (N).
 // Returns { moves, p, w, pp, pw } or null if no candidates.
 function evaluatePosition(prefix) {
-  const base = new Game2(SIZE);
+  const base = new Game2(SIZE, true);
   for (const m of prefix) base.play(m);
   const mover = base.current;
   const cands = [];

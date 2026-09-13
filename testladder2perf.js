@@ -68,7 +68,7 @@ let nextPrint  = 10;
 const deadline = performance.now() + duration * 1000;
 const start    = performance.now();
 
-const game2 = new Game2(N);
+const game2 = new Game2(N, true);
 
 for (;;) {
   game2.reset();

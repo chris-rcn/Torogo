@@ -14,7 +14,7 @@ const st   = createState(N);
 
 let totalMoves = 0;
 for (let g = 0; g < GAMES; g++) {
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   while (!game.gameOver) {
     extractFeatures(game, st);
     // Flat layout: the pattern key is the FIRST key of each candidate's run

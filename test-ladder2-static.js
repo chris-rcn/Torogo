@@ -33,7 +33,7 @@ Ladder2Static.resetFallbackCount();
 Ladder2Static.setDebugVerify(true);
 
 for (let gi = 0; gi < NUM_GAMES; gi++) {
-  const g = new Game2(SIZE);
+  const g = new Game2(SIZE, true);
   while (true) {
     const move = g.randomLegalMove();
     if (move === PASS) break;
@@ -58,7 +58,7 @@ Ladder2Static.setDebugVerify(false);
 const PERF_GAMES = 50;
 const positions = [];
 for (let i = 0; i < PERF_GAMES; i++) {
-  const g = new Game2(SIZE);
+  const g = new Game2(SIZE, true);
   while (true) {
     const move = g.randomLegalMove();
     if (move === PASS) break;

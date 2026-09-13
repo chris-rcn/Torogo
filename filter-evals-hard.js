@@ -71,7 +71,7 @@ const t0 = Date.now();
 
 for (let i = 0; i < records.length; i++) {
   const r = records[i];
-  const pos = new Game2(r.size);
+  const pos = new Game2(r.size, true);
   for (const t of r.moves) {
     if (!pos.play(parseMove(t, r.size))) { console.error(`record ${i}: illegal replay`); process.exit(1); }
   }

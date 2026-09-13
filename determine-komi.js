@@ -117,7 +117,7 @@ function getEmp(komi) {
 // ── Play one full game at `komi` ──────────────────────────────────────────────
 function playGame(komi) {
   setKomi(size, komi);
-  const g = new Game2(size);
+  const g = new Game2(size, true);
   while (!g.gameOver) {
     const move = getMove(g, budget);
     const idx  = move.type === 'place' ? move.y * size + move.x : -1; // PASS = -1

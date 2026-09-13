@@ -3,7 +3,8 @@
 // Group storage: flat typed arrays indexed by gid, bitsets for stones/liberties.
 //
 // Interface:
-//   new Game2(size)
+//   new Game2(size, applyFirstMove)   — REQUIRED flag: true = standard start
+//                                       (free centre stone), false = empty board
 //   game.play(move)     → true/false
 //   game.isLegal(move)  → boolean (non-mutating)
 //   game.isTrueEye(idx)       → boolean for game.current
@@ -69,7 +70,15 @@ function _pop32(x) {
 }
 
 class Game2 {
-  constructor(size, applyFirstMove = true) {
+  // applyFirstMove is REQUIRED: true = the standard start (free initial black
+  // stone at the centre, white to move), false = a truly empty board.  It had
+  // a default of true for years and the silent "empty board" misreading at
+  // call sites caused repeated bugs — every constructor call now states which
+  // start it means.
+  constructor(size, applyFirstMove) {
+    if (applyFirstMove !== true && applyFirstMove !== false) {
+      throw new Error('Game2: applyFirstMove must be explicitly true (standard start, free centre stone) or false (empty board)');
+    }
     const N = size;
     const cap = N * N;
     this.N        = N;

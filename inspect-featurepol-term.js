@@ -60,7 +60,7 @@ console.error(`inspect: model ${model.size}w from ${path.basename(opts.data)}  t
 
 outer:
 for (let g = 0; g < MAXGAMES; g++) {
-  const game  = new Game2(N);
+  const game  = new Game2(N, true);
   const game3 = game3FromGame2(game);
   let mv = 0;
   while (!game.gameOver && mv < N * N * 4) {

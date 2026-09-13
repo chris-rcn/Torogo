@@ -26,7 +26,7 @@ const SIZE  = opts.getInt('size', 13);
 
 const games = [];
 for (let i = 0; i < GAMES; i++) {
-  const g = new Game2(SIZE);                    // auto-plays black at center
+  const g = new Game2(SIZE, true);                    // auto-plays black at center
   const moves = [idxToGtp((SIZE >> 1) * SIZE + (SIZE >> 1), SIZE)];
   while (!g.gameOver) {
     const idx = g.randomLegalMove();

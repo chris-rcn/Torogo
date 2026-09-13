@@ -62,7 +62,7 @@ function printChain(game, idx, result, ms) {
 }
 
 while (gamesPlayed < gameLimit) {
-  const game = new Game2(boardSize);
+  const game = new Game2(boardSize, true);
 
   while (!game.gameOver) {
     if (rng.random() < 0.1) {

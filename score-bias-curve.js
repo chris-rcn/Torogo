@@ -60,7 +60,7 @@ const model = VPat.loadWeights(opts.model, process.env.HEALTH_DATA || '');
 console.log(`model: ${opts.model}` + (DELTA !== null ? `  delta: ${DELTA}` : ''));
 
 function replay(size, moves, limit) {
-  const g = new Game2(size);
+  const g = new Game2(size, true);
   const toks = moves.split(',');
   const n = limit === undefined ? toks.length : limit;
   if (n > toks.length) {

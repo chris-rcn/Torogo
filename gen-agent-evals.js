@@ -208,7 +208,7 @@ while (emitted < limit) {
   const gi = (rng.random() * corpus.length) | 0;
   const g  = corpus[gi];
   const { size, moves } = g;
-  const game = new Game2(size);
+  const game = new Game2(size, true);
   let chosenPos = -1, seen = 0, ok = true;
   for (let i = 0; i < moves.length; i++) {
     const phase = game.phase();
@@ -241,7 +241,7 @@ while (emitted < limit) {
   misses = 0;
 
   // Replay to the chosen position and label it with the agent's value().
-  const pos = new Game2(size);
+  const pos = new Game2(size, true);
   for (let i = 0; i < chosenPos; i++) pos.play(moves[i]);
   let seq = Array.from(moves.slice(0, chosenPos), m => coordStr(m, size)).join(',');
 

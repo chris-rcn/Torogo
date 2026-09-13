@@ -166,7 +166,7 @@ let pvWalks = 0, pvEscape = 0, pvDie = 0, pvSettled = 0, pvFailures = 0;
 
 outer:
 for (let g = 0; g < GAMES; g++) {
-  const g2 = new Game2(N);
+  const g2 = new Game2(N, true);
   let mv = 0;
   while (!g2.gameOver && mv < cap * 4) {
     const srcCells = Int8Array.from(g2.cells);

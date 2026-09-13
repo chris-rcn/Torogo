@@ -13,7 +13,7 @@
 //    "q":0.512,"z":1}
 //
 //   history — replay path (coordStr tokens, e.g. "k4", 'pass' for PASS;
-//             reconstruct with new Game2(boardSize) then parseMove+play each
+//             reconstruct with new Game2(boardSize, true) then parseMove+play each
 //             token — same convention as the movedetails files)
 //   visits  — root visit counts, sparse (moves with ≥ 1 rounded visit only)
 //   q       — the search's rootWinRatio, mover's perspective
@@ -277,7 +277,7 @@ function printStats() {
 }
 
 while (gamesDone < gameLimit) {
-  const game     = new Game2(size);
+  const game     = new Game2(size, true);
   const maxMoves = size * size * 4;
   const tokens   = [];     // full game history, two-letter tokens
   const records  = [];     // { histLen, visits, q, mover } per decision

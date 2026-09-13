@@ -186,7 +186,7 @@ console.error(`featurepol-survey: model ${model.size}w, ${spaces.length} spaces 
 
 let nextReport = 1000;
 for (let g = 0; g < MAXGAMES; g++) {
-  const game  = new Game2(N);
+  const game  = new Game2(N, true);
   const game3 = game3FromGame2(game);
   games = g + 1;
   let mv = 0;

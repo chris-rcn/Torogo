@@ -313,7 +313,7 @@ if (trainRecs.length === 0) {
 // filtered records also cross-check the recorded phase column via the band.
 const BAND_ACTIVE = MIN_PHASE > 0 || MAX_PHASE < 1;
 function replayRecord(rec, bandExempt = false) {
-  const game = new Game2(rec.size);
+  const game = new Game2(rec.size, true);
   const moves = rec.moves;
   if (rec.v) {
     for (let i = 0; i < moves.length; i++) game.play(moves[i]);
@@ -365,7 +365,7 @@ function loadBiasPairs() {
     if (ph < MIN_PHASE || ph > MAX_PHASE) { biasDropped++; continue; }
     const rec = { pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
     for (const [key, col] of [['f1', 3], ['f2', 4]]) {
-      const g = new Game2(size);
+      const g = new Game2(size, true);
       for (const t of p[col].split(',')) {
         if (!g.play(parseMove(t, size))) {
           console.error(`bias-file: replay failed (${BIAS_FILE})`);
@@ -472,7 +472,7 @@ function evalVsReference(N, refGetMove, nGames) {
   const m = { weights: evalW, specs, preparedSpecs: prepSpecs };
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game = new Game2(N);   // free initial stone
+    const game = new Game2(N, true);   // free initial stone
     for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());
     const maxMoves = N * N * 4;
     let moves = 0;

@@ -18,7 +18,7 @@ const Game2 = mod.Game2;
 const PASS  = mod.PASS;
 const N = boardSize;
 const cap = N * N;
-const _sharedGame = new Game2(N);
+const _sharedGame = new Game2(N, true);
 // Try random probes first; fall back to full candidate list
 playGame = function () {
   const game = _sharedGame;

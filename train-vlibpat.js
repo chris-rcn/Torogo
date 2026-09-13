@@ -200,7 +200,7 @@ function search1ply(game, game3) {
 // Both colours use the policy.  Apply 2-step logistic TD inline during play.
 // All targets are absolute (P(BLACK wins)).
 function trainGame(N) {
-  const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+  const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
   const game3    = game3FromGame2(game);   // lockstep mirror incl. the opening stone
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
@@ -281,7 +281,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+    const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
     // Random opening: 3 random legal moves to diversify positions (same as
     // selfplay.js --rand-moves default).
     for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());

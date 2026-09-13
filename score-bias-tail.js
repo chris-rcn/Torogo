@@ -93,7 +93,7 @@ console.log(`model: ${opts.model}` +
   (process.env.HEALTH_DATA ? `  health: ${process.env.HEALTH_DATA}` : ''));
 
 function replay(size, moves, limit) {
-  const g = new Game2(size);
+  const g = new Game2(size, true);
   const toks = moves.split(',');
   const n = limit === undefined ? toks.length : limit;
   if (n > toks.length) {
@@ -120,7 +120,7 @@ for (const file of files) {
     if (BIN_BY === 'start') {
       // Start phase is not recorded; recover it by replaying the start moves
       // (captures shift emptyCount, so a move count is not enough).
-      g0 = p[2] === '-' ? new Game2(size) : replay(size, p[2]);
+      g0 = p[2] === '-' ? new Game2(size, true) : replay(size, p[2]);
       ph = 1 - g0.emptyCount / (size * size);
     }
     if (ph < MIN_PH || ph > MAX_PH) continue;

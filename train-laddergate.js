@@ -180,7 +180,7 @@ function printStats() {
 }
 
 function playGame() {
-  const game = new Game2(SIZE);              // free initial stone
+  const game = new Game2(SIZE, true);              // free initial stone
   const game3 = game3FromGame2(game);
   const maxMoves = SIZE * SIZE * 4;
   let prev2 = null, prev1 = null, moves = 0;

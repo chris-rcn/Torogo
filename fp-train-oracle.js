@@ -34,7 +34,7 @@ let ema = 0, totalUpdates = 0;
 
 const out = [];
 for (let i = 0; i < STEPS; i++) {
-  const game = new Game2(SIZE);
+  const game = new Game2(SIZE, true);
   const g3 = needLadder ? game3FromGame2(game) : undefined;
   const nSetup = 2 + ((rng.random() * (SIZE * SIZE - 4)) | 0);
   const moves = [];

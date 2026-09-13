@@ -101,7 +101,7 @@ for (const line of gameLines) {
   const hasWinner = lastField === 'b' || lastField === 'w';
   const moves     = hasWinner ? fields.slice(1, -1) : fields.slice(1);
 
-  const game = new Game2(N);
+  const game = new Game2(N, true);
 
   for (let mi = 1; mi < moves.length; mi++) {
     const candidates = [];

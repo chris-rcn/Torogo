@@ -251,7 +251,7 @@ function search1ply(game, w = model.weights) {
 }
 
 function playGame(N) {
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   const maxMoves = N * N * 4;
   const tStart = Date.now();
   let prev1 = null, prev2 = null, moves = 0, pSizeSum = 0, admitted = 0;
@@ -294,7 +294,7 @@ function evalVsReference(N, nGames, seat) {
   const evalW = (EMA_ALPHA > 0 && model.weightsEMAInit) ? model.weightsEMA : model.weights;
   for (let g = 0; g < nGames; g++) {
     const modelIsBlack = ((seat + g) % 2 === 0);
-    const game = new Game2(N);
+    const game = new Game2(N, true);
     // Random opening (3 moves, as train-hpatterns and selfplay's --rand-moves).
     // Without it every game starts from the same position and the policy is
     // deterministic bar the tie-break, so the only variation is the opponent's

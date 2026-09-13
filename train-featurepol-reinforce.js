@@ -252,7 +252,7 @@ function playMirrorPair(game) {
 }
 // ── One self-play game + REINFORCE update ─────────────────────────────────────
 function trainGame(N) {
-  const game  = new Game2(N);
+  const game  = new Game2(N, true);
   const game3 = game3FromGame2(game);
   const maxMoves = N * N * 4;
   const tStart = Date.now();

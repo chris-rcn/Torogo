@@ -42,7 +42,7 @@ let sim = null;
 
 // Mean uniform-rollout value of `child` from its side-to-move's perspective.
 function uniformValue(child, k, rng) {
-  if (!sim || sim.N !== child.N) sim = new Game2(child.N);
+  if (!sim || sim.N !== child.N) sim = new Game2(child.N, true);
   const player = child.current;
   const moveCap = 3 * (child.N * child.N) + 20;
   let wins = 0;

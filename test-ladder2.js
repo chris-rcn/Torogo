@@ -39,7 +39,7 @@ const eqSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
   let found = null, scanned = 0;
   search:
   while (scanned < 2000000) {
-    const game = new Game2(N); let moves = 0;
+    const game = new Game2(N, true); let moves = 0;
     while (!game.gameOver && moves < N * N * 2) {
       scanned++;
       const seen = new Set();
@@ -74,7 +74,7 @@ const eqSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
   const N = 13, rng = makeRng(99);
   let nChecked = 0, bad = 0;
   for (let g = 0; g < 30 && nChecked < 30000; g++) {
-    const game = new Game2(N); let moves = 0;
+    const game = new Game2(N, true); let moves = 0;
     while (!game.gameOver && moves < N * N * 2) {
       const seen = new Set();
       for (let i = 0; i < N * N; i++) {

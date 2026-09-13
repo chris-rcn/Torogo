@@ -199,7 +199,7 @@ function* positionSource() {
       const moves = p[1].split(',');
       // Pass 1: replay counting plies whose position is in-band;
       // reservoir-pick one.
-      const g = new Game2(size);
+      const g = new Game2(size, true);
       const area = size * size;
       let pick = -1, seen = 0, ok = true;
       for (let i = 0; i < moves.length; i++) {
@@ -240,7 +240,7 @@ let emitSkippedTerminal = 0;
 
 for (const pos of positionSource()) {
   if (measured >= LIMIT) break;
-  const g = new Game2(pos.size);
+  const g = new Game2(pos.size, true);
   let ok = true;
   for (const t of pos.moves) if (!g.play(parseMoveTok(t, pos.size))) { ok = false; break; }
   if (!ok) { skipped++; continue; }

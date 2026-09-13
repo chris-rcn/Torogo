@@ -54,7 +54,7 @@ function loadPositions(filePath) {
 // no usable rating the worst rated candidate is charged instead.
 function evalPosition(agent, position, budgetMs) {
   const { boardSize, history, candidates } = position;
-  const game = new Game2(boardSize);
+  const game = new Game2(boardSize, true);
   for (const h of history) game.play(parseMove(h, boardSize));
 
   // Game phase ∈ [0,1]: board fullness = 1 − emptyCount/area (the codebase's

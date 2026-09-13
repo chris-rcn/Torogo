@@ -80,7 +80,7 @@ for (const f of files) {
   if (!ok) { badFirst++; process.stderr.write(`${f}: unmappable (bad coord or non-center first move), dropped\n`); continue; }
   if (toks.length === 0) { malformed++; continue; }
 
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   let legal = true;
   for (const idx of toks) if (!g.play(idx)) { legal = false; break; }
   if (!legal) { replayFail++; process.stderr.write(`${f}: replay failed, dropped\n`); continue; }

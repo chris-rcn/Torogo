@@ -108,7 +108,7 @@ const rng = makeRng(SEED);
 
 for (const p of positions) {
   const N = p.boardSize, area = N * N;
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   for (const h of p.history) game.play(parseMove(h, N));
   const game3 = game3FromGame2(game);
 

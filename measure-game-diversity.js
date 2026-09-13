@@ -71,7 +71,7 @@ if (opts.file) {
   const tGen0 = Date.now();
   lines = [];
   for (let g = 0; g < GAMES; g++) {
-    const game = new Game2(SIZE);
+    const game = new Game2(SIZE, true);
     const toks = [];
     for (let r = 0; r < RAND_OPEN && !game.gameOver; r++) {
       const m = game.randomLegalMove();
@@ -101,7 +101,7 @@ for (const line of lines) {
   const size = parseInt(line.slice(0, sp), 10);
   const toks = line.slice(sp + 1).split(',');
   prefixes.push(toks);
-  const g = new Game2(size);
+  const g = new Game2(size, true);
   let chosen = -1, seen = 0, ok = true;
   for (let i = 0; i < toks.length; i++) {
     const ph = g.phase();
@@ -111,7 +111,7 @@ for (const line of lines) {
   }
   if (!ok) { failed++; continue; }
   if (chosen < 0) continue;
-  const g2 = new Game2(size);
+  const g2 = new Game2(size, true);
   for (let i = 0; i < chosen; i++) g2.play(parseMove(toks[i], size));
   const key = size + '|' + g2.current + '|' + g2.cells.join('');
   sampled++;

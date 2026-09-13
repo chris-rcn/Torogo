@@ -69,7 +69,7 @@ function runTests(NPats) {
       { version: NPats.VERSION, count: 0, cfg: CFG, keys: new Int32Array(0), vals: new Float32Array(0) },
       'test');
     const model = { weights, cfg: CFG };
-    const g = new Game2(9);
+    const g = new Game2(9, true);
     const rng = makeRng(5);
     for (let i = 0; i < 20; i++) g.play(g.randomLegalMove(rng));
     const state = NPat.createState(9);
@@ -91,7 +91,7 @@ function runTests(NPats) {
     const rng = makeRng(11);
     let positions = 0, agree = true;
     for (let trial = 0; trial < 3 && agree; trial++) {
-      const g = new Game2(9);
+      const g = new Game2(9, true);
       const len = 8 + ((rng.random() * 40) | 0);
       for (let i = 0; i < len && !g.gameOver; i++) g.play(g.randomLegalMove(rng));
       if (g.gameOver) continue;
@@ -142,7 +142,7 @@ function runTests(NPats) {
   // feature sets are forced to equal probabilities), so the target is the
   // softmax of a reference weight vector — train fresh weights to match it.
   {
-    const g = new Game2(9);
+    const g = new Game2(9, true);
     const rng = makeRng(31);
     for (let i = 0; i < 16; i++) g.play(g.randomLegalMove(rng));
     const state = NPat.createState(9);

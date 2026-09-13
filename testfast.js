@@ -149,7 +149,7 @@ section('patternHash2 determinism');
 
 section('Game2 construction');
 {
-  const g = new Game2(9);
+  const g = new Game2(9, true);
   const center = 4 * 9 + 4;
   assert(g.N === 9,               'game2 N');
   assert(g.boardSize === 9,       'game2 boardSize');
@@ -162,15 +162,15 @@ section('Game2 construction');
 
 section('Game2 sizes');
 {
-  const g7  = new Game2(7);
+  const g7  = new Game2(7, true);
   assert(g7.cells[3*7+3] === BLACK,   'game2 7x7: center stone');
-  const g13 = new Game2(13);
+  const g13 = new Game2(13, true);
   assert(g13.cells[6*13+6] === BLACK, 'game2 13x13: center stone');
 }
 
 section('Game2 play and pass');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   assert(g.play(0) === true,   'game2: legal move returns true');
   assert(g.cells[0] === WHITE, 'game2: stone placed');
   assert(g.current === BLACK,  'game2: turn switches');
@@ -188,7 +188,7 @@ section('Game2 play and pass');
 
 section('Game2 capture');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   // white at (2,2), then black surrounds and captures it
   g.play(2*N+2);   // white at (2,2)
   g.play(3*N+2);   // black at (3,2)
@@ -276,7 +276,7 @@ section('Game2.captureList: non-capturing move on occupied cell returns empty');
 
 section('Game2 ko');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   // Build minimal ko: white at (0,1),(2,1),(1,0), black at (1,2),(3,1),(2,0),(2,2)
   // Then black captures the single white stone at (1,1) to create ko.
   // Manually drive both sides to a ko shape using pass-padded moves.
@@ -296,7 +296,7 @@ section('Game2 ko');
   // Simpler: verify ko flag is set when a single stone is captured
   // and the capturing group itself has exactly 1 liberty.
   // Reset and use a known ko shape.
-  const g2 = new Game2(N);
+  const g2 = new Game2(N, true);
   // white to move first. Build:  B at (2,1),(0,1),(1,0),(1,2); white at (1,1) after
   // Actually easier: just check ko flag is PASS initially and gets set on a ko capture.
   // Play a full ko sequence:
@@ -304,7 +304,7 @@ section('Game2 ko');
   //   W: (5,4)  B: (7,6)  W: (6,4)  B: (5,7)  W: (7,4)  B: (6,7)  — not a ko, too complex
   // Just test that ko is PASS before any capture and verify ko flag gets set
   // by checking a simple 1-stone capture scenario.
-  const g3 = new Game2(5);
+  const g3 = new Game2(5, true);
   // g3: center=(2,2) has black, white to move
   // place white stones around (0,0): W@(1,0), W@(0,1); black surrounds from other sides
   // On 5x5 toroidal: neighbors of (0,0) are (4,0),(1,0),(0,4),(0,1)
@@ -317,7 +317,7 @@ section('Game2 ko');
 
 section('Game2 reset');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   const center = (N>>1)*N + (N>>1);
   g.play(0); g.play(1); g.play(2);
   g.reset();
@@ -335,7 +335,7 @@ section('Game2 reset');
 
 section('Game2 move count limit ends game');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   while (!g.gameOver) g.play(PASS);
   assert(g.gameOver, 'game2: game ends by pass or move limit');
 }
@@ -343,7 +343,7 @@ section('Game2 move count limit ends game');
 section('Game2.groupIdAt / groupSize / groupLibertyCount: isolated stone');
 {
   // After construction: black stone at center, white to play.
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   const center = (N >> 1) * N + (N >> 1);  // 4*9+4 = 40
 
   const gid = g.groupIdAt(center);
@@ -357,7 +357,7 @@ section('Game2.groupIdAt / groupSize / groupLibertyCount: two-stone group');
 {
   // White plays at (0,0), then at (0,1)=N — adjacent, should merge into one group.
   // After construction: black at center (4,4), current=WHITE.
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   g.play(0);          // white at index 0
   g.play(5);          // black somewhere away
   g.play(N);          // white at index N, adjacent to white@0 — merges
@@ -376,7 +376,7 @@ section('Game2.groupLibertyCount decreases on play');
 {
   // White at index 0 (toroidal corner: 4 liberties — 1, N, 8, N*N-N).
   // Black fills them one at a time, white passes each turn.
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   g.play(0);                            // white@0, current=black
   const gid = g.groupIdAt(0);
   assert(g.groupLibertyCount(gid) === 4, 'groupLibertyCount: toroidal corner = 4 liberties');
@@ -393,7 +393,7 @@ section('Game2.groupLibertyCount decreases on play');
 section('Game2.groupIdAt: captured group returns -1');
 {
   // Capture white stone at (0,0) and confirm all indices in that group lose their gid.
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   g.play(0);          // white at (0,0)
   const gid = g.groupIdAt(0);
   assert(gid >= 0, 'gid valid before capture');
@@ -415,7 +415,7 @@ section('Game2.groupIdAt: captured group returns -1');
 
 section('Game2.nbr: neighbour table is accessible and correct');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   assert(g.nbr !== undefined, 'nbr property exists');
   assert(g.nbr instanceof Int32Array, 'nbr is an Int32Array');
 
@@ -430,7 +430,7 @@ section('Game2.nbr: neighbour table is accessible and correct');
 
 section('Game2.nbr: shared with clone');
 {
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   const c = g.clone();
   assert(c.nbr === g.nbr, 'nbr is shared (same reference) between original and clone');
 }
@@ -443,7 +443,7 @@ section('Game2.clone: independence');
 {
   const { Game2 } = require('./game2.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   // Constructor places BLACK at center (current becomes WHITE, moveCount=1).
   // Play at (2,3) as WHITE.
   g.play(3 * N + 2);
@@ -461,7 +461,7 @@ section('Game2.clone: cells copied correctly');
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   // Play several moves then clone and compare cells.
   const moves = [3*N+3, 5*N+5, 3*N+5, 5*N+3, 4*N+4];
   for (const m of moves) g.play(m);
@@ -481,7 +481,7 @@ section('Game2.clone: group data copied correctly');
 {
   const { Game2 } = require('./game2.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   g.play(3*N+3); g.play(5*N+5); g.play(3*N+4); g.play(5*N+4);
   const c = g.clone();
   // Liberty counts must match for every occupied cell.
@@ -500,7 +500,7 @@ section('Game2.clone: isLegal agrees between original and clone');
 {
   const { Game2 } = require('./game2.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   for (const m of [3*N+3, 5*N+5, 3*N+4, 5*N+4, 4*N+3]) g.play(m);
   const c = g.clone();
   let agree = true;
@@ -515,7 +515,7 @@ section('Game2.clone: capture in clone does not affect original groups');
   // Build a capture scenario: surround a white stone and capture it in clone.
   const { Game2, BLACK, WHITE } = require('./game2.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   // Center stone placed by constructor is BLACK.
   // Play white at (1,0), then surround with black.
   // Simpler: place a white stone in the open, surround it one liberty short, then clone.
@@ -526,7 +526,7 @@ section('Game2.clone: capture in clone does not affect original groups');
   // After constructor: black center placed, current = WHITE, moveCount = 1.
   // So first play goes to WHITE.
   // Re-create for clarity.
-  const g2 = new Game2(N);
+  const g2 = new Game2(N, true);
   // current = WHITE after constructor.
   g2.play(3 * N + 3);  // white at (3,3)
   g2.play(3 * N + 2);  // black at (2,3)
@@ -547,7 +547,7 @@ section('Game2.clone: capture in clone does not affect original groups');
 section('Game2.clone: gameOver propagates correctly');
 {
   const { Game2, PASS } = require('./game2.js');
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   // Force game over via consecutive passes.
   while (!g.gameOver) g.play(PASS);
   assert(g.gameOver, 'original game over');
@@ -561,7 +561,7 @@ section('Game2.clone: gameOver propagates correctly');
 section('Game2.groupStones: single stone');
 {
   const { Game2, BLACK } = require('./game2.js');
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   const idx = 4 * N + 4; // center (placed by constructor)
   const gid = g._gid[idx];
   const stones = g.groupStones(gid);
@@ -572,7 +572,7 @@ section('Game2.groupStones: single stone');
 section('Game2.groupStones: connected group');
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   // Constructor places BLACK at center (4,4). Play WHITE somewhere far away,
   // then extend the BLACK group by playing at (4,5) and (4,3).
   g.play(0);           // WHITE at (0,0)
@@ -591,7 +591,7 @@ section('Game2.groupStones: connected group');
 section('Game2.groupStones: count matches _ss');
 {
   const { Game2 } = require('./game2.js');
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   g.play(0); g.play(4 * N + 5); g.play(0 * N + 1); g.play(4 * N + 3);
   // Check every occupied cell's group.
   const cap = N * N;
@@ -613,7 +613,7 @@ section('Game2.groupStones: count matches _ss');
 section('Game2.groupStones: all stones belong to the correct color');
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const N = 9, g = new Game2(N);
+  const N = 9, g = new Game2(N, true);
   g.play(0); g.play(4 * N + 5); g.play(0 * N + 1); g.play(4 * N + 3);
   const cap = N * N;
   const seen = new Set();
@@ -940,7 +940,7 @@ section('getLadderStatus2 – sanity check on 50 random positions');
   let checks = 0;
   for (let trial = 0; trial < 50; trial++) {
     const N = 9;
-    const g = new Game2(N);
+    const g = new Game2(N, true);
     const moves = 20 + rng.int(21);
     for (let m = 0; m < moves && !g.gameOver; m++) g.play(g.randomLegalMove());
 
@@ -1513,7 +1513,7 @@ section('game2 calcScore — flood fill');
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   {
     // Verify winner on a trivially won position.
-    const g = new Game2(5);
+    const g = new Game2(5, true);
     // Clear board, place all black
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
@@ -1525,7 +1525,7 @@ section('game2 calcScore — flood fill');
   {
     // 3×3 black perimeter, empty centre.  On a toroidal 3×3 board, all cells
     // are adjacent to each other, so the "centre" is adjacent to 4 black stones.
-    const g = new Game2(3);
+    const g = new Game2(3, true);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 9; i++) if (i !== 4) g.cells[i] = B2;
     const t = g.calcScore();
@@ -1539,7 +1539,7 @@ section('game2 estimateWinner — 1-step neighbour check');
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   {
     // All-black board: both estimate and flood-fill agree black wins.
-    const g = new Game2(5);
+    const g = new Game2(5, true);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let i = 0; i < 25; i++) g.cells[i] = B2;
     const tc = g.calcScore();
@@ -1548,7 +1548,7 @@ section('game2 estimateWinner — 1-step neighbour check');
   }
   {
     // White perimeter, empty interior (5×5): both methods agree white wins.
-    const g = new Game2(5);
+    const g = new Game2(5, true);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
       if (y === 0 || y === 4 || x === 0 || x === 4) g.cells[y * 5 + x] = W2;
@@ -1559,7 +1559,7 @@ section('game2 estimateWinner — 1-step neighbour check');
   }
   {
     // Empty board: white wins by komi alone.
-    const g = new Game2(5);
+    const g = new Game2(5, true);
     g.cells.fill(0); g._gid.fill(-1); g._nextGid = 0;
     assert(g.estimateWinner() === W2, 'game2.estimateWinner: empty board → white wins by komi');
   }
@@ -1570,7 +1570,7 @@ section('calcScore winner and estimateWinner agree after random playouts');
   const { Game2, BLACK: B2, WHITE: W2 } = require('./game2.js');
   let agree = 0, disagree = 0;
   for (let trial = 0; trial < 200; trial++) {
-    const g = new Game2(7);
+    const g = new Game2(7, true);
     const cap = 49;
     while (!g.gameOver) {
       const cands = [];
@@ -1727,7 +1727,7 @@ section('RAVE vs passer: game ends quickly');
   const { getMove: raveAgent } = require('./ai/rave.js');
   const { getMove: passerAgent } = require('./ai/passer.js');
   const N = 9;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   let moves = 0;
   while (!g.gameOver && moves < 4 * N * N) {
     const move = g.current === BLACK ? raveAgent(g, 100) : passerAgent(g, 100);
@@ -1746,7 +1746,7 @@ section('RAVE vs passer: game ends quickly');
 section('toString centerAt: no centerAt matches default output');
 {
   const { Game2, BLACK, WHITE } = require('./game2.js');
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   g.cells[2*5+3] = BLACK;
   g.cells[1*5+1] = WHITE;
   assert(g.toString() === g.toString(g.lastMove, {}), 'no centerAt matches default');
@@ -1786,7 +1786,7 @@ section('toString centerAt: wraps toroidally — corner cell centered splits boa
 section('toString centerAt: PASS centerAt leaves view unchanged');
 {
   const { Game2, PASS } = require('./game2.js');
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   const def = g.toString();
   assert(g.toString(PASS, { centerAt: PASS }) === def, 'PASS centerAt = default view');
 }
@@ -1834,7 +1834,7 @@ section('book: canonicalHash is stable across calls');
 {
   const { canonicalHash } = require('./book.js');
   const { Game2 } = require('./game2.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const { hash: h1 } = canonicalHash(g.cells, g.N);
   const { hash: h2 } = canonicalHash(g.cells, g.N);
   assert(h1 === h2, 'canonicalHash is deterministic');
@@ -1846,7 +1846,7 @@ section('book: symmetric board has same canonical hash for all D4 transforms');
   // Build a fully symmetric board: only the center stone (placed by Game2 constructor).
   const { Game2 } = require('./game2.js');
   const N = 7;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   // The center stone is symmetric under all D4 transforms.
   // Generate all 8 "rotated" cell arrays and verify same canonical hash.
   const { hash: hBase } = canonicalHash(g.cells, N);
@@ -1875,7 +1875,7 @@ section('book: D4-equivalent moves at symmetric position share the same count');
   // The root position (center stone only) is fully symmetric under all 8 D4 transforms.
   // Adding D4-equivalent moves should all increment the same canonical entry.
   const book = new Map(); book.minEmptyCount = Infinity;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   const mx = 1, my = 2;
   const baseMove = my * N + mx;
 
@@ -1899,7 +1899,7 @@ section('book: addToBook / lookupBook basic');
   const { Game2, PASS } = require('./game2.js');
   const N = 7;
   const book = new Map(); book.minEmptyCount = Infinity;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   assert(lookupBook(book, g) === null, 'unknown position returns null');
   // Add the same move 5 times.
   const moveIdx = 1 * N + 2;  // (2, 1) flat index
@@ -1962,7 +1962,7 @@ section('book: serializeBook / deserializeBook round-trip');
   const { Game2 } = require('./game2.js');
   const N = 7;
   const book = new Map(); book.minEmptyCount = Infinity;
-  const g = new Game2(N);
+  const g = new Game2(N, true);
   const moveIdx = 2 * N + 1;  // (1, 2)
   for (let i = 0; i < 6; i++) addToBook(book, g, moveIdx);
   const js = serializeBook(book);
@@ -1987,7 +1987,7 @@ section('book: serializeBook / deserializeBook round-trip');
 section('Random agent (Game2)');
 {
   const { getMove: randomAgent } = require('./ai/random.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const move = randomAgent(g);
   assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'random returns legal move');
 }
@@ -1995,7 +1995,7 @@ section('Random agent (Game2)');
 section('MC agent (Game2)');
 {
   const { getMove: mc } = require('./ai/mc.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const move = mc(g, 50);
   assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'mc returns legal move');
 }
@@ -2003,7 +2003,7 @@ section('MC agent (Game2)');
 section('MCTS agent (Game2)');
 {
   const { getMove: mcts } = require('./ai/mcts.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const move = mcts(g, 50);
   assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'mcts returns legal move');
 }
@@ -2011,7 +2011,7 @@ section('MCTS agent (Game2)');
 section('AMAF agent (Game2)');
 {
   const { getMove: amaf } = require('./ai/amaf.js');
-  const g = new Game2(7);
+  const g = new Game2(7, true);
   const move = amaf(g, 50);
   assert(move.move === PASS || (typeof move.move === 'number' && g.clone().play(move.move) !== false), 'amaf returns legal move');
 }
@@ -2020,7 +2020,7 @@ section('Game2 clone divergence (independent futures)');
 {
   let ok = true;
   for (let trial = 0; trial < 10; trial++) {
-    const g = new Game2(7);
+    const g = new Game2(7, true);
     for (let i = 0; i < 5 && !g.gameOver; i++) g.play(g.randomLegalMove());
     if (g.gameOver) continue;
     const c = g.clone();
@@ -2060,7 +2060,7 @@ section('setKomi override');
   assert(KOMI(7) === orig7, 'setKomi(7, orig): restored to default');
   // calcScore respects the override.
   setKomi(9, 100);
-  const g = new Game2(9);
+  const g = new Game2(9, true);
   const sc = g.calcScore();
   assert(sc.white >= 100, 'calcScore uses overridden komi');
   setKomi(9, orig9); // restore
@@ -2072,7 +2072,7 @@ const { ab, search: abSearch } = require('./ab-search.js');
 
 section('ab-search: depth-0 returns evaluate(game)');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   const evalFn = game => 0.75;
   const v = ab(g, 0, -Infinity, Infinity, evalFn, 0);
   assert(Math.abs(v - 0.75) < 1e-9, `depth-0 returns evaluate result, got ${v}`);
@@ -2080,7 +2080,7 @@ section('ab-search: depth-0 returns evaluate(game)');
 
 section('ab-search: terminal position returns winner');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   while (!g.gameOver) g.play(PASS);
   const v = ab(g, 5, -Infinity, Infinity, () => 0.5, 0);
   assert(v === 0 || v === 1, `terminal returns 0 or 1, got ${v}`);
@@ -2088,7 +2088,7 @@ section('ab-search: terminal position returns winner');
 
 section('ab-search: search returns a legal move index');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   const evalFn = game => 0.5;
   const move = abSearch(g, 1, evalFn, 0);
   if (move === PASS) {
@@ -2125,7 +2125,7 @@ section('ab-search: WHITE prefers minimising move at depth 1');
 
 section('ab-search: depth-2 search completes without error on 5×5');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   let evalCalls = 0;
   const evalFn = game => { evalCalls++; return 0.5; };
   const move = abSearch(g, 2, evalFn, 0);
@@ -2135,7 +2135,7 @@ section('ab-search: depth-2 search completes without error on 5×5');
 
 section('ab-search: dither produces non-deterministic results');
 {
-  const g = new Game2(5);
+  const g = new Game2(5, true);
   // evalFn returns same value for all moves — dither should break ties randomly.
   const evalFn = () => 0.5;
   const moves = new Set();

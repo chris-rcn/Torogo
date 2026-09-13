@@ -92,7 +92,7 @@ function processLine(line) {
     if (cur) {
       phase = parseFloat(p[1]);
     } else {
-      const g = new Game2(size);
+      const g = new Game2(size, true);
       let ok = true;
       for (const t of moves.split(',')) { if (!g.play(parseMoveTok(t, size))) { ok = false; break; } }
       if (!ok) { skipped++; return; }

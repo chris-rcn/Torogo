@@ -97,7 +97,7 @@ for (const line of lines) {
     const selectedMoves = movesInFile.slice(0, prefixLen);
 
     // Replay the selected moves to reconstruct the position.
-    const g = new Game2(N);  // constructor places black at center
+    const g = new Game2(N, true);  // constructor places black at center
     for (const idx of selectedMoves) {
       if (g.gameOver) break;
       g.play(idx);

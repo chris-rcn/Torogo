@@ -94,7 +94,7 @@ function check(cond, msg) { if (cond) pass++; else { fail++; if (fails.length < 
 
 for (let game = 0; game < GAMES; game++) {
   // Reference position from clean self-play (no undo in construction).
-  const g2 = new Game2(N);
+  const g2 = new Game2(N, true);
   const moves = 1 + ((rng() * (cap * 2)) | 0);
   for (let k = 0; k < moves && !g2.gameOver; k++) g2.play(g2.randomLegalMove({ random: rng }));
   let g;

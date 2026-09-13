@@ -49,7 +49,7 @@ if (minPhase > maxPhase)                { console.error('--min-phase must be <= 
 // Phase of a sample: replay its history, then board fullness = 1 − empty/area.
 function phaseOf(sample) {
   const { boardSize, history } = sample;
-  const game = new Game2(boardSize);
+  const game = new Game2(boardSize, true);
   for (const h of history) game.play(parseMove(h, boardSize));
   return 1 - game.emptyCount / (boardSize * boardSize);
 }

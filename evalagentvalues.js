@@ -74,7 +74,7 @@ const FILTERED = { filtered: true };
 // expensive valueB call, so filtered positions cost nothing).
 function evalPosition(valueB, pos, minPhase = 0, maxPhase = 1) {
   const { size, moves, target } = pos;
-  const game = new Game2(size);
+  const game = new Game2(size, true);
   for (const m of moves) {
     if (!game.play(parseMove(m, size))) return null;
   }

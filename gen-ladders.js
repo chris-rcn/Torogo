@@ -123,7 +123,7 @@ function findCase(chain, type) {
   const t0 = Date.now();
   let scanned = 0;
   while (true) {   // search until found (no time limit)
-    const game = new Game2(SIZE);
+    const game = new Game2(SIZE, true);
     const maxMoves = SIZE * SIZE * 2;
     let moves = 0;
     while (!game.gameOver && moves < maxMoves) {

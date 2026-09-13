@@ -87,7 +87,7 @@ function auditStructures(g3, ctx) {
 // One deterministic fuzz iteration.  Returns null (clean) or failure info.
 function fuzzSeed(seed) {
   const rng = makeRng(seed);
-  const g2 = new Game2(SIZE);
+  const g2 = new Game2(SIZE, true);
   const cap = SIZE * SIZE;
   const target = (cap * 0.25 | 0) + ((rng.random() * cap * 0.65) | 0);
   for (let m = 0; m < target && !g2.gameOver; m++) g2.play(g2.randomLegalMove(rng));

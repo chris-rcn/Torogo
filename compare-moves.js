@@ -102,7 +102,7 @@ function maybePrint(force) {
 outer:
 while (records.length < maxLabels) {
   gameNo++;
-  const game = new Game2(size);
+  const game = new Game2(size, true);
   const p1IsBlack = gameNo % 2 === 1;
   const maxMoves = area * 4;
   for (let i = 0; i < randMoves && !game.gameOver; i++) game.play(game.randomLegalMove(rng));

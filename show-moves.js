@@ -42,7 +42,7 @@ for (const line of lines) {
   const N     = parseInt(parts[0], 10);
   const moves = parts.slice(1);
 
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   let nextShow = 1 + Math.floor(Math.random() * interval);
   for (let i = 0; i < moves.length; i++) {
     if (game.gameOver) break;

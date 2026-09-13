@@ -612,7 +612,7 @@ function getMask(game, cell) {
 
 // ── 11. All moves have valid patIds ────────────────────────────────────────────
 {
-  const g = new Game2(9);
+  const g = new Game2(9, true);
   for (let i = 0; i < 30; i++) { const m = g.randomLegalMove(); if (m >= 0) g.play(m); }
   const st = createState(9);
   extractFeatures(g, st);

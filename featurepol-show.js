@@ -24,7 +24,7 @@ const N = parseInt(sizeArg, 10);
 const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, 'featurepol-cbk7wa32.js');
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 
-const game = new Game2(N);
+const game = new Game2(N, true);
 const moves = movesArg ? movesArg.split(',').map(s => s.trim()).filter(Boolean) : [];
 for (const m of moves) {
   const idx = parseMove(m, N);

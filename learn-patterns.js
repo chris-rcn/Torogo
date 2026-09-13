@@ -55,7 +55,7 @@ function bumpPattern(hash, isWin, weight) {
 
 function learnFromGame(moves, winner, N) {
   const cap  = N * N;
-  const game = new Game2(N);
+  const game = new Game2(N, true);
 
   for (let mi = 0; mi < moves.length; mi++) {
     const selected = moves[mi];
@@ -83,7 +83,7 @@ function learnFromGame(moves, winner, N) {
 // ── Play one game, return { winner, moves } ────────────────────────────────────
 
 function playGame(blackPolicy, whitePolicy) {
-  const game  = new Game2(boardSize);
+  const game  = new Game2(boardSize, true);
   const moves = [];
 
   while (!game.gameOver) {

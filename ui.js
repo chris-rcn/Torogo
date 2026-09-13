@@ -464,7 +464,7 @@ function startGame(boardSize) {
   moveNumber = 0;
   lastRootWinRatio = 0.5;
   console.log(`[Game] new game started (${boardSize}×${boardSize})`);
-  game = new Game2(boardSize);
+  game = new Game2(boardSize, true);
   game.lastMove = null;
   game.illegalFlash = null;
   renderer = new Renderer(canvas, game);

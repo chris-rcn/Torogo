@@ -46,7 +46,7 @@ process.stdout.write(`# spec=${spec.str} size=${SIZE} temp=${TEMP} needsLadder=$
 
 const rng = makeRng(SEED);
 for (let p = 0; p < NPOS; p++) {
-  const game = new Game2(SIZE);
+  const game = new Game2(SIZE, true);
   const g3 = needLadder ? game3FromGame2(game) : undefined;
   const nSetup = 2 + ((rng.random() * (SIZE * SIZE - 4)) | 0);   // varied board fullness
   const playedMoves = [];

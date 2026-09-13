@@ -57,7 +57,7 @@ for (let gi = 0; gi < lines.length; gi++) {
   if (hasWinner) {
     winner = lastField === 'b' ? BLACK : WHITE;
   } else {
-    const g = new Game2(size);
+    const g = new Game2(size, true);
     for (let mi = 1; mi < moves.length; mi++) {
       const token = moves[mi];
       if (token === '..') { g.play(-1); continue; }
@@ -69,7 +69,7 @@ for (let gi = 0; gi < lines.length; gi++) {
   }
 
   // Pass 2: replay and extract patterns for winner's moves only.
-  const g = new Game2(size);
+  const g = new Game2(size, true);
   for (let mi = 1; mi < moves.length; mi++) {
     const token = moves[mi];
     if (token === '..') { g.play(-1); continue; }

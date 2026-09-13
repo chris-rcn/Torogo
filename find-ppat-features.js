@@ -16,7 +16,7 @@ const st = createState(9);
 const prevBase = NUM_PATTERNS;   // single-phase extraction (phaseCount defaults to 1)
 
 for (let t = 0; t < games; t++) {
-  const g = new Game2(9);
+  const g = new Game2(9, true);
   for (let m = 0; m < moves && !g.gameOver; m++) {
     extractFeatures(g, st);
     for (let i = 0; i < st.count; i++) {

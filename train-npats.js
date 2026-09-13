@@ -213,7 +213,7 @@ function createTrainer(model, { lr = 0.05, targetTemp = 1, zWeight = 0, rankTemp
     let idxOf = scratchIdx.get(N);
     if (!idxOf) { idxOf = new Int32Array(N * N); scratchIdx.set(N, idxOf); }
 
-    const g2 = new Game2(N);
+    const g2 = new Game2(N, true);
     const g3 = game3FromGame2(g2);
     let played = 0;
     let ce = 0, top1 = 0, count = 0;

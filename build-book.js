@@ -114,7 +114,7 @@ let totalDepth = 0;
 const startTime = performance.now();
 
 while (true) {
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   let depth = 0;
   const snapshots = [game.clone()];   // snapshot before each move
 

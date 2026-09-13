@@ -50,7 +50,7 @@ const q3 = x => Math.round(x * 1000) / 1000;
 const p2 = x => Math.round(x * 100) / 100;
 
 function selfPlayGame() {
-  const game = new Game2(SIZE), moves = [], options = { rng };
+  const game = new Game2(SIZE, true), moves = [], options = { rng };
   while (!game.gameOver && moves.length < MAXMV) {
     const mv = rng.random() < EPSILON ? game.randomLegalMove(rng) : agent.getMove(game, 0, options).move;
     game.play(mv); moves.push(mv);
@@ -60,7 +60,7 @@ function selfPlayGame() {
 
 // Run the teacher search at the replayed position; return { moves, q, n, qp, np } or null.
 function evaluatePosition(prefix) {
-  const base = new Game2(SIZE);
+  const base = new Game2(SIZE, true);
   for (const m of prefix) base.play(m);
   if (base.gameOver) return null;
   // Cheap candidate pre-check, so we never spend a search on a dead position.

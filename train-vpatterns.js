@@ -297,7 +297,7 @@ function search1ply(game) {
 // during play; at episode end the λ-return target is computed by a single
 // backward pass and applied to each position.
 function trainGame(N) {
-  const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+  const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
 
@@ -359,7 +359,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game     = new Game2(N);   // free initial stone (applyFirstMove=true)
+    const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
     // Random opening: 3 random legal moves to diversify positions (same as
     // selfplay.js --rand-moves default).
     for (let r = 0; r < 3 && !game.gameOver; r++) game.play(game.randomLegalMove());

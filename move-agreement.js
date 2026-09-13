@@ -105,7 +105,7 @@ function samplePosition(line) {
   const sp = line.indexOf(' ');
   if (parseInt(line.slice(0, sp), 10) !== SIZE) return null;
   const toks = line.slice(sp + 1).split(',');
-  const walk = new Game2(SIZE);
+  const walk = new Game2(SIZE, true);
   let chosen = null, nEligible = 0;
   for (let i = 0; i < toks.length; i++) {
     const ph = 1 - walk.emptyCount / area;

@@ -41,7 +41,7 @@ const deltas = [];
 for (const line of lines) {
   const { boardSize, history, candidates } = JSON.parse(line);
 
-  const game = new Game2(boardSize);
+  const game = new Game2(boardSize, true);
   let ok = true;
   for (const c of history) {
     if (!game.play(parseMove(c, boardSize))) { ok = false; break; }

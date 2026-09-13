@@ -157,7 +157,7 @@ for (let gameNum = 0; gameNum < numGames; gameNum++) {
   // (simplified: just analyze the final position for now, would need tree traversal for full benchmark)
 
   // For a more realistic test, let's analyze at every move
-  const game2Copy = new Game2(13);
+  const game2Copy = new Game2(13, true);
   const game3Copy = new Game3(13);
 
   for (const move of moves2) {

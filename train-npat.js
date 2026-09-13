@@ -143,7 +143,7 @@ function loadWeights(filePath) {
 // Play one self-play game and apply REINFORCE updates after it ends.
 // Returns game-level stats for logging.
 function trainGame(N) {
-  const game  = new Game2(N);          // free initial stone (applyFirstMove=true)
+  const game  = new Game2(N, true);          // free initial stone (applyFirstMove=true)
   const game3 = game3FromGame2(game);  // lockstep mirror for ladder analysis
   const maxMoves = N * N * 4;
   const tStart   = Date.now();
@@ -240,7 +240,7 @@ function evalVsReference(N, refGetMove, nGames) {
   const results = [];
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
-    const game  = new Game2(N);          // free initial stone (applyFirstMove=true)
+    const game  = new Game2(N, true);          // free initial stone (applyFirstMove=true)
     const game3 = game3FromGame2(game);  // lockstep mirror for ladder analysis
     // Random opening: 4 random legal moves to diversify positions.
     for (let r = 0; r < 4 && !game.gameOver; r++) {

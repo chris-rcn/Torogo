@@ -33,7 +33,7 @@ let wins = 0;
 const t0 = Date.now();
 for (let g = 0; g < GAMES; g++) {
   const policyIsBlack = (g % 2 === 0);
-  const game = new Game2(N);
+  const game = new Game2(N, true);
   const game3 = game3FromGame2(game);
   for (let r = 0; r < 3 && !game.gameOver; r++) { const mv = game.randomLegalMove(); game.play(mv); game3.play(mv); }
   let m = 0;
