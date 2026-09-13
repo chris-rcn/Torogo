@@ -38,6 +38,14 @@
 //               same canonical pattern reached at a different extent is a
 //               distinct feature.  Larger N reaches further and yields more,
 //               rarer keys.  A descriptor.
+//   emptyExpand<R>  Adaptive-diamond opening shape: the smallest L1 diamond
+//               around the move that is NOT completely empty, hashed with the
+//               stones12b recursion (level 1 = the 5-point plus, level k = a
+//               plus of five level-(k-1) hashes), radius capped at R.  The
+//               level is folded into the key; an all-empty radius-R diamond is
+//               one shared key.  Invariant by construction at every level, so
+//               unlike stoneExpand it scales past 20 cells (radius 3/4/5/6 =
+//               25/41/61/85 cells).  A descriptor.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -366,6 +374,66 @@ function _t13Prepare(ctx) {
                                     _uh(t5[nn[base + 1]], t5[nn[base + 3]])), t5[idx]);
   }
 }
+// emptyExpand: hash of an ALL-EMPTY radius-k diamond, per level.  Empty leaves
+// code 1 regardless of cur, so the value is a constant — which makes "is this
+// diamond empty" a single compare against it instead of a second AND-recursion
+// pass.  A false positive needs a non-empty region colliding into the constant,
+// the same per-key 2^-32 event the hash family already accepts everywhere.
+// Signed (Int32Array domain), matching the stored t-values it is compared to.
+const _eeEmptyConst = [0];   // 1-indexed: [k] = the level-k all-empty hash
+function _eeEmpty(k) {
+  while (_eeEmptyConst.length <= k) {
+    const j = _eeEmptyConst.length;                  // computing level j
+    const e = j === 1 ? 1 : _eeEmptyConst[j - 1];    // level 1's leaves are the empty symbol
+    _eeEmptyConst.push(_hashCombine(_uh(_uh(e, e), _uh(e, e)), e) | 0);
+  }
+  return _eeEmptyConst[k];
+}
+
+// Fill st.key[idx] for every cell: the level-k diamond hash with k folded in,
+// k = the smallest non-empty level, or the shared all-empty key.  One O(area)
+// pass per level, five reads each — the same shape as _t13Prepare — and the
+// key assignment rides those passes: level 1 initialises every cell (its own
+// key if non-empty, the all-empty key otherwise), and level k overwrites
+// exactly the cells whose level k-1 was empty and level k is not, so a cell
+// empty through R keeps the all-empty initialisation with no final pass.
+// st is PER TERM (closed over in parseTerm), so two emptyExpand terms with
+// different R in one spec keep separate buffers.
+function _eePrepare(ctx, R, st) {
+  const game = ctx.game, area = game.N * game.N, cur = ctx.cur;
+  const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
+  if (!st.key || st.key.length < area) {
+    st.key = new Int32Array(area); st.a = new Int32Array(area); st.b = new Int32Array(area);
+  }
+  const key = st.key, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
+  let a = st.a, b = st.b;
+  {
+    const eCur = _eeEmpty(1);
+    for (let idx = 0; idx < area; idx++) {
+      const base = idx * stride;
+      const cN = cells[nn[base]],     sN = cN === 0 ? 1 : cN === cur ? 2 : 3;
+      const cE = cells[nn[base + 1]], sE = cE === 0 ? 1 : cE === cur ? 2 : 3;
+      const cS = cells[nn[base + 2]], sS = cS === 0 ? 1 : cS === cur ? 2 : 3;
+      const cW = cells[nn[base + 3]], sW = cW === 0 ? 1 : cW === cur ? 2 : 3;
+      const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
+      const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
+      a[idx] = v;
+      key[idx] = v !== eCur ? _hashCombine(v, 1) | 0 : allEmptyKey;
+    }
+  }
+  for (let k = 2; k <= R; k++) {
+    const ePrev = _eeEmpty(k - 1), eCur = _eeEmpty(k);
+    for (let idx = 0; idx < area; idx++) {
+      const base = idx * stride;
+      const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
+                                 _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
+      b[idx] = v;
+      if (a[idx] === ePrev && v !== eCur) key[idx] = _hashCombine(v, k) | 0;
+    }
+    const t = a; a = b; b = t;
+  }
+}
+
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
@@ -712,6 +780,25 @@ function _makeTerm(str) {
         }
         return _hashCombine(_canonStones(cv, n), n) >>> 0;
       };
+      break;
+    }
+    case 'emptyExpand': {
+      // Adaptive-diamond opening shape: the smallest L1 diamond around the move
+      // that is NOT completely empty, radius capped at R, hashed with the
+      // stones12b recursion — invariant by construction, so no canonicalisation
+      // cap; each extra level is one more O(area) prepare pass.  Expansion
+      // happens exactly while the pattern carries no information, so the key
+      // always describes a region whose outer shell holds the nearest stones.
+      // The level is folded into the key; an all-empty radius-R diamond is one
+      // shared key.  A descriptor — all work is in prepare, one read per move.
+      if (param === null || param < 2) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, got "${str}"`);
+      {
+        const R = param;
+        maxNear = 4;
+        const st = { key: null, a: null, b: null };
+        prepare = ctx => _eePrepare(ctx, R, st);
+        evalFn = (ctx, idx) => st.key[idx];
+      }
       break;
     }
     case 'adjHealth': {
