@@ -176,8 +176,14 @@ if (loaded) {
   // specs resume with its trained weights; CLI-only spaces start at 0; saved-only
   // spaces are dropped (their imported weights are never regenerated under the new
   // spec, so they sit unused).
-  const cliSpaces   = new Set(weights.spec.spaces.map(s => s.str));
-  const savedSpaces = new Set(loaded.weights.spec.spaces.map(s => s.str));
+  // Synthetic spaces (emptyExpand's internal depth thermometer) track their
+  // parent term and are not part of the user's spec — keep them out of the diff.
+  // Weight carry-over follows the SALTS, which strip emptyExpand's radius, so
+  // the diff compares the same normalized spelling: emptyExpand5 -> emptyExpand0
+  // is a kept space (radius change), not a remove+add.
+  const spaceId = s => s.str.replace(/emptyExpand\d+/g, 'emptyExpand');
+  const cliSpaces   = new Set(weights.spec.spaces.filter(s => !s.synthetic).map(spaceId));
+  const savedSpaces = new Set(loaded.weights.spec.spaces.filter(s => !s.synthetic).map(spaceId));
   const kept    = [...cliSpaces].filter(s => savedSpaces.has(s));
   const added   = [...cliSpaces].filter(s => !savedSpaces.has(s));
   const removed = [...savedSpaces].filter(s => !cliSpaces.has(s));

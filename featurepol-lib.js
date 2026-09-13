@@ -1201,9 +1201,12 @@ function parseSpec(specStr) {
     const slot = slotFor(t);
     const unbounded = t.maxLevel === 0;
     if (unbounded) boardMaxSpaces++;
+    // synthetic: internal plumbing, not part of the user's spec — interfaces
+    // listing spaces (the trainer's resume diff) skip these; they track their
+    // parent term exactly.
     spaces.push({ str: t.str, salt: _hashStr('space:' + (t.saltStr || t.str)), gate: [slot], baseTerms: [],
                   cumTerms: [{ salt: t.salt, slot, maxLevel: unbounded ? Infinity : t.maxLevel }],
-                  maxKeys: unbounded ? 0 : t.maxLevel, usesRank: false });
+                  maxKeys: unbounded ? 0 : t.maxLevel, usesRank: false, synthetic: true });
   }
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
