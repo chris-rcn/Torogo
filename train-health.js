@@ -173,9 +173,9 @@ irreducible label entropy.
   --eval-phase A,B  the ENDPOINT phase band to train — the band the model's
                   consumers will evaluate.  Leaf sampling is derived as
                   [A - delta, B - delta]; A below delta is unreachable and an
-                  error.  Default delta,delta+0.8 = endpoints at every phase;
-                  narrow it only for a gated consumer (e.g. 0.5,0.55 for the
-                  late-band arm)
+                  error; A = 0 clamps to delta ("from the start").  Default
+                  0,1 = endpoints at every reachable phase; narrow it only
+                  for a gated consumer (e.g. 0.5,0.55 for the late-band arm)
   --delta F       playout descent to the graded endpoint (default 0.2)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
                   at N (default 10; 0 = off)
@@ -248,17 +248,20 @@ const DELTA = parseFloat(opts.delta !== undefined ? opts.delta : '0.2');
 // the parser rejects them.  Default reproduces the old default exactly:
 // endpoints [delta, delta + 0.8] = leaf band [0, 0.8].
 const _epRaw = (opts['eval-phase'] !== undefined
-  ? opts['eval-phase'] : `${DELTA},${DELTA + 0.8}`).split(',').map(parseFloat);
+  ? opts['eval-phase'] : '0,1').split(',').map(parseFloat);
 if (_epRaw.length !== 2 || _epRaw.some(x => !Number.isFinite(x)) || !(_epRaw[0] < _epRaw[1])) {
   console.error('error: --eval-phase wants "A,B" with A < B (the ENDPOINT band to train)');
   process.exit(1);
 }
-if (_epRaw[0] < DELTA - 1e-9) {
+// A = 0 is the "from the start" idiom and clamps to the earliest reachable
+// endpoint (delta).  A strictly between 0 and delta is a mistake — the band
+// asked for cannot start there — and fails loudly.
+if (_epRaw[0] > 1e-9 && _epRaw[0] < DELTA - 1e-9) {
   console.error(`error: --eval-phase lower bound ${_epRaw[0]} is unreachable — endpoints sit ` +
-    `delta (${DELTA}) above their leaves, so the band cannot start below ${DELTA}`);
+    `delta (${DELTA}) above their leaves, so the band cannot start below ${DELTA} (use 0 for "from the start")`);
   process.exit(1);
 }
-const EVAL_MIN = _epRaw[0], EVAL_MAX = _epRaw[1];
+const EVAL_MIN = Math.max(_epRaw[0], DELTA), EVAL_MAX = _epRaw[1];
 const MIN_PH = EVAL_MIN - DELTA;
 const MAX_PH = EVAL_MAX - DELTA;
 // Floor sample size: the label is a stochastic playout outcome, so no model
