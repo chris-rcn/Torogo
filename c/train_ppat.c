@@ -134,12 +134,13 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
 #define MATCH_GROWTH       1.1   /* match effort grows this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */
 #define MATCH_UNIFORM_BELOW 0.6f /* both sides play uniform below this fullness, as the u6 rungs do */
-#define MATCH_BOARD_SIZE    13   /* directWR plays at the DEPLOYMENT size, whatever size the
-                                  * training data is: small-board verdicts must be re-validated
-                                  * at 13 anyway, so the trusted indicator now measures there
-                                  * directly.  The topology is swapped around the match (a
-                                  * microsecond rebuild); live% and teMSE stay at the training
-                                  * size, whose positions their records replay. */
+#define DEPLOY_BOARD_SIZE   13   /* The size the policy is FIELDED at.  Both self-contained
+                                  * instruments measure there whatever size the training data
+                                  * is — directWR (its own games) and live% (its own uniform-
+                                  * play position set) — because small-board verdicts must be
+                                  * re-validated at 13 anyway.  The topology is swapped around
+                                  * each (a microsecond rebuild) and restored.  teMSE follows
+                                  * its --test-file's size, since its records replay. */
 
 /* Polyak-Ruppert weight averaging.  The window is in AGGREGATE POSITIONS, not in
  * sync rounds: --sync-every is a comms/round-error knob that should scale with lr
@@ -265,11 +266,14 @@ static void mark_live_chains(const Game2 *g) {
         }
 }
 
-/* Fill the live-position set with uniform random play; called once, after
- * the board size is known. */
-static void build_live_positions(int size) {
+/* Fill the live-position set with uniform random play, at the DEPLOYMENT size:
+ * the positions are generated here rather than replayed from training records,
+ * so nothing ties them to the training size.  Called once at startup. */
+static void build_live_positions(int train_size) {
     live_pos = calloc(LIVE_POSITIONS, sizeof(LivePos));
     if (!live_pos) return;
+    const int size = DEPLOY_BOARD_SIZE;
+    g2_init_topology(size);
     Rng rng; rng_seed(&rng, 0x1CE0DEL);
     int games = 0;
     while (live_pos_n < LIVE_POSITIONS && games < 200000) {
@@ -290,6 +294,7 @@ static void build_live_positions(int size) {
                       * the effective sample size without cutting the cost */
         }
     }
+    g2_init_topology(train_size);
 }
 
 static float run_pass_weight = 0;
@@ -1328,6 +1333,9 @@ static double live_death_ratio(void) {
     if (!live_pos || live_pos_n == 0) return 0;
     static PpatState st;
     Rng rng; rng_seed(&rng, 0xD1ED1EL);
+    /* The set was built at the deployment size; play it out there. */
+    const int swap_topo = DEPLOY_BOARD_SIZE != topo_size;
+    if (swap_topo) g2_init_topology(DEPLOY_BOARD_SIZE);
     long checked = 0, died = 0;
     for (int i = 0; i < live_pos_n; i++) {
         for (int k = 0; k < LIVE_PLAYOUTS; k++) {
@@ -1343,6 +1351,7 @@ static double live_death_ratio(void) {
             }
         }
     }
+    if (swap_topo) g2_init_topology(topo_size);
     return checked > 0 ? (double)died / (double)checked : 0;
 }
 
@@ -1406,7 +1415,7 @@ static float direct_match_wr(int games) {
     ppat_uniform_below_phase = MATCH_UNIFORM_BELOW;
     /* Deployment-size board for the match; the training size's topology is
      * restored on exit for the other monitor instruments. */
-    g2_init_topology(MATCH_BOARD_SIZE);
+    g2_init_topology(DEPLOY_BOARD_SIZE);
     static PpatState st;
     Rng rng;
     const double t0 = wall_now();
@@ -1429,7 +1438,7 @@ static float direct_match_wr(int games) {
         rng_seed(&rng, 0x5eed1234L + (g >> 1));
         const int cur_is_black = (g & 1) == 0;   /* the pair's two colour assignments */
         Game2 game;
-        g2_new(&game, MATCH_BOARD_SIZE);
+        g2_new(&game, DEPLOY_BOARD_SIZE);
         while (!game.game_over) {
             const int black_to_move = (game.current == BLACK);
             const float *w;
