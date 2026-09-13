@@ -1165,7 +1165,7 @@ static double  wall_start;            /* wall clock at training start, for pos/s
  * columns switch on only once a cycle's TRAINING time exceeds the time a test
  * costs, so the early phase — when tests would otherwise dominate wall clock —
  * spends all of it on training and still prints the free columns. */
-#define PRINT_POS_FIRST   1000
+#define PRINT_POS_FIRST    500
 #define PRINT_POS_GROWTH   1.5
 static long    next_print_pos;
 static double  last_print_test_s;      /* duration of the most recent tested row */
