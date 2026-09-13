@@ -720,7 +720,7 @@ function _makeTerm(str) {
   // maxNear: how many of the nearest cells this term reads from the nearNbr table
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
   let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
-  let prepare = null, stacked = null;   // stacked: a synthetic companion term parseSpec appends as its own space
+  let prepare = null, stacked = null;   // stacked: an additional weight space this keyword emits into (see parseSpec)
   switch (kind) {
     case 'vpat': {
       // Rank under the external value model as a cumulative size: rank r ->
@@ -820,12 +820,13 @@ function _makeTerm(str) {
         const sh = _eeShared(param), st = sh.st;
         prepare = sh.prepare;
         evalFn = (ctx, idx) => st.key[idx];
-        // The stack: a synthetic cumulative term parseSpec appends as its own
-        // additive space — a thermometer over the fully-empty levels (size =
-        // reached level − 1, R when empty through R), one shared weight per
-        // "the radius-j diamond was empty".  Same prepare object, so the
-        // identity-dedupe runs the computation once; depth 0 emits nothing
-        // (the gated-event reference: stones already adjacent).
+        // The stack: emptyExpand's second key family — a thermometer over the
+        // fully-empty levels (size = reached level − 1, R when empty through
+        // R), one shared weight per "the radius-j diamond was empty", emitted
+        // additively alongside the pattern key.  parseSpec registers it as its
+        // own weight space.  Same prepare object, so the identity-dedupe runs
+        // the computation once; depth 0 emits nothing (the gated-event
+        // reference: stones already adjacent).
         stacked = { str: `emptyDepth${param}`, salt: _hashStr(`emptyDepth${param}`),
                     cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
                     prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx] };
@@ -1135,9 +1136,11 @@ function parseSpec(specStr) {
     const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
     spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate, baseTerms, cumTerms, maxKeys, usesRank });
   }
-  // Each stacked term becomes its own additive single-term space, exactly as if
-  // it had been written comma-separated in the spec.  Its prepare is the parent
-  // term's object, so the includes() dedupe above already covered it.
+  // A keyword is not limited to one key family: `stacked` is an additional
+  // weight space the keyword emits into (emptyExpand's per-level emptiness
+  // thermometer, 0..R keys per move) alongside whatever its host space emits.
+  // Its prepare is the parent term's object, so the includes() dedupe above
+  // already covered it.
   for (const t of stackedTerms) {
     const slot = slotFor(t);
     spaces.push({ str: t.str, salt: _hashStr('space:' + t.str), gate: [slot], baseTerms: [],
