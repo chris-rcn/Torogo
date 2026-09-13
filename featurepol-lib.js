@@ -426,6 +426,13 @@ function _eePrepare(ctx, R0, st) {
   }
   const key = st.key, depth = st.depth, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
   let a = st.a, b = st.b;
+  // nEmpty: cells still all-empty at the level just computed.  Emptiness is
+  // monotone (the radius-k ball contains the radius-(k-1) ball), so once it
+  // hits zero no later level can assign anything — every key is final and the
+  // remaining passes are dead work.  On a midgame board that ends the loop at
+  // the deepest actual gap, which is what keeps a large R (emptyExpand0's 12)
+  // priced by the position, not the cap.
+  let nEmpty = 0;
   {
     const eCur = _eeEmpty(1);
     for (let idx = 0; idx < area; idx++) {
@@ -438,17 +445,19 @@ function _eePrepare(ctx, R0, st) {
       const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
       a[idx] = v;
       if (v !== eCur) { key[idx] = _hashCombine(v, 1) | 0; depth[idx] = 0; }
-      else            { key[idx] = allEmptyKey;            depth[idx] = R; }
+      else            { key[idx] = allEmptyKey;            depth[idx] = R; nEmpty++; }
     }
   }
-  for (let k = 2; k <= R; k++) {
+  for (let k = 2; k <= R && nEmpty > 0; k++) {
     const ePrev = _eeEmpty(k - 1), eCur = _eeEmpty(k);
+    nEmpty = 0;
     for (let idx = 0; idx < area; idx++) {
       const base = idx * stride;
       const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
                                  _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
       b[idx] = v;
-      if (a[idx] === ePrev && v !== eCur) { key[idx] = _hashCombine(v, k) | 0; depth[idx] = k - 1; }
+      if (v === eCur) nEmpty++;
+      else if (a[idx] === ePrev) { key[idx] = _hashCombine(v, k) | 0; depth[idx] = k - 1; }
     }
     const t = a; a = b; b = t;
   }
