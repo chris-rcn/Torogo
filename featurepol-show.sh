@@ -45,8 +45,9 @@ for (let i = 0; i < state.count; i++) {
 }
 
 console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
-console.log(`size: ${N}  moves: ${moves.length}  to move: ${game.current === BLACK ? 'black' : 'white'}`);
+console.log(`size: ${N}  moves: ${moves.length}`);
 console.log();
+console.log(`${game.current === BLACK ? 'black' : 'white'} to move`);
 // Column letters across the top, row numbers down the left; rows print
 // top-to-bottom as N..1, matching parseBoard/coordStr orientation.
 const colHdr = [];
