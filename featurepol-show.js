@@ -39,13 +39,10 @@ const state = FeaturePol.createState(N, weights.spec);
 FeaturePol.extractFeatures(game, state, weights);
 FeaturePol.computeSoftmax(state, weights, 1);
 
-// pct: per-mille, rounded, clamped to 999 (three digits of precision); a
-// probability of exactly zero renders blank, while a small-but-nonzero one
-// still shows "  0".
+// pct: per-mille, rounded, clamped to 999 (three digits of precision).
 const pct = new Map();
 for (let i = 0; i < state.count; i++) {
-  const p = state.probs[i];
-  pct.set(state.moves[i], p === 0 ? '   ' : String(Math.min(999, Math.round(p * 1000))).padStart(3));
+  pct.set(state.moves[i], String(Math.min(999, Math.round(state.probs[i] * 1000))).padStart(3));
 }
 
 console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
