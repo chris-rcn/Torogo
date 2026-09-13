@@ -1512,9 +1512,21 @@ function policyMove(game, state, weights, rng, game3, temperature = 1) {
   computeSoftmax(state, weights, temperature);
   const probs = state.probs;
   if (temperature === 0) {
-    let best = 0;
-    for (let i = 1; i < n; i++) if (probs[i] > probs[best]) best = i;
-    return { move: state.moves[best], index: best, prob: 1 };
+    // Greedy with reservoir sampling over the argmax ties: scan once, and on
+    // meeting the j-th tied max replace the pick with probability 1/j —
+    // uniform over the tied class with no second pass or buffer.  Ties are
+    // EXACT float equality, which symmetry twins satisfy bitwise (identical
+    // key families summed in the same per-space order); without this, board
+    // order always picked the same member of the best class — on a torus,
+    // the same opening every game.  Scans logits: probs is one-hot here.
+    const lg = state.logits, R = rng || Math;
+    let best = 0, ties = 1;
+    for (let i = 1; i < n; i++) {
+      const s = lg[i];
+      if (s > lg[best]) { best = i; ties = 1; }
+      else if (s === lg[best] && R.random() * ++ties < 1) best = i;
+    }
+    return { move: state.moves[best], index: best, prob: 1 / ties };
   }
   let r = (rng || Math).random(), chosen = n - 1;
   for (let i = 0; i < n; i++) { r -= probs[i]; if (r <= 0) { chosen = i; break; } }
