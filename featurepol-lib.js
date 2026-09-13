@@ -50,7 +50,11 @@
 //               level expanded through (a thermometer riding the same
 //               computation), so those weights carry the distance-to-stone
 //               prior and the rare deep pattern keys learn residuals — the
-//               twelvecell-on-ninecell logic.  A descriptor plus its stack.
+//               twelvecell-on-ninecell logic.  R 0 = board maximum (the
+//               largest toroidal L1 distance, 12 on 13x13), resolved when the
+//               board is known — which makes the R-0 feature set
+//               board-size-dependent; a fixed R is the cross-size-safe
+//               spelling.  A descriptor plus its stack.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -407,9 +411,15 @@ function _eeEmpty(k) {
 // terms with different R keep separate buffers.  Alongside each key, depth[idx]
 // records how many levels were fully empty (reached level − 1; R when empty all
 // the way out) — emptyDepth's thermometer size — riding the same assignments.
-function _eePrepare(ctx, R, st) {
+function _eePrepare(ctx, R0, st) {
   const game = ctx.game, area = game.N * game.N, cur = ctx.cur;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
+  // R 0 = board maximum: the largest toroidal L1 distance, beyond which a
+  // diamond has already seen every cell.  Resolved here, where N is known —
+  // which makes the R-0 feature set board-size-dependent (deeper levels and a
+  // different all-empty key on a bigger board): fine for a model living on one
+  // size, the cross-size trap if it migrates.
+  const R = R0 === 0 ? (game.N >> 1) * 2 : R0;
   if (!st.key || st.key.length < area) {
     st.key = new Int32Array(area); st.depth = new Int32Array(area);
     st.a = new Int32Array(area); st.b = new Int32Array(area);
@@ -814,7 +824,7 @@ function _makeTerm(str) {
       // always describes a region whose outer shell holds the nearest stones.
       // The level is folded into the key; an all-empty radius-R diamond is one
       // shared key.  A descriptor — all work is in prepare, one read per move.
-      if (param === null || param < 2) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, got "${str}"`);
+      if (param === null || param === 1) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, or 0 = board maximum, got "${str}"`);
       {
         maxNear = 4;
         const sh = _eeShared(param), st = sh.st;
@@ -1140,11 +1150,18 @@ function parseSpec(specStr) {
   // weight space the keyword emits into (emptyExpand's per-level emptiness
   // thermometer, 0..R keys per move) alongside whatever its host space emits.
   // Its prepare is the parent term's object, so the includes() dedupe above
-  // already covered it.
+  // already covered it.  maxLevel 0 = board maximum: the size values the
+  // prepare produces are already capped at the board's largest L1 distance, so
+  // the emission clamp becomes Infinity (never binds) and the space's key
+  // budget is deferred to createState, where N is known (boardMaxSpaces).
+  let boardMaxSpaces = 0;
   for (const t of stackedTerms) {
     const slot = slotFor(t);
+    const unbounded = t.maxLevel === 0;
+    if (unbounded) boardMaxSpaces++;
     spaces.push({ str: t.str, salt: _hashStr('space:' + t.str), gate: [slot], baseTerms: [],
-                  cumTerms: [{ salt: t.salt, slot, maxLevel: t.maxLevel }], maxKeys: t.maxLevel, usesRank: false });
+                  cumTerms: [{ salt: t.salt, slot, maxLevel: unbounded ? Infinity : t.maxLevel }],
+                  maxKeys: unbounded ? 0 : t.maxLevel, usesRank: false });
   }
   if (spaces.length === 0) throw new Error(`featurepol: no feature spaces in "${str}"`);
   let maxKeysPerMove = 0;
@@ -1159,7 +1176,7 @@ function parseSpec(specStr) {
     for (const t of [...sp.baseTerms, ...sp.cumTerms]) if (!plainSlots.includes(t.slot)) plainSlots.push(t.slot);
   const rankMaxKeys = rankSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
   return { str, spaces, plainSpaces, rankSpaces, plainSlots, rankMaxKeys,
-           computers, numSlots: computers.length, prepares, maxKeysPerMove, needsLadder, nearMax };
+           computers, numSlots: computers.length, prepares, maxKeysPerMove, boardMaxSpaces, needsLadder, nearMax };
 }
 
 // ── Weights store (hash → dense idx → Float32 weight) ─────────────────────────
@@ -1208,7 +1225,9 @@ function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 function createState(N, spec) {
   spec = parseSpec(spec);
   const cap = N * N;
-  const maxK = spec.maxKeysPerMove;   // upper bound on keys emitted per move
+  // Upper bound on keys emitted per move; a board-maximum thermometer space
+  // (emptyExpand0) contributes its resolved depth here, N finally being known.
+  const maxK = spec.maxKeysPerMove + spec.boardMaxSpaces * ((N >> 1) * 2);
   // Toroidal nearest-cell table: nearNbr[idx*stride + k] = flat index of the k-th
   // nearest cell to idx.  The stride is sized to the spec's actual reach (the max
   // nearest-cells any term in this spec reads), not the global NEAR_MAX — a spec that
