@@ -40,10 +40,12 @@ FeaturePol.extractFeatures(game, state, weights);
 FeaturePol.computeSoftmax(state, weights, 1);
 
 // pct[idx] = clamped 2-digit percentage for each candidate move
+// pct: rounded, clamped to 99; a probability of exactly zero renders blank,
+// while a small-but-nonzero one still shows " 0".
 const pct = new Map();
 for (let i = 0; i < state.count; i++) {
-  const p = Math.min(99, Math.round(state.probs[i] * 100));
-  pct.set(state.moves[i], p);
+  const p = state.probs[i];
+  pct.set(state.moves[i], p === 0 ? '  ' : String(Math.min(99, Math.round(p * 100))).padStart(2));
 }
 
 console.log(`model: ${modelName}  spec: ${weights.spec.str}`);
@@ -61,7 +63,7 @@ for (let y = N - 1; y >= 0; y--) {
     const idx = y * N + x, c = game.cells[idx];
     if (c === BLACK) cells.push(' ●');
     else if (c !== 0) cells.push(' ○');
-    else if (pct.has(idx)) cells.push(String(pct.get(idx)).padStart(2));
+    else if (pct.has(idx)) cells.push(pct.get(idx));
     else cells.push(' ·');
   }
   console.log(String(y + 1).padStart(2) + ' ' + cells.join(' '));
