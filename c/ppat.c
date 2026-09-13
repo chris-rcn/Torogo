@@ -20,8 +20,10 @@ const int32_t *ppat_canon_id = NULL;
 int ppat_twelvecell = 0;
 int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
 static int32_t t12_table[PPAT_T12_RAW];
+static int32_t t12b_table[PPAT_T12B_RAW];
 static bool    t12_built = false;
-const int32_t *ppat_t12_canon = t12_table;
+const int32_t *ppat_t12_canon  = t12_table;
+const int32_t *ppat_t12b_canon = t12b_table;
 
 static void ppat_build_t12(void) {
     if (t12_built) return;
@@ -53,6 +55,43 @@ static void ppat_build_t12(void) {
     if (next_id != PPAT_T12_PATTERNS) {
         fprintf(stderr, "ppat: twelvecell orbits %d != %d\n", next_id, PPAT_T12_PATTERNS);
         exit(1);
+    }
+
+    /* Mode 2's JOINT table: positions 0-3 are the diagonals (NE, SE, SW, NW),
+     * 4-7 the arms (N, E, S, W), so one D4 element permutes both sets at once.
+     * Canonicalising them together is what keeps an enemy arm BESIDE an enemy
+     * diagonal distinct from the same two stones opposite each other. */
+    {
+        static const int ROT8[8] = {1, 2, 3, 0, 5, 6, 7, 4};   /* NE->SE->SW->NW, N->E->S->W */
+        static const int REF8[8] = {3, 2, 1, 0, 4, 7, 6, 5};   /* mirror about N-S */
+        int perms8[8][8], cur8[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+        for (int r = 0; r < 4; r++) {
+            for (int i = 0; i < 8; i++) { perms8[2*r][i] = cur8[i]; perms8[2*r+1][i] = cur8[REF8[i]]; }
+            int nxt[8];
+            for (int i = 0; i < 8; i++) nxt[i] = cur8[ROT8[i]];
+            for (int i = 0; i < 8; i++) cur8[i] = nxt[i];
+        }
+        static int32_t id_of8[PPAT_T12B_RAW];
+        for (int i = 0; i < PPAT_T12B_RAW; i++) id_of8[i] = -1;
+        int next8 = 0;
+        for (int raw = 0; raw < PPAT_T12B_RAW; raw++) {
+            int v[8], r = raw;
+            for (int i = 0; i < 8; i++) { v[i] = r % 3; r /= 3; }
+            int min_v = raw;
+            for (int d = 0; d < 8; d++) {
+                int tv[8];
+                for (int i = 0; i < 8; i++) tv[perms8[d][i]] = v[i];
+                int enc = 0;
+                for (int i = 7; i >= 0; i--) enc = enc * 3 + tv[i];
+                if (enc < min_v) min_v = enc;
+            }
+            if (id_of8[min_v] < 0) id_of8[min_v] = next8++;
+            t12b_table[raw] = id_of8[min_v];
+        }
+        if (next8 != PPAT_T12B_PATTERNS) {
+            fprintf(stderr, "ppat: twelvecell2 orbits %d != %d\n", next8, PPAT_T12B_PATTERNS);
+            exit(1);
+        }
     }
     t12_built = true;
 }
@@ -340,7 +379,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int phase = ppat_phase_count * (g->cap - g->empty_count) / g->cap;
     const int pat_offset = phase * ppat_num_patterns;
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
-    const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * PPAT_T12_PATTERNS;
+    const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * ppat_t12_block();
 
     /* The 7 hand-coded previous-move features are disabled — both the
      * emission AND the pre-scan/mask work that feeds it.  A/B at equal time
@@ -511,11 +550,20 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             const int8_t a1 = g->cells[g2_nbr[ni3 * 4 + 3]];
             const int8_t a2 = g->cells[g2_nbr[ni1 * 4 + 1]];
             const int8_t a3 = g->cells[g2_nbr[ni2 * 4 + 2]];
-            const int t12 = (a0 == EMPTY ? 0 : a0 == cur ? 1 : 2) +
-                        3 * ((a1 == EMPTY ? 0 : a1 == cur ? 1 : 2) +
-                        3 * ((a2 == EMPTY ? 0 : a2 == cur ? 1 : 2) +
-                        3 *  (a3 == EMPTY ? 0 : a3 == cur ? 1 : 2)));
-            st->feat[nf++] = t12_offset + ppat_t12_canon[t12];
+            const int w0 = a0 == EMPTY ? 0 : a0 == cur ? 1 : 2;
+            const int w1 = a1 == EMPTY ? 0 : a1 == cur ? 1 : 2;
+            const int w2 = a2 == EMPTY ? 0 : a2 == cur ? 1 : 2;
+            const int w3 = a3 == EMPTY ? 0 : a3 == cur ? 1 : 2;
+            if (ppat_twelvecell == 1) {
+                st->feat[nf++] = t12_offset +
+                    ppat_t12_canon[w0 + 3*(w1 + 3*(w2 + 3*w3))];
+            } else {
+                /* Diagonals first (NE, SE, SW, NW), then the arms — jointly
+                 * canonicalised so their relative placement survives. */
+                st->feat[nf++] = t12_offset +
+                    ppat_t12b_canon[vNE + 3*(vSE + 3*(vSW + 3*(vNW +
+                                    3*(w0 + 3*(w1 + 3*(w2 + 3*w3))))))];
+            }
         }
 
         /* Previous-move features disabled — see the note at the pre-scan

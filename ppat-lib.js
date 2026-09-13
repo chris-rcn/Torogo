@@ -108,17 +108,20 @@ const NUM_PATTERNS = _T2.numPatterns;
 //   mode 2 (--twelvecell2)  the four ADJACENT points are empty, whatever the
 //                           diagonals hold.  Fires strictly more often.
 //
-// Canonicalising the arms under the full D4 is EXACT in mode 1: the inner
-// pattern is all-empty, hence fixed by every element of D4, so any transform
-// that canonicalises the arms is a symmetry of the whole twelvecell.  In mode 2
-// the diagonals may be occupied, so the pair (ninecell key, arm key) stays D4-
-// INVARIANT — both halves are canonical — but loses the RELATIVE alignment
-// between the diagonals and the arms: two positions sharing a ninecell and an
-// arm orbit collide even when the arms sit differently against the diagonals.
-// That is the usual additive-feature trade, not a defect; an exact mode-2 key
-// would have to canonicalise diagonals and arms jointly (954 orbits, not 21).
-// 81 raw arm configurations collapse to 21 orbits.
+// Each mode canonicalises EXACTLY, over whatever cells its trigger leaves
+// informative — cells sharing one spatial window are canonicalised together,
+// never independently, or the key loses their relative arrangement:
+//   mode 1: the inner ninecell is all-empty, hence fixed by every element of
+//           D4, so the four ARMS alone are exact.  81 raw -> 21 orbits.
+//   mode 2: the four orthogonals are empty and carry nothing, but the DIAGONALS
+//           may be occupied, so diagonals and arms are canonicalised JOINTLY —
+//           one enemy diagonal beside an enemy arm is a connected shape, the
+//           same two stones opposite each other are unrelated, and an
+//           independently-canonicalised arm key would collide them.
+//           3^8 = 6561 raw -> 954 orbits (the same structure as the health
+//           ninecell: eight cells in two D4-orbits of four).
 const T12_RAW = 81;
+const T12B_RAW = 6561;
 const _T12 = (() => {
   // Arm order N, E, S, W — the ninecell's D4 restricted to the orthogonals.
   const ROT = [1, 2, 3, 0];   // 90 degrees: N->E, E->S, S->W, W->N
@@ -146,6 +149,40 @@ const _T12 = (() => {
   return { canonId, numPatterns: nextId };
 })();
 const NUM_T12 = _T12.numPatterns;
+
+// Mode 2's joint table: positions 0-3 are the DIAGONALS (NE, SE, SW, NW) and
+// 4-7 the ARMS (N, E, S, W), so one D4 element permutes both sets at once.
+const _T12B = (() => {
+  // Diagonal quarter-turn NE->SE->SW->NW; arm quarter-turn N->E->S->W.
+  const ROT = [1, 2, 3, 0, 5, 6, 7, 4];
+  // Mirror about the N-S axis: NE<->NW, SE<->SW, E<->W, N and S fixed.
+  const REF = [3, 2, 1, 0, 4, 7, 6, 5];
+  const ap = (p, q) => q.map(i => p[i]);
+  const perms = [];
+  let cur = [0, 1, 2, 3, 4, 5, 6, 7];
+  for (let r = 0; r < 4; r++) { perms.push(cur.slice()); perms.push(ap(cur, REF)); cur = ap(cur, ROT); }
+  const canonId = new Int32Array(T12B_RAW);
+  const v = new Int32Array(8), tv = new Int32Array(8);
+  const idMap = new Map();
+  let nextId = 0;
+  for (let raw = 0; raw < T12B_RAW; raw++) {
+    let r = raw;
+    for (let i = 0; i < 8; i++) { v[i] = r % 3; r = (r / 3) | 0; }
+    let minV = raw;
+    for (const p of perms) {
+      for (let i = 0; i < 8; i++) tv[p[i]] = v[i];
+      let enc = 0;
+      for (let i = 7; i >= 0; i--) enc = enc * 3 + tv[i];
+      if (enc < minV) minV = enc;
+    }
+    if (!idMap.has(minV)) idMap.set(minV, nextId++);
+    canonId[raw] = idMap.get(minV);
+  }
+  return { canonId, numPatterns: nextId };
+})();
+const NUM_T12B = _T12B.numPatterns;
+// Weights the twelvecell block needs for a given mode.
+function t12Block(mode) { return mode === 1 ? NUM_T12 : mode === 2 ? NUM_T12B : 0; }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -301,11 +338,11 @@ function createState(N) {
 
 // The twelvecell block is APPENDED after the pattern and local blocks, so every
 // pre-extension weight index keeps its meaning and an old file loads unchanged.
-// Both twelvecell modes share the single appended block, so the size is the
-// same either way; only which positions emit into it differs.
-function totalWeights(phaseCount, libCap = 2, twelvecell = false) {
+// The twelvecell block's size depends on the MODE (21 arms-only vs 954 joint),
+// so callers pass the mode rather than a boolean.
+function totalWeights(phaseCount, libCap = 2, t12mode = 0) {
   return phaseCount * (_buildTables(libCap).numPatterns + 7) +
-         (twelvecell ? phaseCount * NUM_T12 : 0);
+         phaseCount * t12Block(t12mode | 0);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -347,8 +384,8 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const phase = phaseCount * (cap - game.emptyCount) / cap | 0;
   const patOffset = phase * _NPAT;
   const prevOffset = phaseCount * _NPAT + phase * 7;
-  const t12Offset = phaseCount * (_NPAT + 7) + phase * NUM_T12;
-  const _T12C = _T12.canonId;
+  const _T12C = t12mode === 2 ? _T12B.canonId : _T12.canonId;
+  const t12Offset = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -546,10 +583,17 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
     if (t12mode === 1 ? rawIdx === 0 : t12mode === 2 && emptyNbr === 4) {
       const a0 = cells[nbr[niN * 4 + 0]], a1 = cells[nbr[niE * 4 + 3]];
       const a2 = cells[nbr[niS * 4 + 1]], a3 = cells[nbr[niW * 4 + 2]];
-      const t12 = (a0 === 0 ? 0 : a0 === cur ? 1 : 2) +
-              3 * ((a1 === 0 ? 0 : a1 === cur ? 1 : 2) +
-              3 * ((a2 === 0 ? 0 : a2 === cur ? 1 : 2) +
-              3 *  (a3 === 0 ? 0 : a3 === cur ? 1 : 2)));
+      const w0 = a0 === 0 ? 0 : a0 === cur ? 1 : 2, w1 = a1 === 0 ? 0 : a1 === cur ? 1 : 2;
+      const w2 = a2 === 0 ? 0 : a2 === cur ? 1 : 2, w3 = a3 === 0 ? 0 : a3 === cur ? 1 : 2;
+      let t12;
+      if (t12mode === 1) {
+        t12 = w0 + 3 * (w1 + 3 * (w2 + 3 * w3));
+      } else {
+        // Diagonals first (NE, SE, SW, NW — vNE.. already coded 0/1/2), then
+        // the arms, jointly canonicalised so their relative placement survives.
+        t12 = vNE + 3 * (vSE + 3 * (vSW + 3 * (vNW +
+              3 * (w0 + 3 * (w1 + 3 * (w2 + 3 * w3))))));
+      }
       state.feat[nf++] = t12Offset + _T12C[t12];
     }
 
@@ -778,7 +822,7 @@ function loadWeights(pathOrObj) {
 const PPatterns = {
   createState, extractFeatures, evaluate, ppatMove,
   totalWeights, loadWeights,
-  NUM_PATTERNS, NUM_T12,
+  NUM_PATTERNS, NUM_T12, NUM_T12B,
 };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;

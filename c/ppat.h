@@ -77,20 +77,27 @@ void     ppat_init(int lib_cap);
  * the ninecell key and its block is APPENDED after the pattern and local
  * blocks, so every pre-extension weight index keeps its meaning and an old
  * model fine-tunes into the extension with its weights untouched. */
-#define PPAT_T12_RAW      81
-#define PPAT_T12_PATTERNS 21
+#define PPAT_T12_RAW       81
+#define PPAT_T12_PATTERNS  21    /* mode 1: arms alone, exact (inner all-empty) */
+#define PPAT_T12B_RAW    6561
+#define PPAT_T12B_PATTERNS 954   /* mode 2: diagonals + arms, canonicalised JOINTLY */
 /* 0 = off, 1 = --twelvecell (whole ninecell empty), 2 = --twelvecell2 (the four
  * ADJACENT points empty, whatever the diagonals hold; fires strictly more
- * often).  Both share the single appended block. */
+ * often).  Mutually exclusive; the appended block is sized per mode. */
 extern int  ppat_twelvecell;
 extern int  ppat_file_twelvecell;      /* the mode the last loaded file carried */
-extern const int32_t *ppat_t12_canon;  /* PPAT_T12_RAW -> orbit id */
+extern const int32_t *ppat_t12_canon;   /* PPAT_T12_RAW  -> orbit id (mode 1) */
+extern const int32_t *ppat_t12b_canon;  /* PPAT_T12B_RAW -> orbit id (mode 2) */
+static inline int ppat_t12_block(void) {
+    return ppat_twelvecell == 1 ? PPAT_T12_PATTERNS
+         : ppat_twelvecell == 2 ? PPAT_T12B_PATTERNS : 0;
+}
 
 /* Total weight count: phase_count * (num_patterns + 7), plus the twelvecell
  * block when enabled. */
 static inline int ppat_total_weights(void) {
     return ppat_phase_count * (ppat_num_patterns + 7) +
-           (ppat_twelvecell != 0 ? ppat_phase_count * PPAT_T12_PATTERNS : 0);
+           ppat_phase_count * ppat_t12_block();
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */
