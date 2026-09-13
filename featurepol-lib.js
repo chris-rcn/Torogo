@@ -409,11 +409,11 @@ function _eeEmpty(k) {
 // key if non-empty, the all-empty key otherwise), and level k overwrites
 // exactly the cells whose level k-1 was empty and level k is not, so a cell
 // empty through R keeps the all-empty initialisation with no final pass.
-// st is shared PER R via _eeShared, so emptyExpand<R> and emptyDepth<R> with
+// st is shared PER R via _eeShared, so emptyExpand<R> and its thermometer with
 // the same R run one computation (parseSpec dedupes prepares by identity) and
 // terms with different R keep separate buffers.  Alongside each key, depth[idx]
 // records how many levels were fully empty (reached level − 1; R when empty all
-// the way out) — emptyDepth's thermometer size — riding the same assignments.
+// the way out) — the thermometer's size — riding the same assignments.
 function _eePrepare(ctx, R0, st) {
   const game = ctx.game, area = game.N * game.N, cur = ctx.cur;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
@@ -466,7 +466,7 @@ function _eePrepare(ctx, R0, st) {
   }
 }
 
-// One shared { st, prepare } per R, so same-R emptyExpand/emptyDepth terms
+// One shared { st, prepare } per R, so a term and its thermometer companion
 // dedupe to a single prepare run.
 const _eeByR = new Map();
 function _eeShared(R) {
@@ -840,7 +840,7 @@ function _makeTerm(str) {
       {
         maxNear = 4;
         // R is NOT part of the key namespace: the salts hash 'emptyExpand' /
-        // 'emptyDepth' with the R stripped (the space salt strips it too, in
+        // '_emptyExpandThermometer' with the R stripped (the space salt strips it too, in
         // parseSpec), so retraining with a different R keeps every weight the
         // two caps agree on — pattern levels up to min(Rold, Rnew) and the
         // thermometer below it; only the deeper levels and the all-empty key
@@ -863,7 +863,8 @@ function _makeTerm(str) {
         // from emptyExpand — the 4-informative-cell level-1 pattern carries
         // almost no information, and absence is the gated-event reference.
         // The minimum emission is therefore the 12-cell level-2 pattern.
-        stacked = { str: `emptyDepth${param}`, saltStr: 'emptyDepth', salt: _hashStr('emptyDepth'),
+        stacked = { str: `_emptyExpandThermometer${param}`, saltStr: '_emptyExpandThermometer',
+                    salt: _hashStr('_emptyExpandThermometer'),
                     cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
                     prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
       }
