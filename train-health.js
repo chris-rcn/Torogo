@@ -33,9 +33,10 @@
 // random ply in [--min-phase, --max-phase] from a corpus game (the tree LEAF
 // / playout-start position), then descend --delta in fullness with the
 // standard playout policy (ppat-data.js, uniform below phase 0.6).  The
-// ENDPOINT is where features are extracted and graded, because the endpoint
-// is the position class the evaluator is actually applied to — training on
-// raw corpus positions would fit the wrong distribution.  The playout then
+// ENDPOINT is where features are extracted and graded.  With the default
+// delta 0 that IS the sampled ply; a consumer that evaluates delta-descended
+// truncation endpoints should train with the matching --delta, since the
+// endpoint class is the class the evaluator is applied to.  The playout then
 // runs to the end to label chain survival (capture is atomic, merges
 // included, so "first stone still owner-colour" decides it).
 //
@@ -121,7 +122,8 @@
 //                   only for a model used behind a matching gate (e.g.
 //                   --eval-phase 0.5,0.55 for the late-band arm).
 //   --delta F       playout descent in fullness from leaf to graded endpoint
-//                   (default 0.2, the deployed truncation delta)
+//                   (default 0 = train the sampled plies directly; set the
+//                   deployed truncation delta to train the endpoint class)
 //   --floor F       irreducible label entropy subtracted in the 'exc' column
 //                   (default: MEASURED at startup for this exact band/delta,
 //                   deterministically — see measureFloor)
@@ -176,7 +178,9 @@ irreducible label entropy.
                   error; A = 0 clamps to delta ("from the start").  Default
                   0,1 = endpoints at every reachable phase; narrow it only
                   for a gated consumer (e.g. 0.5,0.55 for the late-band arm)
-  --delta F       playout descent to the graded endpoint (default 0.2)
+  --delta F       playout descent to the graded endpoint (default 0 — train
+                  the sampled plies directly; set the deployed truncation
+                  delta to train the descended endpoint class instead)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
                   at N (default 10; 0 = off)
   --stone-ninecells 0|1  emit a ninecell per STONE (default 0 — the winning
@@ -240,7 +244,7 @@ irreducible label entropy.
 const CORPUS = opts.corpus;
 // Leaf band and descent fix the ENDPOINT distribution, and the floor belongs
 // to that distribution, so it is measured per run rather than hardcoded.
-const DELTA = parseFloat(opts.delta !== undefined ? opts.delta : '0.2');
+const DELTA = parseFloat(opts.delta !== undefined ? opts.delta : '0');
 // --eval-phase names the band of ENDPOINT positions — the positions actually
 // trained — and the leaf sampling band is derived from it ([A - delta,
 // B - delta]).  The old --min-phase/--max-phase named the LEAF band, which
