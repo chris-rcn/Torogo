@@ -36,6 +36,17 @@
  *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase;
  *                           REQUIRED with --trunc-vpat — offsets are per
  *                           (model, delta, band) and never transfer
+ *     --phase-compensation-buckets <n>
+ *                           reweight per-step gradient credit so applied
+ *                           pressure is uniform by phase (default 0 = off).
+ *                           Buckets track applied WEIGHT (1/(N*T) per counted
+ *                           step, pre-compensation); correction shrinks toward
+ *                           1 on thin evidence and normalizes to mean 1 over
+ *                           occupied buckets, so the effective lr keeps its
+ *                           meaning.  Without it, pressure by phase is an
+ *                           artifact of corpus geometry (a mouth corpus ramps
+ *                           across its band then plateaus to the game-end
+ *                           taper; truncation reshapes it again)
  *     --batch <n>           batch size (default 10)
  *     --test-pos <n>        test positions (default 0 = no teMSE test).  The match
  *                           columns are the primary readout now; a test set costs
@@ -198,6 +209,44 @@ static int    cfg_trunc_on;
 static float  cfg_trunc_delta;
 static float  cfg_trunc_max_phase;
 static float  cfg_trunc_off_a, cfg_trunc_off_b;
+
+/* --phase-comp: reweight per-step gradient credit so the applied pressure is
+ * uniform by phase.  Without it, pressure is a pure artifact of corpus
+ * geometry (a mouth corpus ramps across its band, then a plateau to the
+ * game-end taper; truncation reshapes it again), which makes configs hard to
+ * reason about.  Buckets track APPLIED weight (each gradient step adds its
+ * 1/(N*T) coefficient — steps are not equal across rollouts, 3x so under
+ * mixed truncated/full), pre-compensation so the estimator never chases its
+ * own output.  The correction shrinks toward 1 on thin evidence:
+ * c[b] = Wbar/(w[b] + Wbar/PC_SHRINK), normalized to mean 1 over occupied
+ * buckets so the effective lr keeps its meaning; count-only during warmup. */
+#define PC_MAX_BUCKETS 256
+#define PC_STEP_CAP    (MAX_CAP * 8)
+#define PC_SHRINK      8.0f
+#define PC_WARMUP_POSITIONS 100
+static int    cfg_pc_buckets;          /* --phase-compensation-buckets, 0 = off */
+static double pc_w[PC_MAX_BUCKETS];    /* accumulated raw (pre-comp) weight per bucket */
+static float  pc_c[PC_MAX_BUCKETS];    /* current correction factors */
+static long   pc_positions;            /* update_theta calls seen (warmup gate) */
+static int    pc_step_bucket[PC_STEP_CAP];   /* per-rollout: bucket of each counted step */
+
+/* Refresh pc_c from pc_w: shrinkage toward 1, then mean-1 normalization. */
+static void pc_refresh(void) {
+    double total = 0; int occ = 0;
+    for (int b = 0; b < cfg_pc_buckets; b++) if (pc_w[b] > 0) { total += pc_w[b]; occ++; }
+    if (occ == 0 || pc_positions < PC_WARMUP_POSITIONS) {
+        for (int b = 0; b < cfg_pc_buckets; b++) pc_c[b] = 1.0f;
+        return;
+    }
+    const double wbar = total / occ, eps = wbar / PC_SHRINK;
+    double csum = 0;
+    for (int b = 0; b < cfg_pc_buckets; b++) {
+        pc_c[b] = (float)(wbar / (pc_w[b] + eps));
+        if (pc_w[b] > 0) csum += pc_c[b];
+    }
+    const float norm = (float)(occ / csum);
+    for (int b = 0; b < cfg_pc_buckets; b++) pc_c[b] *= norm;
+}
 static int    cfg_worker_id;
 static int    cfg_sync_every;          /* 0 = no sync (single process) */
 static const char *cfg_sync_dir;
@@ -832,23 +881,37 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
         int n = rollout_feat_st.count;
 
         if (grad_acc) {
+            /* Phase compensation: this step's whole ψ contribution is scaled
+             * by the phase bucket's correction (chosen-move and expectation
+             * term alike); the bucket is recorded below, where the step is
+             * counted, so the rollout's raw 1/(N*T) weight lands in pc_w. */
+            float pc = 1.0f;
+            int pcb = -1;
+            if (cfg_pc_buckets) {
+                int b = cfg_pc_buckets * (sim.cap - sim.empty_count) / sim.cap;
+                if (b >= cfg_pc_buckets) b = cfg_pc_buckets - 1;
+                pcb = b;
+                pc = pc_c[b];
+            }
             /* ψ(s,a) = φ(s,a) − Σ_b π(b|s)φ(s,b).  The pass carries no features,
              * so a chosen pass contributes only the −Σ term: a uniform downward
              * push on every board feature, which is exactly the update that
              * lowers the absolute logit level toward passing more often. */
             for (int i = 0; i < n; i++) {
-                float p = rollout_probs[i];
+                float p = pc * rollout_probs[i];
                 for (int fi = rollout_feat_st.feat_start[i]; fi < rollout_feat_st.feat_start[i + 1]; fi++)
                     grad_acc[rollout_feat_st.feat[fi]] -= p;
             }
             if (chosen != PICK_PASSED)
                 for (int fi = rollout_feat_st.feat_start[chosen]; fi < rollout_feat_st.feat_start[chosen + 1]; fi++)
-                    grad_acc[rollout_feat_st.feat[fi]] += 1.0f;
+                    grad_acc[rollout_feat_st.feat[fi]] += pc;
 
             /* Count this step toward T (all phases) / T_P (masked single phase). */
             if (cfg_phase < 0 ||
-                ppat_phase_count * (sim.cap - sim.empty_count) / sim.cap == cfg_phase)
+                ppat_phase_count * (sim.cap - sim.empty_count) / sim.cap == cfg_phase) {
+                if (pcb >= 0 && steps < PC_STEP_CAP) pc_step_bucket[steps] = pcb;
                 steps++;
+            }
         }
 
         if (chosen == PICK_PASSED) {
@@ -939,6 +1002,10 @@ static void mask_to_phase(float *v) {
 static void update_theta(const Game2 *game, float v_star) {
     int8_t player = game->current;
 
+    /* Phase compensation: correction factors refresh once per position from
+     * the counters (cheap; count-only until the warmup completes). */
+    if (cfg_pc_buckets) { pc_refresh(); pc_positions++; }
+
     /* V: M rollouts, no gradient */
     float V = 0;
     for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, NULL);
@@ -956,6 +1023,14 @@ static void update_theta(const Game2 *game, float v_star) {
         if (T > 0) {
             float scale = z / ((float)N * (float)T);
             for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
+            /* Track the rollout's raw applied weight per bucket: each counted
+             * step carried 1/(N*T), PRE-compensation, so the estimator never
+             * chases its own output. */
+            if (cfg_pc_buckets) {
+                const double wstep = 1.0 / ((double)N * (double)T);
+                const int lim = T < PC_STEP_CAP ? T : PC_STEP_CAP;
+                for (int k = 0; k < lim; k++) pc_w[pc_step_bucket[k]] += wstep;
+            }
         }
     }
     if (cfg_phase >= 0) mask_to_phase(g_buf);
@@ -1893,6 +1968,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
+        fprintf(stderr, "       [--phase-compensation-buckets <n>]\n");
         return 1;
     }
 
@@ -1943,6 +2019,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "error: --trunc-delta/--trunc-offset/--trunc-max-phase need --trunc-vpat\n");
             exit(1);
         }
+    }
+    cfg_pc_buckets = get_int_arg(argc, argv, "--phase-compensation-buckets", 0);
+    if (cfg_pc_buckets != 0 && (cfg_pc_buckets < 2 || cfg_pc_buckets > PC_MAX_BUCKETS)) {
+        fprintf(stderr, "error: --phase-compensation-buckets must be 0 (off) or 2..%d\n", PC_MAX_BUCKETS);
+        exit(1);
     }
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
@@ -2112,6 +2193,9 @@ int main(int argc, char **argv) {
            cfg_file, n_train_total, n_train, cfg_workers, lrbuf, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_no_extreme,
            ppat_phase_count, cfg_phase, scalebuf);
+    if (cfg_pc_buckets)
+        printf("phase-comp: %d buckets (weight-tracked, shrink %g, warmup %d positions)\n",
+               cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
     if (cfg_trunc_on)
         printf("trunc: vpat %s  delta: %g  max-phase: %g  offset: %g,%g\n",
                get_str_arg(argc, argv, "--trunc-vpat", ""), (double)cfg_trunc_delta,
