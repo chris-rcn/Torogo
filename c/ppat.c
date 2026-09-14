@@ -485,6 +485,24 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     if (n_atari > 0)
         n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
 
+    /* Ko-solve pre-scan (slot 5): liberty cells that would capture an enemy
+     * group adjacent to our ko stone — resolving the ko by removing the
+     * recapture. */
+    int32_t ko_solve_libs[4];
+    int n_ko_solve = 0;
+    if (my_ko_stone != PASS) {
+        int ks4 = my_ko_stone * 4;
+        for (int d = 0; d < 4; d++) {
+            int32_t ni = g2_nbr[ks4 + d];
+            if (g->cells[ni] != foe) continue;
+            int32_t egid = g->gid[ni];
+            if (g->ls[egid] == 1) {
+                int32_t lib = first_lib(egid, g);
+                if (lib >= 0) ko_solve_libs[n_ko_solve++] = lib;
+            }
+        }
+    }
+
     int count = 0;
     int nf = 0;  /* index into st->feat[] */
 
@@ -634,6 +652,10 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                     if (atari_libs[i] == idx) { st->feat[nf++] = prev_offset + (sa > 0 ? 4 : 3); break; }
             }
         }
+
+        /* Ko-solve (slot 5) */
+        for (int ki = 0; ki < n_ko_solve; ki++)
+            if (idx == ko_solve_libs[ki]) { st->feat[nf++] = prev_offset + 5; break; }
 
         count++;
     }
