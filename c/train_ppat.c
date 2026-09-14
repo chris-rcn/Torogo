@@ -1711,7 +1711,7 @@ static void run_monitor(void) {
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
-    printf("  %8s  %7s", "elapsedS", "pos/s");
+    printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
     ppat_load_quiet = 1;   /* suppress the per-cycle "loaded N weights" noise */
@@ -1730,7 +1730,7 @@ static void run_monitor(void) {
         /* elapsed AFTER the match columns, as every later row does — otherwise
          * the baseline row under-reports its own cost by the match time. */
         double el = wall_now() - wall_start;
-        char eb[32]; snprintf(eb, sizeof(eb), "%.1fs", el);
+        char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         if (loaded) {
             printf("%9d  %7s", 0, "-");
             if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
@@ -1825,7 +1825,7 @@ static void run_monitor(void) {
         long agg = my_pos < 0 ? 0 : (long)cfg_workers * my_pos;
         double el = wall_now() - wall_start;
         double posps = el > 0 ? agg / el : 0;
-        char eb[32]; snprintf(eb, sizeof(eb), "%.1fs", el);
+        char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
         double dsum, psum; long dcnt, pcnt; char trbuf[24], tebuf[16];
@@ -1895,7 +1895,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     float mse = tr.mse;
     double elapsed_s = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     char elapsed_buf[32];
-    snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fs", elapsed_s);
+    snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fm", elapsed_s / 60.0);
 
     double train_s = elapsed_s - cumulative_test_s;
     double pos_ms = total_positions > 0 ? 1000.0 * train_s / total_positions : 0;
@@ -2227,7 +2227,7 @@ int main(int argc, char **argv) {
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
-    printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedS", "posMs", "pos/s");
+    printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
     }
 
