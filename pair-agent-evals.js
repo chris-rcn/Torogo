@@ -2,19 +2,18 @@
 
 // pair-agent-evals.js — paired comparison of evalagentvalues --verbose logs.
 //
-//   node pair-agent-evals.js <control.log> <arm.log> [<arm.log> ...]
+//   node pair-agent-evals.js <arm.log> <arm.log> [<arm.log> ...]
 //
 // Every log must come from the SAME position file in the same order (the
 // sweep scripts snapshot the eval file, so this holds).  For each arm we
-// compute, per position i, the difference of squared errors against the
-// control, d(i) = errArm(i)^2 - errCtl(i)^2, and report mean(d) with its
-// standard error and z.  Both arms score the identical position with the
-// same label, so the per-position difficulty that dominates a pooled RMS
-// cancels in d — the paired read resolves arm effects an order of magnitude
-// below the pooled comparison, from the same runs.  mean(d) < 0 means the
-// arm is MORE accurate than the control.  (Pairing fixes resolution, not
-// label bias: d = (vA-vB)(vA+vB-2L), so the label still referees per-position
-// disagreements.)
+// compute, per position i, the difference of its squared error against the
+// LEAVE-ONE-OUT mean of the other arms' squared errors, and report mean(d)
+// with its standard error and z.  All arms score the identical position with
+// the same label, so the per-position difficulty that dominates a pooled RMS
+// cancels in the pair, and the leave-one-out reference keeps any single
+// run's private noise out of the comparison.  mean(d) < 0 means the arm is
+// MORE accurate than the rest of the sweep.  (Pairing fixes resolution, not
+// label bias — the label still referees per-position disagreements.)
 
 const fs = require('fs');
 
@@ -38,12 +37,11 @@ function row(label, st) {
   console.log(`${label.padEnd(38)} ${String(st.n).padStart(4)}  ${st.mean.toExponential(3).padStart(10)}  ${st.se.toExponential(2).padStart(8)}  ${(st.mean / st.se).toFixed(2).padStart(6)}`);
 }
 
-const [ctlPath, ...armPaths] = process.argv.slice(2);
-if (!ctlPath || armPaths.length === 0) {
-  console.error('usage: node pair-agent-evals.js <control.log> <arm.log> [...]');
+const paths = process.argv.slice(2);
+if (paths.length < 2) {
+  console.error('usage: node pair-agent-evals.js <arm.log> <arm.log> [...]');
   process.exit(1);
 }
-const paths = [ctlPath, ...armPaths];
 const errs = paths.map(loadErrs);
 
 // Positions every log has — the common paired set.
@@ -53,15 +51,9 @@ for (let i = 0; i < nPos; i++) if (errs.every(e => e[i] !== undefined)) common.p
 const sq = errs.map(e => common.map(i => e[i] * e[i]));
 const K = paths.length;
 
-// Table 1 — the decision contrast: each arm vs the designated control.
-console.log(`control: ${ctlPath} (${common.length} paired positions, ${K} logs)`);
-console.log('vs CONTROL                               n     mean(d)        SE       z');
-for (let k = 1; k < K; k++)
-  row(paths[k], stats(common.map((_, i) => sq[k][i] - sq[0][i])));
-
-// Table 2 — curve shape: each log (control included) vs the leave-one-out
-// mean of the others, removing any single run's private noise from the
-// reference.  mean(d) < 0 = more accurate than the rest of the sweep.
+// Each log vs the leave-one-out mean of the others: the reference carries
+// no single run's private noise.  mean(d) < 0 = more accurate than the rest.
+console.log(`${common.length} paired positions, ${K} logs`);
 console.log('vs LEAVE-ONE-OUT MEAN                    n     mean(d)        SE       z');
 const tot = common.map((_, i) => sq.reduce((a, s2) => a + s2[i], 0));
 for (let k = 0; k < K; k++)
