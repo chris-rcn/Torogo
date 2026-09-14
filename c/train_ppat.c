@@ -2233,7 +2233,7 @@ int main(int argc, char **argv) {
      * done by a separate --monitor process so the training workers never stall on the
      * barrier; worker 0 just saves the averaged checkpoint after each sync. */
     /* Who owns testing?  A monitor does it whenever one exists, and one exists
-     * exactly when we were launched by train-ppat-parallel.sh — which always passes
+     * exactly when we were launched by train-ppat-parallel — which always passes
      * --sync-dir.  Keying this off the worker count instead used to make
      * --workers 1 a special case: the trainer believed it was standalone and ran
      * its own (expensive, silenced) test pass while the monitor tested the same

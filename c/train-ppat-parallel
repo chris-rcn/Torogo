@@ -17,7 +17,7 @@
 set -e
 # Locate the binary by absolute path but keep the caller's cwd, so relative
 # data/output paths (e.g. out/evals-s9-500k.txt, out/ppat-data-*.js) resolve.
-BIN="$(cd "$(dirname "$0")" && pwd)/train_ppat.bin"
+BIN="$(cd "$(dirname "$0")" && pwd)/train-ppat"
 
 # Usage text is the header comment above, so the two cannot drift apart.
 usage() {
