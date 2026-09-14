@@ -88,11 +88,6 @@
  *                           The block is APPENDED, so --load of a model without
  *                           it fine-tunes (old weights keep their indices, the
  *                           new ones start at zero).
- *     --self-atari          graded self-atari feature: a gated key when the
- *                           candidate leaves its own group in atari, one-hot
- *                           on min(group size, 4) — size 1 (throw-ins,
- *                           snapbacks) can learn a different sign than 4+.
- *                           Appended block; existing models fine-tune in
  *     --twelvecell2         the same key on a LOOSER trigger: the four ADJACENT
  *                           points empty, whatever the diagonals hold.  Fires
  *                           strictly more often.  Mutually exclusive with
@@ -1945,7 +1940,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--self-atari] [--no-local] [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
         fprintf(stderr, "       [--phase-compensation-buckets <n>] [--match-phases A,B]\n");
@@ -2082,7 +2077,6 @@ int main(int argc, char **argv) {
         exit(1);
     }
     ppat_twelvecell = t12_2 ? 2 : t12_1 ? 1 : 0;
-    ppat_self_atari = has_flag(argc, argv, "--self-atari") != 0;
     check_unknown_args(argc, argv);
     ppat_init(cfg_lib_cap);
 

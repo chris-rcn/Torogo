@@ -83,7 +83,7 @@ void     ppat_init(int lib_cap);
  * almost always a blunder, so the grades let training find the sign flip.
  * Appended after the twelvecell block, so existing models fine-tune in. */
 #define PPAT_SA_N 4
-extern int ppat_self_atari;            /* 0/1, from --self-atari */
+extern int ppat_self_atari;            /* always 1 — the feature proved out and is unconditional */
 extern int ppat_file_self_atari;       /* what the last loaded file carried */
 
 #define PPAT_T12_RAW       81

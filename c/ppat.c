@@ -17,7 +17,7 @@ const int32_t *ppat_canon_id = NULL;
  * usual lossy shortcut: the feature fires only when the inner ninecell is
  * all-empty, and that inner pattern is fixed by every element of D4, so any
  * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
-int ppat_self_atari = 0;
+int ppat_self_atari = 1;
 int ppat_file_self_atari = 0;          /* set by ppat_load_weights from the file */
 int ppat_twelvecell = 0;
 int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
