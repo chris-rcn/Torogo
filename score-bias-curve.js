@@ -129,6 +129,6 @@ if (FIT) {
   const a = my - slope * mx;
   let maxResid = 0;
   for (const c of pts) maxResid = Math.max(maxResid, Math.abs(c.y - (a + slope * c.x)));
-  console.log(`fit [${FIT[0]}, ${FIT[1]}] (${pts.length} bins, n-weighted): ` +
-    `TRUNC_VALUE_OFFSET=${a.toFixed(3)},${slope.toFixed(3)}  maxResid: ${maxResid.toFixed(4)}`);
+  console.log(`fit [${FIT[0]}, ${FIT[1]}] (${pts.length} bins, n-weighted)  maxResid: ${maxResid.toFixed(4)}`);
+  console.log(`TRUNC_VALUE_OFFSET=${a.toFixed(3)},${slope.toFixed(3)}`);
 }
