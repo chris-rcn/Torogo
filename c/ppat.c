@@ -17,6 +17,8 @@ const int32_t *ppat_canon_id = NULL;
  * usual lossy shortcut: the feature fires only when the inner ninecell is
  * all-empty, and that inner pattern is fixed by every element of D4, so any
  * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
+int ppat_self_atari = 0;
+int ppat_file_self_atari = 0;          /* set by ppat_load_weights from the file */
 int ppat_twelvecell = 0;
 int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
 static int32_t t12_table[PPAT_T12_RAW];
@@ -367,6 +369,68 @@ static bool not_self_atari_cheap(int32_t idx, int b4, const Game2 *g,
     return false;
 }
 
+/* Exact self-atari size for the LEGAL candidate idx (colour cur): 0 when the
+ * placed group would keep >= 2 liberties, else its merged stone count.  The
+ * cheap bound clears most candidates; the exact path ORs the joined chains'
+ * liberty bitsets and credits capture-freed points, so snapbacks label
+ * correctly as size-1 self-atari. */
+static uint32_t sa_lib[MAX_BW];
+static int self_atari_size(const Game2 *g, int32_t idx, int b4, int8_t cur) {
+    if (not_self_atari_cheap(idx, b4, g, cur)) return 0;
+    const int W = g->W;
+    int16_t fr[4];  int nfr = 0;
+    int16_t capg[4]; int ncap = 0;
+    memset(sa_lib, 0, (size_t)W * sizeof(uint32_t));
+    for (int d = 0; d < 4; d++) {
+        const int32_t ni = g2_nbr[b4 + d];
+        const int8_t c = g->cells[ni];
+        if (c == EMPTY) { sa_lib[ni >> 5] |= 1u << (ni & 31); continue; }
+        const int16_t gid = g->gid[ni];
+        if (c == cur) {
+            int dup = 0;
+            for (int k = 0; k < nfr; k++) dup |= (fr[k] == gid);
+            if (!dup) fr[nfr++] = gid;
+        } else if (g->ls[gid] == 1) {
+            /* adjacent enemy in atari: its lone liberty is idx, so it dies */
+            int dup = 0;
+            for (int k = 0; k < ncap; k++) dup |= (capg[k] == gid);
+            if (!dup) capg[ncap++] = gid;
+        }
+    }
+    int size = 1;
+    for (int k = 0; k < nfr; k++) {
+        const uint32_t *lw = &g->lw[(int)fr[k] * W];
+        for (int w = 0; w < W; w++) sa_lib[w] |= lw[w];
+        size += g->ss[fr[k]];
+    }
+    sa_lib[idx >> 5] &= ~(1u << (idx & 31));
+    /* Capture-freed points: a captured stone is a liberty of the merged group
+     * iff adjacent to it (the placed stone or a joined chain). */
+    for (int k = 0; k < ncap; k++) {
+        const uint32_t *sw = &g->sw[(int)capg[k] * W];
+        for (int w = 0; w < W; w++) {
+            uint32_t bits = sw[w];
+            while (bits) {
+                const int p = (w << 5) + __builtin_ctz(bits);
+                bits &= bits - 1;
+                for (int d = 0; d < 4; d++) {
+                    const int32_t np = g2_nbr[p * 4 + d];
+                    if (np == idx) { sa_lib[p >> 5] |= 1u << (p & 31); break; }
+                    if (g->cells[np] == cur) {
+                        const int16_t ng = g->gid[np];
+                        int adj = 0;
+                        for (int k2 = 0; k2 < nfr; k2++) adj |= (fr[k2] == ng);
+                        if (adj) { sa_lib[p >> 5] |= 1u << (p & 31); break; }
+                    }
+                }
+            }
+        }
+    }
+    int libs = 0;
+    for (int w = 0; w < W && libs < 2; w++) libs += __builtin_popcount(sa_lib[w]);
+    return libs >= 2 ? 0 : size;
+}
+
 /* ── Extract features ──────────────────────────────────────────────────────── */
 
 void ppat_extract(const Game2 *g, PpatState *st) {
@@ -380,6 +444,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int pat_offset = phase * ppat_num_patterns;
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
     const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * ppat_t12_block();
+    const int sa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block()) + phase * PPAT_SA_N;
 
     /* The 7 hand-coded previous-move features are disabled — both the
      * emission AND the pre-scan/mask work that feeds it.  A/B at equal time
@@ -566,6 +631,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             }
         }
 
+        if (ppat_self_atari) {
+            const int sa = self_atari_size(g, idx, b4, cur);
+            if (sa > 0)
+                st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
+        }
+
         /* Previous-move features disabled — see the note at the pre-scan
          * above. */
 //        /* ── Previous-move features ───────────────────────────────────────── */
@@ -732,11 +803,12 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s };\n",
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s };\n",
             ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
             early_pass ? "true" : "false", pass_weight,
             ppat_twelvecell == 1 ? "true" : "false",
-            ppat_twelvecell == 2 ? "true" : "false");
+            ppat_twelvecell == 2 ? "true" : "false",
+            ppat_self_atari ? "true" : "false");
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -802,6 +874,7 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
      * the appended layout buys). */
     ppat_file_twelvecell = strstr(buf, "twelvecell2: true") != NULL ? 2
                          : strstr(buf, "twelvecell: true")  != NULL ? 1 : 0;
+    ppat_file_self_atari = strstr(buf, "selfAtari: true") != NULL;
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
 

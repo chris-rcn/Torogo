@@ -51,7 +51,7 @@ extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_mov
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
 /* Max features per candidate: 1 pattern + 7 prev-move + 1 twelvecell */
-#define PPAT_MAX_FEAT 9
+#define PPAT_MAX_FEAT 10
 
 /* ── Feature state (reusable across calls) ─────────────────────────────────── */
 typedef struct {
@@ -77,6 +77,15 @@ void     ppat_init(int lib_cap);
  * the ninecell key and its block is APPENDED after the pattern and local
  * blocks, so every pre-extension weight index keeps its meaning and an old
  * model fine-tunes into the extension with its weights untouched. */
+/* Graded self-atari: when a LEGAL candidate would leave its own group in
+ * atari, one gated feature fires, one-hot on min(group size, PPAT_SA_N) —
+ * size-1 self-atari (throw-ins, snapbacks) is often correct while 3+ is
+ * almost always a blunder, so the grades let training find the sign flip.
+ * Appended after the twelvecell block, so existing models fine-tune in. */
+#define PPAT_SA_N 3
+extern int ppat_self_atari;            /* 0/1, from --self-atari */
+extern int ppat_file_self_atari;       /* what the last loaded file carried */
+
 #define PPAT_T12_RAW       81
 #define PPAT_T12_PATTERNS  21    /* mode 1: arms alone, exact (inner all-empty) */
 #define PPAT_T12B_RAW    6561
@@ -97,7 +106,8 @@ static inline int ppat_t12_block(void) {
  * block when enabled. */
 static inline int ppat_total_weights(void) {
     return ppat_phase_count * (ppat_num_patterns + 7) +
-           ppat_phase_count * ppat_t12_block();
+           ppat_phase_count * ppat_t12_block() +
+           (ppat_self_atari ? ppat_phase_count * PPAT_SA_N : 0);
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */
