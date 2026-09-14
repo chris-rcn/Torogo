@@ -1661,55 +1661,8 @@ static void match_cols(char *dw, size_t dwn) {
     if (!match_truncated) match_scale *= MATCH_GROWTH;
 }
 
-/* Short names for the 7 prev-move features (≤6 chars to align with %6.2f). */
-static const char *PREV_FEAT_NAMES[7] = {
-    "contig", "savcap", "cap+sa", "extend", "ext+sa", "ko", "semeai"
-};
 
-/* Print one phase's 7 exp'd prev-move feature multipliers as "[ ... ]". */
-static void print_phase_weights(int p) {
-    int pb = ppat_phase_count * ppat_num_patterns + p * 7;
-    printf("[ ");
-    for (int i = 0; i < 7; i++) printf("%6.2f ", expf(theta[pb + i]));
-    printf("]");
-}
 
-/* Print the exp'd prev-move feature multipliers from theta, as a suffix.
- * Single phase (--phase P, or phaseCount 1): that phase's vector.
- * Multiple phases trained together: first and last phase, to show divergence.
- * Shared by the solo print_stats and the parallel monitor. */
-static void print_weights(void) {
-    printf("  ");
-    if (cfg_phase >= 0) {
-        print_phase_weights(cfg_phase);
-    } else if (ppat_phase_count <= 1) {
-        print_phase_weights(0);
-    } else {
-        printf("p0 ");                          print_phase_weights(0);
-        printf("  p%d ", ppat_phase_count - 1);  print_phase_weights(ppat_phase_count - 1);
-    }
-}
-
-/* Print the prev-move feature-name header aligned under one phase's "[ ... ]". */
-static void print_phase_header(void) {
-    printf("[ ");
-    for (int i = 0; i < 7; i++) printf("%6s ", PREV_FEAT_NAMES[i]);
-    printf("]");
-}
-
-/* Header counterpart of print_weights: same layout, feature names instead of
- * values, so the column titles sit over the right brackets. */
-static void print_weights_header(void) {
-    printf("  ");
-    if (cfg_phase >= 0) {
-        print_phase_header();
-    } else if (ppat_phase_count <= 1) {
-        print_phase_header();
-    } else {
-        printf("p0 ");                          print_phase_header();
-        printf("  p%d ", ppat_phase_count - 1);  print_phase_header();
-    }
-}
 
 /* Dedicated monitor: repeatedly load the latest checkpoint and test it, printing
  * the metrics — without training or touching the sync barrier, so the training
@@ -1729,7 +1682,6 @@ static void run_monitor(void) {
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
     printf("  %8s  %7s", "elapsedS", "pos/s");
-    print_weights_header();
     printf("\n");
     fflush(stdout);
     ppat_load_quiet = 1;   /* suppress the per-cycle "loaded N weights" noise */
@@ -1756,7 +1708,6 @@ static void run_monitor(void) {
             printf("  %6d  %7s  %6s  %6s", live_weights(), "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             printf("  %8s  %7s", eb, "-");
-            print_weights();
             printf("\n");
         } else {
             printf("%9d  %7s", 0, "-");
@@ -1859,7 +1810,6 @@ static void run_monitor(void) {
                MON_PASS1(cfg_monitor), 100.0 * live_death_ratio());
         if (ref_theta) printf("  %8s", dwbuf);
         printf("  %8s  %7.0f", eb, posps);
-        print_weights();
         printf("\n");
         if (is_best) {
             char bc[256];
@@ -1886,7 +1836,7 @@ static void run_monitor(void) {
 
 /* ── Print stats ───────────────────────────────────────────────────────────── */
 
-static void print_stats(int iterations, int total_positions, int use_uniform, int show_weights,
+static void print_stats(int iterations, int total_positions, int use_uniform,
                         int test_cap, int run_tests) {
     /* Everything below reads the global theta — the test rollouts, both match
      * columns, live_weights(), and the printed feature vector.  Point it at the
@@ -1946,7 +1896,6 @@ static void print_stats(int iterations, int total_positions, int use_uniform, in
     if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.0f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
-    if (show_weights) print_weights();
     printf("\n");
     fflush(stdout);
 
@@ -2233,7 +2182,6 @@ int main(int argc, char **argv) {
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedS", "posMs", "pos/s");
-    print_weights_header();
     printf("\n");
     }
 
@@ -2266,7 +2214,7 @@ int main(int argc, char **argv) {
      * loaded model's actual test + weights.  --baseline-only stops here. */
     if (do_inline || baseline_only) {
         /* The baseline always tests: it is where the cost of a test is measured. */
-        print_stats(iterations, total_positions, cfg_load ? 0 : 1, cfg_load ? 1 : 0, n_test, 1);
+        print_stats(iterations, total_positions, cfg_load ? 0 : 1, n_test, 1);
         cycle_t0 = wall_now();
         if (baseline_only) return 0;
     }
@@ -2286,7 +2234,7 @@ int main(int argc, char **argv) {
                 if (run_tests) testing_started = 1;
                 /* Always test the FULL --test-pos set: rows (and the best-* star)
                  * stay statistically comparable. */
-                print_stats(iterations, total_positions, 0, 1, 0, run_tests);
+                print_stats(iterations, total_positions, 0, 0, run_tests);
                 next_print_pos = (long)(next_print_pos * PRINT_POS_GROWTH) + 1;
                 cycle_t0 = wall_now();
             }
@@ -2328,7 +2276,7 @@ int main(int argc, char **argv) {
         shuffle_train();
 
         if (cfg_iter_limit > 0 && iterations >= cfg_iter_limit) {
-            if (do_inline) print_stats(iterations, total_positions, 0, 1, 0, 1);
+            if (do_inline) print_stats(iterations, total_positions, 0, 0, 1);
             break;
         }
     }
