@@ -212,6 +212,10 @@ static int32_t vp_lN[MAX_CAP], vp_lI[MAX_CAP];
 static int32_t vp_h2N[MAX_CAP], vp_h2I[MAX_CAP];
 
 double vpat_evaluate(const Game2 *g) {
+    return 1.0 / (1.0 + exp(-vpat_evaluate_z(g)));
+}
+
+double vpat_evaluate_z(const Game2 *g) {
     const int N = g->N, area = N * N;
     const int8_t *cells = g->cells;
     double z = 0.0;
@@ -292,5 +296,5 @@ double vpat_evaluate(const Game2 *g) {
             }
         }
     }
-    return 1.0 / (1.0 + exp(-z));
+    return z;
 }

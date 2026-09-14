@@ -808,10 +808,14 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
             const float area = (float)(sim.N * sim.N);
             const float ph = 1.0f - (float)sim.empty_count / area;
             if (ph <= cfg_trunc_max_phase) {
-                /* Evaluate here: v = P(BLACK wins), offset-corrected at the
-                 * eval phase, mapped to the rollout's [-1, 1] convention. */
-                float v = (float)vpat_evaluate(&sim) + cfg_trunc_off_a + cfg_trunc_off_b * ph;
-                if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+                /* Evaluate here.  The offset is applied exactly as deployment
+                 * does (puct-ppat-fp-trunc): SUBTRACTED in logit space scaled
+                 * by 4 (the sigmoid slope at 1/2), v = sigma(z - 4*(a+b*ph)) —
+                 * so fitted TRUNC_VALUE_OFFSET pairs transfer verbatim.  Then
+                 * mapped to the rollout's [-1, 1] convention. */
+                const double zv = vpat_evaluate_z(&sim)
+                                - 4.0 * (double)(cfg_trunc_off_a + cfg_trunc_off_b * ph);
+                float v = (float)(1.0 / (1.0 + exp(-zv)));
                 if (player != BLACK) v = 1.0f - v;
                 if (out_steps) *out_steps = steps;
                 return 2.0f * v - 1.0f;
