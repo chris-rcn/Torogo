@@ -41,9 +41,10 @@
  *                           pressure is uniform by phase (default 0 = off).
  *                           Buckets track applied WEIGHT (1/(N*T) per counted
  *                           step, pre-compensation); correction shrinks toward
- *                           1 on thin evidence and normalizes to mean 1 over
- *                           occupied buckets, so the effective lr keeps its
- *                           meaning.  Without it, pressure by phase is an
+ *                           1 on thin evidence and normalizes so the
+ *                           pressure-weighted mean is 1 (total applied
+ *                           throughput conserved), so the effective lr keeps
+ *                           its meaning.  Without it, pressure by phase is an
  *                           artifact of corpus geometry (a mouth corpus ramps
  *                           across its band then plateaus to the game-end
  *                           taper; truncation reshapes it again)
@@ -239,12 +240,18 @@ static void pc_refresh(void) {
         return;
     }
     const double wbar = total / occ, eps = wbar / PC_SHRINK;
-    double csum = 0;
+    /* Normalize so the PRESSURE-WEIGHTED mean of the correction is 1
+     * (sum w*c = sum w): total applied gradient throughput is conserved and
+     * only its distribution changes.  An unweighted mean-1 normalization
+     * deflates globally — c and w are inversely related, so the heavy
+     * buckets' sub-1 factors dominate the applied product (observed live as
+     * avgW growing much slower with compensation on). */
+    double wcsum = 0;
     for (int b = 0; b < cfg_pc_buckets; b++) {
         pc_c[b] = (float)(wbar / (pc_w[b] + eps));
-        if (pc_w[b] > 0) csum += pc_c[b];
+        wcsum += pc_w[b] * pc_c[b];
     }
-    const float norm = (float)(occ / csum);
+    const float norm = (float)(total / wcsum);
     for (int b = 0; b < cfg_pc_buckets; b++) pc_c[b] *= norm;
 }
 static int    cfg_worker_id;
