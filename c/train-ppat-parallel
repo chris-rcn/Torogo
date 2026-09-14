@@ -1,9 +1,9 @@
 #!/bin/sh
-# train-ppat-parallel.sh — launch K train_ppat workers that parameter-average θ,
+# train-ppat-parallel — launch K train-ppat workers that parameter-average θ,
 # plus one dedicated monitor that tests the averaged checkpoint without stalling
 # the trainers.
 #
-#   ./train-ppat-parallel.sh <K> <data> [extra train_ppat args...]
+#   ./train-ppat-parallel <K> <data> [extra train-ppat args...]
 #
 # The K trainers run silently in the background; every --sync-every positions they
 # file-barrier all-reduce (mean) their weights, and worker 0 writes the averaged
@@ -12,7 +12,7 @@
 # off the training critical path, the trainers never wait on it.
 #
 # Example (10 trainers, sync every 2000 positions):
-#   ./train-ppat-parallel.sh 10 out/evals-s9-500k.txt --M 100 --N 100 --lr 5 \
+#   ./train-ppat-parallel 10 out/evals-s9-500k.txt --M 100 --N 100 --lr 5 \
 #       --train-pos 24000 --test-pos 2000 --sync-every 2000
 set -e
 # Locate the binary by absolute path but keep the caller's cwd, so relative
@@ -28,7 +28,7 @@ case "${1:-}" in
     -h|--help) usage 0 ;;
 esac
 if [ $# -lt 2 ]; then
-    echo "train-ppat-parallel.sh: need <K> and <data>" >&2
+    echo "train-ppat-parallel: need <K> and <data>" >&2
     echo >&2
     usage 1 >&2
 fi
@@ -48,11 +48,11 @@ done
 if [ -n "$TRAIN_POS" ]; then
     TP_MSG="train-pos (total, split across workers): $TRAIN_POS"
 else
-    TP_MSG="train-pos (total): (train_ppat default = all after test head)"
+    TP_MSG="train-pos (total): (train-ppat default = all after test head)"
 fi
 
 # The trainers' stdout goes to /dev/null (the monitor owns the terminal), so a
-# seed chosen inside train_ppat would never be seen.  Choose it here instead, so
+# seed chosen inside train-ppat would never be seen.  Choose it here instead, so
 # a single-worker run can be replayed.  Honour an explicit --seed in the passed
 # args rather than overriding it.
 SEED=""; prev=""
