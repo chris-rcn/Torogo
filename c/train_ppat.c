@@ -18,6 +18,24 @@
  *     --playouts <n>        default for --M, --N, and --test-playouts (default 500)
  *     --M <n>               rollouts for V estimate (default --playouts)
  *     --N <n>               rollouts for gradient (default M)
+ *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
+ *                           moves, if the phase there is <= --trunc-max-phase
+ *                           (default 0.55, the deployed gate) the rollout stops
+ *                           and z becomes this vpat evaluator's offset-corrected
+ *                           value; a cut past the gate runs full as before.
+ *                           Makes an early band mouth affordable: playout cost
+ *                           becomes delta*area moves + one eval, flat in the
+ *                           mouth's phase, with the evaluator confined to the
+ *                           band deployment already trusts.  Applies to train
+ *                           AND test rollouts (same estimator; directWR, the
+ *                           primary readout, is match-based and unaffected).
+ *     --trunc-delta <f>     the cut distance, in phase units (moves-method:
+ *                           ceil(delta * area) moves past the start); required
+ *                           with --trunc-vpat
+ *     --trunc-max-phase <f> the gate B (default 0.55)
+ *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase;
+ *                           REQUIRED with --trunc-vpat — offsets are per
+ *                           (model, delta, band) and never transfer
  *     --batch <n>           batch size (default 10)
  *     --test-pos <n>        test positions (default 0 = no teMSE test).  The match
  *                           columns are the primary readout now; a test set costs
@@ -95,6 +113,7 @@
  */
 #include "game2.h"
 #include "ppat.h"
+#include "vpat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -167,6 +186,18 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
 /* Parameter-averaging across processes: K workers each run batch-1 SB with their
  * own seed; every --sync-every positions they file-barrier all-reduce (average) θ. */
 static int    cfg_workers;
+
+/* Truncated training rollouts (--trunc-vpat + friends): after ceil(delta *
+ * area) moves, if the phase there is <= trunc-max-phase the rollout stops and
+ * z becomes the offset-corrected vpat value — the same estimator deployment
+ * trusts, gated to the same band (the evaluator is never consulted past B; a
+ * rollout whose cut overshoots the gate just runs to the end as before).
+ * Offsets are per (model, delta, band) and never transfer, so --trunc-offset
+ * is REQUIRED with --trunc-vpat. */
+static int    cfg_trunc_on;
+static float  cfg_trunc_delta;
+static float  cfg_trunc_max_phase;
+static float  cfg_trunc_off_a, cfg_trunc_off_b;
 static int    cfg_worker_id;
 static int    cfg_sync_every;          /* 0 = no sync (single process) */
 static const char *cfg_sync_dir;
@@ -762,14 +793,31 @@ static int policy_select(Game2 *g) {
  * (board phase == cfg_phase) when a single phase is masked — i.e. T_P, matching
  * the steps whose ψ survives mask_to_phase. */
 
-static int rollout(const Game2 *game, int8_t player, float *grad_acc, int *out_steps) {
+static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out_steps) {
     Game2 sim;
     g2_clone(&sim, game);
     int steps = 0;
 
+    /* Truncation cut, in MOVES past the start (the deployed moves-method). */
+    const int cut_steps = cfg_trunc_on ? (int)ceilf(cfg_trunc_delta * (float)(sim.N * sim.N)) : -1;
+
     int passed_yet = 0, rejected_pass = 0, reject_first = 0;
     if (RUN_EARLY_PASS && rng_float(&g_rng) < PASS_REJECT_RATE) reject_first = 1;
     for (int step = 0; !sim.game_over; step++) {
+        if (step == cut_steps) {
+            const float area = (float)(sim.N * sim.N);
+            const float ph = 1.0f - (float)sim.empty_count / area;
+            if (ph <= cfg_trunc_max_phase) {
+                /* Evaluate here: v = P(BLACK wins), offset-corrected at the
+                 * eval phase, mapped to the rollout's [-1, 1] convention. */
+                float v = (float)vpat_evaluate(&sim) + cfg_trunc_off_a + cfg_trunc_off_b * ph;
+                if (v < 0.0f) v = 0.0f; else if (v > 1.0f) v = 1.0f;
+                if (player != BLACK) v = 1.0f - v;
+                if (out_steps) *out_steps = steps;
+                return 2.0f * v - 1.0f;
+            }
+            /* Cut overshot the gate: run the rollout to the end as usual. */
+        }
         int chosen = policy_select(&sim);
         if (chosen == PICK_NO_MOVES) {
             /* Nothing to choose between — no decision, so no gradient. */
@@ -857,7 +905,7 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int *out_s
     }
 
     if (out_steps) *out_steps = steps;
-    return g2_estimate_winner(&sim) == player ? 1 : -1;
+    return g2_estimate_winner(&sim) == player ? 1.0f : -1.0f;
 }
 
 /* ── Core update (Algorithm 1) ─────────────────────────────────────────────── */
@@ -900,9 +948,9 @@ static void update_theta(const Game2 *game, float v_star) {
     for (int j = 0; j < N; j++) {
         memset(rollout_grad_buf, 0, sizeof(float) * TOTAL);
         int T = 0;
-        int z = rollout(game, player, rollout_grad_buf, &T);
+        float z = rollout(game, player, rollout_grad_buf, &T);
         if (T > 0) {
-            float scale = (float)z / ((float)N * (float)T);
+            float scale = z / ((float)N * (float)T);
             for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
         }
     }
@@ -1840,6 +1888,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
+        fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
         return 1;
     }
 
@@ -1869,6 +1918,28 @@ int main(int argc, char **argv) {
     /* Presence of --init-phase-scale enables seeding phase P from phase P+1. */
     int cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
     float cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
+    {
+        const char *tv = get_str_arg(argc, argv, "--trunc-vpat", NULL);
+        cfg_trunc_delta     = get_float_arg(argc, argv, "--trunc-delta", 0.0f);
+        cfg_trunc_max_phase = get_float_arg(argc, argv, "--trunc-max-phase", 0.55f);
+        const char *toff = get_str_arg(argc, argv, "--trunc-offset", NULL);
+        if (tv) {
+            if (cfg_trunc_delta <= 0.0f) {
+                fprintf(stderr, "error: --trunc-vpat requires --trunc-delta > 0\n");
+                exit(1);
+            }
+            if (!toff || sscanf(toff, "%f,%f", &cfg_trunc_off_a, &cfg_trunc_off_b) != 2) {
+                fprintf(stderr, "error: --trunc-vpat requires --trunc-offset a,b — offsets are per "
+                                "(model, delta, band) and never transfer, so there is no default\n");
+                exit(1);
+            }
+            vpat_load(tv);
+            cfg_trunc_on = 1;
+        } else if (cfg_trunc_delta != 0.0f || toff || has_flag(argc, argv, "--trunc-max-phase")) {
+            fprintf(stderr, "error: --trunc-delta/--trunc-offset/--trunc-max-phase need --trunc-vpat\n");
+            exit(1);
+        }
+    }
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
     /* 30, not 100: rounds are pure approximation error (each worker's later
@@ -2037,6 +2108,10 @@ int main(int argc, char **argv) {
            cfg_file, n_train_total, n_train, cfg_workers, lrbuf, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_no_extreme,
            ppat_phase_count, cfg_phase, scalebuf);
+    if (cfg_trunc_on)
+        printf("trunc: vpat %s  delta: %g  max-phase: %g  offset: %g,%g\n",
+               get_str_arg(argc, argv, "--trunc-vpat", ""), (double)cfg_trunc_delta,
+               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
     /* libCap fixes the pattern table size; how many of those weights are
      * actually reached is the nWts column, not something knowable up front. */
     printf("model: libCap %d  pattern table: %d%s\n", ppat_lib_cap, ppat_num_patterns,
