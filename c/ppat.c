@@ -19,6 +19,8 @@ const int32_t *ppat_canon_id = NULL;
  * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
 int ppat_self_atari = 1;
 int ppat_file_self_atari = 0;          /* set by ppat_load_weights from the file */
+int ppat_atari_n = 0;
+int ppat_file_atari = 0;               /* set by ppat_load_weights from the file */
 int ppat_twelvecell = 0;
 int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
 static int32_t t12_table[PPAT_T12_RAW];
@@ -445,6 +447,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
     const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * ppat_t12_block();
     const int sa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block()) + phase * PPAT_SA_N;
+    const int at_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                               (ppat_self_atari ? PPAT_SA_N : 0)) + phase * ppat_atari_n;
 
     /* The 7 hand-coded previous-move features are disabled — both the
      * emission AND the pre-scan/mask work that feeds it.  A/B at equal time
@@ -637,6 +641,24 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                 st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
         }
 
+        /* Gives-atari: the largest adjacent enemy chain this move reduces to
+         * one liberty (an adjacent empty point is always one of its
+         * liberties, so ls == 2 is the exact condition). */
+        if (ppat_atari_n) {
+            int biggest = 0;
+            for (int d = 0; d < 4; d++) {
+                const int32_t ni = g2_nbr[b4 + d];
+                if (g->cells[ni] != cur && g->cells[ni] != EMPTY) {
+                    const int16_t eg = g->gid[ni];
+                    if (g->ls[eg] == 2 && g->ss[eg] > biggest) biggest = g->ss[eg];
+                }
+            }
+            if (biggest > 0) {
+                const int b = biggest < ppat_atari_n ? biggest : ppat_atari_n;
+                st->feat[nf++] = at_offset + b - 1;
+            }
+        }
+
         /* Previous-move features disabled — see the note at the pre-scan
          * above. */
 //        /* ── Previous-move features ───────────────────────────────────────── */
@@ -803,12 +825,12 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s };\n",
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s, atari: %d };\n",
             ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
             early_pass ? "true" : "false", pass_weight,
             ppat_twelvecell == 1 ? "true" : "false",
             ppat_twelvecell == 2 ? "true" : "false",
-            ppat_self_atari ? "true" : "false");
+            ppat_self_atari ? "true" : "false", ppat_atari_n);
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -875,6 +897,12 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
     ppat_file_twelvecell = strstr(buf, "twelvecell2: true") != NULL ? 2
                          : strstr(buf, "twelvecell: true")  != NULL ? 1 : 0;
     ppat_file_self_atari = strstr(buf, "selfAtari: true") != NULL;
+    {
+        /* case-sensitive: "selfAtari" carries a capital A, so this matches
+         * only the standalone field */
+        const char *at = strstr(buf, "atari: ");
+        ppat_file_atari = at ? atoi(at + 7) : 0;
+    }
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
 

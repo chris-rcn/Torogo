@@ -51,7 +51,7 @@ extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_mov
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
 /* Max features per candidate: 1 pattern + 7 prev-move + 1 twelvecell */
-#define PPAT_MAX_FEAT 10
+#define PPAT_MAX_FEAT 11
 
 /* ── Feature state (reusable across calls) ─────────────────────────────────── */
 typedef struct {
@@ -86,6 +86,16 @@ void     ppat_init(int lib_cap);
 extern int ppat_self_atari;            /* always 1 — the feature proved out and is unconditional */
 extern int ppat_file_self_atari;       /* what the last loaded file carried */
 
+/* Graded gives-atari (--atari N, 0 = off): when a candidate reduces an
+ * adjacent enemy chain to exactly one liberty, one gated key fires, one-hot
+ * on min(largest such chain's size, N).  The cap-2 pattern cannot see this
+ * at all — an enemy at two liberties codes the same as a safe one — so the
+ * feature supplies liberty resolution the ninecell structurally lacks.
+ * Appended after the self-atari block. */
+#define PPAT_ATARI_MAX 8
+extern int ppat_atari_n;               /* the grade count N, 0 = off */
+extern int ppat_file_atari;            /* what the last loaded file carried */
+
 #define PPAT_T12_RAW       81
 #define PPAT_T12_PATTERNS  21    /* mode 1: arms alone, exact (inner all-empty) */
 #define PPAT_T12B_RAW    6561
@@ -107,7 +117,8 @@ static inline int ppat_t12_block(void) {
 static inline int ppat_total_weights(void) {
     return ppat_phase_count * (ppat_num_patterns + 7) +
            ppat_phase_count * ppat_t12_block() +
-           (ppat_self_atari ? ppat_phase_count * PPAT_SA_N : 0);
+           (ppat_self_atari ? ppat_phase_count * PPAT_SA_N : 0) +
+           ppat_phase_count * ppat_atari_n;
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */
