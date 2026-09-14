@@ -329,7 +329,7 @@ function createState(N) {
   const cap = N * N;
   return {
     moves:          new Int32Array(cap),
-    feat:           new Int32Array(cap * 9),  // flat feature keys (1 pat + 7 prev + 1 twelvecell)
+    feat:           new Int32Array(cap * 10),  // flat feature keys (1 pat + 7 prev + 1 twelvecell + 1 self-atari)
     featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
     prevNeighborSet: new Uint8Array(cap),
     count:          0,
@@ -340,9 +340,92 @@ function createState(N) {
 // pre-extension weight index keeps its meaning and an old file loads unchanged.
 // The twelvecell block's size depends on the MODE (21 arms-only vs 954 joint),
 // so callers pass the mode rather than a boolean.
-function totalWeights(phaseCount, libCap = 2, t12mode = 0) {
+// Graded self-atari (the C twin's PPAT_SA_N): when a legal candidate would
+// leave its own group in atari, one gated key fires, one-hot on
+// min(merged size, SA_N) — size-1 self-atari (throw-ins, snapbacks) is often
+// correct while large is almost always a blunder, so the grades let training
+// find the sign flip.  Appended after the twelvecell block.
+const SA_N = 4;
+let _saLib = null;
+
+// Cheap bound: true = provably NOT self-atari (>= 2 liberties after placing).
+function _notSelfAtariCheap(game, idx, cur) {
+  const cells = game.cells, nbr = game._nbr, gid = game._gid, ls = game._ls,
+        lw = game._lw, W = game._W;
+  let free = 0;
+  const wi = idx >> 5, m = 1 << (idx & 31), b4 = idx * 4;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b4 + d], c = cells[ni];
+    if (c === 0) { if (++free >= 2) return true; }
+    else if (c === cur) { if (ls[gid[ni]] >= 3) return true; }
+    else {
+      const eg = gid[ni];
+      if (ls[eg] === 1 && (lw[eg * W + wi] & m) !== 0) { if (++free >= 2) return true; }
+    }
+  }
+  return false;
+}
+
+// Exact self-atari size for the LEGAL candidate idx: 0 when the placed group
+// would keep >= 2 liberties, else its merged stone count.  Mirrors the C
+// twin: OR the joined chains' liberty bitsets and credit capture-freed
+// points, so snapbacks label correctly as size-1 self-atari.
+function _selfAtariSize(game, idx, cur) {
+  if (_notSelfAtariCheap(game, idx, cur)) return 0;
+  const cells = game.cells, nbr = game._nbr, gid = game._gid, ls = game._ls,
+        lw = game._lw, sw = game._sw, ss = game._ss, W = game._W;
+  if (!_saLib || _saLib.length < W) _saLib = new Int32Array(W);
+  else _saLib.fill(0, 0, W);
+  const lib = _saLib, b4 = idx * 4;
+  const fr = [], capg = [];
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b4 + d], c = cells[ni];
+    if (c === 0) { lib[ni >> 5] |= 1 << (ni & 31); continue; }
+    const g = gid[ni];
+    if (c === cur) { if (!fr.includes(g)) fr.push(g); }
+    else if (ls[g] === 1) {
+      // adjacent enemy in atari: its lone liberty is idx, so it dies
+      if (!capg.includes(g)) capg.push(g);
+    }
+  }
+  let size = 1;
+  for (let k = 0; k < fr.length; k++) {
+    const base = fr[k] * W;
+    for (let w = 0; w < W; w++) lib[w] |= lw[base + w];
+    size += ss[fr[k]];
+  }
+  lib[idx >> 5] &= ~(1 << (idx & 31));
+  // Capture-freed points: a captured stone is a liberty of the merged group
+  // iff adjacent to it (the placed stone or a joined chain).
+  for (let k = 0; k < capg.length; k++) {
+    const base = capg[k] * W;
+    for (let w = 0; w < W; w++) {
+      let bits = sw[base + w];
+      while (bits !== 0) {
+        const p = (w << 5) + (31 - Math.clz32(bits & -bits));
+        bits &= bits - 1;
+        for (let d = 0; d < 4; d++) {
+          const np = nbr[p * 4 + d];
+          if (np === idx || (cells[np] === cur && fr.includes(gid[np]))) {
+            lib[p >> 5] |= 1 << (p & 31);
+            break;
+          }
+        }
+      }
+    }
+  }
+  let libs = 0;
+  for (let w = 0; w < W && libs < 2; w++) {
+    let bits = lib[w];
+    while (bits !== 0 && libs < 2) { bits &= bits - 1; libs++; }
+  }
+  return libs >= 2 ? 0 : size;
+}
+
+function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false) {
   return phaseCount * (_buildTables(libCap).numPatterns + 7) +
-         phaseCount * t12Block(t12mode | 0);
+         phaseCount * t12Block(t12mode | 0) +
+         (selfAtari ? phaseCount * SA_N : 0);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -362,7 +445,7 @@ function totalWeights(phaseCount, libCap = 2, t12mode = 0) {
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0) {
+function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0, selfAtari = false) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -386,6 +469,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const prevOffset = phaseCount * _NPAT + phase * 7;
   const _T12C = t12mode === 2 ? _T12B.canonId : _T12.canonId;
   const t12Offset = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
+  const saOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode)) + phase * SA_N;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -597,6 +681,11 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
       state.feat[nf++] = t12Offset + _T12C[t12];
     }
 
+    if (selfAtari) {
+      const sa = _selfAtariSize(game, idx, cur);
+      if (sa > 0) state.feat[nf++] = saOffset + (sa < SA_N ? sa : SA_N) - 1;
+    }
+
     // ── Previous-move features ────────────────────────────────────────────────
     let mask = 0;
     if (hasPrev && prevNeighborSet[idx]) mask = 1;
@@ -665,7 +754,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -711,7 +800,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -794,6 +883,7 @@ function loadWeights(pathOrObj) {
   // their gradients at zero forever.
   const phases = raw.phases || 1;
   const twelvecell = raw.twelvecell === true, twelvecell2 = raw.twelvecell2 === true;
+  const selfAtari = raw.selfAtari === true;
   if (twelvecell && twelvecell2) {
     console.error('ppat loadWeights: twelvecell and twelvecell2 are mutually exclusive');
     return null;
@@ -814,7 +904,7 @@ function loadWeights(pathOrObj) {
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
   return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
-           twelvecell, twelvecell2, t12mode,
+           twelvecell, twelvecell2, t12mode, selfAtari,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }
@@ -822,7 +912,7 @@ function loadWeights(pathOrObj) {
 const PPatterns = {
   createState, extractFeatures, evaluate, ppatMove,
   totalWeights, loadWeights,
-  NUM_PATTERNS, NUM_T12, NUM_T12B,
+  NUM_PATTERNS, NUM_T12, NUM_T12B, SA_N,
 };
 if (typeof module !== 'undefined') module.exports = PPatterns;
 else window.PPatterns = PPatterns;
