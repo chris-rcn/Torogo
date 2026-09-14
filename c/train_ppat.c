@@ -36,6 +36,13 @@
  *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase;
  *                           REQUIRED with --trunc-vpat — offsets are per
  *                           (model, delta, band) and never transfer
+ *     --ppatMinPhase <f>    directWR match: both sides play uniform below this
+ *                           fullness (default 0.6, the historical convention —
+ *                           rows are comparable only at the same setting).
+ *                           For truncation-band training, set it to the corpus
+ *                           band's bottom so the match exercises the trained
+ *                           band; keep it above 0 so fixed-seed openings stay
+ *                           theta-independent and consecutive rows pair
  *     --phase-compensation-buckets <n>
  *                           reweight per-step gradient credit so applied
  *                           pressure is uniform by phase (default 0 = off).
@@ -174,7 +181,9 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
 #define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp (~3s at size 10, ~3x that at 13) */
 #define MATCH_GROWTH       1.1   /* match effort grows this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */
-#define MATCH_UNIFORM_BELOW 0.6f /* both sides play uniform below this fullness, as the u6 rungs do */
+#define MIN_PPAT_PHASE 0.6f  /* directWR default: both sides uniform below this
+                              * fullness (the u6 rungs); --ppatMinPhase overrides */
+static float cfg_ppat_min_phase = MIN_PPAT_PHASE;
 #define DEPLOY_BOARD_SIZE   13   /* The size the policy is FIELDED at.  Both self-contained
                                   * instruments measure there whatever size the training data
                                   * is — directWR (its own games) and live% (its own uniform-
@@ -1548,13 +1557,17 @@ static void use_ref_model(void) { ppat_init(ref_lib_cap); ppat_phase_count = ref
  * CURRENT model's win rate.  A fixed seed each call, so a change in the column
  * reflects a change in the weights rather than match luck. */
 static float direct_match_wr(int games) {
-    /* Both players uniform below MATCH_UNIFORM_BELOW.  Two reasons: the training
-     * data is filtered to phase > 0.6, so below it the weights never saw a
-     * gradient and the play is off-distribution; and with the match seed fixed,
-     * theta-independent opening play means every row replays the SAME openings,
-     * pairing consecutive rows instead of redrawing the games each time. */
+    /* Both players uniform below cfg_ppat_min_phase (default MIN_PPAT_PHASE,
+     * 0.6 — the u6 rungs' convention).  Two reasons for a nonzero floor: play
+     * below the training band never saw a gradient and is off-distribution;
+     * and with the match seed fixed, theta-independent opening play means
+     * every row replays the SAME openings, pairing consecutive rows instead
+     * of redrawing the games each time.  Truncation-band training inverts the
+     * first reason — set --ppatMinPhase to the corpus band's bottom so the
+     * match exercises the trained band; rows are then comparable only to runs
+     * at the same setting. */
     const float saved_ubp = ppat_uniform_below_phase;
-    ppat_uniform_below_phase = MATCH_UNIFORM_BELOW;
+    ppat_uniform_below_phase = cfg_ppat_min_phase;
     /* Deployment-size board for the match; the training size's topology is
      * restored on exit for the other monitor instruments. */
     g2_init_topology(DEPLOY_BOARD_SIZE);
@@ -1924,7 +1937,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
-        fprintf(stderr, "       [--phase-compensation-buckets <n>]\n");
+        fprintf(stderr, "       [--phase-compensation-buckets <n>] [--ppatMinPhase <f>]\n");
         return 1;
     }
 
@@ -1976,6 +1989,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
     }
+    cfg_ppat_min_phase = get_float_arg(argc, argv, "--ppatMinPhase", MIN_PPAT_PHASE);
     cfg_pc_buckets = get_int_arg(argc, argv, "--phase-compensation-buckets", 0);
     if (cfg_pc_buckets != 0 && (cfg_pc_buckets < 2 || cfg_pc_buckets > PC_MAX_BUCKETS)) {
         fprintf(stderr, "error: --phase-compensation-buckets must be 0 (off) or 2..%d\n", PC_MAX_BUCKETS);
