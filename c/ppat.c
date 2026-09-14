@@ -462,6 +462,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     int32_t atari_gids[8];
     int n_atari = 0;
     int32_t atari_libs[8];  /* single liberty for each atari group */
+    int32_t two_lib_gids[8];
+    int n_two = 0;          /* friendly 2-liberty strings adjacent to prev (semeai) */
     if (has_prev) {
         int pb4 = prev * 4;
         for (int d = 0; d < 4; d++) {
@@ -473,6 +475,10 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                 bool dup = false;
                 for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
                 if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
+            } else if (g->ls[gid] == 2) {
+                bool dup = false;
+                for (int j = 0; j < n_two; j++) if (two_lib_gids[j] == gid) { dup = true; break; }
+                if (!dup && n_two < 8) two_lib_gids[n_two++] = gid;
             }
         }
         for (int i = 0; i < n_atari; i++)
@@ -484,6 +490,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     int n_sbc = 0;
     if (n_atari > 0)
         n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
+
+    /* Precompute semeai candidates (slot 6) */
+    SemeaiCandidate sem_cells[MAX_CAP];
+    int n_sem = 0;
+    if (n_two > 0)
+        n_sem = precompute_semeai(two_lib_gids, n_two, g, foe, sem_cells);
 
     /* Ko-solve pre-scan (slot 5): liberty cells that would capture an enemy
      * group adjacent to our ko stone — resolving the ko by removing the
@@ -656,6 +668,15 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         /* Ko-solve (slot 5) */
         for (int ki = 0; ki < n_ko_solve; ki++)
             if (idx == ko_solve_libs[ki]) { st->feat[nf++] = prev_offset + 5; break; }
+
+        /* 2-point semeai (slot 6): only fires if the atari likely kills. */
+        for (int si = 0; si < n_sem; si++) {
+            if (sem_cells[si].cell == idx &&
+                !opponent_can_save(idx, sem_cells[si].egid, g, foe)) {
+                st->feat[nf++] = prev_offset + 6;
+                break;
+            }
+        }
 
         count++;
     }
