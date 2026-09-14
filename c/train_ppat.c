@@ -123,7 +123,6 @@ static int    cfg_test_playouts;
 static float  cfg_no_extreme;
 static int    cfg_iter_limit;          /* 0 = infinite */
 static int    cfg_overfit;
-static int    cfg_train_moves;         /* -1 = unlimited; else ppat for first N moves, then uniform (train + test rollouts) */
 static int    cfg_phase;               /* -1 = all phases; >= 0 = train/test only this phase */
 static int    cfg_no_local;            /* 1 = freeze the 7 previous-move ("local") features at 0 */
 /* Board size of the training positions; global because topology is (g2_init_topology). */
@@ -763,15 +762,14 @@ static int policy_select(Game2 *g) {
  * (board phase == cfg_phase) when a single phase is masked — i.e. T_P, matching
  * the steps whose ψ survives mask_to_phase. */
 
-static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_moves, int *out_steps) {
+static int rollout(const Game2 *game, int8_t player, float *grad_acc, int *out_steps) {
     Game2 sim;
     g2_clone(&sim, game);
-    int pm = ppat_moves;
     int steps = 0;
 
     int passed_yet = 0, rejected_pass = 0, reject_first = 0;
     if (RUN_EARLY_PASS && rng_float(&g_rng) < PASS_REJECT_RATE) reject_first = 1;
-    for (int step = 0; !sim.game_over && (pm < 0 || step < pm); step++) {
+    for (int step = 0; !sim.game_over; step++) {
         int chosen = policy_select(&sim);
         if (chosen == PICK_NO_MOVES) {
             /* Nothing to choose between — no decision, so no gradient. */
@@ -833,9 +831,8 @@ static int rollout(const Game2 *game, int8_t player, float *grad_acc, int ppat_m
     while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim, &g_rng));
 
     /* Pass-weight control loop.  Only rollouts the policy played to the end and
-     * actually chose to stop are evidence: with --train-moves set the tail is
-     * uniform, so the termination is not the policy's decision. */
-    if (RUN_EARLY_PASS && pm < 0 && passed_yet && !rejected_pass) {
+     * actually chose to stop are evidence. */
+    if (RUN_EARLY_PASS && passed_yet && !rejected_pass) {
         /* Unfinished business on the final board, of either kind:
          *   - a chain in atari: an unresolved capture, so the score is unreliable
          *   - a DAME (empty point touching both colours): it counts for neither
@@ -892,7 +889,7 @@ static void update_theta(const Game2 *game, float v_star) {
 
     /* V: M rollouts, no gradient */
     float V = 0;
-    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, cfg_train_moves, NULL);
+    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, NULL);
     V /= cfg_M;
 
     /* g: N rollouts with gradient.  Algorithm 1: g ← g + z/(N·T)·Σ_t ψ.  T is the
@@ -903,7 +900,7 @@ static void update_theta(const Game2 *game, float v_star) {
     for (int j = 0; j < N; j++) {
         memset(rollout_grad_buf, 0, sizeof(float) * TOTAL);
         int T = 0;
-        int z = rollout(game, player, rollout_grad_buf, cfg_train_moves, &T);
+        int z = rollout(game, player, rollout_grad_buf, &T);
         if (T > 0) {
             float scale = (float)z / ((float)N * (float)T);
             for (int k = 0; k < TOTAL; k++) g_buf[k] += scale * rollout_grad_buf[k];
@@ -1136,7 +1133,7 @@ static TestResult measure_test(int use_uniform, int n) {
         int8_t player = g.current;
         float sum = 0;
         for (int i = 0; i < cfg_test_playouts; i++)
-            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, cfg_train_moves, NULL);
+            sum += use_uniform ? uniform_rollout(&g, player) : rollout(&g, player, NULL, NULL);
         /* Normalise v* and the rollout mean from [-1,1] to win-probability [0,1]
          * before the error, so MSE matches the SB paper's units. */
         float v01 = 0.5f * (pos->value + 1.0f);
@@ -1859,7 +1856,6 @@ int main(int argc, char **argv) {
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
     int baseline_only = has_flag(argc, argv, "--baseline-only");  /* print uniform baseline, then exit */
-    cfg_train_moves = get_int_arg(argc, argv, "--train-moves", -1);
     ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
     cfg_test_file = get_str_arg(argc, argv, "--test-file", NULL);
     cfg_test_pos_given = has_flag(argc, argv, "--test-pos");
@@ -2037,10 +2033,10 @@ int main(int argc, char **argv) {
      * worker's.  Spell that out rather than leaving it implicit. */
     if (parallel) snprintf(lrbuf, sizeof lrbuf, "%.1f (x%d workers per round)", cfg_lr, cfg_workers);
     else          snprintf(lrbuf, sizeof lrbuf, "%.1f", cfg_lr);
-    printf("train: %s (%d positions; %d/worker × %d)  lr: %s  M: %d  N: %d  batch: %d  overfit: %s  no-extreme: %.1f  train-moves: %d  phases: %d  phase: %d  init-phase-scale: %s\n",
+    printf("train: %s (%d positions; %d/worker × %d)  lr: %s  M: %d  N: %d  batch: %d  overfit: %s  no-extreme: %.1f  phases: %d  phase: %d  init-phase-scale: %s\n",
            cfg_file, n_train_total, n_train, cfg_workers, lrbuf, cfg_M, cfg_N, cfg_batch,
            cfg_overfit ? "true" : "false", cfg_no_extreme,
-           cfg_train_moves, ppat_phase_count, cfg_phase, scalebuf);
+           ppat_phase_count, cfg_phase, scalebuf);
     /* libCap fixes the pattern table size; how many of those weights are
      * actually reached is the nWts column, not something knowable up front. */
     printf("model: libCap %d  pattern table: %d%s\n", ppat_lib_cap, ppat_num_patterns,
