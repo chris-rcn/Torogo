@@ -1011,8 +1011,12 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
  * so they never leave their initial 0.  A weight of 0 adds nothing to the logit,
  * so this is a true ablation, not merely a frozen parameter. */
 static void mask_local(float *v) {
+    /* Only the 7 prev-move slots — the twelvecell/self-atari/atari blocks
+     * live past them and must keep their gradient (this used to zero
+     * everything to TOTAL, a latent bug since the twelvecell block landed). */
     const int prev_base = ppat_phase_count * ppat_num_patterns;
-    for (int k = prev_base; k < TOTAL; k++) v[k] = 0.0f;
+    const int prev_end  = prev_base + ppat_phase_count * 7;
+    for (int k = prev_base; k < prev_end; k++) v[k] = 0.0f;
 }
 
 static void mask_to_phase(float *v) {
