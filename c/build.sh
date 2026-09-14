@@ -15,5 +15,6 @@ $CC $CFLAGS -o selfplay.bin             game2.c rave.c selfplay.c -lm
 $CC $CFLAGS -o tune_rave.bin            game2.c rave.c tune_rave.c -lm
 $CC $CFLAGS -o train_ppat.bin           game2.c ppat.c train_ppat.c -lm
 $CC $CFLAGS -o find_ppat_features.bin   game2.c ppat.c find_ppat_features.c -lm
+$CC $CFLAGS -o test_vpat.bin            game2.c vpat.c test_vpat.c -lm
 
-echo "built 11 binaries"
+echo "built 12 binaries"
