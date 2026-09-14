@@ -491,6 +491,18 @@ void ppat_extract(const Game2 *g, PpatState *st) {
     if (n_atari > 0)
         n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
 
+    /* Contiguity (slot 0): the 8-neighborhood of prev, computed as eight
+     * indices once — no per-state set to clear. */
+    int32_t prev_n8[8];
+    int n_prev_n8 = 0;
+    if (has_prev) {
+        int pb4 = prev * 4;
+        for (int d = 0; d < 4; d++) {
+            prev_n8[n_prev_n8++] = g2_nbr[pb4 + d];
+            prev_n8[n_prev_n8++] = g2_dnbr[pb4 + d];
+        }
+    }
+
     /* Precompute semeai candidates (slot 6) */
     SemeaiCandidate sem_cells[MAX_CAP];
     int n_sem = 0;
@@ -650,6 +662,8 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             }
         }
 
+        const int nf_locals = nf;   /* for the slot-0 piggyback below */
+
         /* Save-atari features: capture (slots 1/2) takes priority over
          * extension (slots 3/4), split by whether the rescue itself is a
          * self-atari — the interaction the additive pair cannot express, and
@@ -676,6 +690,14 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                 st->feat[nf++] = prev_offset + 6;
                 break;
             }
+        }
+
+        /* Contiguity (slot 0): within prev's 8-neighborhood, or — the
+         * original piggyback — any tactical local (slots 1-6) fired. */
+        if (has_prev) {
+            bool local = nf > nf_locals;
+            for (int k = 0; !local && k < n_prev_n8; k++) local = (prev_n8[k] == idx);
+            if (local) st->feat[nf++] = prev_offset + 0;
         }
 
         count++;
