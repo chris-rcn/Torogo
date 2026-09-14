@@ -1327,17 +1327,18 @@ static double  cumulative_test_s = 0;
 
 /* Render the trMSE column: only FULL epochs are shown — a freshly-completed
  * epoch (full_count>0, mean differs from *last_full) prints once; every other
- * row prints "-".  Partial running means are not shown: they mix a shrinking
+ * row prints "...".  Partial running means are not shown: they mix a shrinking
  * epoch fraction with position order and read as noise.  *last_full latches
  * the most recent full value so it prints exactly once. */
 static const char *trmse_col(double full_sum, long full_count, double part_sum, long part_count,
                              double *last_full, char *buf, size_t n) {
-    (void)part_sum; (void)part_count;
+    (void)part_sum;
     if (full_count > 0) {
         double fm = full_sum / (double)full_count;
         if (fm != *last_full) { *last_full = fm; snprintf(buf, n, "%.4f", fm); return buf; }
     }
-    buf[0] = '-'; buf[1] = 0;
+    /* "..." = an epoch is in progress; "-" = nothing trained yet (row 0). */
+    snprintf(buf, n, (part_count > 0 || full_count > 0) ? "..." : "-");
     return buf;
 }
 
