@@ -597,11 +597,10 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             }
         }
 
-        if (ppat_self_atari) {
-            const int sa = self_atari_size(g, idx, b4, cur);
-            if (sa > 0)
-                st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
-        }
+        /* Computed once; feeds the graded feature AND the save-slot split. */
+        const int sa = ppat_self_atari ? self_atari_size(g, idx, b4, cur) : 0;
+        if (sa > 0)
+            st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
 
         /* Gives-atari: the largest adjacent enemy chain this move reduces to
          * one liberty (an adjacent empty point is always one of its
@@ -621,17 +620,18 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             }
         }
 
-        /* Save-atari features: capture (slot 1) takes priority over
-         * extension (slot 3).  No self-atari split — the generic self-atari
-         * feature carries that additively. */
+        /* Save-atari features: capture (slots 1/2) takes priority over
+         * extension (slots 3/4), split by whether the rescue itself is a
+         * self-atari — the interaction the additive pair cannot express, and
+         * free now that `sa` is already computed for the graded feature. */
         if (n_atari > 0) {
             bool feat2 = false;
             for (int si = 0; si < n_sbc; si++)
                 if (sbc_cells[si] == idx) { feat2 = true; break; }
-            if (feat2) st->feat[nf++] = prev_offset + 1;
+            if (feat2) st->feat[nf++] = prev_offset + (sa > 0 ? 2 : 1);
             else {
                 for (int i = 0; i < n_atari; i++)
-                    if (atari_libs[i] == idx) { st->feat[nf++] = prev_offset + 3; break; }
+                    if (atari_libs[i] == idx) { st->feat[nf++] = prev_offset + (sa > 0 ? 4 : 3); break; }
             }
         }
 
