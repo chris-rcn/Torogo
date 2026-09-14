@@ -28,24 +28,41 @@ function loadErrs(path) {
   return errs;
 }
 
+function stats(d) {
+  const n = d.length;
+  const mean = d.reduce((a, x) => a + x, 0) / n;
+  const varD = d.reduce((a, x) => a + (x - mean) * (x - mean), 0) / (n - 1);
+  return { n, mean, se: Math.sqrt(varD / n) };
+}
+function row(label, st) {
+  console.log(`${label.padEnd(38)} ${String(st.n).padStart(4)}  ${st.mean.toExponential(3).padStart(10)}  ${st.se.toExponential(2).padStart(8)}  ${(st.mean / st.se).toFixed(2).padStart(6)}`);
+}
+
 const [ctlPath, ...armPaths] = process.argv.slice(2);
 if (!ctlPath || armPaths.length === 0) {
   console.error('usage: node pair-agent-evals.js <control.log> <arm.log> [...]');
   process.exit(1);
 }
-const ctl = loadErrs(ctlPath);
-console.log(`control: ${ctlPath} (${ctl.length} positions)`);
-console.log('arm                                      n     mean(d)        SE       z');
-for (const p of armPaths) {
-  const arm = loadErrs(p);
-  const d = [];
-  for (let i = 0; i < Math.min(ctl.length, arm.length); i++)
-    if (ctl[i] !== undefined && arm[i] !== undefined)
-      d.push(arm[i] * arm[i] - ctl[i] * ctl[i]);
-  if (d.length === 0) { console.log(`${p}: no paired positions`); continue; }
-  const n = d.length;
-  const mean = d.reduce((a, x) => a + x, 0) / n;
-  const varD = d.reduce((a, x) => a + (x - mean) * (x - mean), 0) / (n - 1);
-  const se = Math.sqrt(varD / n);
-  console.log(`${p.padEnd(38)} ${String(n).padStart(4)}  ${mean.toExponential(3).padStart(10)}  ${se.toExponential(2).padStart(8)}  ${(mean / se).toFixed(2).padStart(6)}`);
-}
+const paths = [ctlPath, ...armPaths];
+const errs = paths.map(loadErrs);
+
+// Positions every log has — the common paired set.
+const nPos = Math.min(...errs.map(e => e.length));
+const common = [];
+for (let i = 0; i < nPos; i++) if (errs.every(e => e[i] !== undefined)) common.push(i);
+const sq = errs.map(e => common.map(i => e[i] * e[i]));
+const K = paths.length;
+
+// Table 1 — the decision contrast: each arm vs the designated control.
+console.log(`control: ${ctlPath} (${common.length} paired positions, ${K} logs)`);
+console.log('vs CONTROL                               n     mean(d)        SE       z');
+for (let k = 1; k < K; k++)
+  row(paths[k], stats(common.map((_, i) => sq[k][i] - sq[0][i])));
+
+// Table 2 — curve shape: each log (control included) vs the leave-one-out
+// mean of the others, removing any single run's private noise from the
+// reference.  mean(d) < 0 = more accurate than the rest of the sweep.
+console.log('vs LEAVE-ONE-OUT MEAN                    n     mean(d)        SE       z');
+const tot = common.map((_, i) => sq.reduce((a, s2) => a + s2[i], 0));
+for (let k = 0; k < K; k++)
+  row(paths[k], stats(common.map((_, i) => sq[k][i] - (tot[i] - sq[k][i]) / (K - 1))));
