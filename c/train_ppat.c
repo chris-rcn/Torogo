@@ -90,8 +90,8 @@
  *                           new ones start at zero).
  *     --self-atari          graded self-atari feature: a gated key when the
  *                           candidate leaves its own group in atari, one-hot
- *                           on min(group size, 5) — size 1 (throw-ins,
- *                           snapbacks) can learn a different sign than 5+.
+ *                           on min(group size, 4) — size 1 (throw-ins,
+ *                           snapbacks) can learn a different sign than 4+.
  *                           Appended block; existing models fine-tune in
  *     --twelvecell2         the same key on a LOOSER trigger: the four ADJACENT
  *                           points empty, whatever the diagonals hold.  Fires

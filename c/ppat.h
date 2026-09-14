@@ -82,7 +82,7 @@ void     ppat_init(int lib_cap);
  * size-1 self-atari (throw-ins, snapbacks) is often correct while large is
  * almost always a blunder, so the grades let training find the sign flip.
  * Appended after the twelvecell block, so existing models fine-tune in. */
-#define PPAT_SA_N 5
+#define PPAT_SA_N 4
 extern int ppat_self_atari;            /* 0/1, from --self-atari */
 extern int ppat_file_self_atari;       /* what the last loaded file carried */
 
