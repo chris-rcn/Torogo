@@ -1770,9 +1770,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
         printf("run       1 worker, seed %d (--seed replays exactly)\n", cfg_seed);
 
     if (ref_theta)
-        printf("match     directWR vs %s (libCap %d, %d phase(s)): %d games row 1, +%.0f%%/row, cap %.0f min\n",
-               cfg_ref_weights, ref_lib_cap, ref_phases,
-               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0);
+        printf("match     directWR vs %s\n", cfg_ref_weights);
 
     if (!monitor)
         printf("out       %s  (best %s)\n", ckpt, best);
