@@ -1785,7 +1785,6 @@ static void run_monitor(void) {
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
-    ppat_load_quiet = 1;   /* suppress the per-cycle "loaded N weights" noise */
     wall_start = wall_now();
     float mon_best_te = 1e30f;   /* lowest teMSE seen, for the '*' new-low marker */
 
@@ -2028,6 +2027,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       [--phase-compensation-buckets <n>] [--match-phases A,B]\n");
         return 1;
     }
+
+    ppat_load_quiet = 1;   /* the banner reports what loaded; the per-file notices are noise */
 
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
