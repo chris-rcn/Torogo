@@ -494,7 +494,6 @@ static int     n_train = 0;            /* this worker's slice of the train set *
 static int     n_train_total = 0;      /* full train set across all workers' slices */
 static int     test_idx[MAX_LINES];
 static int     n_test = 0;
-static int     records_kept = 0, records_filtered = 0, records_skipped = 0;
 
 /* Per-epoch training-fit: accumulate Σ (v* − V)^2 (v*, V normalised to win-prob
  * [0,1], matching the SB paper's MSE units) over the current epoch (V is the
@@ -710,7 +709,6 @@ static void load_positions_from(const char *path, int test_head) {
     if (skipped > 5)
         fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
     if (n_all == base) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", path, skipped); exit(1); }
-    records_kept = n_all - base; records_filtered = filtered; records_skipped = skipped;
 }
 
 /* n_test_file: how many leading records came from --test-file (0 when unset).
@@ -1736,8 +1734,8 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     char feats[256]; banner_features(feats, sizeof feats);
     (void)ckpt; (void)best;   /* used only on the solo `out` line */
 
-    printf("data      %s  (%d records: %d train, %d test)\n",
-           cfg_file, records_kept, n_train_total, n_test);
+    printf("data      %s  (%d train, %d test)\n",
+           cfg_file, n_train_total, n_test);
     printf("model     libCap %d%s%s%s\n",
            ppat_lib_cap,
            cfg_no_local ? ", no-local" : "",
