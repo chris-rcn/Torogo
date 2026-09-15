@@ -434,8 +434,8 @@ function _eePrepare(ctx, R0, st) {
   // different all-empty key on a bigger board): fine for a model living on one
   // size, the cross-size trap if it migrates.
   const R = R0 === 0 ? (game.N >> 1) * 2 : R0;
-  if (!st.lkeys || st.lkeys.length < (Rmax + 1) * area) {
-    st.lkeys = new Int32Array((Rmax + 1) * area); st.depth = new Int32Array(area);
+  if (!st.key || st.key.length < area) {
+    st.key = new Int32Array(area); st.depth = new Int32Array(area);
     st.a = new Int32Array(area); st.b = new Int32Array(area);
   }
   const key = st.key, depth = st.depth, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
