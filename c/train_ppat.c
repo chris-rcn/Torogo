@@ -17,7 +17,7 @@
  *     --lr <f>              learning rate (default 10)
  *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 500)
  *     --value-playouts <n>  rollouts for the V estimate (default --playouts)
- *     --gradient-playouts <n>  rollouts for the gradient (default --value-playouts)
+ *     --gradient-playouts <n>  rollouts for the gradient (default --playouts)
  *     --value-ema <f>       EMA decay for a per-position value estimate blended
  *                           across epochs (default 0 = off; f in [0,1)).  Cuts
  *                           the variance of V for a given --value-playouts, best
@@ -185,8 +185,8 @@
  * MEANING of special values, not the default. */
 
 static float  cfg_lr;
-static int    cfg_M;
-static int    cfg_N;
+static int    cfg_value_po;
+static int    cfg_gradient_po;
 static int    cfg_batch;
 static int    cfg_test_pos;
 static int    cfg_train_pos;
@@ -1073,8 +1073,8 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
 
     /* V: M value-playouts, no gradient. */
     float V = 0;
-    for (int i = 0; i < cfg_M; i++) V += rollout(game, player, NULL, NULL);
-    V /= cfg_M;
+    for (int i = 0; i < cfg_value_po; i++) V += rollout(game, player, NULL, NULL);
+    V /= cfg_value_po;
 
     /* --value-ema: blend this visit's V into the position's running EMA and use
      * the (bias-corrected) EMA as the fitted value.  First visit debiases to
@@ -1089,7 +1089,7 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     /* g: N rollouts with gradient.  Algorithm 1: g ← g + z/(N·T)·Σ_t ψ.  T is the
      * rollout's policy-step count (T_P, the in-phase steps, when a phase is masked).
      * T == 0 means no ψ was accumulated, so that rollout contributes nothing. */
-    int N = cfg_N;
+    int N = cfg_gradient_po;
     memset(g_buf, 0, sizeof(float) * TOTAL);
     for (int j = 0; j < N; j++) {
         memset(rollout_grad_buf, 0, sizeof(float) * TOTAL);
@@ -1777,7 +1777,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     /* The train line describes the run regardless of who prints it, so the
      * monitor shows it too (it parsed the same args). */
     printf("train     lr %.3g, value-playouts %d, gradient-playouts %d, batch %d, %d phase(s)",
-           (double)cfg_lr, cfg_M, cfg_N, cfg_batch, ppat_phase_count);
+           (double)cfg_lr, cfg_value_po, cfg_gradient_po, cfg_batch, ppat_phase_count);
     if (cfg_phase >= 0)        printf(", phase %d only", cfg_phase);
     if (cfg_ema_window > 0)    printf(", ema %d", cfg_ema_window);
     if (cfg_overfit)           printf(", overfit");
@@ -2067,8 +2067,8 @@ int main(int argc, char **argv) {
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
     int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N */
-    cfg_M            = get_int_arg(argc, argv, "--value-playouts", playouts);
-    cfg_N            = get_int_arg(argc, argv, "--gradient-playouts", cfg_M);
+    cfg_value_po     = get_int_arg(argc, argv, "--value-playouts", playouts);
+    cfg_gradient_po  = get_int_arg(argc, argv, "--gradient-playouts", playouts);
     cfg_value_ema    = get_float_arg(argc, argv, "--value-ema", 0.0f);
     if (cfg_value_ema < 0.0f || cfg_value_ema >= 1.0f) {
         fprintf(stderr, "error: --value-ema must be in [0, 1) (0 = off)\n");
