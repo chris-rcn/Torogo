@@ -66,8 +66,9 @@
 //               levels: the FULL stack — the base (level-1) pattern for
 //               EVERY candidate plus each deeper within-limit level's
 //               pattern, one key per level, with a reached-level thermometer
-//               alongside.  Radius runs to the board maximum; N is semantic
-//               and stays in the key salt.
+//               alongside.  OPENING ONLY: emits nothing at board fullness
+//               >= 0.1, and costs nothing there either.  Radius runs to the
+//               board maximum; N is semantic and stays in the key salt.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -499,8 +500,15 @@ const _listBuf = new Int32Array(64);        // list-term emission scratch
 let _slDist = null;       // torus L1 distance lookup, indexed by (dr*N + dc)
 let _slDistN = 0;
 
+// stoneLimit is an OPENING feature: it emits only while board fullness is
+// under SL_MAX_PHASE, and outside that window the prepare exits before any
+// work, so mid- and endgame positions pay nothing.
+const SL_MAX_PHASE = 0.1;
+
 function _slPrepare(ctx, limit, st) {
   const game = ctx.game, N = game.N, area = N * N, cur = ctx.cur;
+  st.active = (1 - game.emptyCount / area) < SL_MAX_PHASE;
+  if (!st.active) return;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
   const Rmax = (N >> 1) * 2;
   if (!st.lkeys || st.lkeys.length < (Rmax + 1) * area) {
@@ -955,6 +963,7 @@ function _makeTerm(str) {
         // plus every deeper within-limit level's pattern (a list term — one
         // key per level).  The reached-level thermometer stacks alongside.
         listFn = (ctx, idx, out) => {
+          if (!st.active) return 0;
           const area = ctx.game.N * ctx.game.N, lkeys = st.lkeys;
           const L = st.depth[idx];
           out[0] = lkeys[area + idx];
@@ -964,7 +973,7 @@ function _makeTerm(str) {
         stacked = { str: `_stoneLimitThermometer${param}`, saltStr: `_stoneLimitThermometer${param}`,
                     salt: _hashStr(`_stoneLimitThermometer${param}`),
                     cumulative: true, maxLevel: 0, maxNear: 4, needsLadder: false,
-                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx] };
+                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.active ? st.depth[idx] : 0 };
       }
       break;
     }
