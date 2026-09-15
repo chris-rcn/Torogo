@@ -63,10 +63,11 @@
 //               the largest empty diamond, a pure distance profile;
 //               stoneLimit2 = the largest window still sparse enough to
 //               read).  Hashed with the stones12b recursion at the reached
-//               level, level folded in; STACKS a reached-level thermometer
-//               like emptyExpand, and a move whose level-1 diamond already
-//               exceeds the limit emits nothing.  Radius runs to the board
-//               maximum; N is semantic and stays in the key salt.
+//               levels: the FULL stack — the base (level-1) pattern for
+//               EVERY candidate plus each deeper within-limit level's
+//               pattern, one key per level, with a reached-level thermometer
+//               alongside.  Radius runs to the board maximum; N is semantic
+//               and stays in the key salt.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -432,8 +433,8 @@ function _eePrepare(ctx, R0, st) {
   // different all-empty key on a bigger board): fine for a model living on one
   // size, the cross-size trap if it migrates.
   const R = R0 === 0 ? (game.N >> 1) * 2 : R0;
-  if (!st.key || st.key.length < area) {
-    st.key = new Int32Array(area); st.depth = new Int32Array(area);
+  if (!st.lkeys || st.lkeys.length < (Rmax + 1) * area) {
+    st.lkeys = new Int32Array((Rmax + 1) * area); st.depth = new Int32Array(area);
     st.a = new Int32Array(area); st.b = new Int32Array(area);
   }
   const key = st.key, depth = st.depth, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
@@ -494,6 +495,7 @@ function _eeShared(R) {
 // pyramid as emptyExpand run only to the deepest level any cell reached.
 let _slCnt = null;        // (Rmax+1) x area stone counts by exact distance
 const _slRowD = new Int32Array(64), _slColD = new Int32Array(64);   // per-stone wrapped deltas
+const _listBuf = new Int32Array(64);        // list-term emission scratch
 let _slDist = null;       // torus L1 distance lookup, indexed by (dr*N + dc)
 let _slDistN = 0;
 
@@ -501,8 +503,8 @@ function _slPrepare(ctx, limit, st) {
   const game = ctx.game, N = game.N, area = N * N, cur = ctx.cur;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
   const Rmax = (N >> 1) * 2;
-  if (!st.key || st.key.length < area) {
-    st.key = new Int32Array(area); st.depth = new Int32Array(area);
+  if (!st.lkeys || st.lkeys.length < (Rmax + 1) * area) {
+    st.lkeys = new Int32Array((Rmax + 1) * area); st.depth = new Int32Array(area);
     st.a = new Int32Array(area); st.b = new Int32Array(area);
   }
   if (!_slCnt || _slCnt.length < (Rmax + 1) * area) _slCnt = new Int16Array((Rmax + 1) * area);
@@ -549,8 +551,9 @@ function _slPrepare(ctx, limit, st) {
     depth[i] = L;
     if (L > maxL) maxL = L;
   }
-  // t-hash pyramid to maxL only; key[i] assigned at its own level.
-  const key = st.key;
+  // t-hash pyramid: the BASE (level-1) key is stored for every cell, and each
+  // deeper level's key for the cells whose limit reaches it — the full stack.
+  const lkeys = st.lkeys;
   let a = st.a, b = st.b;
   {
     for (let idx = 0; idx < area; idx++) {
@@ -562,16 +565,17 @@ function _slPrepare(ctx, limit, st) {
       const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
       const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
       a[idx] = v;
-      if (depth[idx] === 1) key[idx] = _hashCombine(v, 1) | 0;
+      lkeys[area + idx] = _hashCombine(v, 1) | 0;
     }
   }
   for (let k = 2; k <= maxL; k++) {
+    const ko = k * area;
     for (let idx = 0; idx < area; idx++) {
       const base = idx * stride;
       const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
                                  _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
       b[idx] = v;
-      if (depth[idx] === k) key[idx] = _hashCombine(v, k) | 0;
+      if (depth[idx] >= k) lkeys[ko + idx] = _hashCombine(v, k) | 0;
     }
     const t = a; a = b; b = t;
   }
@@ -581,7 +585,7 @@ const _slByN = new Map();
 function _slShared(limit) {
   let sh = _slByN.get(limit);
   if (!sh) {
-    const st = { key: null, depth: null, a: null, b: null };
+    const st = { lkeys: null, depth: null, a: null, b: null };
     sh = { st, prepare: ctx => _slPrepare(ctx, limit, st) };
     _slByN.set(limit, sh);
   }
@@ -852,6 +856,7 @@ function _makeTerm(str) {
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
   let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
   let prepare = null, stacked = null;   // stacked: an additional weight space this keyword emits into (see parseSpec)
+  let listFn = null;                    // list term: emits one key per value it writes into the shared buffer
   switch (kind) {
     case 'vpat': {
       // Rank under the external value model as a cumulative size: rank r ->
@@ -946,11 +951,20 @@ function _makeTerm(str) {
         maxNear = 4;
         const sh = _slShared(param), st = sh.st;
         prepare = sh.prepare;
-        evalFn = (ctx, idx) => st.key[idx];
+        // FULL STACK, base always: the level-1 pattern for every candidate,
+        // plus every deeper within-limit level's pattern (a list term — one
+        // key per level).  The reached-level thermometer stacks alongside.
+        listFn = (ctx, idx, out) => {
+          const area = ctx.game.N * ctx.game.N, lkeys = st.lkeys;
+          const L = st.depth[idx];
+          out[0] = lkeys[area + idx];
+          for (let k = 2; k <= L; k++) out[k - 1] = lkeys[k * area + idx];
+          return L > 1 ? L : 1;
+        };
         stacked = { str: `_stoneLimitThermometer${param}`, saltStr: `_stoneLimitThermometer${param}`,
                     salt: _hashStr(`_stoneLimitThermometer${param}`),
                     cumulative: true, maxLevel: 0, maxNear: 4, needsLadder: false,
-                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
+                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx] };
       }
       break;
     }
@@ -1242,7 +1256,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked, listFn };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -1279,6 +1293,7 @@ function parseSpec(specStr) {
     return slot;
   }
   const stackedTerms = [];    // synthetic companion terms (emptyExpand's depth thermometer), deduped by salt
+  let boardMaxSpaces = 0;     // spaces whose key count resolves at createState (board maximum)
   let eeR = null;             // the one emptyExpand R this spec may use (R-free salts share slots)
   for (const spaceStr of str.split(',').map(s => s.trim()).filter(Boolean)) {
     const terms = spaceStr.split('+').map(t => t.trim()).filter(Boolean).map(_makeTerm);
@@ -1286,6 +1301,22 @@ function parseSpec(specStr) {
     const gate = [];        // slots that must be ≥ 1 for the space to fire at all
     const baseTerms = [];   // descriptors (bin:false, fold value) + binary events (bin:true, fold level 1)
     const cumTerms = [];    // cumulative size terms (thermometer cross-product)
+    // A LIST term emits one key per value (per-level pattern stacks); it
+    // owns its space — '+' composition has no defined cross-product with a
+    // variable-length key list.
+    if (terms.some(t => t.listFn)) {
+      if (terms.length !== 1) throw new Error(`featurepol: "${spaceStr}" — a list term cannot be composed with '+'`);
+      const t = terms[0];
+      if (t.needsLadder) needsLadder = true;
+      if (t.maxNear > nearMax) nearMax = t.maxNear;
+      if (t.prepare && !prepares.includes(t.prepare)) prepares.push(t.prepare);
+      if (t.stacked && !stackedTerms.some(x => x.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
+      spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr), gate: [], baseTerms: [],
+                    cumTerms: [], maxKeys: 0, usesRank: false,
+                    listFn: t.listFn, listSalt: t.salt });
+      boardMaxSpaces++;          // keys per move bounded by the board maximum
+      continue;
+    }
     for (const t of terms) {
       if (t.kind === 'emptyExpand') {
         if (eeR !== null && t.param !== eeR)
@@ -1324,7 +1355,6 @@ function parseSpec(specStr) {
   // prepare produces are already capped at the board's largest L1 distance, so
   // the emission clamp becomes Infinity (never binds) and the space's key
   // budget is deferred to createState, where N is known (boardMaxSpaces).
-  let boardMaxSpaces = 0;
   for (const t of stackedTerms) {
     const slot = slotFor(t);
     const unbounded = t.maxLevel === 0;
@@ -1445,7 +1475,15 @@ function createState(N, spec) {
 // Emit one space's keys for the move whose term values are in `memo`.  Same
 // logic as the main loop below; factored out because the top-N path emits the
 // plain spaces and the rank spaces in two separate phases.
-function _emitSpace(sp, memo, weights, out, pos, accA, accB) {
+function _emitSpace(sp, memo, weights, out, pos, accA, accB, ctx, idx) {
+  if (sp.listFn) {
+    const n = sp.listFn(ctx, idx, _listBuf);
+    for (let j = 0; j < n; j++) {
+      const ix = _intern(weights, _hashCombine(sp.salt, _hashCombine(sp.listSalt, _listBuf[j] >>> 0)) >>> 0);
+      if (ix >= 0) out[pos++] = ix;
+    }
+    return pos;
+  }
   const gate = sp.gate;
   for (let gi = 0; gi < gate.length; gi++) if (memo[gate[gi]] < 1) return pos;   // space stays dark
   let base = sp.salt;
@@ -1500,7 +1538,7 @@ function _extractTopN(game, state, weights, ctx, spec, useRank) {
     if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
     for (let si = 0; si < plainSlots.length; si++) { const sl = plainSlots[si]; memo[sl] = computers[sl](ctx, idx); }
     const start = pos;
-    for (let s = 0; s < plainSpaces.length; s++) pos = _emitSpace(plainSpaces[s], memo, weights, keys, pos, accA, accB);
+    for (let s = 0; s < plainSpaces.length; s++) pos = _emitSpace(plainSpaces[s], memo, weights, keys, pos, accA, accB, ctx, idx);
     let sc = 0;
     for (let k = start; k < pos; k++) sc += vals[keys[k]];
     pScore[count] = sc;
@@ -1537,7 +1575,7 @@ function _extractTopN(game, state, weights, ctx, spec, useRank) {
     for (let sl = 0; sl < numSlots; sl++) memo[sl] = computers[sl](ctx, idx);
     const base = ci * stride;
     let hp = base;
-    for (let s = 0; s < rankSpaces.length; s++) hp = _emitSpace(rankSpaces[s], memo, weights, rKeys, hp, accA, accB);
+    for (let s = 0; s < rankSpaces.length; s++) hp = _emitSpace(rankSpaces[s], memo, weights, rKeys, hp, accA, accB, ctx, idx);
     rCount[ci] = hp - base;
   }
   // Splice the rank-space keys into each move's range, keeping the flat layout every
@@ -1591,6 +1629,14 @@ function extractFeatures(game, state, weights, game3) {
     for (let sl = 0; sl < numSlots; sl++) memo[sl] = computers[sl](ctx, idx);
     for (let s = 0; s < nSpaces; s++) {
       const sp = spaces[s];
+      if (sp.listFn) {
+        const n = sp.listFn(ctx, idx, _listBuf);
+        for (let j = 0; j < n; j++) {
+          const ix = _intern(weights, _hashCombine(sp.salt, _hashCombine(sp.listSalt, _listBuf[j] >>> 0)) >>> 0);
+          if (ix >= 0) keys[pos++] = ix;
+        }
+        continue;
+      }
       // Gate: every cumulative/binary term must be present (≥1) or the space fires nothing.
       const gate = sp.gate; let gated = false;
       for (let gi = 0; gi < gate.length; gi++) if (memo[gate[gi]] < 1) { gated = true; break; }
