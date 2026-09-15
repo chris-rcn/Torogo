@@ -7,14 +7,14 @@
 //
 //   PHASE_MUX_A       agent below the switch (default ref-ab2-fp5-vpat)
 //   PHASE_MUX_B       agent at/above the switch (default ref-puct-ppat-fp-e2-u6-300)
-//   PHASE_MUX_PHASE   the switch phase (default 0.5)
+//   PHASE_MUX_THRESH  the switch phase (default 0.5)
 
 const path = require('path');
 
 function create(cfg) {
   const nameA = cfg.str('PHASE_MUX_A', 'ref-ab2-fp5-vpat');
   const nameB = cfg.str('PHASE_MUX_B', 'ref-puct-ppat-fp-e2-u6-300');
-  const switchPhase = cfg.float('PHASE_MUX_PHASE', 0.5);
+  const switchPhase = cfg.float('PHASE_MUX_THRESH', 0.5);
 
   function load(name) {
     const mod = require(path.join(__dirname, name + '.js'));
