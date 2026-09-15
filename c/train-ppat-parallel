@@ -12,7 +12,7 @@
 # off the training critical path, the trainers never wait on it.
 #
 # Example (10 trainers, sync every 2000 positions):
-#   ./train-ppat-parallel 10 out/evals-s9-500k.txt --M 100 --N 100 --lr 5 \
+#   ./train-ppat-parallel 10 out/evals-s9-500k.txt --value-playouts 100 --gradient-playouts 100 --lr 5 \
 #       --train-pos 24000 --test-pos 2000 --sync-every 2000
 set -e
 # Locate the binary by absolute path but keep the caller's cwd, so relative

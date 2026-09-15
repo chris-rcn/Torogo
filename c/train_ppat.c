@@ -15,9 +15,9 @@
  *   ./train_ppat <file> [options]
  *   Options:
  *     --lr <f>              learning rate (default 10)
- *     --playouts <n>        default for --M and --N (default 500)
- *     --M <n>               rollouts for V estimate (default --playouts)
- *     --N <n>               rollouts for gradient (default M)
+ *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 500)
+ *     --value-playouts <n>  rollouts for the V estimate (default --playouts)
+ *     --gradient-playouts <n>  rollouts for the gradient (default --value-playouts)
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
  *                           moves, if the phase there is <= --trunc-max-phase
  *                           (default 0.55, the deployed gate) the rollout stops
@@ -1752,7 +1752,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
 
     /* The train line describes the run regardless of who prints it, so the
      * monitor shows it too (it parsed the same args). */
-    printf("train     lr %.3g, M %d, N %d, batch %d, %d phase(s)",
+    printf("train     lr %.3g, value-playouts %d, gradient-playouts %d, batch %d, %d phase(s)",
            (double)cfg_lr, cfg_M, cfg_N, cfg_batch, ppat_phase_count);
     if (cfg_phase >= 0)        printf(", phase %d only", cfg_phase);
     if (cfg_ema_window > 0)    printf(", ema %d", cfg_ema_window);
@@ -2027,7 +2027,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
 
 int main(int argc, char **argv) {
     if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
-        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--value-playouts <n>] [--gradient-playouts <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--capture <n>] [--capture-by-self-atari <n>] [--no-local] [--overfit]\n");
@@ -2042,8 +2042,8 @@ int main(int argc, char **argv) {
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
     int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N */
-    cfg_M            = get_int_arg(argc, argv, "--M", playouts);
-    cfg_N            = get_int_arg(argc, argv, "--N", cfg_M);
+    cfg_M            = get_int_arg(argc, argv, "--value-playouts", playouts);
+    cfg_N            = get_int_arg(argc, argv, "--gradient-playouts", cfg_M);
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 0);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
