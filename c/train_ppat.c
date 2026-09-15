@@ -99,6 +99,11 @@
  *                           gated key when the candidate captures, one-hot on
  *                           min(total stones captured, n).  The pattern sees
  *                           capture EXISTENCE at cap 2; this adds the size
+ *     --capture-by-self-atari <n>
+ *                           ko-take / snapback interaction grid (default 0 =
+ *                           off): fires when the candidate captures AND ends
+ *                           in atari itself, one-hot on the (own size,
+ *                           stones captured) grid capped at n each
  *     --atari-by-self-atari <n>
  *                           mutual-atari interaction grid (default 0 = off):
  *                           fires when the candidate is BOTH self-atari and
@@ -1963,7 +1968,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--capture <n>] [--no-local] [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--capture <n>] [--capture-by-self-atari <n>] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
         fprintf(stderr, "       [--phase-compensation-buckets <n>] [--match-phases A,B]\n");
@@ -2113,6 +2118,11 @@ int main(int argc, char **argv) {
     ppat_capture_n = get_int_arg(argc, argv, "--capture", 0);
     if (ppat_capture_n < 0 || ppat_capture_n > PPAT_CAP_MAX) {
         fprintf(stderr, "error: --capture must be 0..%d\n", PPAT_CAP_MAX);
+        exit(1);
+    }
+    ppat_cs_n = get_int_arg(argc, argv, "--capture-by-self-atari", 0);
+    if (ppat_cs_n < 0 || ppat_cs_n > PPAT_CS_MAX) {
+        fprintf(stderr, "error: --capture-by-self-atari must be 0..%d\n", PPAT_CS_MAX);
         exit(1);
     }
     check_unknown_args(argc, argv);

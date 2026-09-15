@@ -25,6 +25,8 @@ int ppat_xa_n = 0;
 int ppat_file_xa = 0;                  /* set by ppat_load_weights from the file */
 int ppat_capture_n = 0;
 int ppat_file_capture = 0;             /* set by ppat_load_weights from the file */
+int ppat_cs_n = 0;
+int ppat_file_cs = 0;                  /* set by ppat_load_weights from the file */
 int ppat_twelvecell = 0;
 int ppat_file_twelvecell = 0;          /* set by ppat_load_weights from the file */
 static int32_t t12_table[PPAT_T12_RAW];
@@ -460,6 +462,10 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                                                (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
                                                ppat_xa_n * ppat_xa_n)
                          + phase * ppat_capture_n;
+    const int cs_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                               (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
+                                               ppat_xa_n * ppat_xa_n + ppat_capture_n)
+                         + phase * ppat_cs_n * ppat_cs_n;
 
     /* Previous-move SAVE features re-enabled (2026-09-14): slots 1
      * (save-atari-by-capture) and 3 (save-atari-by-extension) only.  The
@@ -646,7 +652,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
         /* Gives-atari: the largest adjacent enemy chain this move reduces to
          * one liberty (an adjacent empty point is always one of its
          * liberties, so ls == 2 is the exact condition). */
-        if (ppat_atari_n || ppat_xa_n || ppat_capture_n) {
+        if (ppat_atari_n || ppat_xa_n || ppat_capture_n || ppat_cs_n) {
             int biggest = 0, cap_sum = 0;
             int16_t cap_gids[4]; int n_cap_gids = 0;
             for (int d = 0; d < 4; d++) {
@@ -654,7 +660,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
                 if (g->cells[ni] != cur && g->cells[ni] != EMPTY) {
                     const int16_t eg = g->gid[ni];
                     if (g->ls[eg] == 2 && g->ss[eg] > biggest) biggest = g->ss[eg];
-                    else if (ppat_capture_n && g->ls[eg] == 1) {
+                    else if ((ppat_capture_n || ppat_cs_n) && g->ls[eg] == 1) {
                         int dup = 0;
                         for (int k = 0; k < n_cap_gids; k++) dup |= (cap_gids[k] == eg);
                         if (!dup) { cap_gids[n_cap_gids++] = eg; cap_sum += g->ss[eg]; }
@@ -664,6 +670,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             if (ppat_capture_n && cap_sum > 0) {
                 const int b = cap_sum < ppat_capture_n ? cap_sum : ppat_capture_n;
                 st->feat[nf++] = cap_offset + b - 1;
+            }
+            /* Ko-take / snapback family: captures while ending in atari. */
+            if (ppat_cs_n && sa > 0 && cap_sum > 0) {
+                const int bs = sa < ppat_cs_n ? sa : ppat_cs_n;
+                const int bc = cap_sum < ppat_cs_n ? cap_sum : ppat_cs_n;
+                st->feat[nf++] = cs_offset + (bs - 1) * ppat_cs_n + (bc - 1);
             }
             if (ppat_atari_n && biggest > 0) {
                 const int b = biggest < ppat_atari_n ? biggest : ppat_atari_n;
@@ -814,12 +826,12 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s, atari: %d, atariBySelfAtari: %d, capture: %d };\n",
+    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s, atari: %d, atariBySelfAtari: %d, capture: %d, captureBySelfAtari: %d };\n",
             ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
             early_pass ? "true" : "false", pass_weight,
             ppat_twelvecell == 1 ? "true" : "false",
             ppat_twelvecell == 2 ? "true" : "false",
-            ppat_self_atari ? "true" : "false", ppat_atari_n, ppat_xa_n, ppat_capture_n);
+            ppat_self_atari ? "true" : "false", ppat_atari_n, ppat_xa_n, ppat_capture_n, ppat_cs_n);
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
     fclose(f);
@@ -895,6 +907,8 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
         ppat_file_xa = xa ? atoi(xa + 18) : 0;
         const char *cp = strstr(buf, "capture: ");
         ppat_file_capture = cp ? atoi(cp + 9) : 0;
+        const char *cs = strstr(buf, "captureBySelfAtari: ");
+        ppat_file_cs = cs ? atoi(cs + 20) : 0;
     }
     int total = ppat_total_weights();
     float *weights = calloc(total, sizeof(float));
