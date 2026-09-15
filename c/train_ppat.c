@@ -1761,7 +1761,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     /* The run line carries the only mode-specific facts: worker count, plus the
      * seed (solo, replayable) or a monitor tag (parallel). */
     if (monitor)
-        printf("run       %d workers (monitor)\n", cfg_workers);
+        printf("run       %d workers + monitor\n", cfg_workers);
     else if (cfg_workers > 1)
         printf("run       %d workers, sync-every %d, seed %d\n", cfg_workers, cfg_sync_every, cfg_seed);
     else
