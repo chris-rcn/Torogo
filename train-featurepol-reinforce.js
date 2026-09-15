@@ -156,7 +156,8 @@ try {
 }
 let ema = 0;
 let totalUpdates = 0;
-// avgW: running frequency-weighted mean |weight| over every weight update this run.
+// wStats accumulates frequency-weighted Sigma|weight| and a count over the whole
+// run; the avgW column differences consecutive snapshots for a per-interval mean.
 const wStats = { absSum: 0, count: 0 };
 
 const NO_ADD = opts['no-add'] === true;
@@ -377,6 +378,7 @@ const MAX_PRINT_GAP_MS = 4 * 3600 * 1000;   // 4 h
 const MAX_EVAL_GAMES = 2000;
 let nextPrintAt = t0 + 1000, lastPrintAt = t0;
 let g = 0, elapsedAcc = 0, movesAcc = 0, maxPSum = 0, maxPN = 0;
+let prevWAbsSum = 0, prevWCount = 0;   // last row's wStats snapshot (avgW is per-interval)
 const evalHistory = [];   // per-game eval results (1/0); the rolling-half avg (wrAv) uses this
 
 while (true) {
@@ -397,7 +399,11 @@ while (true) {
   }
 
   if (Date.now() >= nextPrintAt) {
-    const avgW = wStats.count > 0 ? wStats.absSum / wStats.count : 0;
+    // Per-interval mean |weight|: difference this row's cumulative wStats from
+    // the last row's snapshot, so avgW tracks the current weight scale rather
+    // than a lifetime average that only ever drifts up.
+    const dWCount = wStats.count - prevWCount;
+    const avgW = dWCount > 0 ? (wStats.absSum - prevWAbsSum) / dWCount : 0;
     const row = [
       Util.fmtMs(Date.now() - t0),
       Util.fmt4i(g),
@@ -445,6 +451,7 @@ while (true) {
     maxPSum = 0; maxPN = 0; elapsedAcc = 0; movesAcc = 0;
     komiSum = 0; komiSumGames = 0;
     featSum = 0; candSum = 0;
+    prevWAbsSum = wStats.absSum; prevWCount = wStats.count;
     const nowMs = Date.now();
     nextPrintAt = Math.min(t0 + Math.round((nowMs - t0) * 1.4), nowMs + MAX_PRINT_GAP_MS);
     lastPrintAt = Date.now();
