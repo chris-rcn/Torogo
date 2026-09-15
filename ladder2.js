@@ -254,6 +254,41 @@ function getAllLadderStatuses(game, minChainSize = 1) {
 // Returns { libs: [], moverSucceeds: boolean, urgentLibs: [] }
 //
 // Logs a warning and returns null when the group has more than 2 liberties.
+// ── Repro capture for the game3 group-id exhaustion (a runaway cyclic read) ──
+// The exhaustion throws deep inside _canReach3Libs, AFTER the DFS has mutated
+// the board past its undo points, so the entry position is snapshotted here
+// (into reusable buffers, no allocation) and dumped on the throw — turning a
+// non-reproducible crash into a replayable board.  See test-ladder2 for replay.
+let _snapCells = null, _snapN = 0, _snapCurrent = 0, _snapStone = 0;
+function _snapshotRead(game, stoneIdx) {
+  const area = game.N * game.N;
+  if (!_snapCells || _snapCells.length < area) _snapCells = new Int8Array(area);
+  _snapCells.set(game.cells.subarray(0, area));
+  _snapN = game.N; _snapCurrent = game.current; _snapStone = stoneIdx;
+}
+function _dumpRead(err) {
+  if (typeof require !== 'function') return;            // browser: nothing to write
+  const N = _snapN, glyph = c => c === 0 ? '·' : c > 0 ? '●' : '○';
+  let board = '';
+  for (let y = N - 1; y >= 0; y--) {
+    let row = '';
+    for (let x = 0; x < N; x++) row += glyph(_snapCells[y * N + x]) + ' ';
+    board += row.trimEnd() + '\n';
+  }
+  const sx = _snapStone % N, sy = (_snapStone / N) | 0;
+  const text = `# ladder2 group-id exhaustion repro\n` +
+               `# size ${N}  current ${_snapCurrent === 1 ? 'BLACK' : 'WHITE'}  stone ${sx},${sy} (idx ${_snapStone})\n` +
+               `# ${err && err.message ? err.message : err}\n` + board;
+  try {
+    const fs = require('fs');
+    const path = `out/ladder-exhaustion-${process.pid}-${Date.now()}.txt`;
+    fs.writeFileSync(path, text);
+    process.stderr.write(`ladder2: exhaustion board dumped to ${path}\n`);
+  } catch (e) {
+    process.stderr.write(`ladder2: exhaustion (dump failed: ${e.message})\n${text}`);
+  }
+}
+
 function getLadderStatus(game, stoneIdx) {
   const { count: lc, lib0, lib1, lib2 } = game.groupLibs3(stoneIdx);
   if (lc < 1 || lc > 3) {
@@ -269,6 +304,8 @@ function getLadderStatus(game, stoneIdx) {
   // therefore reports "not urgent" after one trivial probe.
   const libs = lc === 1 ? [lib0] : lc === 2 ? [lib0, lib1] : [lib0, lib1, lib2];
   _movePath.length = 0;   // cycle-prune path: fresh per read
+  _snapshotRead(game, stoneIdx);   // entry position, for the exhaustion dump
+  try {
   const gColor = game.cells[stoneIdx];
   const mover = game.current;   // BLACK or WHITE
   const defending = gColor === mover;
@@ -319,6 +356,10 @@ function getLadderStatus(game, stoneIdx) {
     }
   }
   return { libs, moverSucceeds, urgentLibs, readNodes, readDepth };
+  } catch (e) {
+    if (String(e && e.message).includes('group ids exhausted')) _dumpRead(e);
+    throw e;
+  }
 }
 
 // _setCap: test/measurement hook; returns the previous cap.
