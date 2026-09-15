@@ -1767,9 +1767,6 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     else
         printf("run       1 worker, seed %d\n", cfg_seed);
 
-    if (ref_theta)
-        printf("match     directWR vs %s\n", cfg_ref_weights);
-
     char best_derived[320];
     if (!best) { best_path(ckpt, best_derived, sizeof best_derived); best = best_derived; }
     printf("out       %s  (best %s)\n", ckpt, best);
