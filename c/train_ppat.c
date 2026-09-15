@@ -68,11 +68,13 @@
  *                           Use a fixed high-playout set as a permanent yardstick:
  *                           teMSE then compares across runs and datasets.
  *     --train-pos <n>       train positions (default 0 = all)
- *     --test-playouts <n>   playouts per test position (default 1).  teMSE
- *                           carries a +0.25/n bias, so it is comparable only
- *                           across runs at the SAME n; 1 maximises positions
- *                           per unit test time (variance falls with position
- *                           count, which is where teMSE precision lives)
+ *     --test-playouts <n>   playouts per test position (default 10).  teMSE
+ *                           precision comes from position count, not playouts
+ *                           per position, so keep this small; 10 amortises the
+ *                           per-position setup overhead without paying for
+ *                           precision the position count already buys.  teMSE
+ *                           carries a +0.25/n bias — comparable only across
+ *                           runs at the SAME n.
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
@@ -2045,7 +2047,7 @@ int main(int argc, char **argv) {
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 0);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
-    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 1);
+    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 10);
     cfg_no_extreme       = get_float_arg(argc, argv, "--no-extreme", 0.0f);
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
