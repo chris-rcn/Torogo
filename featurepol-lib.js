@@ -58,6 +58,15 @@
 //               board is known — which makes the R-0 feature set
 //               board-size-dependent; a fixed R is the cross-size-safe
 //               spelling.  A descriptor plus its stack.
+//   stoneLimit<N>  Adaptive-diamond sparse shape: the LARGEST L1 diamond
+//               around the move containing at most N stones (stoneLimit0 =
+//               the largest empty diamond, a pure distance profile;
+//               stoneLimit2 = the largest window still sparse enough to
+//               read).  Hashed with the stones12b recursion at the reached
+//               level, level folded in; STACKS a reached-level thermometer
+//               like emptyExpand, and a move whose level-1 diamond already
+//               exceeds the limit emits nothing.  Radius runs to the board
+//               maximum; N is semantic and stays in the key salt.
 //   stones12b   The stones12 cells PLUS the centre (13), hashed as a recursive
 //               plus-of-plusses instead of a min over 8 D4 permutations: invariant
 //               by construction, so much cheaper, at 90.4% of the true D4 orbits.
@@ -479,6 +488,106 @@ function _eeShared(R) {
   return sh;
 }
 
+// ── stoneLimit<N>: the largest diamond holding at most N stones ──────────────
+// Exact counts come from a per-stone scatter into per-distance planes
+// (stones x area), each cell's level from a prefix walk, and the SAME t-hash
+// pyramid as emptyExpand run only to the deepest level any cell reached.
+let _slCnt = null;        // (Rmax+1) x area stone counts by exact distance
+const _slRowD = new Int32Array(64), _slColD = new Int32Array(64);   // per-stone wrapped deltas
+let _slDist = null;       // torus L1 distance lookup, indexed by (dr*N + dc)
+let _slDistN = 0;
+
+function _slPrepare(ctx, limit, st) {
+  const game = ctx.game, N = game.N, area = N * N, cur = ctx.cur;
+  const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
+  const Rmax = (N >> 1) * 2;
+  if (!st.key || st.key.length < area) {
+    st.key = new Int32Array(area); st.depth = new Int32Array(area);
+    st.a = new Int32Array(area); st.b = new Int32Array(area);
+  }
+  if (!_slCnt || _slCnt.length < (Rmax + 1) * area) _slCnt = new Int16Array((Rmax + 1) * area);
+  if (_slDistN !== N) {
+    // Pre-multiplied by area: the scatter's plane index needs no multiply.
+    _slDist = new Int32Array(area);
+    const half = N >> 1;
+    for (let dr = 0; dr < N; dr++) for (let dc = 0; dc < N; dc++) {
+      const wr = dr > half ? N - dr : dr, wc = dc > half ? N - dc : dc;
+      _slDist[dr * N + dc] = (wr + wc) * area;
+    }
+    _slDistN = N;
+  }
+  const cnt = _slCnt, dist = _slDist;
+  cnt.fill(0, 0, (Rmax + 1) * area);
+  // Scatter: every stone bumps its exact-distance plane at every cell.  The
+  // inner loop is two lookups and an add: per stone, the wrapped row/col
+  // deltas are precomputed into dist-table strides, so no division and no
+  // branch survives in the area loop.
+  const rowD = _slRowD, colD = _slColD;
+  for (let s = 0; s < area; s++) {
+    if (cells[s] === 0) continue;
+    const sr = (s / N) | 0, sc = s - sr * N;
+    for (let r = 0; r < N; r++) rowD[r] = ((r - sr + N) % N) * N;
+    for (let c = 0; c < N; c++) colD[c] = (c - sc + N) % N;
+    let i = 0;
+    for (let r = 0; r < N; r++) {
+      const dRow = rowD[r];
+      for (let c = 0; c < N; c++, i++) cnt[dist[dRow + colD[c]] + i]++;
+    }
+  }
+  // Per cell: the largest level with cumulative stones <= limit (level 0 =
+  // just the cell itself, which never emits — depth 0 gates the host space).
+  const depth = st.depth;
+  let maxL = 0;
+  for (let i = 0; i < area; i++) {
+    let cum = cnt[i];               // distance 0
+    let L = 0;
+    for (let o = area + i; o <= Rmax * area + i; o += area) {
+      cum += cnt[o];
+      if (cum > limit) break;
+      L++;
+    }
+    depth[i] = L;
+    if (L > maxL) maxL = L;
+  }
+  // t-hash pyramid to maxL only; key[i] assigned at its own level.
+  const key = st.key;
+  let a = st.a, b = st.b;
+  {
+    for (let idx = 0; idx < area; idx++) {
+      const base = idx * stride;
+      const cN = cells[nn[base]],     sN = cN === 0 ? 1 : cN === cur ? 2 : 3;
+      const cE = cells[nn[base + 1]], sE = cE === 0 ? 1 : cE === cur ? 2 : 3;
+      const cS = cells[nn[base + 2]], sS = cS === 0 ? 1 : cS === cur ? 2 : 3;
+      const cW = cells[nn[base + 3]], sW = cW === 0 ? 1 : cW === cur ? 2 : 3;
+      const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
+      const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
+      a[idx] = v;
+      if (depth[idx] === 1) key[idx] = _hashCombine(v, 1) | 0;
+    }
+  }
+  for (let k = 2; k <= maxL; k++) {
+    for (let idx = 0; idx < area; idx++) {
+      const base = idx * stride;
+      const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
+                                 _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
+      b[idx] = v;
+      if (depth[idx] === k) key[idx] = _hashCombine(v, k) | 0;
+    }
+    const t = a; a = b; b = t;
+  }
+}
+
+const _slByN = new Map();
+function _slShared(limit) {
+  let sh = _slByN.get(limit);
+  if (!sh) {
+    const st = { key: null, depth: null, a: null, b: null };
+    sh = { st, prepare: ctx => _slPrepare(ctx, limit, st) };
+    _slByN.set(limit, sh);
+  }
+  return sh;
+}
+
 (function () {
   const d4 = [
     (r, c) => [ r,  c], (r, c) => [ c, -r], (r, c) => [-r, -c], (r, c) => [-c,  r],
@@ -825,6 +934,24 @@ function _makeTerm(str) {
         }
         return _hashCombine(_canonStones(cv, n), n) >>> 0;
       };
+      break;
+    }
+    case 'stoneLimit': {
+      // The largest diamond holding at most N stones, hashed at its reached
+      // level; a reached-level thermometer stacks and gates like
+      // emptyExpand's.  N is semantic (patterns mean "<= N stones"), so it
+      // stays in the salts.
+      if (param === null || param < 0 || param > 8) throw new Error(`featurepol: stoneLimit<N> needs a stone limit N in 0..8, got "${str}"`);
+      {
+        maxNear = 4;
+        const sh = _slShared(param), st = sh.st;
+        prepare = sh.prepare;
+        evalFn = (ctx, idx) => st.key[idx];
+        stacked = { str: `_stoneLimitThermometer${param}`, saltStr: `_stoneLimitThermometer${param}`,
+                    salt: _hashStr(`_stoneLimitThermometer${param}`),
+                    cumulative: true, maxLevel: 0, maxNear: 4, needsLadder: false,
+                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
+      }
       break;
     }
     case 'emptyExpand': {
