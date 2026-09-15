@@ -137,7 +137,11 @@ win-ratio gap to the file's top-rated move.  Reports the RMS gap.
   if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
   if (showPhases !== null && (isNaN(showPhases) || showPhases < 1)) { console.error('--show-phases must be a positive integer'); process.exit(1); }
 
-  const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
+  const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
+// create(cfg)-style agents (phase-mux, the puct family) instantiate with a
+// plain env reader; bare { getMove } modules are used directly.
+const agent = (typeof _agentMod.create === 'function'
+    ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
   const pool      = loadPositions(opts.file);
   // --index N evaluates only the position at 0-based index N, restoring the
   // agent rng seed it would have had in a full sweep so the result reproduces

@@ -46,7 +46,11 @@ const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
 
-const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
+const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
+// create(cfg)-style agents (phase-mux, the puct family) instantiate with a
+// plain env reader; bare { getMove } modules are used directly.
+const agent = (typeof _agentMod.create === 'function'
+    ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
 
 // A position is eligible for analysis only when |win ratio − 0.5| is within
 // this, keeping only contested positions in the dataset.

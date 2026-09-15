@@ -98,7 +98,11 @@ print: loadCases(file) then evalCases(cases, getMove, { budgetMs, oversample })`
   const budgetMs   = parseInt(opts.budget || '1', 10);
   const oversample = parseInt(opts.oversample || '1', 10);
   const verbose    = opts.verbose !== undefined;
-  const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
+  const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
+// create(cfg)-style agents (phase-mux, the puct family) instantiate with a
+// plain env reader; bare { getMove } modules are used directly.
+const agent = (typeof _agentMod.create === 'function'
+    ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
 
   const cases = loadCases(opts.file);
   console.log(`file: ${opts.file}  cases: ${cases.length}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
