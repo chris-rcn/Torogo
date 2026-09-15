@@ -15,7 +15,7 @@
  *   ./train_ppat <file> [options]
  *   Options:
  *     --lr <f>              learning rate (default 10)
- *     --playouts <n>        default for --M, --N, and --test-playouts (default 500)
+ *     --playouts <n>        default for --M and --N (default 500)
  *     --M <n>               rollouts for V estimate (default --playouts)
  *     --N <n>               rollouts for gradient (default M)
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
@@ -68,7 +68,11 @@
  *                           Use a fixed high-playout set as a permanent yardstick:
  *                           teMSE then compares across runs and datasets.
  *     --train-pos <n>       train positions (default 0 = all)
- *     --test-playouts <n>   playouts per test position (default --playouts)
+ *     --test-playouts <n>   playouts per test position (default 1).  teMSE
+ *                           carries a +0.25/n bias, so it is comparable only
+ *                           across runs at the SAME n; 1 maximises positions
+ *                           per unit test time (variance falls with position
+ *                           count, which is where teMSE precision lives)
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
@@ -2035,13 +2039,13 @@ int main(int argc, char **argv) {
 
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
-    int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N, test-playouts */
+    int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N */
     cfg_M            = get_int_arg(argc, argv, "--M", playouts);
     cfg_N            = get_int_arg(argc, argv, "--N", cfg_M);
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 0);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
-    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", playouts);
+    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 1);
     cfg_no_extreme       = get_float_arg(argc, argv, "--no-extreme", 0.0f);
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
