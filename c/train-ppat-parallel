@@ -39,18 +39,6 @@ SYNC_DIR="out/ppat-sync-$RUN"
 CKPT="out/ppat-data-$RUN.js"
 BEST="${CKPT%.js}-best.js"
 
-# Pull --train-pos out of the passed args, for reporting.
-TRAIN_POS=""; prev=""
-for a in "$@"; do
-    [ "$prev" = "--train-pos" ] && { TRAIN_POS="$a"; break; }
-    prev="$a"
-done
-if [ -n "$TRAIN_POS" ]; then
-    TP_MSG="train-pos (total, split across workers): $TRAIN_POS"
-else
-    TP_MSG="train-pos (total): (train-ppat default = all after test head)"
-fi
-
 # The trainers' stdout goes to /dev/null (the monitor owns the terminal), so a
 # seed chosen inside train-ppat would never be seen.  Choose it here instead, so
 # a single-worker run can be replayed.  Honour an explicit --seed in the passed
@@ -70,12 +58,10 @@ fi
 # Fresh sync dir (avoid stale round files from a previous run).
 rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 
-echo "launching $K trainers + 1 monitor;  $TP_MSG"
-echo "sync-dir: $SYNC_DIR  checkpoint: $CKPT  best: $BEST"
-# Only worth reporting at K=1.  Above that the sync barrier's poll loop draws from
-# the training RNG, so wall-clock timing perturbs the stream and the seed replays
-# nothing — printing it would just be noise.
-[ "$K" -eq 1 ] && echo "seed: $SEED  (replay with --seed $SEED)"
+# The binary's monitor prints the shared banner (data / model / match); the
+# wrapper adds only what it owns — the output paths and the run housekeeping.
+echo "run       $K workers + monitor  →  $CKPT  (best $BEST)"
+[ "$K" -eq 1 ] && echo "seed      $SEED  (replay with --seed $SEED)"
 PIDS=""
 i=0
 while [ "$i" -lt "$K" ]; do

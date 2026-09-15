@@ -244,6 +244,9 @@ static int    cfg_trunc_on;
 static float  cfg_trunc_delta;
 static float  cfg_trunc_max_phase;
 static float  cfg_trunc_off_a, cfg_trunc_off_b;
+static const char *cfg_trunc_vpat = "";
+static int    cfg_init_from_next;
+static float  cfg_init_phase_scale = 1.0f;
 
 /* --phase-comp: reweight per-step gradient credit so the applied pressure is
  * uniform by phase.  Without it, pressure is a pure artifact of corpus
@@ -491,6 +494,7 @@ static int     n_train = 0;            /* this worker's slice of the train set *
 static int     n_train_total = 0;      /* full train set across all workers' slices */
 static int     test_idx[MAX_LINES];
 static int     n_test = 0;
+static int     records_kept = 0, records_filtered = 0, records_skipped = 0;
 
 /* Per-epoch training-fit: accumulate Σ (v* − V)^2 (v*, V normalised to win-prob
  * [0,1], matching the SB paper's MSE units) over the current epoch (V is the
@@ -706,9 +710,7 @@ static void load_positions_from(const char *path, int test_head) {
     if (skipped > 5)
         fprintf(stderr, "WARNING: %d more lines skipped\n", skipped - 5);
     if (n_all == base) { fprintf(stderr, "error: no valid positions in %s (%d lines skipped)\n", path, skipped); exit(1); }
-    if (cfg_worker_id == 0)
-        printf("records: %d kept of %d in %s (%d train-filtered, %d skipped)\n",
-               n_all - base, n_all - base + filtered, path, filtered, skipped);
+    records_kept = n_all - base; records_filtered = filtered; records_skipped = skipped;
 }
 
 /* n_test_file: how many leading records came from --test-file (0 when unset).
@@ -1711,19 +1713,76 @@ static void match_cols(char *dw, size_t dwn) {
 
 
 
+/* Optional-feature summary for the model banner line (empty when all default;
+ * self-atari is always on, so it is not listed). */
+static void banner_features(char *buf, size_t n) {
+    buf[0] = 0;
+    size_t o = 0;
+    #define ADD(...) do { o += snprintf(buf + o, o < n ? n - o : 0, __VA_ARGS__); } while (0)
+    if (ppat_twelvecell == 1) ADD("%stwelvecell", o ? ", " : "");
+    if (ppat_twelvecell == 2) ADD("%stwelvecell2", o ? ", " : "");
+    if (ppat_atari_n)   ADD("%satari %d", o ? ", " : "", ppat_atari_n);
+    if (ppat_xa_n)      ADD("%satari-by-self-atari %d", o ? ", " : "", ppat_xa_n);
+    if (ppat_capture_n) ADD("%scapture %d", o ? ", " : "", ppat_capture_n);
+    if (ppat_cs_n)      ADD("%scapture-by-self-atari %d", o ? ", " : "", ppat_cs_n);
+    #undef ADD
+}
+
+/* One banner for both modes, so a solo run and a parallel monitor read the
+ * same.  Shared rows (data / model / match) are identical; each mode adds only
+ * the rows it owns (train params + seed for solo, worker/checkpoint for the
+ * monitor).  Label column is 8 wide. */
+static void print_banner(bool monitor, const char *ckpt, const char *best) {
+    char feats[256]; banner_features(feats, sizeof feats);
+    (void)ckpt; (void)best;   /* used only on the solo `out` line */
+
+    printf("data      %s  (%d records: %d train, %d test)\n",
+           cfg_file, records_kept, n_train_total, n_test);
+    printf("model     libCap %d, %d patterns%s%s%s\n",
+           ppat_lib_cap, ppat_num_patterns,
+           cfg_no_local ? ", no-local" : "",
+           feats[0] ? " | " : "", feats);
+
+    if (!monitor) {
+        printf("train     lr %.3g, M %d, N %d, batch %d, %d phase(s)",
+               (double)cfg_lr, cfg_M, cfg_N, cfg_batch, ppat_phase_count);
+        if (cfg_phase >= 0)        printf(", phase %d only", cfg_phase);
+        if (cfg_ema_window > 0)    printf(", ema %d", cfg_ema_window);
+        if (cfg_overfit)           printf(", overfit");
+        if (cfg_no_extreme > 0)    printf(", no-extreme %.1f", cfg_no_extreme);
+        if (cfg_init_from_next)    printf(", init-scale %.3g", cfg_init_phase_scale);
+        printf("\n");
+        if (cfg_pc_buckets)
+            printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
+                   cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
+        if (cfg_trunc_on)
+            printf("          trunc vpat %s, delta %g, max-phase %g, offset %g,%g\n",
+                   cfg_trunc_vpat, (double)cfg_trunc_delta,
+                   (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
+    }
+
+    if (monitor)
+        printf("monitor   %d workers, test-playouts %d\n", cfg_workers, cfg_test_playouts);
+    else if (cfg_workers > 1)
+        printf("run       %d workers, sync-every %d, seed %d (not reproducible with >1 worker)\n",
+               cfg_workers, cfg_sync_every, cfg_seed);
+    else
+        printf("run       1 worker, seed %d (--seed replays exactly)\n", cfg_seed);
+
+    if (ref_theta)
+        printf("match     directWR vs %s (libCap %d, %d phase(s)): %d games row 1, +%.0f%%/row, cap %.0f min\n",
+               cfg_ref_weights, ref_lib_cap, ref_phases,
+               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0);
+
+    if (!monitor)
+        printf("out       %s  (best %s)\n", ckpt, best);
+}
+
 /* Dedicated monitor: repeatedly load the latest checkpoint and test it, printing
  * the metrics — without training or touching the sync barrier, so the training
  * workers never stall on the (expensive) test. */
 static void run_monitor(void) {
-    printf("monitor: %d test positions, test-playouts %d, %d workers, phases %d, libCap %d",
-           n_test, cfg_test_playouts, cfg_workers, ppat_phase_count, ppat_lib_cap);
-    if (cfg_phase >= 0) printf(", phase %d only (others frozen)", cfg_phase);
-    printf("\n");
-    if (ref_theta)
-        printf("match: directWR %d games on the first row, +%.0f%%/row capped at %.0f min, "
-               "vs %s (libCap %d, %d phase(s))\n",
-               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
-               cfg_ref_weights, ref_lib_cap, ref_phases);
+    print_banner(true, cfg_monitor, NULL);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
@@ -1999,8 +2058,8 @@ int main(int argc, char **argv) {
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
     cfg_phase = get_int_arg(argc, argv, "--phase", -1);
     /* Presence of --init-phase-scale enables seeding phase P from phase P+1. */
-    int cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
-    float cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
+    cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
+    cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
     {
         const char *tv = get_str_arg(argc, argv, "--trunc-vpat", NULL);
         cfg_trunc_delta     = get_float_arg(argc, argv, "--trunc-delta", 0.0f);
@@ -2017,6 +2076,7 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             vpat_load(tv);
+            cfg_trunc_vpat = tv;
             cfg_trunc_on = 1;
         } else if (cfg_trunc_delta != 0.0f || toff || has_flag(argc, argv, "--trunc-max-phase")) {
             fprintf(stderr, "error: --trunc-delta/--trunc-offset/--trunc-max-phase need --trunc-vpat\n");
@@ -2214,46 +2274,8 @@ int main(int argc, char **argv) {
     }
 
     if (cfg_worker_id == 0) {
-    char scalebuf[32];
-    if (cfg_init_from_next) snprintf(scalebuf, sizeof scalebuf, "%.3g", cfg_init_phase_scale);
-    else                    snprintf(scalebuf, sizeof scalebuf, "off");
-    char lrbuf[64];
-    /* Workers sum displacements at the barrier, so --lr is the per-position rate
-     * regardless of worker count; the aggregate step per round is K times one
-     * worker's.  Spell that out rather than leaving it implicit. */
-    if (parallel) snprintf(lrbuf, sizeof lrbuf, "%.1f (x%d workers per round)", cfg_lr, cfg_workers);
-    else          snprintf(lrbuf, sizeof lrbuf, "%.1f", cfg_lr);
-    printf("train: %s (%d positions; %d/worker × %d)  lr: %s  M: %d  N: %d  batch: %d  overfit: %s  no-extreme: %.1f  phases: %d  phase: %d  init-phase-scale: %s\n",
-           cfg_file, n_train_total, n_train, cfg_workers, lrbuf, cfg_M, cfg_N, cfg_batch,
-           cfg_overfit ? "true" : "false", cfg_no_extreme,
-           ppat_phase_count, cfg_phase, scalebuf);
-    if (cfg_pc_buckets)
-        printf("phase-comp: %d buckets (weight-tracked, shrink %g, warmup %d positions)\n",
-               cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
-    if (cfg_trunc_on)
-        printf("trunc: vpat %s  delta: %g  max-phase: %g  offset: %g,%g\n",
-               get_str_arg(argc, argv, "--trunc-vpat", ""), (double)cfg_trunc_delta,
-               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
-    /* libCap fixes the pattern table size; how many of those weights are
-     * actually reached is the nWts column, not something knowable up front. */
-    printf("model: libCap %d  pattern table: %d%s\n", ppat_lib_cap, ppat_num_patterns,
-           cfg_no_local ? "  local features: FROZEN at 0 (--no-local)" : "");
-    if (cfg_ema_window > 0)
-        printf("weights: Polyak average over %d aggregate positions (--ema-window)\n", cfg_ema_window);
-    printf("seed: %d%s\n", cfg_seed,
-           parallel ? "  (--seed replays this, but NOT reproducibly with >1 worker)"
-                    : "  (--seed with this value replays the run exactly)");
-    if (parallel)
-        printf("parallel: %d workers  sync-every: %d  sync-dir: %s\n", cfg_workers, cfg_sync_every, cfg_sync_dir);
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
-    printf("test: %d positions%s%s  test-playouts: %d  output: %s  best: %s\n",
-           n_test, cfg_test_file ? " from " : "", cfg_test_file ? cfg_test_file : "",
-           cfg_test_playouts, weights_file, best_file);
-    if (ref_theta)
-        printf("match: directWR %d games on the first row, +%.0f%%/row capped at %.0f min, "
-               "vs %s (libCap %d, %d phase(s))\n",
-               DIRECT_GAMES, 100.0 * (MATCH_GROWTH - 1.0), MATCH_MAX_S / 60.0,
-               cfg_ref_weights, ref_lib_cap, ref_phases);
+    print_banner(false, weights_file, best_file);
     printf("%9s  %7s", "positions", "trMSE");
     if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
