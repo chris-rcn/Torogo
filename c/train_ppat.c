@@ -1732,7 +1732,6 @@ static void banner_features(char *buf, size_t n) {
  * monitor).  Label column is 8 wide. */
 static void print_banner(bool monitor, const char *ckpt, const char *best) {
     char feats[256]; banner_features(feats, sizeof feats);
-    (void)ckpt; (void)best;   /* used only on the solo `out` line */
 
     printf("data      %s  (%d train, %d test)\n",
            cfg_file, n_train_total, n_test);
@@ -1769,8 +1768,9 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     if (ref_theta)
         printf("match     directWR vs %s\n", cfg_ref_weights);
 
-    if (!monitor)
-        printf("out       %s  (best %s)\n", ckpt, best);
+    char best_derived[320];
+    if (!best) { best_path(ckpt, best_derived, sizeof best_derived); best = best_derived; }
+    printf("out       %s  (best %s)\n", ckpt, best);
 }
 
 /* Dedicated monitor: repeatedly load the latest checkpoint and test it, printing

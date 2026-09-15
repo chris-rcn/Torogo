@@ -37,7 +37,6 @@ K="$1"; DATA="$2"; shift 2
 RUN="$$"
 SYNC_DIR="out/ppat-sync-$RUN"
 CKPT="out/ppat-data-$RUN.js"
-BEST="${CKPT%.js}-best.js"
 
 # The trainers' stdout goes to /dev/null (the monitor owns the terminal), so a
 # seed chosen inside train-ppat would never be seen.  Choose it here instead, so
@@ -58,9 +57,9 @@ fi
 # Fresh sync dir (avoid stale round files from a previous run).
 rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 
-# The binary's monitor prints the shared banner (data / model / match); the
-# wrapper adds only what it owns — the output paths and the run housekeeping.
-echo "run       $K workers + monitor  →  $CKPT  (best $BEST)"
+# The binary's monitor prints the whole shared banner (data / model / match /
+# out); the wrapper adds only the seed, which the workers (stdout to /dev/null)
+# cannot report and which is replayable only at K=1.
 [ "$K" -eq 1 ] && echo "seed      $SEED  (replay with --seed $SEED)"
 PIDS=""
 i=0
