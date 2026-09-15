@@ -10,3 +10,6 @@ ref/
 cgos/data/
 __pycache__/
 *.pyc
+
+# extension-less C binary (train-ppat-parallel is the tracked script)
+c/train-ppat
