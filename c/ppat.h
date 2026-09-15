@@ -51,7 +51,7 @@ extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_mov
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
 /* Max features per candidate: 1 pattern + 7 prev-move + 1 twelvecell */
-#define PPAT_MAX_FEAT 12
+#define PPAT_MAX_FEAT 13
 
 /* ── Feature state (reusable across calls) ─────────────────────────────────── */
 typedef struct {
@@ -106,6 +106,14 @@ extern int ppat_file_atari;            /* what the last loaded file carried */
 extern int ppat_xa_n;                  /* grid cap N, 0 = off */
 extern int ppat_file_xa;               /* what the last loaded file carried */
 
+/* Graded capture size (--capture N, 0 = off): when a candidate captures,
+ * one gated key fires, one-hot on min(total stones captured, N).  The cap-2
+ * pattern already sees capture EXISTENCE (a lib-1 enemy orthogonal is
+ * distinguishable); this adds the SIZE the pattern cannot express. */
+#define PPAT_CAP_MAX 8
+extern int ppat_capture_n;             /* the grade count N, 0 = off */
+extern int ppat_file_capture;          /* what the last loaded file carried */
+
 #define PPAT_T12_RAW       81
 #define PPAT_T12_PATTERNS  21    /* mode 1: arms alone, exact (inner all-empty) */
 #define PPAT_T12B_RAW    6561
@@ -129,7 +137,8 @@ static inline int ppat_total_weights(void) {
            ppat_phase_count * ppat_t12_block() +
            (ppat_self_atari ? ppat_phase_count * PPAT_SA_N : 0) +
            ppat_phase_count * ppat_atari_n +
-           ppat_phase_count * ppat_xa_n * ppat_xa_n;
+           ppat_phase_count * ppat_xa_n * ppat_xa_n +
+           ppat_phase_count * ppat_capture_n;
 }
 
 /* Extract features for all legal non-true-eye moves into `st`. */
