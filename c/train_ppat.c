@@ -95,6 +95,12 @@
  *                           the cap-2 pattern (two enemy liberties code the
  *                           same as safe), so this is liberty resolution the
  *                           ninecell lacks.  Appended block; fine-tunes in
+ *     --atari-by-self-atari <n>
+ *                           mutual-atari interaction grid (default 0 = off):
+ *                           fires when the candidate is BOTH self-atari and
+ *                           gives atari (capturing-race fills, snapbacks),
+ *                           one-hot on the (own size, victim size) grid
+ *                           capped at n each — n*n weights per phase
  *     --twelvecell2         the same key on a LOOSER trigger: the four ADJACENT
  *                           points empty, whatever the diagonals hold.  Fires
  *                           strictly more often.  Mutually exclusive with
@@ -1953,7 +1959,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--M <n>] [--N <n>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--no-local] [--overfit]\n");
+        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--no-local] [--overfit]\n");
         fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
         fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
         fprintf(stderr, "       [--phase-compensation-buckets <n>] [--match-phases A,B]\n");
@@ -2093,6 +2099,11 @@ int main(int argc, char **argv) {
     ppat_atari_n = get_int_arg(argc, argv, "--atari", 0);
     if (ppat_atari_n < 0 || ppat_atari_n > PPAT_ATARI_MAX) {
         fprintf(stderr, "error: --atari must be 0..%d\n", PPAT_ATARI_MAX);
+        exit(1);
+    }
+    ppat_xa_n = get_int_arg(argc, argv, "--atari-by-self-atari", 0);
+    if (ppat_xa_n < 0 || ppat_xa_n > PPAT_XA_MAX) {
+        fprintf(stderr, "error: --atari-by-self-atari must be 0..%d\n", PPAT_XA_MAX);
         exit(1);
     }
     check_unknown_args(argc, argv);
