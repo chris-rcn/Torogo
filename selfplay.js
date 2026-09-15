@@ -114,7 +114,9 @@ alternate between games; per-agent env config uses the P1_/P2_ prefixes
   --stop-tol A      early stop once P(p2 truly better than 50%) reaches 1-A
                     (confidently better) or A (confidently worse)
   --stop-min N      minimum games before --stop-tol can trigger (default 0)
-  --help            show this message`);
+  --help            show this message
+
+  env VERBOSE=1     print the board and agent info after every move`);
   process.exit(0);
 }
 
