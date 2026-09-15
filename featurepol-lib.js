@@ -108,9 +108,10 @@
 //   koSolve     binary (ppat Feature 6): 1 iff the move captures an atari'd enemy
 //               group adjacent to my own ko-stone (game.koStone[cur+1]) — resolving
 //               a ko I just made by capturing the threat rather than fighting it.
-//   dist<n>     cumulative blended-toroidal distance to the previous move, as
-//               levels floor(Game2.distance*2-1) capped at n (orthogonal-adjacent
-//               = 1, rising with distance); no previous move emits nothing.
+//   dist<n>     ONE-HOT blended-toroidal distance to the previous move: the
+//               reached level floor(Game2.distance*2-1) capped at n
+//               (orthogonal-adjacent = 1, rising with distance), one key per
+//               move; no previous move emits nothing (level 0, gated).
 //   ladderStatus 4-bit ladder presence mask at the move from ladder2
 //               (urgent-kill/urgent-save/wasted-extend/wasted-attack)
 //   urgentKill<n> / urgentSave<n> / wastedExtend<n> / wastedAttack<n>
@@ -862,7 +863,7 @@ function _makeTerm(str) {
   // terms set evalFn directly (one value → one key).
   // maxNear: how many of the nearest cells this term reads from the nearNbr table
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
-  let evalFn = null, sizeFn = null, cumulative = false, needsLadder = false, binary = false, maxNear = 0;
+  let evalFn = null, sizeFn = null, cumulative = false, oneHot = false, needsLadder = false, binary = false, maxNear = 0;
   let prepare = null, stacked = null;   // stacked: an additional weight space this keyword emits into (see parseSpec)
   let listFn = null;                    // list term: emits one key per value it writes into the shared buffer
   switch (kind) {
@@ -1228,13 +1229,17 @@ function _makeTerm(str) {
       break;
     }
     case 'dist': {
-      // Cumulative thermometer of the (blended toroidal) distance from the move to
-      // the previous move, mapped to integer levels via floor(Game2.distance*2-1):
-      // an orthogonal-adjacent move is level 1 and the level rises with distance,
-      // up to the cap n.  No previous move (or a pass) yields level 0 — the
-      // reference state, which emits nothing.  Graded sibling of `local`.
+      // ONE-HOT (blended toroidal) distance from the move to the previous move,
+      // mapped to an integer level via floor(Game2.distance*2-1): an
+      // orthogonal-adjacent move is level 1, rising with distance, capped at n.
+      // Exactly ONE key per move — the reached level — not a 1..k thermometer
+      // (distance bands are not a monotone accumulation, and a thermometer
+      // emitted up to n keys per candidate for marginal signal).  No previous
+      // move (or a pass) yields level 0, the reference state, which emits
+      // nothing (gated).  Graded sibling of `local`.
       if (!param) throw new Error(`featurepol: dist<n> needs a cap, got "${str}"`);
       cumulative = true;
+      oneHot = true;
       sizeFn = (ctx, idx) => {
         const g = ctx.game, prev = g.lastMove;
         if (prev < 0) return 0;
@@ -1265,7 +1270,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked, listFn };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, oneHot, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked, listFn };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -1336,7 +1341,7 @@ function parseSpec(specStr) {
       if (t.maxNear > nearMax) nearMax = t.maxNear;
       const slot = slotFor(t);
       if (t.prepare && !prepares.includes(t.prepare)) prepares.push(t.prepare);
-      if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel }); }
+      if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel, oneHot: t.oneHot }); }
       else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
       if (t.stacked) {
@@ -1349,7 +1354,7 @@ function parseSpec(specStr) {
       }
     }
     let maxKeys = 1;
-    for (const c of cumTerms) maxKeys *= c.maxLevel;
+    for (const c of cumTerms) maxKeys *= (c.oneHot ? 1 : c.maxLevel);
     const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
     // The space salt strips emptyExpand's R (matching its R-free term salt),
     // so a retrain at a different R lands on the same weight space.
@@ -1506,13 +1511,13 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB, ctx, idx) {
     { const ix = _intern(weights, base >>> 0); if (ix >= 0) out[pos++] = ix; }
   } else if (ct.length === 1) {
     const t = ct[0]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
-    for (let k = 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) out[pos++] = ix; }
+    for (let k = t.oneHot ? sz : 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) out[pos++] = ix; }
   } else {
     let acc = accA, nxt = accB, nAcc = 1; acc[0] = base;
     for (let ci = 0; ci < ct.length; ci++) {
       const t = ct[ci]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
       let on = 0;
-      for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
+      for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = t.oneHot ? sz : 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
       const tmp = acc; acc = nxt; nxt = tmp; nAcc = on;
     }
     for (let a = 0; a < nAcc; a++) { const ix = _intern(weights, acc[a] >>> 0); if (ix >= 0) out[pos++] = ix; }
@@ -1661,16 +1666,17 @@ function extractFeatures(game, state, weights, game3) {
       if (ct.length === 0) {
         { const ix = _intern(weights, base >>> 0); if (ix >= 0) keys[pos++] = ix; }
       } else if (ct.length === 1) {
-        // Single thermometer: present levels 1..min(size, maxLevel) (size ≥ 1, gated above).
+        // One key: the reached level for a one-hot term (dist), else the
+        // present thermometer levels 1..min(size, maxLevel) (size >= 1, gated).
         const t = ct[0]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
-        for (let k = 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) keys[pos++] = ix; }
+        for (let k = t.oneHot ? sz : 1; k <= sz; k++) { const ix = _intern(weights, _hashCombine(base, _hashCombine(t.salt, k)) >>> 0); if (ix >= 0) keys[pos++] = ix; }
       } else {
         // ≥2 cumulative terms: cross-product of their present levels (rare).
         let acc = accA, nxt = accB, nAcc = 1; acc[0] = base;
         for (let ci = 0; ci < ct.length; ci++) {
           const t = ct[ci]; let sz = memo[t.slot]; if (sz > t.maxLevel) sz = t.maxLevel;
           let on = 0;
-          for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
+          for (let a = 0; a < nAcc; a++) { const ba = acc[a]; for (let k = t.oneHot ? sz : 1; k <= sz; k++) nxt[on++] = _hashCombine(ba, _hashCombine(t.salt, k)); }
           const tmp = acc; acc = nxt; nxt = tmp; nAcc = on;
         }
         for (let a = 0; a < nAcc; a++) { const ix = _intern(weights, acc[a] >>> 0); if (ix >= 0) keys[pos++] = ix; }
