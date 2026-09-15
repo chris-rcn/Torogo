@@ -225,66 +225,8 @@ function _canSaveByCapture(idx, new1LibGids, nbr, cells, gidArr, lsArr, lw, sw, 
   return false;
 }
 
-// Find both liberties of a group with exactly 2 libs.
-function _twoLibs(gid, lw, W, cap) {
-  const lb = gid * W;
-  const libs = [-1, -1];
-  let found = 0;
-  for (let wi = 0; wi < W && found < 2; wi++) {
-    let w = lw[lb + wi];
-    while (w && found < 2) {
-      const i = wi * 32 + (31 - Math.clz32(w & -w));
-      if (i < cap) libs[found++] = i;
-      w &= w - 1;
-    }
-  }
-  return libs;
-}
 
-// Check if the other liberty of egid (not idx) connects to a same-color group
-// (excluding egid) with ≥2 liberties. If so, the opponent can save by joining.
-function _opponentCanSave(idx, egid, nbr, cells, gidArr, lsArr, lw, W, cap, foe) {
-  const [l0, l1] = _twoLibs(egid, lw, W, cap);
-  const other = (l0 === idx) ? l1 : l0;
-  const ob4 = other * 4;
-  for (let d = 0; d < 4; d++) {
-    const ni = nbr[ob4 + d];
-    if (cells[ni] !== foe) continue;
-    const ngid = gidArr[ni];
-    if (ngid === egid) continue;
-    if (lsArr[ngid] >= 2) return true;
-  }
-  return false;
-}
 
-// Returns true if playing at idx gives atari to an enemy group adjacent to
-// any of the friendly 2-liberty groups in new2LibGids, AND the opponent
-// cannot save by joining at the other liberty.
-function _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lw, sw, W, cap, foe) {
-  for (const sgid of new2LibGids) {
-    const sb = sgid * W;
-    for (let wi = 0; wi < W; wi++) {
-      let w = sw[sb + wi];
-      while (w) {
-        const lsb = w & -w;
-        const si = wi * 32 + (31 - Math.clz32(lsb));
-        if (si < cap) {
-          const b4 = si * 4;
-          for (let di = 0; di < 4; di++) {
-            const ni = nbr[b4 + di];
-            if (cells[ni] !== foe) continue;
-            const egid = gidArr[ni];
-            if (lsArr[egid] === 2 && (lw[egid * W + (idx >> 5)] & (1 << (idx & 31)))
-                && !_opponentCanSave(idx, egid, nbr, cells, gidArr, lsArr, lw, W, cap, foe))
-              return true;
-          }
-        }
-        w ^= lsb;
-      }
-    }
-  }
-  return false;
-}
 
 // Quick self-atari pre-check.  Returns true if we can guarantee the move at idx
 // is NOT self-atari, without simulating the move.
@@ -294,31 +236,12 @@ function _gives2LibAtari(idx, new2LibGids, nbr, cells, gidArr, lsArr, lw, sw, W,
 // Also: if any adjacent friendly group has ≥3 liberties, connecting to it still
 // leaves ≥2 after idx is consumed from its liberty set.
 // If this returns true, skip the expensive clone; otherwise fall through to clone.
-function _notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lw, W, cur, foe) {
-  let free = 0;
-  for (let di = 0; di < 4; di++) {
-    const ni = nbr[b4 + di];
-    const c  = cells[ni];
-    if (c === 0) {
-      if (++free >= 2) return true;
-    } else if (c === cur) {
-      if (lsArr[gidArr[ni]] >= 3) return true;
-    } else {
-      const egid = gidArr[ni];
-      if (lsArr[egid] === 1 && (lw[egid * W + (idx >> 5)] & (1 << (idx & 31))))
-        if (++free >= 2) return true;
-    }
-  }
-  return false;
-}
 
 // ── Static buffers (avoid per-call allocation / GC pressure) ─────────────────
+const _prevN8       = new Int32Array(8);
 const _atariGids    = new Int32Array(8);
 const _atariLibsArr = new Int32Array(8);
-const _twoLibGids   = new Int32Array(8);
 let _sbcCells       = new Int32Array(64);   // save-by-capture cell indices (grown to cap)
-let _semCells       = new Int32Array(64);   // semeai candidate cell indices (grown to cap)
-let _semEgids       = new Int32Array(64);   // semeai candidate enemy gids (grown to cap)
 const _koSolveLibs  = new Int32Array(4);
 const _seenBuf      = new Int32Array(16);   // dedup scratch
 
@@ -331,7 +254,6 @@ function createState(N) {
     moves:          new Int32Array(cap),
     feat:           new Int32Array(cap * 10),  // flat feature keys (1 pat + 7 prev + 1 twelvecell + 1 self-atari)
     featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
-    prevNeighborSet: new Uint8Array(cap),
     count:          0,
   };
 }
@@ -422,10 +344,11 @@ function _selfAtariSize(game, idx, cur) {
   return libs >= 2 ? 0 : size;
 }
 
-function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false) {
+function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false, atariN = 0) {
   return phaseCount * (_buildTables(libCap).numPatterns + 7) +
          phaseCount * t12Block(t12mode | 0) +
-         (selfAtari ? phaseCount * SA_N : 0);
+         (selfAtari ? phaseCount * SA_N : 0) +
+         phaseCount * (atariN | 0);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -445,7 +368,7 @@ function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false) {
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0, selfAtari = false) {
+function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -454,14 +377,13 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const _LC    = libCap;
   if (_sbcCells.length < cap) {
     _sbcCells = new Int32Array(cap);
-    _semCells = new Int32Array(cap);
-    _semEgids = new Int32Array(cap);
   }
   const cells  = game.cells;
   const gidArr = game._gid;
   const lsArr  = game._ls;
   const lwArr  = game._lw;
   const swArr  = game._sw;
+  const ssArr  = game._ss;
   const W      = game._W;
 
   const phase = phaseCount * (cap - game.emptyCount) / cap | 0;
@@ -470,6 +392,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const _T12C = t12mode === 2 ? _T12B.canonId : _T12.canonId;
   const t12Offset = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
   const saOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode)) + phase * SA_N;
+  const atOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0)) + phase * atariN;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -480,38 +403,33 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   const hasPrev = !skipLocal && prev !== PASS;
   const myKoStone = game.koStone[cur + 1];
 
-  // ── Pre-scan: build prevNeighborSet + find friendly strings in atari or with 2 libs ──
-  const prevNeighborSet = state.prevNeighborSet;
+  // ── Pre-scan (mirrors c/ppat.c): friendly strings put in atari by prev,
+  // their save-by-capture cells, prev's 8-neighborhood, and ko-solve libs. ──
   const atariGids = _atariGids;     // reuse static arrays (no GC)
   const atariLibsArr = _atariLibsArr;
   let nAtari = 0;
-  const twoLibGids = _twoLibGids;
-  let nTwo = 0;
+  const prevN8 = _prevN8;
+  let nPrevN8 = 0;
 
   if (hasPrev) {
     const pb4 = prev * 4;
     for (let di = 0; di < 4; di++) {
-      prevNeighborSet[nbr[pb4 + di]]  = 1;
-      prevNeighborSet[dnbr[pb4 + di]] = 1;
+      prevN8[nPrevN8++] = nbr[pb4 + di];
+      prevN8[nPrevN8++] = dnbr[pb4 + di];
       const ni = nbr[pb4 + di];
       if (cells[ni] !== cur) continue;
       const gid = gidArr[ni];
-      const ls  = lsArr[gid];
-      if (ls === 1) {
+      if (lsArr[gid] === 1) {
         let dup = false;
         for (let j = 0; j < nAtari; j++) if (atariGids[j] === gid) { dup = true; break; }
         if (!dup) atariGids[nAtari++] = gid;
-      } else if (ls === 2) {
-        let dup = false;
-        for (let j = 0; j < nTwo; j++) if (twoLibGids[j] === gid) { dup = true; break; }
-        if (!dup) twoLibGids[nTwo++] = gid;
       }
     }
     for (let i = 0; i < nAtari; i++)
       atariLibsArr[i] = _firstLib(atariGids[i], lwArr, W, cap);
   }
 
-  // Precompute save-by-capture cells (avoid per-candidate _canSaveByCapture).
+  // Precompute save-by-capture cells.
   let nSbc = 0;
   if (nAtari > 0) {
     const seen = _seenBuf;
@@ -537,41 +455,6 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
               if (nSeen < 16) seen[nSeen++] = egid;
               const lib = _firstLib(egid, lwArr, W, cap);
               if (lib >= 0) _sbcCells[nSbc++] = lib;
-            }
-          }
-          w ^= lsb;
-        }
-      }
-    }
-  }
-
-  // Precompute semeai candidates (avoid per-candidate _gives2LibAtari).
-  let nSem = 0;
-  if (nTwo > 0) {
-    const seen = _seenBuf;
-    let nSeen = 0;
-    for (let ti = 0; ti < nTwo; ti++) {
-      const sgid = twoLibGids[ti];
-      const sb = sgid * W;
-      for (let wi = 0; wi < W; wi++) {
-        let w = swArr[sb + wi];
-        while (w) {
-          const lsb = w & -w;
-          const si = wi * 32 + (31 - Math.clz32(lsb));
-          if (si < cap) {
-            const b4s = si * 4;
-            for (let d = 0; d < 4; d++) {
-              const ni = nbr[b4s + d];
-              if (cells[ni] !== foe) continue;
-              const egid = gidArr[ni];
-              if (lsArr[egid] !== 2) continue;
-              let dup = false;
-              for (let j = 0; j < nSeen; j++) if (seen[j] === egid) { dup = true; break; }
-              if (dup) continue;
-              if (nSeen < 16) seen[nSeen++] = egid;
-              const [l0, l1] = _twoLibs(egid, lwArr, W, cap);
-              if (l0 >= 0) { _semCells[nSem] = l0; _semEgids[nSem] = egid; nSem++; }
-              if (l1 >= 0) { _semCells[nSem] = l1; _semEgids[nSem] = egid; nSem++; }
             }
           }
           w ^= lsb;
@@ -681,60 +564,52 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
       state.feat[nf++] = t12Offset + _T12C[t12];
     }
 
-    if (selfAtari) {
-      const sa = _selfAtariSize(game, idx, cur);
-      if (sa > 0) state.feat[nf++] = saOffset + (sa < SA_N ? sa : SA_N) - 1;
+    // Computed once; feeds the graded feature AND the save-slot split.
+    const sa = (selfAtari || hasPrev) ? _selfAtariSize(game, idx, cur) : 0;
+    if (selfAtari && sa > 0) state.feat[nf++] = saOffset + (sa < SA_N ? sa : SA_N) - 1;
+
+    // Gives-atari: the largest adjacent enemy chain this move reduces to one
+    // liberty (pre-move ls === 2 is exact: an adjacent empty point is always
+    // one of its liberties).
+    if (atariN > 0) {
+      let biggest = 0;
+      for (let d = 0; d < 4; d++) {
+        const ni = nbr[b4 + d], c = cells[ni];
+        if (c !== 0 && c !== cur) {
+          const eg = gidArr[ni];
+          if (lsArr[eg] === 2 && ssArr[eg] > biggest) biggest = ssArr[eg];
+        }
+      }
+      if (biggest > 0) state.feat[nf++] = atOffset + (biggest < atariN ? biggest : atariN) - 1;
     }
 
-    // ── Previous-move features ────────────────────────────────────────────────
-    let mask = 0;
-    if (hasPrev && prevNeighborSet[idx]) mask = 1;
+    // ── Previous-move features (mirrors c/ppat.c: slots 1-5 + contiguity) ────
+    const nfLocals = nf;
 
-    // Features 2–5: precomputed save-by-capture + extension check
+    // Save-atari: capture (slots 1/2) takes priority over extension (3/4),
+    // split by whether the rescue itself is a self-atari.
     if (nAtari > 0) {
       let feat2 = false;
-      for (let si = 0; si < nSbc; si++) {
+      for (let si = 0; si < nSbc; si++)
         if (_sbcCells[si] === idx) { feat2 = true; break; }
-      }
-      let feat4 = false;
-      if (!feat2) {
-        for (let i = 0; i < nAtari; i++) {
-          if (atariLibsArr[i] === idx) { feat4 = true; break; }
-        }
-      }
-      if (feat2 || feat4) {
-        let sa = false;
-        if (!_notSelfAtariCheap(idx, b4, nbr, cells, gidArr, lsArr, lwArr, W, cur, foe)) {
-          const cg = game.clone();
-          cg.play(idx);
-          const cid = cg._gid[idx];
-          sa = cid !== -1 && cg._ls[cid] === 1;
-        }
-        if (feat2) mask |= sa ? 4 : 2;
-        if (feat4) mask |= sa ? 16 : 8;
+      if (feat2) state.feat[nf++] = prevOffset + (sa > 0 ? 2 : 1);
+      else {
+        for (let i = 0; i < nAtari; i++)
+          if (atariLibsArr[i] === idx) { state.feat[nf++] = prevOffset + (sa > 0 ? 4 : 3); break; }
       }
     }
 
-    // Feature 7: precomputed semeai candidates
-    if (nSem > 0) {
-      for (let si = 0; si < nSem; si++) {
-        if (_semCells[si] === idx &&
-            !_opponentCanSave(idx, _semEgids[si], nbr, cells, gidArr, lsArr, lwArr, W, cap, foe)) {
-          mask |= 64; break;
-        }
-      }
+    // Ko-solve (slot 5)
+    for (let ki = 0; ki < nKoSolve; ki++)
+      if (idx === _koSolveLibs[ki]) { state.feat[nf++] = prevOffset + 5; break; }
+
+    // Contiguity (slot 0): within prev's 8-neighborhood, or any tactical
+    // local (slots 1-5) fired.
+    if (hasPrev) {
+      let local = nf > nfLocals;
+      for (let k = 0; !local && k < nPrevN8; k++) local = (prevN8[k] === idx);
+      if (local) state.feat[nf++] = prevOffset + 0;
     }
-
-    // Feature 6: ko-solve capture
-    for (let ki = 0; ki < nKoSolve; ki++) {
-      if (idx === _koSolveLibs[ki]) { mask |= 32; break; }
-    }
-
-    if (mask & 0x7E) mask |= 1;
-
-    // Emit prev feature keys
-    for (let b = 0; b < 7; b++)
-      if (mask & (1 << b)) state.feat[nf++] = prevOffset + b;
 
     count++;
   }
@@ -742,19 +617,12 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
   state.featStart[count] = nf;
   state.count = count;
 
-  if (hasPrev) {
-    const pb4 = prev * 4;
-    for (let di = 0; di < 4; di++) {
-      prevNeighborSet[nbr[pb4 + di]]  = 0;
-      prevNeighborSet[dnbr[pb4 + di]] = 0;
-    }
-  }
 }
 
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -800,7 +668,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari);
+  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -884,6 +752,7 @@ function loadWeights(pathOrObj) {
   const phases = raw.phases || 1;
   const twelvecell = raw.twelvecell === true, twelvecell2 = raw.twelvecell2 === true;
   const selfAtari = raw.selfAtari === true;
+  const atariN = raw.atari | 0;
   if (twelvecell && twelvecell2) {
     console.error('ppat loadWeights: twelvecell and twelvecell2 are mutually exclusive');
     return null;
@@ -904,7 +773,7 @@ function loadWeights(pathOrObj) {
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
   return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
-           twelvecell, twelvecell2, t12mode, selfAtari,
+           twelvecell, twelvecell2, t12mode, selfAtari, atariN,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }
