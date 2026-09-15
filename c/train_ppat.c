@@ -1733,8 +1733,12 @@ static void banner_features(char *buf, size_t n) {
 static void print_banner(bool monitor, const char *ckpt, const char *best) {
     char feats[256]; banner_features(feats, sizeof feats);
 
-    printf("data      %s  (%d train, %d test)\n",
-           cfg_file, n_train_total, n_test);
+    if (cfg_test_file)
+        printf("data      %s (%d train), %s (%d test)\n",
+               cfg_file, n_train_total, cfg_test_file, n_test);
+    else
+        printf("data      %s  (%d train, %d test)\n",
+               cfg_file, n_train_total, n_test);
     printf("model     libCap %d%s%s%s\n",
            ppat_lib_cap,
            cfg_no_local ? ", no-local" : "",
