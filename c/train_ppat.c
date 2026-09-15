@@ -1738,8 +1738,8 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
 
     printf("data      %s  (%d records: %d train, %d test)\n",
            cfg_file, records_kept, n_train_total, n_test);
-    printf("model     libCap %d, %d patterns%s%s%s\n",
-           ppat_lib_cap, ppat_num_patterns,
+    printf("model     libCap %d%s%s%s\n",
+           ppat_lib_cap,
            cfg_no_local ? ", no-local" : "",
            feats[0] ? " | " : "", feats);
 
