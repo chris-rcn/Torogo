@@ -1856,7 +1856,7 @@ static void run_monitor(void) {
         printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor), 100.0 * live_death_ratio());
         if (ref_theta) printf("  %8s", dwbuf);
-        printf("  %8s  %7.0f", eb, posps);
+        printf("  %8s  %7.1f", eb, posps);
         printf("\n");
         if (is_best) {
             char bc[256];
@@ -1941,7 +1941,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
            avg_first_pass_phase(), 100.0 * live_death_ratio());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
-    printf("  %6.1f  %8s  %6.1f  %7.0f",
+    printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
     printf("\n");
     fflush(stdout);
