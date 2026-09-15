@@ -1740,26 +1740,28 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
            cfg_no_local ? ", no-local" : "",
            feats[0] ? " | " : "", feats);
 
-    if (!monitor) {
-        printf("train     lr %.3g, M %d, N %d, batch %d, %d phase(s)",
-               (double)cfg_lr, cfg_M, cfg_N, cfg_batch, ppat_phase_count);
-        if (cfg_phase >= 0)        printf(", phase %d only", cfg_phase);
-        if (cfg_ema_window > 0)    printf(", ema %d", cfg_ema_window);
-        if (cfg_overfit)           printf(", overfit");
-        if (cfg_no_extreme > 0)    printf(", no-extreme %.1f", cfg_no_extreme);
-        if (cfg_init_from_next)    printf(", init-scale %.3g", cfg_init_phase_scale);
-        printf("\n");
-        if (cfg_pc_buckets)
-            printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
-                   cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
-        if (cfg_trunc_on)
-            printf("          trunc vpat %s, delta %g, max-phase %g, offset %g,%g\n",
-                   cfg_trunc_vpat, (double)cfg_trunc_delta,
-                   (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
-    }
+    /* The train line describes the run regardless of who prints it, so the
+     * monitor shows it too (it parsed the same args). */
+    printf("train     lr %.3g, M %d, N %d, batch %d, %d phase(s)",
+           (double)cfg_lr, cfg_M, cfg_N, cfg_batch, ppat_phase_count);
+    if (cfg_phase >= 0)        printf(", phase %d only", cfg_phase);
+    if (cfg_ema_window > 0)    printf(", ema %d", cfg_ema_window);
+    if (cfg_overfit)           printf(", overfit");
+    if (cfg_no_extreme > 0)    printf(", no-extreme %.1f", cfg_no_extreme);
+    if (cfg_init_from_next)    printf(", init-scale %.3g", cfg_init_phase_scale);
+    printf("\n");
+    if (cfg_pc_buckets)
+        printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
+               cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
+    if (cfg_trunc_on)
+        printf("          trunc vpat %s, delta %g, max-phase %g, offset %g,%g\n",
+               cfg_trunc_vpat, (double)cfg_trunc_delta,
+               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
 
+    /* The run line carries the only mode-specific facts: worker count, plus the
+     * seed (solo, replayable) or a monitor tag (parallel). */
     if (monitor)
-        printf("monitor   %d workers, test-playouts %d\n", cfg_workers, cfg_test_playouts);
+        printf("run       %d workers (monitor)\n", cfg_workers);
     else if (cfg_workers > 1)
         printf("run       %d workers, sync-every %d, seed %d\n", cfg_workers, cfg_sync_every, cfg_seed);
     else
