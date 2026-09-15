@@ -27,6 +27,14 @@ const N = parseInt(sizeArg, 10);
 const FPOL_DATA = process.env.FPOL_DATA || path.join(__dirname, 'featurepol-cbk7wa32.js');
 const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
 
+// FPOL_SPEC overrides the spec used for EXTRACTION only; the weights still load
+// by key from the model, so any feature space spelled identically to a trained
+// one keeps its weights (same salts) and everything else reads zero.  Use it to
+// score the board through a subset of the model's spaces.
+if (process.env.FPOL_SPEC) {
+  weights.spec = FeaturePol.parseSpec(process.env.FPOL_SPEC);
+}
+
 const game = new Game2(N, false);   // empty board: the move list carries every stone
 const moves = movesArg ? movesArg.split(',').map(s => s.trim()).filter(Boolean) : [];
 for (const m of moves) {
