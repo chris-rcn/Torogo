@@ -1764,10 +1764,9 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     if (monitor)
         printf("monitor   %d workers, test-playouts %d\n", cfg_workers, cfg_test_playouts);
     else if (cfg_workers > 1)
-        printf("run       %d workers, sync-every %d, seed %d (not reproducible with >1 worker)\n",
-               cfg_workers, cfg_sync_every, cfg_seed);
+        printf("run       %d workers, sync-every %d, seed %d\n", cfg_workers, cfg_sync_every, cfg_seed);
     else
-        printf("run       1 worker, seed %d (--seed replays exactly)\n", cfg_seed);
+        printf("run       1 worker, seed %d\n", cfg_seed);
 
     if (ref_theta)
         printf("match     directWR vs %s\n", cfg_ref_weights);
