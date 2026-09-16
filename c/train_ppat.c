@@ -1275,31 +1275,9 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 /* ── Move probability ──────────────────────────────────────────────────────── */
 
 /* Returns the softmax probability the current policy assigns to `move`. */
-static float move_probability(const Game2 *g, int32_t move) {
-    static PpatState st;
-    static float logits[MAX_CAP];
-    ppat_extract(g, &st);
-    int n = st.count;
-    if (n == 0) return 0;
-    float mx = -1e30f;
-    int target = -1;
-    for (int i = 0; i < n; i++) {
-        float v = 0;
-        for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++)
-            v += theta[st.feat[fi]];
-        logits[i] = v;
-        if (v > mx) mx = v;
-        if (st.moves[i] == move) target = i;
-    }
-    if (target < 0) return 0;
-    float sum = 0;
-    for (int i = 0; i < n; i++) sum += expf(logits[i] - mx);
-    return expf(logits[target] - mx) / sum;
-}
-
 /* ── Measure test ──────────────────────────────────────────────────────────── */
 
-typedef struct { float mean_abs; float mse; float move_match; } TestResult;
+typedef struct { float mean_abs; float mse; } TestResult;
 
 #define TEST_RNG_SEED 0x7e57c0deL   /* fixed seed → reproducible test rollouts */
 
@@ -1317,8 +1295,8 @@ static TestResult measure_test(int use_uniform, int n) {
      * global neighbour tables to match (restored before every return). */
     const int swap_topo = test_board_size != topo_size;
     if (swap_topo) g2_init_topology(test_board_size);
-    float abs_sum = 0, sq_sum = 0, prob_sum = 0;
-    int count = 0, prob_n = 0;
+    float abs_sum = 0, sq_sum = 0;
+    int count = 0;
     for (int ti = 0; ti < n; ti++) {
         Position *pos = &all_positions[test_idx[ti]];
         Game2 g;
@@ -1326,11 +1304,6 @@ static TestResult measure_test(int use_uniform, int n) {
         int rp = replay_position(pos, &g, &bad);
         if (rp < 0) { fprintf(stderr, "WARNING: illegal move #%d (idx %d) in test position %d, skipping\n", bad, pos->history[bad], test_idx[ti]); continue; }
         if (rp == 0) continue;
-
-        if (pos->best_move != PASS) {
-            prob_sum += move_probability(&g, pos->best_move);
-            prob_n++;
-        }
 
         int8_t player = g.current;
         float sum = 0;
@@ -1345,11 +1318,10 @@ static TestResult measure_test(int use_uniform, int n) {
         sq_sum += d * d;
         count++;
     }
-    float mp = prob_n > 0 ? prob_sum / prob_n : 0;
     g_rng = saved_rng;   /* restore training's RNG stream */
     if (swap_topo) g2_init_topology(topo_size);
-    if (count == 0) return (TestResult){0, 0, mp};
-    return (TestResult){ abs_sum / count, sq_sum / count, mp };   /* mse = mean squared error */
+    if (count == 0) return (TestResult){0, 0};
+    return (TestResult){ abs_sum / count, sq_sum / count };   /* mse = mean squared error */
 }
 
 
@@ -1813,9 +1785,9 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
 static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
     printf("%9s  %7s", "positions", "trMSE");
-    if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
+    if (n_test > 0) printf("  %7s", "teMSE");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
@@ -1837,18 +1809,16 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         if (loaded) {
             printf("%9d  %7s", 0, "-");
-            if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
-                                   tr.move_match * 100.0f);
             printf("  %6d  %7s  %6s  %6s", live_weights(), "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
+            if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
             printf("  %8s  %7s", eb, "-");
             printf("\n");
         } else {
             printf("%9d  %7s", 0, "-");
-            if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
-                                   tr.move_match * 100.0f);
             printf("  %6s  %7s  %6s  %6s", "-", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
+            if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
             printf("  %8s  %7s\n", eb, "-");
         }
         fflush(stdout);
@@ -1936,13 +1906,13 @@ static void run_monitor(void) {
         if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt) == 0)
             trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
         else { trbuf[0] = '-'; trbuf[1] = 0; }
-        int is_best = ref_theta ? match_score_peak : ((n_test > 0) && tr.mse < mon_best_te);
+        int is_best = (n_test > 0) ? (tr.mse < mon_best_te)
+                                   : (ref_theta ? match_score_peak : 0);
         printf("%9ld  %7s", agg, trbuf);
-        if (n_test > 0) printf("  %7s  %5.1f", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf),
-                               tr.move_match * 100.0f);
         printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor), 100.0 * live_death_ratio());
         if (ref_theta) printf("  %8s", dwbuf);
+        if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
         printf("  %8s  %7.1f", eb, posps);
         printf("\n");
         if (is_best) {
@@ -2014,19 +1984,16 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     static double last_full = -1;
     static float best_te = 1e30f;
     char trbuf[24], tebuf[16];
-    /* Prefer score; fall back to teMSE only when there is no reference to match
-     * against.  With neither, write no -best at all rather than a misleading one. */
-    int is_best = run_tests && (ref_theta ? match_score_peak : (n_test > 0 && mse < best_te));
+    /* A test set decides -best by teMSE (a held-out yardstick); without one,
+     * fall back to the directWR peak.  With neither, write no -best at all. */
+    int is_best = run_tests && (n_test > 0 ? (mse < best_te)
+                                           : (ref_theta ? match_score_peak : 0));
     trmse_col(done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, &last_full, trbuf, sizeof trbuf);
     printf("%9ld  %7s", (long)cfg_workers * total_positions, trbuf);
-    if (n_test > 0) {
-        if (run_tests) printf("  %7s  %5.1f", temse_col(mse, &best_te, tebuf, sizeof tebuf),
-                              tr.move_match * 100.0f);
-        else           printf("  %7s  %5s", "-", "-");
-    }
     printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), avg_abs_weight(),
            avg_first_pass_phase(), 100.0 * live_death_ratio());
     if (ref_theta) printf("  %8s", dwbuf);
+    if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse, &best_te, tebuf, sizeof tebuf) : "-");
     if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
@@ -2312,9 +2279,9 @@ int main(int argc, char **argv) {
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
     print_banner(false, weights_file, best_file);
     printf("%9s  %7s", "positions", "trMSE");
-    if (n_test > 0) printf("  %7s  %5s", "teMSE", "move%");
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
+    if (n_test > 0) printf("  %7s", "teMSE");
     if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
