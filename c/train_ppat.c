@@ -2128,6 +2128,15 @@ int main(int argc, char **argv) {
         exit(1);
     }
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
+    /* progressive keys off the inline teMSE test, which only the single-process
+     * path runs — in parallel the monitor tests but the workers train, so it
+     * could never fire.  Error rather than silently ignore it (the banner would
+     * otherwise imply it is active). */
+    if (cfg_progressive > 1.0f && (cfg_workers > 1 || cfg_monitor)) {
+        fprintf(stderr, "error: --progressive is single-process only "
+                        "(the parallel monitor tests, not the workers that train)\n");
+        exit(1);
+    }
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
     /* 30, not 100: rounds are pure approximation error (each worker's later
      * gradients are evaluated away from the common theta0, and the barrier sums
