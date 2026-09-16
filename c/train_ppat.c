@@ -1087,6 +1087,7 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     float V = 0;
     for (int i = 0; i < cfg_value_po; i++) V += rollout(game, player, NULL, NULL);
     V /= cfg_value_po;
+    const float V_fresh = V;   /* trMSE reports THIS (the policy's fit), not the EMA'd V */
 
     /* --value-ema: blend this visit's V into the position's running EMA and use
      * the (bias-corrected) EMA as the fitted value.  First visit debiases to
@@ -1126,9 +1127,10 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     /* Gradient uses the un-normalised [-1,1] bias (the SB paper's faster-learning
      * -1/1 regime).  The MSE byproduct normalises v* and V to win-probability
      * [0,1] before squaring, so trMSE/teMSE are reported in the paper's units. */
-    float bias = v_star - V;
-    float v01 = 0.5f * (v_star + 1.0f), V01 = 0.5f * (V + 1.0f);
-    epoch_sq_sum += (double)(v01 - V01) * (v01 - V01);
+    float bias = v_star - V;                          /* gradient: EMA'd V (lower variance) */
+    float v01 = 0.5f * (v_star + 1.0f);
+    float V01 = 0.5f * (V_fresh + 1.0f);              /* trMSE: fresh V, so value-ema does not */
+    epoch_sq_sum += (double)(v01 - V01) * (v01 - V01);/* confound the reported policy fit */
     epoch_sq_count++;
     for (int k = 0; k < TOTAL; k++) batch_buf[k] += bias * g_buf[k];
     batch_count++;
