@@ -1994,7 +1994,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
            avg_first_pass_phase(), 100.0 * live_death_ratio());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse, &best_te, tebuf, sizeof tebuf) : "-");
-    if (n_test > 0) printf("  %5d  %6.1f", run_tests ? test_n : 0, cumulative_test_s);
+    if (n_test > 0) printf("  %6.1f", cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
     printf("\n");
@@ -2282,7 +2282,7 @@ int main(int argc, char **argv) {
     printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE");
-    if (n_test > 0) printf("  %5s  %6s", "tPos", "testS");
+    if (n_test > 0) printf("  %6s", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
     }
