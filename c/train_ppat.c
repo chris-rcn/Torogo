@@ -22,6 +22,11 @@
  *                           across epochs (default 0 = off; f in [0,1)).  Cuts
  *                           the variance of V for a given --value-playouts, best
  *                           paired with a small one; higher f = longer memory
+ *     --progressive <X>     when a tested row's teMSE is NOT a new best, multiply
+ *                           value- and gradient-playouts by X (default 1 = off).
+ *                           Cheap-and-noisy early, more precision once accuracy
+ *                           stalls.  Single-process only (the parallel monitor
+ *                           does the testing, not the workers that train)
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
  *                           moves, if the phase there is <= --trunc-max-phase
  *                           (default 0.55, the deployed gate) the rollout stops
@@ -506,6 +511,12 @@ static int      n_all = 0;
  * that the EMA smooths across epochs).  0 = off.  Each worker only ever touches
  * its own slice's slots, so the arrays need no locking. */
 static float  cfg_value_ema = 0.0f;
+
+/* --progressive X: when a teMSE row is shown that is NOT a new best, multiply
+ * value-playouts and gradient-playouts by X (ceil).  Starts cheap and noisy and
+ * spends more per position once accuracy stalls — self-limiting, since higher
+ * playouts cut V's variance and teMSE resumes improving.  1 (or 0) = off. */
+static float  cfg_progressive = 1.0f;
 static float  pos_v_ema[MAX_LINES];
 static int32_t pos_v_seen[MAX_LINES];
 
@@ -1756,6 +1767,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     if (cfg_no_extreme > 0)    printf(", no-extreme %.1f", cfg_no_extreme);
     if (cfg_init_from_next)    printf(", init-scale %.3g", cfg_init_phase_scale);
     if (cfg_value_ema > 0.0f)  printf(", value-ema %.3g", (double)cfg_value_ema);
+    if (cfg_progressive > 1.0f) printf(", progressive x%.3g", (double)cfg_progressive);
     printf("\n");
     if (cfg_pc_buckets)
         printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
@@ -2013,13 +2025,22 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
         else           snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %d", mse, total_positions);
         save_best(weights_file, bc);
     }
+
+    /* --progressive: a tested row whose teMSE did not improve (is_best is the
+     * teMSE-new-low test when a test set is present) bumps the playout counts. */
+    if (cfg_progressive > 1.0f && run_tests && n_test > 0 && !is_best) {
+        cfg_value_po    = (int)ceilf(cfg_value_po    * cfg_progressive);
+        cfg_gradient_po = (int)ceilf(cfg_gradient_po * cfg_progressive);
+        printf("progressive: value-playouts %d, gradient-playouts %d\n",
+               cfg_value_po, cfg_gradient_po);
+    }
 }
 
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
     if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
-        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--value-playouts <n>] [--gradient-playouts <n>] [--value-ema <f>]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--value-playouts <n>] [--gradient-playouts <n>] [--value-ema <f>] [--progressive <X>]\n", argv[0]);
         fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
         fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
         fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--capture <n>] [--capture-by-self-atari <n>] [--no-local] [--overfit]\n");
@@ -2039,6 +2060,11 @@ int main(int argc, char **argv) {
     cfg_value_ema    = get_float_arg(argc, argv, "--value-ema", 0.0f);
     if (cfg_value_ema < 0.0f || cfg_value_ema >= 1.0f) {
         fprintf(stderr, "error: --value-ema must be in [0, 1) (0 = off)\n");
+        exit(1);
+    }
+    cfg_progressive  = get_float_arg(argc, argv, "--progressive", 1.0f);
+    if (cfg_progressive != 0.0f && cfg_progressive < 1.0f) {
+        fprintf(stderr, "error: --progressive must be >= 1 (1 or 0 = off)\n");
         exit(1);
     }
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
