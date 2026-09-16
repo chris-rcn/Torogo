@@ -22,8 +22,9 @@
  *                           across epochs (default 0 = off; f in [0,1)).  Cuts
  *                           the variance of V for a given --value-playouts, best
  *                           paired with a small one; higher f = longer memory
- *     --progressive <X>     when a tested row's teMSE is NOT a new best, multiply
- *                           value- and gradient-playouts by X (default 1 = off).
+ *     --progressive <X>     when an evaluated row does NOT improve (teMSE if a
+ *                           test set is present, else directWR), multiply value-
+ *                           and gradient-playouts by X (default 1 = off).
  *                           Cheap-and-noisy early, more precision once accuracy
  *                           stalls.  Single-process only (the parallel monitor
  *                           does the testing, not the workers that train)
@@ -2026,9 +2027,10 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
         save_best(weights_file, bc);
     }
 
-    /* --progressive: a tested row whose teMSE did not improve (is_best is the
-     * teMSE-new-low test when a test set is present) bumps the playout counts. */
-    if (cfg_progressive > 1.0f && run_tests && n_test > 0 && !is_best) {
+    /* --progressive: an evaluated row that did NOT improve bumps the playout
+     * counts.  is_best already picks the metric — teMSE when a test set is
+     * present, else the directWR peak — so this uses whichever is in play. */
+    if (cfg_progressive > 1.0f && run_tests && (n_test > 0 || ref_theta) && !is_best) {
         cfg_value_po    = (int)ceilf(cfg_value_po    * cfg_progressive);
         cfg_gradient_po = (int)ceilf(cfg_gradient_po * cfg_progressive);
         printf("progressive: value-playouts %d, gradient-playouts %d\n",
