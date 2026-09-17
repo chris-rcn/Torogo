@@ -242,7 +242,7 @@ function isAntisymmetric(game) {
 }
 // Play a random move and its 180-degree rotation; validated on a clone (no
 // undo), rejecting fixed points and pairs whose captures interact.
-function playMirrorPair(game) {
+function playMirrorPair(game, record) {
   for (let tries = 0; tries < 32; tries++) {
     const idx = game.randomLegalMove();
     if (idx === PASS) return false;
@@ -253,10 +253,43 @@ function playMirrorPair(game) {
     if (!isAntisymmetric(trial)) continue;
     game.play(idx);
     game.play(m);
+    if (record) record.push(idx, m);
     return true;
   }
   return false;
 }
+// ── Move-cycle guard for the forward self-play games ──────────────────────────
+// Both self-play loops advance a single Game3 forward with no undo, so a policy
+// that locks into a capture-recapture cycle keeps allocating fresh group ids
+// that are never reclaimed, eventually exhausting the id array (MAX_G = 5·area).
+// End the game the instant the last six moves repeat the six before them — the
+// period-6 capture cycle, the same signature the ladder reader prunes.  Cycles
+// are rare under stochastic play, so this is just a length check per move.
+function isMoveCycle(path) {
+  const d = path.length;
+  return d >= 12 &&
+    path[d - 1] === path[d - 7] && path[d - 2] === path[d - 8] &&
+    path[d - 3] === path[d - 9] && path[d - 4] === path[d - 10] &&
+    path[d - 5] === path[d - 11] && path[d - 6] === path[d - 12];
+}
+
+// On a group-id exhaustion (should be unreachable now the cycle guard ends
+// looping games early) write the full move list — every stone from an empty
+// board, so it replays directly — to out/ before the error propagates.  The
+// ladder reader's own dump prints only the (innocent) board at the throwing
+// read; the sequence that actually accumulated the ids lives here.
+function dumpExhaustionMoves(N, fullMoves, err) {
+  try {
+    const p = `out/fp-reinforce-exhaustion-${process.pid}-${Date.now()}.txt`;
+    fs.writeFileSync(p, `# train-featurepol-reinforce group-id exhaustion\n` +
+      `# size ${N}  temperature ${TEMPERATURE}\n# ${err && err.message ? err.message : err}\n` +
+      fullMoves.join(',') + '\n');
+    process.stderr.write(`train-featurepol-reinforce: gid exhaustion, ${fullMoves.length}-move sequence dumped to ${p}\n`);
+  } catch (e) {
+    process.stderr.write(`train-featurepol-reinforce: gid exhaustion (move dump failed: ${e.message})\n`);
+  }
+}
+
 // ── One self-play game + REINFORCE update ─────────────────────────────────────
 function trainGame(N) {
   const game  = new Game2(N, true);
@@ -268,6 +301,8 @@ function trainGame(N) {
   const needTac = weights.spec.needsLadder;
 
   let moves = 0;
+  const movePath = [];
+  try {
   while (!game.gameOver && moves < maxMoves) {
     const player = game.current;
     const choice = FeaturePol.policyMove(game, state, weights, Math, needTac ? game3 : undefined, TEMPERATURE);
@@ -285,7 +320,16 @@ function trainGame(N) {
     }
     game.play(choice.move);
     game3.play(choice.move);
+    movePath.push(choice.move);
     moves++;
+    if (isMoveCycle(movePath)) break;   // stuck in a capture cycle; end the game
+  }
+  } catch (e) {
+    if (String(e && e.message).includes('group ids exhausted')) {
+      const center = (N >> 1) * N + (N >> 1);   // Game2(N, true) free stone
+      dumpExhaustionMoves(N, [center, ...movePath], e);
+    }
+    throw e;
   }
 
   const winner = game.calcWinner();
@@ -325,9 +369,11 @@ function evalVsReference(N, nGames) {
     // rotate-180 + colour-swap, so neither side is favoured — measured ~2.25x
     // variance reduction on win-rate stats vs random openings (selfplay.js).
     const game = new Game2(N, false);
-    for (let p = 0; p < 2; p++) playMirrorPair(game);
+    const movePath = [];
+    for (let p = 0; p < 2; p++) playMirrorPair(game, movePath);
     const game3 = game3FromGame2(game);
     let m = 0;
+    try {
     while (!game.gameOver && m++ < N * N * 4) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
@@ -337,6 +383,12 @@ function evalVsReference(N, nGames) {
         idx = mv && mv.move !== undefined ? mv.move : PASS;
       }
       game.play(idx); game3.play(idx);
+      movePath.push(idx);
+      if (isMoveCycle(movePath)) break;   // stuck in a capture cycle; end the game
+    }
+    } catch (e) {
+      if (String(e && e.message).includes('group ids exhausted')) dumpExhaustionMoves(N, movePath, e);
+      throw e;
     }
     const winner = game.calcWinner();
     if ((winner === BLACK) === policyIsBlack) wins++;

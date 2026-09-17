@@ -13,7 +13,7 @@
 //
 // Config (cfg reader, slot-aware):
 //   AB_DEPTH    plies of lookahead (1 = score own moves' results) (default 2)
-//   AB_WIDTH    fp candidates searched at the ROOT                (default 3)
+//   AB_WIDTH    fp candidates searched at the ROOT                (default 4)
 //   AB_WIDTH_SHRINK  subtracted from the width per ply of depth  (default 0)
 //               Root searches AB_WIDTH, the next ply AB_WIDTH - SHRINK, and so
 //               on, floored at 1 — a width-1 ply extends the principal line
@@ -22,7 +22,7 @@
 //               about its top two, so narrowing with depth buys plies cheaply.
 //   FPOL_DATA   featurepol weights          (default featurepol-cbk7wa32.js)
 //   VPAT_DATA   leaf evaluator              (default ref/ref-ab-fp-vpat-data.js)
-//   DITHER      uniform noise on root values                    (default 0.005)
+//   DITHER      uniform noise on root values                    (default 0.001)
 //               Both DITHER and AB_TEMP scale by (1 - phase): full strength
 //               of the knob at an empty board, zero at phase 1 — diversity
 //               lives in the opening, determinism in the endgame.
@@ -31,12 +31,12 @@
 //               minimax values (mover-relative, win-prob units).  Deviations
 //               concentrate where the search itself calls the moves equal,
 //               so strength cost stays tiny while openings branch.
-//               (default 0.002; 0 = argmax).  Gentler than FP_SOFTMAX_MOVES, which
+//               (default 0.003; 0 = argmax).  Gentler than FP_SOFTMAX_RATIO, which
 //               plays a weaker policy's move outright
-//   FP_SOFTMAX_MOVES  while the board holds FEWER than this many stones,
-//               play an fp softmax move (temperature 1) instead of
-//               searching — opening diversity confined to the first
-//               stones, full search strength after (default 3; 0 = off)
+//   FP_SOFTMAX_RATIO  per-move probability of playing an fp softmax move
+//               (temperature 1) instead of searching, scaled by (1 - phase):
+//               FP_SOFTMAX_RATIO on an empty board, tapering to 0 at the
+//               endgame (default 0.4; 0 = off)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -50,7 +50,7 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const AB_DEPTH = Math.max(1, cfg.int('AB_DEPTH', 2));
-  const AB_WIDTH = Math.max(1, cfg.int('AB_WIDTH', 3));
+  const AB_WIDTH = Math.max(1, cfg.int('AB_WIDTH', 4));
   const AB_WIDTH_SHRINK = Math.max(0, cfg.int('AB_WIDTH_SHRINK', 0));
   // ply 0 is the root; a node reached with `depth` remaining sits at
   // AB_DEPTH - depth.  Floored at 1: below the root a width-1 node chooses
@@ -61,9 +61,9 @@ function create(cfg) {
     const w = AB_WIDTH - ply * AB_WIDTH_SHRINK;
     return w < 1 ? 1 : w;
   }
-  const DITHER   = cfg.float('DITHER', 0.005);
-  const AB_TEMP  = cfg.float('AB_TEMP', 0.002);
-  const FP_SOFTMAX_MOVES = cfg.int('FP_SOFTMAX_MOVES', 3);
+  const DITHER   = cfg.float('DITHER', 0.001);
+  const AB_TEMP  = cfg.float('AB_TEMP', 0.003);
+  const FP_SOFTMAX_RATIO = cfg.float('FP_SOFTMAX_RATIO', 0.4);
 
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
     path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
@@ -73,7 +73,7 @@ function create(cfg) {
   console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH}` +
               (AB_WIDTH_SHRINK > 0 ? ` shrink=${AB_WIDTH_SHRINK} (${[...Array(AB_DEPTH).keys()].map(widthAt).join('/')})` : '') +
               (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
-              (FP_SOFTMAX_MOVES > 0 ? ` fp-softmax<${FP_SOFTMAX_MOVES}st` : '') + `  ` +
+              (FP_SOFTMAX_RATIO > 0 ? ` fp-softmax-ratio=${FP_SOFTMAX_RATIO}` : '') + `  ` +
               `fp=${fpWeights.map.size}w  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${VPat.specString(vpatModel.specs)})`);
 
   const rng = makeRng();
@@ -129,7 +129,11 @@ function create(cfg) {
     const phaseScale = 1 - game.phase();
     const dither = DITHER * phaseScale;
     const temp   = AB_TEMP * phaseScale;
-    if (FP_SOFTMAX_MOVES > 0 && (game.N * game.N - game.emptyCount) < FP_SOFTMAX_MOVES) {
+    // fp softmax move (temperature 1) instead of searching, with probability
+    // FP_SOFTMAX_RATIO tapered by (1 - phase) so it's likeliest on an empty board
+    // and reaches zero at the endgame.  The draw is short-circuited when the knob
+    // is off, so existing configs consume no extra rng.
+    if (FP_SOFTMAX_RATIO > 0 && r.random() < FP_SOFTMAX_RATIO * phaseScale) {
       const N = game.N;
       if (!fpState || fpState.moves.length < N * N) {
         fpState  = FeaturePol.createState(N, fpWeights.spec);
@@ -137,7 +141,7 @@ function create(cfg) {
       }
       const game3 = fpWeights.spec.needsLadder ? game3FromGame2(game) : undefined;
       const m = FeaturePol.policyMove(game, fpState, fpWeights, r, game3, 1).move;
-      return { move: m, info: 'fp-softmax (opening)' };
+      return { move: m, info: 'fp-softmax (ratio)' };
     }
     const cand = new Int32Array(AB_WIDTH);
     const k = fpTopK(game, cand, AB_WIDTH);

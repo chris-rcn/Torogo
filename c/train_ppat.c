@@ -22,7 +22,7 @@
  *                           across epochs (default 0 = off; f in [0,1)).  Cuts
  *                           the variance of V for a given --value-playouts, best
  *                           paired with a small one; higher f = longer memory
- *     --progressive <X>     when an evaluated row does NOT improve (teMSE if a
+ *     --progressive <X>     when an evaluated row does NOT improve (teMSE_c if a
  *                           test set is present, else directWR), multiply value-
  *                           and gradient-playouts by X (default 1 = off).
  *                           Cheap-and-noisy early, more precision once accuracy
@@ -159,6 +159,9 @@
  *                           mc-ppat agents (one playout per candidate move,
  *                           then play a winner) — the way an agent actually
  *                           consumes a playout policy.
+ *     --no-direct           disable the directWR match entirely and hide the
+ *                           column (same effect as --ref-weights none); use when
+ *                           directWR is not trusted to represent the target.
  *     --phases <n>          number of phase-conditioned weight slices (default 1)
  *     --phase <p>           train only phase p; freezes the other phases.
  *                           The test head stays UNFILTERED (all phases), so
@@ -181,7 +184,7 @@
 #include <unistd.h>     /* usleep */
 #include <sys/stat.h>   /* mkdir */
 
-#define SYNC_POLL_US 2000   /* parameter-averaging barrier poll: 2 ms base (jittered) */
+#define SYNC_POLL_US 2000   /* parameter-sync barrier poll: 2 ms base (jittered) */
 #define MAX_PRINT_CYCLE_S 3600.0   /* cap the geometric print/test gap at 1 h (inline + monitor) */
 #define MON_GROWTH        1.3      /* parallel monitor: row-to-row elapsed ratio */
 
@@ -225,13 +228,12 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
  * differ only where the subject is trained and the opening/endgame are a
  * fixed, competent, symmetric policy.  Default 0.6,1. */
 static float cfg_match_phase_lo = 0.6f, cfg_match_phase_hi = 1.0f;
-#define DEPLOY_BOARD_SIZE   13   /* The size the policy is FIELDED at.  Both self-contained
-                                  * instruments measure there whatever size the training data
-                                  * is — directWR (its own games) and live% (its own uniform-
-                                  * play position set) — because small-board verdicts must be
-                                  * re-validated at 13 anyway.  The topology is swapped around
-                                  * each (a microsecond rebuild) and restored.  teMSE follows
-                                  * its --test-file's size, since its records replay. */
+#define DEPLOY_BOARD_SIZE   13   /* The size the policy is FIELDED at.  directWR (its own
+                                  * games) measures there whatever size the training data is,
+                                  * because small-board verdicts must be re-validated at 13
+                                  * anyway.  The topology is swapped around the match (a
+                                  * microsecond rebuild) and restored.  teMSE follows its
+                                  * --test-file's size, since its records replay. */
 
 /* Polyak-Ruppert weight averaging.  The window is in AGGREGATE POSITIONS, not in
  * sync rounds: --sync-every is a comms/round-error knob that should scale with lr
@@ -245,8 +247,10 @@ static float cfg_match_phase_lo = 0.6f, cfg_match_phase_hi = 1.0f;
                                   * positions, so sampling density cannot move the
                                   * window, only how finely it is resolved. */
 
-/* Parameter-averaging across processes: K workers each run batch-1 SB with their
- * own seed; every --sync-every positions they file-barrier all-reduce (average) θ. */
+/* Parameter sync across processes: K workers each run batch-1 SB with their own
+ * seed; every --sync-every positions they file-barrier all-reduce the SUM of their
+ * θ displacements (not the mean — see barrier_sync_average), so --lr means the same
+ * thing at any worker count. */
 static int    cfg_workers;
 
 /* Truncated training rollouts (--trunc-vpat + friends): after ceil(delta *
@@ -328,124 +332,6 @@ static float ref_pass_weight = 0;      /* and its own learned pass logit.  Used 
  * Either finding means it stopped too early; a clean board means only that it
  * did not, which is not evidence that it stopped as early as it could have.  So
  * the two directions carry different weight — see PASS_STEP. */
-/* Chains PROVEN uncapturable in a rollout's START position, and how many of
- * them were dead at its end.  The proof: an empty point is an eye of a GROUP
- * when all four orthogonals are stones of one colour, the group being the set
- * of chains those neighbours belong to; two eye points with the SAME group
- * cannot both be filled, because the opponent playing either has no liberty and
- * captures nothing.  Keying on the exact set is what makes that hold — it
- * guarantees every member touches both points.  Mirrors vpatterns.markLiveChains.
- *
- * Measured separation between two real models at these settings: 0.308% for an
- * untrained policy against 0.040% for one trained with early pass, ten standard
- * errors apart.  It needs the trials — at 5 playouts per position it produced
- * two events and looked like no signal at all.
- *
- * A live chain that dies is a playout killing a group that cannot be captured,
- * which corrupts the label outright.  directWR is structurally blind to it:
- * both sides do it, so it cancels in the match.  Target is exactly 0. */
-static int    live_gids[MAX_G];
-static int    live_reps[MAX_G];
-static int8_t live_cols[MAX_G];
-static int    live_n = 0;
-
-/* A fixed SET of live positions, built once at startup: positions that
- * actually contain a provably-live chain.  The training positions cannot
- * serve — they sit at the band the eval data was filtered to (phase 0.60-0.65
- * here) and a group has not had time to seal two of its own eyes, so a scan
- * of 3000 of them finds none.
- * Uniform random play past phase 0.70 yields one about 6% of the time, and every
- * late position is scanned and the game is abandoned after the first hit, so the
- * set costs one game per position — about a third of a second for a thousand. */
-#define LIVE_POSITIONS  1000
-#define LIVE_PLAYOUTS     20
-#define LIVE_MIN_PHASE  0.70f
-typedef struct { Game2 g; int n; int reps[8]; int8_t cols[8]; } LivePos;
-static LivePos *live_pos = NULL;
-static int live_pos_n = 0;
-
-static void mark_live_chains(const Game2 *g) {
-    live_n = 0;
-    int eg[MAX_CAP][4], en[MAX_CAP], ne = 0;
-    for (int p = 0; p < g->cap; p++) {
-        if (g->cells[p] != EMPTY) continue;
-        int b4 = p * 4, col = 0, n = 0, ok = 1;
-        int a0 = -1, a1 = -1, a2 = -1, a3 = -1;
-        for (int d = 0; d < 4; d++) {
-            int32_t j = g2_nbr[b4 + d];
-            int8_t c = g->cells[j];
-            if (c == EMPTY) { ok = 0; break; }
-            if (col == 0) col = c; else if (c != col) { ok = 0; break; }
-            int32_t q = g->gid[j];
-            if (q == a0 || q == a1 || q == a2 || q == a3) continue;
-            /* insertion sort into four slots so identical groups compare equal */
-            if (a0 < 0 || q < a0)      { a3 = a2; a2 = a1; a1 = a0; a0 = q; }
-            else if (a1 < 0 || q < a1) { a3 = a2; a2 = a1; a1 = q; }
-            else if (a2 < 0 || q < a2) { a3 = a2; a2 = q; }
-            else                        a3 = q;
-            n++;
-        }
-        /* SHARED eyes only: the group must span more than one chain.  A single
-         * chain's own eye is refused by isTrueEye outright, so it can never be
-         * filled and would contribute a guaranteed zero.  The shared case is the
-         * one the conservative rule leaves legal, so it is the only one that
-         * measures anything about the policy. */
-        if (!ok || n < 2) continue;
-        eg[ne][0] = a0; eg[ne][1] = a1; eg[ne][2] = a2; eg[ne][3] = a3; en[ne] = n; ne++;
-    }
-    for (int i = 0; i < ne; i++)
-        for (int j = i + 1; j < ne; j++) {
-            if (en[j] != en[i]) continue;
-            if (eg[j][0] != eg[i][0] || eg[j][1] != eg[i][1] ||
-                eg[j][2] != eg[i][2] || eg[j][3] != eg[i][3]) continue;
-            for (int k = 0; k < 4; k++) {
-                int q = eg[i][k];
-                if (q < 0) break;
-                int seen = 0;
-                for (int m = 0; m < live_n; m++) if (live_gids[m] == q) { seen = 1; break; }
-                if (seen || live_n >= MAX_G) continue;
-                /* a representative stone, to test survival by colour at the end */
-                for (int c2 = 0; c2 < g->cap; c2++)
-                    if (g->cells[c2] != EMPTY && g->gid[c2] == q) {
-                        live_gids[live_n] = q; live_reps[live_n] = c2;
-                        live_cols[live_n] = g->cells[c2]; live_n++;
-                        break;
-                    }
-            }
-            break;
-        }
-}
-
-/* Fill the live-position set with uniform random play, at the DEPLOYMENT size:
- * the positions are generated here rather than replayed from training records,
- * so nothing ties them to the training size.  Called once at startup. */
-static void build_live_positions(int train_size) {
-    live_pos = calloc(LIVE_POSITIONS, sizeof(LivePos));
-    if (!live_pos) return;
-    const int size = DEPLOY_BOARD_SIZE;
-    g2_init_topology(size);
-    Rng rng; rng_seed(&rng, 0x1CE0DEL);
-    int games = 0;
-    while (live_pos_n < LIVE_POSITIONS && games < 200000) {
-        Game2 g; g2_new(&g, size); games++;
-        int n = 0, lim = 3 * g.empty_count + 20;
-        while (!g.game_over && n < lim && live_pos_n < LIVE_POSITIONS) {
-            g2_play(&g, g2_random_legal_move(&g, &rng));
-            n++;
-            if ((float)(g.cap - g.empty_count) / g.cap < LIVE_MIN_PHASE) continue;
-            mark_live_chains(&g);
-            if (live_n == 0) continue;
-            LivePos *p = &live_pos[live_pos_n++];
-            g2_clone(&p->g, &g);
-            p->n = live_n > 8 ? 8 : live_n;
-            for (int i = 0; i < p->n; i++) { p->reps[i] = live_reps[i]; p->cols[i] = live_cols[i]; }
-            break;   /* one position per game: successive positions in the same
-                      * game are near-duplicates, and taking several would cut
-                      * the effective sample size without cutting the cost */
-        }
-    }
-    g2_init_topology(train_size);
-}
 
 static float run_pass_weight = 0;
 /* Polyak average of the pass weight, on the same window as theta_ema.  The
@@ -758,9 +644,6 @@ static void load_positions(void) {
         test_board_size = last_loaded_size;
         load_positions_from(cfg_file, 0);   /* all of it is training data */
         topo_size = last_loaded_size;
-        if (test_board_size != topo_size)
-            printf("test set is size %d, training size %d — teMSE measures at the TEST size\n",
-                   test_board_size, topo_size);
     } else {
         load_positions_from(cfg_file, cfg_test_pos);
         topo_size = test_board_size = last_loaded_size;
@@ -1150,7 +1033,7 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     }
 }
 
-/* Apply any pending (sub-full) batch — called before a parameter-averaging sync so
+/* Apply any pending (sub-full) batch — called before a parameter-sync so
  * θ reflects every update this worker has made. */
 static void flush_batch(void) {
     if (batch_count == 0) return;
@@ -1166,13 +1049,15 @@ static void flush_batch(void) {
     batch_count = 0;
 }
 
-/* ── Parameter-averaging all-reduce (file-based barrier) ───────────────────────
+/* ── Parameter-sync all-reduce (file-based barrier) ────────────────────────────
  * Every worker writes θ for the current round (atomic via tmp+rename), waits for
- * all K workers' round files, then sets θ ← mean over workers.  Cleanup of round
+ * all K workers' round files, then sets θ ← θ₀ + Σ (θ_worker − θ₀): the SUM of
+ * every worker's displacement this round, NOT the mean (see barrier_sync_average
+ * for why summing keeps --lr invariant to worker count).  Cleanup of round
  * r-1 is safe once all round-r files exist: a worker only writes round r after it
  * finished reading every round r-1 file, so no one is still reading r-1. */
 static int sync_round = 0;
-static double cumulative_sync_s = 0;   /* wall time spent in parameter-averaging (I/O + barrier wait) */
+static double cumulative_sync_s = 0;   /* wall time spent in parameter-sync (I/O + barrier wait) */
 
 static double wall_now(void) {
     struct timespec ts;
@@ -1291,7 +1176,7 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 /* Returns the softmax probability the current policy assigns to `move`. */
 /* ── Measure test ──────────────────────────────────────────────────────────── */
 
-typedef struct { float mean_abs; float mse; } TestResult;
+typedef struct { float mean_abs; float mse; float mse_c; } TestResult;
 
 #define TEST_RNG_SEED 0x7e57c0deL   /* fixed seed → reproducible test rollouts */
 
@@ -1309,7 +1194,7 @@ static TestResult measure_test(int use_uniform, int n) {
      * global neighbour tables to match (restored before every return). */
     const int swap_topo = test_board_size != topo_size;
     if (swap_topo) g2_init_topology(test_board_size);
-    float abs_sum = 0, sq_sum = 0;
+    float abs_sum = 0, sq_sum = 0, cq_sum = 0;
     int count = 0;
     for (int ti = 0; ti < n; ti++) {
         Position *pos = &all_positions[test_idx[ti]];
@@ -1330,12 +1215,19 @@ static TestResult measure_test(int use_uniform, int n) {
         float d = v01 - V01;
         abs_sum += fabsf(d);
         sq_sum += d * d;
+        /* Floor-corrected: subtract the per-position playout-variance floor
+         * V01(1-V01)/(N-1) (unbiased estimate of Var(V01)), so teMSE_c estimates
+         * the model's true error with the 0.25/N measurement noise removed and is
+         * comparable across --test-playouts.  Per-position terms can go slightly
+         * negative; the mean over the test set is stable. */
+        cq_sum += d * d - (cfg_test_playouts > 1
+                           ? V01 * (1.0f - V01) / (cfg_test_playouts - 1) : 0.0f);
         count++;
     }
     g_rng = saved_rng;   /* restore training's RNG stream */
     if (swap_topo) g2_init_topology(topo_size);
-    if (count == 0) return (TestResult){0, 0};
-    return (TestResult){ abs_sum / count, sq_sum / count };   /* mse = mean squared error */
+    if (count == 0) return (TestResult){0, 0, 0};
+    return (TestResult){ abs_sum / count, sq_sum / count, cq_sum / count };   /* mse = mean squared error */
 }
 
 
@@ -1522,37 +1414,6 @@ static double avg_abs_weight(void) {
  * pass_phase_sum).  Bounded below by the uniform gate, since below it the
  * playout goes through g2_random_legal_move, which has no pass.  Resets the
  * accumulators, so it must be called exactly once per printed row. */
-/* Share of provably-alive chains the CURRENT policy kills, measured fresh on
- * the live-position set.  A live chain that dies is a playout destroying a group that
- * cannot be captured, which corrupts the label outright — and directWR barely
- * sees it, because both sides now play the same pass and most of the effect
- * cancels in the match.  Target is exactly 0. */
-static double live_death_ratio(void) {
-    if (!live_pos || live_pos_n == 0) return 0;
-    static PpatState st;
-    Rng rng; rng_seed(&rng, 0xD1ED1EL);
-    /* The set was built at the deployment size; play it out there. */
-    const int swap_topo = DEPLOY_BOARD_SIZE != topo_size;
-    if (swap_topo) g2_init_topology(DEPLOY_BOARD_SIZE);
-    long checked = 0, died = 0;
-    for (int i = 0; i < live_pos_n; i++) {
-        for (int k = 0; k < LIVE_PLAYOUTS; k++) {
-            Game2 sim; g2_clone(&sim, &live_pos[i].g);
-            int n = 0, lim = 3 * sim.empty_count + 20;
-            while (!sim.game_over && n < lim) {
-                g2_play(&sim, ppat_policy_move(&sim, &st, theta, RUN_EARLY_PASS, run_pass_weight, &rng));
-                n++;
-            }
-            for (int j = 0; j < live_pos[i].n; j++) {
-                checked++;
-                if (sim.cells[live_pos[i].reps[j]] != live_pos[i].cols[j]) died++;
-            }
-        }
-    }
-    if (swap_topo) g2_init_topology(topo_size);
-    return checked > 0 ? (double)died / (double)checked : 0;
-}
-
 static double avg_first_pass_phase(void) {
     double v = pass_phase_count > 0 ? pass_phase_sum / (double)pass_phase_count : 0;
     pass_phase_sum = 0; pass_phase_count = 0;
@@ -1800,14 +1661,14 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
 static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
     printf("%9s  %7s", "positions", "trMSE");
-    printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
+    printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
-    if (n_test > 0) printf("  %7s", "teMSE");
+    if (n_test > 0) printf("  %7s", "teMSE_c");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
     wall_start = wall_now();
-    float mon_best_te = 1e30f;   /* lowest teMSE seen, for the '*' new-low marker */
+    float mon_best_te_c = 1e30f; /* lowest teMSE_c seen, for the '*' new-low marker */
 
     /* Baseline row.  Fresh run: the uniform no-skill reference.  --load: the
      * loaded model's actual test + its weights (theta already holds the loaded
@@ -1815,7 +1676,7 @@ static void run_monitor(void) {
     {
         int loaded = (cfg_load != NULL);
         TestResult tr = measure_test(loaded ? 0 : 1, n_test);
-        char tebuf[16];
+        char tecbuf[16];
         char dwbuf[16];
         match_cols(dwbuf, sizeof dwbuf);
         /* elapsed AFTER the match columns, as every later row does — otherwise
@@ -1824,16 +1685,16 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         if (loaded) {
             printf("%9d  %7s", 0, "-");
-            printf("  %6d  %7s  %6s  %6s", live_weights(), "-", "-", "-");
+            printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
-            if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
+            if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             printf("  %8s  %7s", eb, "-");
             printf("\n");
         } else {
             printf("%9d  %7s", 0, "-");
-            printf("  %6s  %7s  %6s  %6s", "-", "-", "-", "-");
+            printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
-            if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
+            if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             printf("  %8s  %7s\n", eb, "-");
         }
         fflush(stdout);
@@ -1917,23 +1778,23 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
-        double dsum, psum; long dcnt, pcnt; char trbuf[24], tebuf[16];
+        double dsum, psum; long dcnt, pcnt; char trbuf[24], tecbuf[16];
         if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt) == 0)
             trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
         else { trbuf[0] = '-'; trbuf[1] = 0; }
-        int is_best = (n_test > 0) ? (tr.mse < mon_best_te)
+        int is_best = (n_test > 0) ? (tr.mse_c < mon_best_te_c)
                                    : (ref_theta ? match_score_peak : 0);
         printf("%9ld  %7s", agg, trbuf);
-        printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), MON_AVGW(cfg_monitor),
-               MON_PASS1(cfg_monitor), 100.0 * live_death_ratio());
+        printf("  %6d  %7.4f  %6.3f", live_weights(), MON_AVGW(cfg_monitor),
+               MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
-        if (n_test > 0) printf("  %7s", temse_col(tr.mse, &mon_best_te, tebuf, sizeof tebuf));
+        if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
         printf("  %8s  %7.1f", eb, posps);
         printf("\n");
         if (is_best) {
             char bc[256];
             if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %ld", match_score, agg);
-            else           snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %ld", tr.mse, agg);
+            else           snprintf(bc, sizeof bc, "Best by teMSE_c: %.6f, positions: %ld", tr.mse_c, agg);
             save_best(cfg_monitor, bc);
         }
         fflush(stdout);
@@ -1982,6 +1843,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
         cumulative_test_s += last_print_test_s;
     }
     float mse = tr.mse;
+    float mse_c = tr.mse_c;
     double elapsed_s = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     char elapsed_buf[32];
     snprintf(elapsed_buf, sizeof(elapsed_buf), "%.1fm", elapsed_s / 60.0);
@@ -1997,18 +1859,19 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
      * barrier-locked); posMs stays per-process (worker 0's CPU time / its own count).
      * tPos = how many test positions this row used (always the full test set). */
     static double last_full = -1;
-    static float best_te = 1e30f;
-    char trbuf[24], tebuf[16];
-    /* A test set decides -best by teMSE (a held-out yardstick); without one,
-     * fall back to the directWR peak.  With neither, write no -best at all. */
-    int is_best = run_tests && (n_test > 0 ? (mse < best_te)
+    static float best_te_c = 1e30f;
+    char trbuf[24], tecbuf[16];
+    /* A test set decides -best by teMSE_c (floor-corrected, a held-out
+     * yardstick); without one, fall back to the directWR peak.  With neither,
+     * write no -best at all. */
+    int is_best = run_tests && (n_test > 0 ? (mse_c < best_te_c)
                                            : (ref_theta ? match_score_peak : 0));
     trmse_col(done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, &last_full, trbuf, sizeof trbuf);
     printf("%9ld  %7s", (long)cfg_workers * total_positions, trbuf);
-    printf("  %6d  %7.4f  %6.3f  %6.2f", live_weights(), avg_abs_weight(),
-           avg_first_pass_phase(), 100.0 * live_death_ratio());
+    printf("  %6d  %7.4f  %6.3f", live_weights(), avg_abs_weight(),
+           avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
-    if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse, &best_te, tebuf, sizeof tebuf) : "-");
+    if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
     if (n_test > 0) printf("  %6.1f", cumulative_test_s);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
@@ -2025,12 +1888,12 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     if (is_best) {
         char bc[256];
         if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %d", match_score, total_positions);
-        else           snprintf(bc, sizeof bc, "Best by teMSE: %.6f, positions: %d", mse, total_positions);
+        else           snprintf(bc, sizeof bc, "Best by teMSE_c: %.6f, positions: %d", mse_c, total_positions);
         save_best(weights_file, bc);
     }
 
     /* --progressive: an evaluated row that did NOT improve bumps the playout
-     * counts.  is_best already picks the metric — teMSE when a test set is
+     * counts.  is_best already picks the metric — teMSE_c when a test set is
      * present, else the directWR peak — so this uses whichever is in play. */
     if (cfg_progressive > 1.0f && run_tests && (n_test > 0 || ref_theta) && !is_best) {
         cfg_value_po    = (int)ceilf(cfg_value_po    * cfg_progressive);
@@ -2085,6 +1948,9 @@ int main(int argc, char **argv) {
     cfg_no_local       = has_flag(argc, argv, "--no-local");
     cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "out/ppat-data-233162-best-ref-candidate.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;
+    /* --no-direct: disable the directWR match entirely (and hide its column).
+     * Forcing ref_theta off is enough — every directWR path is gated on it. */
+    if (has_flag(argc, argv, "--no-direct")) cfg_ref_weights = NULL;
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
@@ -2161,8 +2027,8 @@ int main(int argc, char **argv) {
      * start testing on different rows.  Set it to align rows across a sweep. */
     cfg_test_from  = (long)get_int_arg(argc, argv, "--test-from", 0);
     cfg_sync_dir   = get_str_arg(argc, argv, "--sync-dir", "out/ppat-sync");
-    /* Barrier sync is only meaningful with something to average against; with a
-     * single worker there is no peer, but it must still SAVE on the same cadence
+    /* Barrier sync is only meaningful with peers to combine displacements with;
+     * with a single worker there is no peer, but it must still SAVE on the same cadence
      * so the monitor sees fresh checkpoints (see save below). */
     int parallel = (cfg_workers > 1 && cfg_sync_every > 0);
     int wrapper_run = has_flag(argc, argv, "--sync-dir");
@@ -2267,11 +2133,6 @@ int main(int argc, char **argv) {
         TOTAL = run_total;
     }
 
-    /* Live-position set for the live% column: unconditional, and after the data load has
-     * fixed topo_size.  Not inside the --ref-weights block — with
-     * --ref-weights none that path is skipped and the set would stay empty,
-     * which reads as a column of zeros rather than as a missing measurement. */
-    build_live_positions(topo_size);
 
     /* Warm-start (--init-phase-scale present): seed phase P's weights from the
      * already-trained phase P+1, scaled by sc (the endgame-first chain). Only the
@@ -2318,9 +2179,9 @@ int main(int argc, char **argv) {
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
     print_banner(false, weights_file, best_file);
     printf("%9s  %7s", "positions", "trMSE");
-    printf("  %6s  %7s  %6s  %6s", "nWts", "avgW", "pass1", "live%");
+    printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
-    if (n_test > 0) printf("  %7s", "teMSE");
+    if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testS");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
@@ -2342,7 +2203,7 @@ int main(int argc, char **argv) {
 
     /* Inline testing/printing only in single-process mode.  In parallel, testing is
      * done by a separate --monitor process so the training workers never stall on the
-     * barrier; worker 0 just saves the averaged checkpoint after each sync. */
+     * barrier; worker 0 just saves the combined checkpoint after each sync. */
     /* Who owns testing?  A monitor does it whenever one exists, and one exists
      * exactly when we were launched by train-ppat-parallel — which always passes
      * --sync-dir.  Keying this off the worker count instead used to make
@@ -2396,8 +2257,8 @@ int main(int argc, char **argv) {
 
             /* Under the wrapper, checkpoint on the sync cadence regardless of
              * worker count — the monitor is the only thing that reads it, and it
-             * needs fresh weights.  With >1 worker this is also the averaging
-             * barrier; with 1 there is no peer to average with, so just save. */
+             * needs fresh weights.  With >1 worker this is also the parameter-sync
+             * barrier; with 1 there is no peer to combine with, so just save. */
             if (wrapper_run && total_positions % cfg_sync_every == 0) {
                 flush_batch();
                 if (parallel) barrier_sync_average();   /* θ ← θ₀ + Σ displacements */
