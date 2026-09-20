@@ -244,7 +244,13 @@ const Util = (() => {
     return String(n).padStart(4, '0');
   }
 
-  return { shuffle, envStr, envFloat, envInt, makeCfg, parseArgs, makeZobrist, fmt4, fmt4i, fmtRatio4, fmtMs, load };
+  // A non-deterministic 32-bit seed for makeRng, decorrelating runs that share a
+  // millisecond and pid (via Math.random).  Non-zero.  Log it to reproduce a run.
+  function randomSeed() {
+    return ((Date.now() ^ (process.pid << 16) ^ (Math.random() * 0x7fffffff | 0)) >>> 0) || 1;
+  }
+
+  return { shuffle, envStr, envFloat, envInt, makeCfg, parseArgs, makeZobrist, randomSeed, fmt4, fmt4i, fmtRatio4, fmtMs, load };
 
 })();
 

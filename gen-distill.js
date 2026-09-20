@@ -38,8 +38,7 @@ const PER_CAND = parseInt(opts['per-cand'] || '32', 10);   // playouts per root 
 const SIZE     = parseInt(opts.size || '13', 10);
 const SAMPLES  = opts.samples !== undefined ? parseInt(opts.samples, 10) : Infinity;
 const EPSILON  = opts.epsilon !== undefined ? parseFloat(opts.epsilon) : 0.1;
-const SEED     = opts.seed !== undefined ? parseInt(opts.seed, 10)
-                                         : ((Date.now() ^ (process.pid << 16) ^ (Math.random() * 0x7fffffff | 0)) >>> 0);
+const SEED     = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 
 console.log = (...a) => process.stderr.write(a.join(' ') + '\n');   // some agents log load info via console.log; keep stdout pure NDJSON
 const agent   = require('./ai/' + AGENT + '.js');

@@ -24,6 +24,10 @@ static double  *vp_vals;
 static uint8_t *vp_used;
 static uint32_t vp_mask;
 
+/* Optional baked truncation block: trunc: { delta: D, offset: [a, b] }. */
+static int    vp_trunc_has;
+static double vp_trunc_delta, vp_trunc_off_a, vp_trunc_off_b;
+
 static double vp_lookup(int32_t key) {
     uint32_t h = (uint32_t)key * 0x9E3779B1u;
     for (uint32_t i = h & vp_mask; ; i = (i + 1) & vp_mask) {
@@ -163,9 +167,38 @@ bool vpat_load(const char *path) {
         loaded++;
     }
     if (loaded != n) { fprintf(stderr, "vpat: parsed %ld of %ld weight entries in %s\n", loaded, n, path); exit(1); }
+
+    /* Optional baked truncation defaults: trunc: { delta: D, offset: [a, b] }.
+     * The JS consumers read these as defaults; here they let the trainer fall
+     * back to the model's fitted offset when --trunc-offset is omitted. */
+    vp_trunc_has = 0;
+    char *tr = strstr(buf, "trunc:");
+    if (tr) {
+        char *tr_end = strchr(tr, '}');
+        char *offp   = strstr(tr, "offset:");
+        char *brk    = offp ? strchr(offp, '[') : NULL;
+        double a, b;
+        if (brk && (!tr_end || brk < tr_end) && sscanf(brk + 1, "%lf,%lf", &a, &b) == 2) {
+            char *dp = strstr(tr, "delta:");
+            vp_trunc_delta = (dp && (!tr_end || dp < tr_end)) ? strtod(dp + 6, NULL) : 0.0;
+            vp_trunc_off_a = a; vp_trunc_off_b = b; vp_trunc_has = 1;
+        }
+    }
+
     free(buf);
     fprintf(stderr, "vpat: loaded %ld weights from %s (%d specs%s)\n",
             loaded, path, vp_num_specs, vp_has_turn ? ", turn" : "");
+    return true;
+}
+
+/* Baked truncation defaults from the model file (trunc: {delta, offset}).
+ * Returns true and fills the requested outputs if the loaded model carried the
+ * block; false if it had none. */
+bool vpat_trunc(double *delta, double *off_a, double *off_b) {
+    if (!vp_trunc_has) return false;
+    if (delta) *delta = vp_trunc_delta;
+    if (off_a) *off_a = vp_trunc_off_a;
+    if (off_b) *off_b = vp_trunc_off_b;
     return true;
 }
 

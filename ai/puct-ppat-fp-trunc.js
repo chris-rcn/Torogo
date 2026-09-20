@@ -71,6 +71,29 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
+  // Static evaluator: a vpatterns checkpoint (train-vpat-playout-eval).  Hard
+  // failure, not a fallback — this agent's identity IS its truncated playouts,
+  // and a silently-missing evaluator would field plain puct-ppat-fp under the
+  // wrong name.  Loaded up front (before the truncation knobs) so a 'trunc'
+  // block baked into the model file can supply their defaults.
+  const _vpatPath = _isNode
+    ? cfg.str('TRUNC_VPAT_DATA',
+        require('path').join(__dirname, '..', 'out', 'vpat-pe-ib06cpml-best-frozen-0912.js'))  // champion
+    : null;
+  if (_isNode && !_vpatPath) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
+  }
+  const _vpatRaw = _isNode
+    ? require(require('path').resolve(_vpatPath))
+    : (typeof window !== 'undefined' && window.truncVpatModel) || null;
+  if (!_vpatRaw) {
+    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
+      (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
+  }
+  // Truncation defaults baked into the model by score-bias-curve --write:
+  // { delta, offset: [a, b] }.  A matching env var still overrides.
+  const _truncMeta = (_vpatRaw && _vpatRaw.trunc) || {};
+
   // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
   const C_PUCT     = cfg.float('C_PUCT', 0.5);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
@@ -99,8 +122,11 @@ function create(cfg) {
   // Truncation point: net board-fullness advance past the leaf before the
   // playout stops for a static evaluation (board-size invariant).  The
   // default 1 can never be reached, so out of the box every playout runs to
-  // the end — plain puct-ppat-fp behaviour until the knobs are set.
-  const TRUNC_PHASE_DELTA = cfg.float('TRUNC_PHASE_DELTA', 1);
+  // the end — plain puct-ppat-fp behaviour until the knobs are set.  Resolution
+  // order: env var, else the model file's baked delta, else 0.2 (the champion).
+  const _deltaFromModel = !cfg.has('TRUNC_PHASE_DELTA') && _truncMeta.delta != null;
+  const TRUNC_PHASE_DELTA = cfg.has('TRUNC_PHASE_DELTA') ? cfg.float('TRUNC_PHASE_DELTA', 0.2)
+                          : (_deltaFromModel ? _truncMeta.delta : 0.2);
   // Prefix length in moves, set once per turn from the board size (getMove).
   let _prefixLen = 0;
   // Truncate only when the position's phase at the truncation point is below
@@ -131,11 +157,11 @@ function create(cfg) {
   // toward full-playout (unbiased) returns.  (The full-span variant, ramp
   // start at root+delta itself, measured a clear loss at budget 500 —
   // 2026-09-06: too many full playouts across the whole zone.)
-  const _gateARaw = cfg.str('TRUNC_MAX_PHASE_A', '');
+  const _gateARaw = cfg.str('TRUNC_MAX_PHASE_A', 'auto');   // champion: auto ramp start
   const GATE_A_AUTO = _gateARaw === 'auto';
   const TRUNC_MAX_PHASE_A = GATE_A_AUTO ? NaN
     : _gateARaw !== '' ? parseFloat(_gateARaw) : TRUNC_MAX_PHASE;
-  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', TRUNC_MAX_PHASE);
+  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', 0.55);   // champion gate B
   if (!GATE_A_AUTO && !(TRUNC_MAX_PHASE_A <= TRUNC_MAX_PHASE_B)) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
       `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
@@ -147,48 +173,33 @@ function create(cfg) {
   // offset(ph) = a + b*ph in win-probability units; it is applied as a
   // LOGIT shift (4*offset, the slope match at v = 0.5), whose natural
   // attenuation at extreme values matches the komi effect shrinking in
-  // decided positions.  Empty/off by default (bit-identical).
-  const _voRaw = cfg.str('TRUNC_VALUE_OFFSET', '');
-  let VO_A = 0, VO_B = 0, VO_ON = false;
-  if (_voRaw !== '') {
-    const parts = _voRaw.split(',').map(parseFloat);
-    if (parts.length < 1 || parts.length > 2 || parts.some(x => !Number.isFinite(x))) {
-      throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-        `TRUNC_VALUE_OFFSET must be "a" or "a,b" (offset = a + b*phase), got "${_voRaw}"`);
+  // decided positions.
+  // Resolution order: env var (an explicit empty string DISABLES the offset,
+  // overriding a model default), else the model file's baked offset, else the
+  // champion default 0.077,-0.023.
+  let VO_A = 0, VO_B = 0, VO_ON = false, _voFromModel = false;
+  if (cfg.has('TRUNC_VALUE_OFFSET')) {
+    const _voRaw = cfg.str('TRUNC_VALUE_OFFSET', '');
+    if (_voRaw !== '') {
+      const parts = _voRaw.split(',').map(parseFloat);
+      if (parts.length < 1 || parts.length > 2 || parts.some(x => !Number.isFinite(x))) {
+        throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+          `TRUNC_VALUE_OFFSET must be "a" or "a,b" (offset = a + b*phase), got "${_voRaw}"`);
+      }
+      VO_A = parts[0]; VO_B = parts.length === 2 ? parts[1] : 0; VO_ON = true;
     }
-    VO_A = parts[0]; VO_B = parts.length === 2 ? parts[1] : 0; VO_ON = true;
+  } else if (Array.isArray(_truncMeta.offset)) {
+    VO_A = _truncMeta.offset[0]; VO_B = _truncMeta.offset[1] || 0; VO_ON = true; _voFromModel = true;
+  } else {
+    VO_A = 0.077; VO_B = -0.023; VO_ON = true;   // champion default offset
   }
 
-  // Cap on the truncation probability: even where the gate would give p = 1,
-  // at most this fraction of playouts truncate — the rest run full, keeping
-  // an unbiased playout component in every node's value.  The evaluator's
-  // variance edge depreciates with budget while its bias doesn't; the cap
-  // buys bias anchoring at a throughput price, so it should earn its keep at
-  // high budgets if anywhere.  1 = no cap (default, rng stream untouched).
-  const TRUNC_MAX_RATIO = cfg.float('TRUNC_MAX_RATIO', 1);
-  if (!(TRUNC_MAX_RATIO > 0 && TRUNC_MAX_RATIO <= 1)) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-      `TRUNC_MAX_RATIO (${TRUNC_MAX_RATIO}) must be in (0, 1]`);
-  }
   // Ramp start used by playout(); in auto mode runSearch refreshes it per
   // decision from the root position.
   let _gateA = TRUNC_MAX_PHASE_A;
 
-  // Static evaluator: a vpatterns checkpoint (train-vpat-playout-eval).
-  // Hard failure, not a fallback — this agent's identity IS its truncated
-  // playouts, and a silently-missing evaluator would field plain puct-ppat-fp
-  // under the wrong name.
-  const _vpatPath = _isNode ? cfg.str('TRUNC_VPAT_DATA', '') : null;
-  if (_isNode && !_vpatPath) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
-  }
-  const _vpatRaw = _isNode
-    ? require(require('path').resolve(_vpatPath))
-    : (typeof window !== 'undefined' && window.truncVpatModel) || null;
-  if (!_vpatRaw) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
-      (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
-  }
+  // Static evaluator weights (the model itself was loaded up top so its baked
+  // truncation defaults could feed the knobs above).
   const _vpatWeights = VPat.makeWeights(Math.max(1024, (_vpatRaw.weights.size ?? _vpatRaw.weights.length) * 2));
   for (const [k, v] of _vpatRaw.weights) _vpatWeights.set(k, v);
   const _vpatModel = { specs: _vpatRaw.specs,
@@ -200,12 +211,11 @@ function create(cfg) {
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-max-phase: ` +
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
      : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`) +
-    (TRUNC_MAX_RATIO < 1 ? `, trunc-max-ratio: ${TRUNC_MAX_RATIO}` : '') +
-    (VO_ON ? `, trunc-value-offset: ${VO_A}${VO_B !== 0 ? `${VO_B >= 0 ? '+' : ''}${VO_B}*ph` : ''}` : ''));
+    (VO_ON ? `, trunc-value-offset: ${VO_A}${VO_B !== 0 ? `${VO_B >= 0 ? '+' : ''}${VO_B}*ph` : ''}${_voFromModel ? ' (model)' : ''}` : ''));
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -302,9 +312,9 @@ function create(cfg) {
     const epPhase = (cap - (game2.emptyCount - truncMoves)) / cap;
     let truncArmed;
     if (epPhase >= TRUNC_MAX_PHASE_B) truncArmed = false;
-    else if (epPhase <= _gateA)       truncArmed = TRUNC_MAX_RATIO >= 1 || rng.random() < TRUNC_MAX_RATIO;
+    else if (epPhase <= _gateA)       truncArmed = true;
     else truncArmed = rng.random() <
-      TRUNC_MAX_RATIO * (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
+      (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
 
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;

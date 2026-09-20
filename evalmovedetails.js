@@ -6,7 +6,7 @@
 // Reads a newline-delimited JSON file produced by createmovedetails.js.
 // For each position, reconstructs the game from the history, asks the agent
 // to choose a move, then compares its win ratio to the top-rated move's.
-// Reports the RMS of the win-ratio gap.
+// Reports the mean win-ratio gap (mae — the expected strength cost).
 //
 // Status is printed at an exponentially increasing interval (× 1.5 each time).
 //
@@ -20,7 +20,7 @@
 //   --limit       evaluate only the first n positions       (default: all)
 //   --index       evaluate only the position at 0-based index n, with the
 //                 seed it had in a full sweep
-//   --seed        starting agent rng seed (overrides default/per-index seed)
+//   --seed        starting agent rng seed (default: random, logged at startup)
 //   --oversample  evaluate each position this many times    (default: 1)
 //   --show-phases P  at the end, print a P-row table of phase-band → RMS,
 //                 binning every eval by game phase (board fullness, in [0,1])
@@ -33,19 +33,30 @@ const { Game2, coordStr, parseMove } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-// Hardcoded seeds so position sampling and agent search are reproducible
-// across runs.  Each agent invocation gets a fresh rng seeded from a counter:
-// a time-budgeted search then replays the same playout sequence every run,
-// so a wall-clock difference only perturbs the marginal playouts of that one
-// invocation instead of shifting a shared stream and diverging every
-// invocation after it.  Distinct seeds keep --oversample repeats distinct.
-const rng = makeRng(1);   // position sampling
-let agentSeed = 1;        // per-invocation agent rng
+// Fixed default seeds so the exported helpers (evalPositions/…, used by
+// train-vpatterns) are reproducible.  The CLI overrides agentSeed with a random
+// base by default (see --seed below).  Each agent invocation gets a fresh rng
+// seeded from a counter: a time-budgeted search then replays the same playout
+// sequence every run, so a wall-clock difference only perturbs the marginal
+// playouts of that one invocation instead of shifting a shared stream and
+// diverging every invocation after it.  Distinct seeds keep --oversample
+// repeats distinct.
+const rng = makeRng(1);   // position sampling (library default; CLI does not use it)
+let agentSeed = 1;        // per-invocation agent rng (CLI reseeds from a random base)
 
 function loadPositions(filePath) {
   return fs.readFileSync(filePath, 'utf8').split('\n')
     .filter(l => l.trim() && !l.startsWith('#'))   // '#' lines hold generation parameters
     .map(l => JSON.parse(l));
+}
+
+// Board fullness (1 − empty/area) of a position, from replaying its history —
+// the same phase evalPosition reports, computed up front for band filtering.
+function positionPhase(position) {
+  const { boardSize, history } = position;
+  const game = new Game2(boardSize, true);
+  for (const h of history) game.play(parseMove(h, boardSize));
+  return 1 - game.emptyCount / (boardSize * boardSize);
 }
 
 // Evaluate the agent on a single position.  Returns the agent's move (string
@@ -72,18 +83,23 @@ function evalPosition(agent, position, budgetMs) {
   return { agentMove, agentStr, topCand, agentCand, phase, gap: (topCand.kwr - agentCand.kwr) / 1000 };
 }
 
-// Evaluate agent on positions; returns { rmsErr, count }.
+// Evaluate agent on positions; returns { maeErr, rmsErr, count }.  maeErr (mean
+// win-prob gap) is the expected-strength-cost headline; rmsErr keeps the
+// blunder-risk view (it over-weights big gaps).
 function evalPositions(agent, positions, budgetMs) {
-  let gapSqSum = 0;
+  let gapSum = 0, gapSqSum = 0;
   for (const position of positions) {
     const { gap } = evalPosition(agent, position, budgetMs);
+    gapSum += gap;
     gapSqSum += gap * gap;
   }
-  return { rmsErr: Math.sqrt(gapSqSum / positions.length), count: positions.length };
+  return { maeErr: gapSum / positions.length,
+           rmsErr: Math.sqrt(gapSqSum / positions.length),
+           count: positions.length };
 }
 
 // Evaluate agent on a random sample of n positions from the pool.
-// If n >= pool.length, uses the full pool.  Returns { rmsErr, count }.
+// If n >= pool.length, uses the full pool.  Returns { maeErr, rmsErr, count }.
 function evalPositionsSample(agent, pool, n, budgetMs) {
   let positions = pool;
   if (n < pool.length) {
@@ -98,22 +114,24 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 }
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
     console.log(`Usage: node evalmovedetails.js --agent <name> --file <path> [options]
 
 Evaluate an agent against pre-computed move details (createmovedetails.js
 output): replay each position, ask the agent for a move, and charge it the
-win-ratio gap to the file's top-rated move.  Reports the RMS gap.
+win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
 
   --agent NAME      ai/<name>.js (required)
   --file PATH       positions file from createmovedetails.js (required)
   --budget MS       per-move budget (default 1000)
   --limit N         evaluate only the first N positions (default: all)
+  --min-phase F     evaluate only positions at board fullness >= F (default 0)
+  --max-phase F     evaluate only positions at board fullness <= F (default 1)
   --index N         evaluate only the position at 0-based index N, with the
-                    agent seed it had in a full sweep
-  --seed N          starting agent rng seed (overrides default/per-index seed)
+                    agent seed it had in a full sweep (not with --min/max-phase)
+  --seed N          starting agent rng seed (default: random, logged at startup)
   --oversample N    evaluate each position N times, distinct seeds (default 1)
   --show-phases P   at the end, print a P-row phase-band -> RMS table
                     (phase = board fullness in [0,1])
@@ -129,6 +147,8 @@ win-ratio gap to the file's top-rated move.  Reports the RMS gap.
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
   const showPhases = opts['show-phases'] !== undefined ? parseInt(opts['show-phases'], 10) : null;
+  const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
+  const maxPhase   = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
   const verbose    = !!opts.verbose;
 
   if (isNaN(budgetMs) || budgetMs < 1)     { console.error('--budget must be a positive integer'); process.exit(1); }
@@ -136,6 +156,18 @@ win-ratio gap to the file's top-rated move.  Reports the RMS gap.
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
   if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
   if (showPhases !== null && (isNaN(showPhases) || showPhases < 1)) { console.error('--show-phases must be a positive integer'); process.exit(1); }
+  if (isNaN(minPhase) || isNaN(maxPhase) || minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
+    console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1'); process.exit(1);
+  }
+  const bandActive = minPhase > 0 || maxPhase < 1;
+  if (bandActive && index !== null) {
+    console.error('--min-phase/--max-phase cannot combine with --index (its seed is tied to the full-sweep position order)');
+    process.exit(1);
+  }
+
+  // Default agent rng seed is random (logged at startup) so runs differ; a fixed
+  // --seed pins the starting seed and reproduces a run exactly.
+  const baseSeed = seed !== null ? seed : Util.randomSeed();
 
   const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
 // create(cfg)-style agents (phase-mux, the puct family) instantiate with a
@@ -152,30 +184,39 @@ const agent = (typeof _agentMod.create === 'function'
       console.error(`--index must be in 0..${pool.length - 1}`); process.exit(1);
     }
     positions = [pool[index]];
-    agentSeed = index + 1;   // position i (0-based) uses seed i+1 in a full sweep
+    agentSeed = baseSeed + index;   // the seed position `index` gets in a baseSeed full sweep
   } else {
-    positions = pool.slice(0, limit);
+    // --min-phase/--max-phase: keep only positions whose board fullness is in
+    // the band, then apply --limit to what survives.
+    const banded = bandActive ? pool.filter(p => {
+      const ph = positionPhase(p);
+      return ph >= minPhase && ph <= maxPhase;
+    }) : pool;
+    positions = banded.slice(0, limit);
+    agentSeed = baseSeed;
   }
-  // --seed sets the starting agent rng seed explicitly, overriding the default
-  // (1) and the per-index seed restored above.
+  // --seed pins the starting agent rng seed, overriding the random default and
+  // the per-index seed set above (so --seed with --index starts exactly at N).
   if (seed !== null) agentSeed = seed;
 
-  console.log(`agent=${agentName}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}`);
+  console.log(`agent=${agentName}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}  seed=${agentSeed}` +
+    (bandActive ? `  band=[${minPhase}, ${maxPhase}]` : ''));
   console.log();
   console.log([
     'pos'    .padStart(5),
     'elapsed'.padStart(7),
     'tMv'    .padStart(5),
-    'rms'    .padStart(5),
+    'mae'    .padStart(5),   // headline: mean win-prob gap (expected strength cost)
   ].join('  '));
 
   // Phase bands: partition phase ∈ [0,1] (board fullness) into P equal-width
-  // bands and accumulate squared gap per band, so the end-of-run table shows
-  // where in the game the agent loses the most.
-  let phaseBandSq = null, phaseBandN = null;
+  // bands and accumulate gap and squared gap per band, so the end-of-run table
+  // shows where in the game the agent loses the most (mae and rms per band).
+  let phaseBandSum = null, phaseBandSq = null, phaseBandN = null;
   if (showPhases !== null) {
-    phaseBandSq = new Float64Array(showPhases);
-    phaseBandN  = new Int32Array(showPhases);
+    phaseBandSum = new Float64Array(showPhases);
+    phaseBandSq  = new Float64Array(showPhases);
+    phaseBandN   = new Int32Array(showPhases);
   }
   function phaseBandOf(phase) {
     let b = Math.floor(phase * showPhases);
@@ -187,7 +228,7 @@ const agent = (typeof _agentMod.create === 'function'
   const startTime = performance.now();
   let printPeriodMs = 1000;
   let lastPrintTime = startTime;
-  let gapSqSum = 0;
+  let gapSum = 0;
 
   function printStats(count) {
     const elapsedMs = performance.now() - startTime;
@@ -195,7 +236,7 @@ const agent = (typeof _agentMod.create === 'function'
       Util.fmt4i(count)                          .padStart(5),
       Util.fmtMs(elapsedMs)                      .padStart(7),
       Util.fmtMs(elapsedMs / count)              .padStart(5),
-      Util.fmtRatio4(Math.sqrt(gapSqSum / count)).padStart(5),
+      Util.fmtRatio4(gapSum / count)             .padStart(5),
     ].join('  '));
   }
 
@@ -225,11 +266,12 @@ const agent = (typeof _agentMod.create === 'function'
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
       const { agentMove, agentStr, topCand, agentCand, phase, gap } = evalPosition(agent, positions[i], budgetMs);
-      gapSqSum += gap * gap;
+      gapSum += gap;
       evals++;
 
       if (showPhases !== null) {
         const b = phaseBandOf(phase);
+        phaseBandSum[b] += gap;
         phaseBandSq[b] += gap * gap;
         phaseBandN[b]++;
       }
@@ -279,16 +321,19 @@ const agent = (typeof _agentMod.create === 'function'
     console.log([
       'phase'.padStart(9),
       'n'    .padStart(5),
+      'mae'  .padStart(5),
       'rms'  .padStart(5),
     ].join('  '));
     for (let b = 0; b < showPhases; b++) {
       const lo = b / showPhases;
       const hi = (b + 1) / showPhases;
       const n  = phaseBandN[b];
+      const mae = n > 0 ? Util.fmtRatio4(phaseBandSum[b] / n) : '-';
       const rms = n > 0 ? Util.fmtRatio4(Math.sqrt(phaseBandSq[b] / n)) : '-';
       console.log([
         `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(9),
         Util.fmt4i(n).padStart(5),
+        mae          .padStart(5),
         rms          .padStart(5),
       ].join('  '));
     }

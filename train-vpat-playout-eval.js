@@ -32,7 +32,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
   ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
-   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec']);
+   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
 
@@ -47,15 +47,23 @@ print, and each new best teMSE also writes the -best checkpoint.
                     pairs, adding b2 and bias columns — the truncation bias
                     floor E[b^2] and its shared lean, the deployment
                     quantities teMSE cannot see.  Reported only; -best
-                    stays teMSE-selected
-  --test-file F     separate data file supplying the held-out test set:
-                    band-filtered, then all of it (or capped at --test-pos);
-                    --data is then entirely train pool
-  --test-pos N      test-set size cap (default: with --test-file, all of it;
-                    otherwise 0 = no test set, no teMSE).  Without
-                    --test-file: the first N records of --data become the
-                    test head (clamped to half the file)
-  --min-phase F     train only on records with phase >= F (default 0)
+                    stays teMSE-selected.  Also fits the offset line
+                    bias(ph) = a + b*ph over these pairs and writes it, with
+                    --delta, into every saved checkpoint's 'trunc' block
+                    (puct-ppat-fp-trunc reads it as a default, so
+                    score-bias-curve need not be run).  Requires --delta
+  --delta D         deployment truncation delta to measure the bias at and
+                    fit the offset for; the recorded prefixes are truncated
+                    to ceil(D*area) moves past the start.  The bias file's
+                    header delta is only its MAXIMUM; D must not exceed it.
+                    Required with --bias-file
+  --test-file F     data file supplying the held-out test set (band-filtered);
+                    all of --data is the train pool.  This is the ONLY source of
+                    the test set / teMSE — without --test-file there is none
+  --test-pos N      cap the --test-file test set to N records (default: all);
+                    requires --test-file
+  --min-phase F     train only on records with phase >= F (default: --delta
+                    if given, else 0 — the endpoint phase is never below delta)
   --max-phase F     train only on records with phase <= F (default 1);
                     the band filters the train pool and the --test-file set
   --epochs N        stop after N full passes over the train pool
@@ -107,9 +115,33 @@ const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
 const MAX_WEIGHTS = opts['max-weights'] !== undefined ? parseInt(opts['max-weights'], 10) : 0;
 const EPOCHS     = opts.epochs !== undefined ? parseInt(opts.epochs, 10) : 0;
-const TEST_POS_RAW = opts['test-pos'] !== undefined ? parseInt(opts['test-pos'], 10)
-                                                    : (opts['test-file'] ? Infinity : 0);
-const MIN_PHASE  = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
+// The test set comes only from --test-file; --test-pos caps it (default: all).
+const TEST_POS_RAW = opts['test-pos'] !== undefined ? parseInt(opts['test-pos'], 10) : Infinity;
+if (opts['test-pos'] !== undefined && !opts['test-file']) {
+  console.error('--test-pos requires --test-file (the test set comes only from --test-file)');
+  process.exit(1);
+}
+// --delta D: the DEPLOYMENT truncation delta to measure the bias at and fit the
+// offset for.  The bias artifact is emitted at a MAXIMUM delta (its header); any
+// D up to that is valid — the recorded prefixes are truncated to ceil(D*area)
+// moves past the start, exactly as score-bias-curve --delta and the deployed
+// agent do.  Required with --bias-file; the fitted offset is stamped with D.
+const DELTA = opts.delta !== undefined ? parseFloat(opts.delta) : null;
+if (opts['bias-file'] && DELTA === null) {
+  console.error("--bias-file requires --delta: the deployment delta to measure and fit the offset at " +
+                "(the bias file's header delta is only its maximum)");
+  process.exit(1);
+}
+if (DELTA !== null && !opts['bias-file']) {
+  console.error('--delta only applies with --bias-file'); process.exit(1);
+}
+if (DELTA !== null && !(DELTA >= 0 && DELTA < 1)) {
+  console.error('--delta: expected 0 <= D < 1'); process.exit(1);
+}
+// The truncation endpoint phase is leaf + delta >= delta, so nothing below delta
+// is ever consulted (or trained on): default --min-phase to delta when it is set.
+const MIN_PHASE  = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase'])
+                 : (DELTA !== null ? DELTA : 0);
 const MAX_PHASE  = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
 if (MIN_PHASE < 0 || MAX_PHASE > 1 || MIN_PHASE > MAX_PHASE) {
   console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
@@ -244,9 +276,7 @@ function tdUpdate(features, target, lr) {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
-function loadRecords(filePath, exemptFirst = 0) {
-  const t0 = Date.now();
-  process.stdout.write(`Loading: ${filePath} (${(fs.statSync(filePath).size / 1e6).toFixed(0)}MB)...`);
+function loadRecords(filePath) {
   const recs = [];
   let malformed = 0, outsideBand = 0;
   const processLine = (line) => {
@@ -258,8 +288,7 @@ function loadRecords(filePath, exemptFirst = 0) {
     const wr    = parseFloat(p[3]);
     if (!Number.isFinite(size) || !Number.isFinite(phase) ||
         !(wr >= 0 && wr <= 1)) { malformed++; return; }
-    if (recs.length >= exemptFirst &&
-        (phase < MIN_PHASE || phase > MAX_PHASE)) { outsideBand++; return; }
+    if (phase < MIN_PHASE || phase > MAX_PHASE) { outsideBand++; return; }
     const toks = p[2].split(',');
     const moves = new Int16Array(toks.length);
     let ok = true;
@@ -286,24 +315,21 @@ function loadRecords(filePath, exemptFirst = 0) {
   }
   fs.closeSync(fd);
   if (rem) processLine(rem);
-  console.log(` Done.` +
-    (malformed ? `  Dropped ${malformed} malformed lines.` : '') +
-    `  Loaded ${recs.length} records in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
   recs.outsideBand = outsideBand;
+  recs.malformed = malformed;
   if (recs.length === 0) { console.error(`data '${filePath}' contains no valid records`); process.exit(1); }
   return recs;
 }
 
-const records = loadRecords(DATA_PATH, TEST_FILE ? 0 : TEST_POS_RAW);
+// All of --data is the train pool; the test set comes only from --test-file.
+const records = loadRecords(DATA_PATH);
+const trainRecs = records;
 const _testAll = TEST_FILE ? loadRecords(TEST_FILE) : null;
-const testRecs  = TEST_FILE
-  ? _testAll.slice(0, TEST_POS_RAW)
-  : records.slice(0, Math.min(TEST_POS_RAW, records.length >> 1));
+const testRecs  = TEST_FILE ? _testAll.slice(0, TEST_POS_RAW) : [];
 if (TEST_FILE && testRecs.length === 0) {
   console.error(`no test records in phase band [${MIN_PHASE}, ${MAX_PHASE}]`);
   process.exit(1);
 }
-const trainRecs = TEST_FILE ? records : records.slice(testRecs.length);
 if (trainRecs.length === 0) {
   console.error(`no train records in phase band [${MIN_PHASE}, ${MAX_PHASE}]`);
   process.exit(1);
@@ -312,7 +338,7 @@ if (trainRecs.length === 0) {
 // First replay of each record validates it (deferred from load); band-
 // filtered records also cross-check the recorded phase column via the band.
 const BAND_ACTIVE = MIN_PHASE > 0 || MAX_PHASE < 1;
-function replayRecord(rec, bandExempt = false) {
+function replayRecord(rec) {
   const game = new Game2(rec.size, true);
   const moves = rec.moves;
   if (rec.v) {
@@ -325,7 +351,7 @@ function replayRecord(rec, bandExempt = false) {
       process.exit(1);
     }
   }
-  if (BAND_ACTIVE && !bandExempt) {
+  if (BAND_ACTIVE) {
     const ph = game.phase();
     if (ph < MIN_PHASE - 0.0006 || ph > MAX_PHASE + 0.0006) {
       console.error(`corrupt record: replayed phase ${ph.toFixed(3)} outside band ` +
@@ -342,43 +368,73 @@ function replayRecord(rec, bandExempt = false) {
 // once at load, then each print is just 2n evaluateFeatures passes.
 const BIAS_FILE = opts['bias-file'] || null;
 let biasPairs = null;
+let biasInfo = null;   // { dropped, secs, ppat, minPhase, source } for the startup banner
 // Called AFTER --load has resolved the final specs/prepSpecs: the cached
-// features must be extracted under the spec the weights are keyed by.
+// features must be extracted under the spec the weights are keyed by.  The
+// artifact is rescored at --delta: each recorded prefix is truncated to
+// n0 + ceil(DELTA*area) moves (start moves + the D-descent) and the endpoint
+// features + phase are taken there — sound for any DELTA up to the artifact's
+// own (maximum) delta, since the references belong to the start.
 function loadBiasPairs() {
   if (!BIAS_FILE) return;
   const lines = fs.readFileSync(BIAS_FILE, 'utf8').split('\n');
-  const header = lines.find(l => l.startsWith('# bias-pairs:'));
-  if (header) console.log(header.slice(2));
+  const header = lines.find(l => l.startsWith('# bias-pairs:')) || '';
+  const field = (k) => { const m = header.match(new RegExp(`${k}:\\s*(\\S+)`)); return m ? m[1] : null; };
+  const maxDelta = field('delta') !== null ? parseFloat(field('delta')) : null;
+  if (maxDelta !== null && DELTA > maxDelta + 1e-9) {
+    console.error(`--delta ${DELTA} exceeds the bias artifact's maximum delta ${maxDelta} (${BIAS_FILE})`);
+    process.exit(1);
+  }
   biasPairs = [];
   let biasDropped = 0;
   const t0b = Date.now();
+  // Replay the first `cut` moves of a recorded prefix, returning the board.
+  const replayCut = (size, moves, cut) => {
+    const toks = moves.split(',');
+    if (cut > toks.length) {
+      console.error(`bias-file: --delta ${DELTA} needs ${cut} moves but a row has only ${toks.length} ` +
+                    `(delta exceeds the artifact) — ${BIAS_FILE}`);
+      process.exit(1);
+    }
+    const g = new Game2(size, true);
+    for (let i = 0; i < cut; i++) {
+      if (!g.play(parseMove(toks[i], size))) {
+        console.error(`bias-file: replay failed (${BIAS_FILE})`);
+        process.exit(1);
+      }
+    }
+    return g;
+  };
   for (const line of lines) {
     if (!line || line[0] === '#') continue;
     const p = line.trim().split(/\s+/);
     if (p.length !== 7) continue;
     const size = parseInt(p[0], 10);
-    // Pairs whose ENDPOINT phase falls outside the training band are dropped:
+    const area = size * size;
+    const n0 = p[2] === '-' ? 0 : p[2].split(',').length;   // start moves before the descent
+    const cut = n0 + Math.ceil(DELTA * area);
+    // Endpoint at DELTA (both prefixes share the move count, hence the phase).
+    const g1 = replayCut(size, p[3], cut);
+    // Pairs whose D-ENDPOINT phase falls outside the training band are dropped:
     // under the band-matching convention the training band IS the consulted
     // band, and out-of-band pairs add checkpoint-dependent extrapolation
     // noise to varB (and to -best selection).
-    const ph = parseFloat(p[1]);
+    const ph = 1 - g1.emptyCount / area;
     if (ph < MIN_PHASE || ph > MAX_PHASE) { biasDropped++; continue; }
-    const rec = { pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
-    for (const [key, col] of [['f1', 3], ['f2', 4]]) {
-      const g = new Game2(size, true);
-      for (const t of p[col].split(',')) {
-        if (!g.play(parseMove(t, size))) {
-          console.error(`bias-file: replay failed (${BIAS_FILE})`);
-          process.exit(1);
-        }
-      }
+    const g2 = replayCut(size, p[4], cut);
+    const rec = { ph, pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
+    for (const [key, g] of [['f1', g1], ['f2', g2]]) {
       const f = extractFeatures(g, prepSpecs);
       rec[key] = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), count: f.count };
     }
     biasPairs.push(rec);
   }
-  console.log(`bias pairs: ${biasPairs.length} loaded+extracted from ${BIAS_FILE} in ${((Date.now() - t0b) / 1000).toFixed(1)}s` +
-    (biasDropped ? ` (${biasDropped} outside band [${MIN_PHASE}, ${MAX_PHASE}] dropped)` : ''));
+  biasInfo = {
+    dropped: biasDropped,
+    secs: (Date.now() - t0b) / 1000,
+    ppat: field('ppat'), minPhase: field('ppat-min-phase'),
+    source: field('source') ? path.parse(field('source')).name : null,
+  };
 }
 
 
@@ -395,12 +451,34 @@ function biasStats() {
   return { b2: prod / biasPairs.length, lean: lean / biasPairs.length };
 }
 
+// The truncation offset for the CURRENT weights: an OLS line bias(ph) = a + b*ph
+// over the loaded bias pairs (rescored at --delta, filtered to the training band,
+// which by the band-matching convention is the deployed band).  Written into
+// every saved checkpoint's 'trunc' block with DELTA, so puct-ppat-fp-trunc reads
+// (delta, offset) as defaults and score-bias-curve never has to be run.
+function fitTrunc() {
+  if (!biasPairs || DELTA === null || biasPairs.length === 0) return null;
+  const evalW = saveEvalW();
+  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const rec of biasPairs) {
+    const v1 = evaluateFeatures(rec.f1, evalW);
+    const v2 = evaluateFeatures(rec.f2, evalW);
+    const y = (v1 + v2) / 2 - (rec.pa + rec.pb) / 2;   // this pair's lean at rec.ph
+    n++; sx += rec.ph; sy += y; sxx += rec.ph * rec.ph; sxy += rec.ph * y;
+  }
+  const denom = n * sxx - sx * sx;
+  // Degenerate phase spread (all pairs at one phase): fit a flat offset.
+  const b = denom > 1e-12 ? (n * sxy - sx * sy) / denom : 0;
+  const a = (sy - b * sx) / n;
+  return { delta: DELTA, offset: [+a.toFixed(3), +b.toFixed(3)] };
+}
+
 function testMSE() {
   if (testRecs.length === 0) return null;
   const evalW = saveEvalW();
   let se = 0;
   for (const rec of testRecs) {
-    const v = evaluateFeatures(extractFeatures(replayRecord(rec, !TEST_FILE), prepSpecs), evalW);
+    const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
     se += (rec.targetB - v) * (rec.targetB - v);
   }
   return se / testRecs.length;
@@ -426,7 +504,6 @@ if (LOAD_PATH) {
       weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
-    console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
   }
@@ -436,17 +513,7 @@ if (NO_ADD && weights.size === 0) {
   process.exit(1);
 }
 
-{
-  const band = BAND_ACTIVE ? ` (band [${MIN_PHASE}, ${MAX_PHASE}]: ${records.outsideBand} outside dropped)` : '';
-  console.log(`data: ${DATA_PATH} (${records.length} records: ` +
-    (TEST_FILE ? `all train` : `${testRecs.length} test, ${trainRecs.length} train`) + `)` + band);
-  if (TEST_FILE) console.log(`test: ${TEST_FILE} (${testRecs.length} records` +
-    (Number.isFinite(TEST_POS_RAW) ? `, capped at ${TEST_POS_RAW}` : ``) +
-    (BAND_ACTIVE ? `, ${_testAll.outsideBand} outside band dropped)` : `)`));
-}
 loadBiasPairs();
-console.log(`LR=${LR}  lr-decay=${LR_DECAY}  smooth-weights=${EMA_ALPHA}  max-weights=${MAX_WEIGHTS || '(unlimited)'}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}`);
-console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}${NO_ADD ? `  no-add` : ''}`);
 // '-best' goes before the file extension, whatever it is (x.js -> x-best.js,
 // x.txt -> x-best.txt); an extensionless path gets it appended.
 const BEST_PATH = (() => {
@@ -454,15 +521,37 @@ const BEST_PATH = (() => {
   return path.join(pp.dir, `${pp.name}-best${pp.ext}`);
 })();
 let bestMetric = Infinity;
-const hasBest = TEST_FILE || TEST_POS_RAW > 0;
-console.log(`Out: ${SAVE_PATH}${hasBest || biasPairs ? ` (best: ${BEST_PATH})` : ''}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
-
+const hasBest = TEST_FILE || !!biasPairs;
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
+const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 const testAgent = gm => ({ move: gm.gameOver ? PASS
   : search(gm, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs }) });
-if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
-const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
-if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
+
+// ── Startup banner: one aligned "label: value" line per group ────────────────
+const bline = (label, content) => console.log(label.padEnd(8) + content);
+const f4 = (n) => Util.fmt4i(n).trim();   // compact integer count (3418 -> "3418", 360427 -> "360K")
+bline('data:', `${DATA_PATH}  ${f4(trainRecs.length)} train` +
+  (BAND_ACTIVE ? `  band [${MIN_PHASE}, ${MAX_PHASE}]` : ``) +
+  (records.malformed ? `  ${f4(records.malformed)} malformed` : ``) +
+  (records.outsideBand ? `  ${f4(records.outsideBand)} out-of-band` : ``));
+if (TEST_FILE) bline('test:', `${TEST_FILE}  ${f4(testRecs.length)} records` +
+  (Number.isFinite(TEST_POS_RAW) ? ` (capped ${f4(TEST_POS_RAW)})` : ``) +
+  (BAND_ACTIVE && _testAll.outsideBand ? `  ${f4(_testAll.outsideBand)} out-of-band` : ``));
+if (biasPairs) bline('bias:', `${BIAS_FILE}  ${f4(biasPairs.length)} pairs, delta ${DELTA}` +
+  (biasInfo.ppat ? `  (ppat ${biasInfo.ppat}${biasInfo.minPhase ? ` @${biasInfo.minPhase}` : ``}` +
+                   `${biasInfo.source ? `, src ${biasInfo.source}` : ``})` : ``) +
+  (biasInfo.dropped ? `  ${f4(biasInfo.dropped)} out-of-band` : ``) +
+  `  [${biasInfo.secs.toFixed(1)}s]`);
+bline('model:', `${specString(specs)}` +
+  (FROZEN.size > 0 ? `  frozen [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ``) +
+  (NO_ADD ? `  no-add` : ``) +
+  (LOAD_PATH && weights.size > 0 ? `  (resumed ${f4(weights.size)} weights from ${LOAD_PATH})` : ``));
+bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
+  `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
+  (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
+if (ladderCases) bline('ladder:', `${LADDER_FILE}  ${f4(ladderCases.length)} cases`);
+if (mdPositions) bline('md:', `${MD_FILE}  ${f4(mdPositions.length)} positions`);
+bline('out:', `${SAVE_PATH}${hasBest ? `  (best ${BEST_PATH})` : ``}`);
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
 
@@ -545,7 +634,7 @@ function statusPrint() {
   }
 
   const tPosMs = intervalTrainMs / Math.max(1, intervalPos);
-  const trMSE  = trSEN > 0 ? trSE / trSEN : 0;
+  const trMSE  = trSEN > 0 ? trSE / trSEN : null;   // null on the pre-training baseline row
   const teMSE  = testMSE();
   const bs = biasPairs ? biasStats() : null;
   const varB = bs ? bs.b2 - bs.lean * bs.lean : null;
@@ -575,10 +664,10 @@ function statusPrint() {
     Util.fmt4i(nPos),
     Util.fmt4i(epoch),
     LR >= 0.001 ? LR.toFixed(4) : LR.toExponential(1),
-    Util.fmtMs(tPosMs),
+    (trMSE !== null ? Util.fmtMs(tPosMs) : '-'),
     Util.fmt4i(ws),
     wAvg.toFixed(4),
-    trMSE.toFixed(4),
+    (trMSE !== null ? trMSE.toFixed(4) : '-'),
     (teMSE !== null ? teMSE.toFixed(4) + (isBest && varB === null ? '*' : ' ') : '-'),
   ];
   if (bs) {
@@ -593,7 +682,7 @@ function statusPrint() {
     // per-position cost (gradient work included), not the deployed eval cost,
     // so this is a proxy: comparable between rows and between runs on the same
     // machine, not an absolute.
-    cols.push((varB * tPosMs * 1000).toFixed(4));
+    cols.push(trMSE !== null ? (varB * tPosMs * 1000).toFixed(4) : '-');
   }
   if (evalGetMove) cols.push(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(batch.length)})` +
                              `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`);
@@ -601,11 +690,17 @@ function statusPrint() {
   if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms));
   printRow(cols);
 
-  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs });
-  if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs });
+  // Fit the truncation offset for the just-saved weights and bake it in, so the
+  // model file carries its own (delta, offset) defaults (no score-bias-curve run).
+  const trunc = fitTrunc();
+  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc });
+  if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc });
   nextPrintPos = Math.max(Math.ceil(nPos * 1.5), nPos + 1);
   nextPrintAt  = Date.now() + MAX_PRINT_GAP_MS;
 }
+
+statusPrint();                      // baseline row: initial metrics before any training
+nextPrintPos = PRINT_START_POS;     // statusPrint set it to 1; resume the normal schedule
 
 let done = false;
 while (!done) {

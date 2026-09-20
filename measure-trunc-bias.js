@@ -9,8 +9,8 @@
 // (does not), where p(s) is the mean FULL-playout outcome from s — the
 // currency the search's untruncated returns are denominated in.  A node's
 // error floor is b(s)^2, so E[b^2] over the band's playout-start distribution is what
-// TRUNC_PHASE_DELTA (decorrelation) and TRUNC_MAX_RATIO (dilution) actually
-// manage.  ('Playout-start', not 'leaf': tree leaves are nodes with their
+// TRUNC_PHASE_DELTA (decorrelation) actually manages.  ('Playout-start', not
+// 'leaf': tree leaves are nodes with their
 // own phase — the truncation anchor is the position a playout launches from.)
 //
 // Estimator, per position: two truncated returns T1, T2 (independent

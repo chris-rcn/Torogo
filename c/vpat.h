@@ -29,4 +29,8 @@ bool   vpat_load(const char *path);       /* parses the model JS file; exits lou
 double vpat_evaluate(const Game2 *g);     /* P(BLACK wins) for the current position */
 double vpat_evaluate_z(const Game2 *g);   /* the raw logit, for callers applying a logit-space offset */
 
+/* Baked truncation defaults (trunc: {delta, offset:[a,b]}) if the model file has
+ * them; returns false when absent.  Any output pointer may be NULL. */
+bool   vpat_trunc(double *delta, double *off_a, double *off_b);
+
 #endif

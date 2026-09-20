@@ -15,19 +15,9 @@
  *   ./train_ppat <file> [options]
  *   Options:
  *     --lr <f>              learning rate (default 10)
- *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 500)
+ *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 100)
  *     --value-playouts <n>  rollouts for the V estimate (default --playouts)
  *     --gradient-playouts <n>  rollouts for the gradient (default --playouts)
- *     --value-ema <f>       EMA decay for a per-position value estimate blended
- *                           across epochs (default 0 = off; f in [0,1)).  Cuts
- *                           the variance of V for a given --value-playouts, best
- *                           paired with a small one; higher f = longer memory
- *     --progressive <X>     when an evaluated row does NOT improve (teMSE_c if a
- *                           test set is present, else directWR), multiply value-
- *                           and gradient-playouts by X (default 1 = off).
- *                           Cheap-and-noisy early, more precision once accuracy
- *                           stalls.  Single-process only (the parallel monitor
- *                           does the testing, not the workers that train)
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
  *                           moves, if the phase there is <= --trunc-max-phase
  *                           (default 0.55, the deployed gate) the rollout stops
@@ -40,12 +30,16 @@
  *                           AND test rollouts (same estimator; directWR, the
  *                           primary readout, is match-based and unaffected).
  *     --trunc-delta <f>     the cut distance, in phase units (moves-method:
- *                           ceil(delta * area) moves past the start); required
- *                           with --trunc-vpat
+ *                           ceil(delta * area) moves past the start).  Defaults
+ *                           to the model file's baked delta (trunc.delta) when
+ *                           omitted; required if the model has none.
  *     --trunc-max-phase <f> the gate B (default 0.55)
- *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase;
- *                           REQUIRED with --trunc-vpat — offsets are per
- *                           (model, delta, band) and never transfer
+ *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase.
+ *                           Defaults to the offset baked into the model file
+ *                           (trunc.offset), valid only when --trunc-delta equals
+ *                           the model's baked delta — offsets are per (model,
+ *                           delta, band) and never transfer.  Required when the
+ *                           model has no baked offset or the deltas differ.
  *     --match-phases A,B    directWR match band (default 0.6,1): inside [A, B]
  *                           each side plays its own weights; outside, BOTH
  *                           sides play reference moves, so games differ only
@@ -66,7 +60,7 @@
  *                           artifact of corpus geometry (a mouth corpus ramps
  *                           across its band then plateaus to the game-end
  *                           taper; truncation reshapes it again)
- *     --batch <n>           batch size (default 10)
+ *     --batch <n>           batch size (default 1)
  *     --test-pos <n>        test positions (default 0 = no teMSE test).  The match
  *                           columns are the primary readout now; a test set costs
  *                           real time (5000 positions x 500 playouts is ~90s a row)
@@ -78,13 +72,21 @@
  *                           Use a fixed high-playout set as a permanent yardstick:
  *                           teMSE then compares across runs and datasets.
  *     --train-pos <n>       train positions (default 0 = all)
- *     --test-playouts <n>   playouts per test position (default 10).  teMSE
- *                           precision comes from position count, not playouts
- *                           per position, so keep this small; 10 amortises the
- *                           per-position setup overhead without paying for
- *                           precision the position count already buys.  teMSE
- *                           carries a +0.25/n bias — comparable only across
- *                           runs at the SAME n.
+ *     --test-playouts <n>   playouts per test position (default: derived from
+ *                           --test-total-playouts).  When set explicitly it
+ *                           overrides the total.  The per-position playout-
+ *                           variance floor is 0.25/n (worst case); teMSE_c
+ *                           subtracts it, so teMSE_c stays comparable across n and
+ *                           n only trades per-position compute for lower teMSE_c
+ *                           variance.
+ *     --test-total-playouts <n>  the default source of the per-position count:
+ *                           spread this TOTAL over the test set, per-position =
+ *                           round(n / #test-positions), floored at 1 (default
+ *                           200000).  Fixes the cost of one teMSE evaluation
+ *                           regardless of test-set size.  An explicit
+ *                           --test-playouts overrides it; set 0 to disable.
+ *                           teMSE_c stays comparable because it removes the
+ *                           0.25/N floor.
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
  *     --iteration-limit <n> stop after n iterations (default infinite)
  *     --overfit             use same data for train and test
@@ -130,11 +132,11 @@
  *                           points empty, whatever the diagonals hold.  Fires
  *                           strictly more often.  Mutually exclusive with
  *                           --twelvecell — they share the one weight block.
- *     --lib-cap <n>         orthogonal liberty cap in the 3x3 pattern (2..4,
+ *     --adj-lib <n>         orthogonal liberty cap in the 3x3 pattern (2..4,
  *                           default 2 = the historical atari-only encoding).
  *                           Higher caps resolve more liberty levels at zero
  *                           runtime cost but a larger pattern table; the cap is
- *                           written into the weights file as libCap.  Ignored
+ *                           written into the weights file as adjLib.  Ignored
  *                           with --load (the file's own cap wins).
  *     --no-local            freeze the 7 previous-move ("local") features at 0 —
  *                           contiguous, save-atari by capture/extension (+self-atari
@@ -143,18 +145,18 @@
  *                           nothing to the logit: the model behaves exactly as if
  *                           they did not exist, while the weight layout is
  *                           unchanged (7 zeros per phase).  An ablation of what the
- *                           local features are worth, alongside --lib-cap 1, which
+ *                           local features are worth, alongside --adj-lib 1, which
  *                           ablates liberty information from the 3x3 pattern.
  *     --ref-weights <path>  reference model for the directWR column (default
  *                           out/ppat-data-233162-best-ref-candidate.js, the
- *                           pat-only lib-cap-2 model; "none" disables the
+ *                           pat-only adj-lib-2 model; "none" disables the
  *                           column).  Each row plays
  *                           --ref-games policy-only games (no search, no tree)
  *                           between the current model and the reference and
  *                           reports the current model's win rate, so it reads
  *                           MOVE quality — teMSE reads rollout VALUE, which is
  *                           what SB actually optimises.  The reference must
- *                           share this run's libCap and phase count.
+ *                           share this run's adjLib and phase count.
  *                           A second column, WR, plays the same two models as
  *                           mc-ppat agents (one playout per candidate move,
  *                           then play a winner) — the way an agent actually
@@ -199,7 +201,9 @@ static int    cfg_gradient_po;
 static int    cfg_batch;
 static int    cfg_test_pos;
 static int    cfg_train_pos;
-static int    cfg_test_playouts;
+static int    cfg_test_playouts;        /* explicit per-position count; 0 = derive from the total */
+static int    cfg_test_total_playouts;  /* > 0: spread this total over the test set instead */
+static int    cfg_test_playouts_derived; /* set when cfg_test_playouts came from the total */
 static float  cfg_no_extreme;
 static int    cfg_iter_limit;          /* 0 = infinite */
 static int    cfg_overfit;
@@ -259,11 +263,14 @@ static int    cfg_workers;
  * trusts, gated to the same band (the evaluator is never consulted past B; a
  * rollout whose cut overshoots the gate just runs to the end as before).
  * Offsets are per (model, delta, band) and never transfer, so --trunc-offset
- * is REQUIRED with --trunc-vpat. */
+ * defaults to the model file's baked offset only when --trunc-delta matches the
+ * model's baked delta; otherwise it must be given explicitly. */
 static int    cfg_trunc_on;
 static float  cfg_trunc_delta;
 static float  cfg_trunc_max_phase;
 static float  cfg_trunc_off_a, cfg_trunc_off_b;
+static int    cfg_trunc_delta_from_model;  /* delta defaulted from the model's baked trunc block, not --trunc-delta */
+static int    cfg_trunc_off_from_model;    /* offset came from the model's baked trunc block, not --trunc-offset */
 static const char *cfg_trunc_vpat = "";
 static int    cfg_init_from_next;
 static float  cfg_init_phase_scale = 1.0f;
@@ -391,22 +398,6 @@ typedef struct {
 static Position all_positions[MAX_LINES];
 static int      n_all = 0;
 
-/* --value-ema: a per-position EMA of the M-rollout value estimate V, blended
- * across the epochs a position is revisited.  V is the quantity SB matches to
- * v*, so cutting its variance sharpens every update — most useful late (V is
- * near-stationary then) and with a small --value-playouts (a noisy per-visit V
- * that the EMA smooths across epochs).  0 = off.  Each worker only ever touches
- * its own slice's slots, so the arrays need no locking. */
-static float  cfg_value_ema = 0.0f;
-
-/* --progressive X: when a teMSE row is shown that is NOT a new best, multiply
- * value-playouts and gradient-playouts by X (ceil).  Starts cheap and noisy and
- * spends more per position once accuracy stalls — self-limiting, since higher
- * playouts cut V's variance and teMSE resumes improving.  1 (or 0) = off. */
-static float  cfg_progressive = 1.0f;
-static float  pos_v_ema[MAX_LINES];
-static int32_t pos_v_seen[MAX_LINES];
-
 static int     train_idx[MAX_LINES];   /* indices into all_positions */
 static int     n_train = 0;            /* this worker's slice of the train set */
 static int     n_train_total = 0;      /* full train set across all workers' slices */
@@ -423,10 +414,18 @@ static double  epoch_sq_sum = 0;
 static long    epoch_sq_count = 0;
 static double  done_sq_sum = 0;        /* last completed epoch (this worker) */
 static long    done_sq_count = 0;
+/* trMSE_c: the same rows' playout-variance floor, Σ V01(1-V01)/(M-1) over the
+ * epoch, subtracted from trMSE to strip the value-playout noise (the training-
+ * side analogue of teMSE_c).  Only the completed-epoch sum is ever reported
+ * (trmse_col ignores the partial sum), so only done_floor_sum is serialized to
+ * the monitor in parallel mode. */
+static double  epoch_floor_sum = 0;
+static double  done_floor_sum = 0;
 static double  agg_train_sq_sum = 0;   /* last completed epoch, summed over workers (worker 0) */
 static long    agg_train_sq_count = 0;
 static double  agg_part_sq_sum = 0;    /* current (partial) epoch, summed over workers */
 static long    agg_part_sq_count = 0;
+static double  agg_train_floor_sum = 0;/* last completed epoch's floor, summed over workers (worker 0) */
 
 /* ── Parameter vector ──────────────────────────────────────────────────────── */
 
@@ -453,7 +452,7 @@ static int      batch_count = 0;
  * weight UPDATES (frequency-weighted over the weights actually being trained),
  * reset at every print — NOT the mean over all stored weights, which would be
  * dominated by the ~74% of the dense table that no legal position ever reaches
- * and would shift with libCap for reasons unrelated to training. */
+ * and would shift with adjLib for reasons unrelated to training. */
 static double   w_abs_sum = 0;
 static long     w_update_count = 0;
 /* First POLICY pass of each rollout, as board fullness (cap-empty)/cap.  A raw
@@ -611,14 +610,21 @@ static void load_positions_from(const char *path, int test_head) {
         /* Value filter (train pool only) */
         if (!in_test_head && cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
 
-        /* Compute phase; filter by it (train pool only) */
-        Game2 g;
-        int bad;
-        if (replay_position(&pos, &g, &bad) > 0)
-            pos.phase = ppat_phase_count * (g.cap - g.empty_count) / g.cap;
-        else
-            pos.phase = -1;
-        if (!in_test_head && cfg_phase >= 0 && pos.phase != cfg_phase) { filtered++; continue; }
+        /* Phase is needed ONLY for the --phase filter: the stored pos.phase is
+         * read nowhere else (truncation and the phase mask recompute it from the
+         * live rollout board), so without a filter this play-through is pure
+         * waste — skip it. */
+        if (cfg_phase >= 0) {
+            Game2 g;
+            int bad;
+            if (replay_position(&pos, &g, &bad) > 0)
+                pos.phase = ppat_phase_count * (g.cap - g.empty_count) / g.cap;
+            else
+                pos.phase = -1;
+            if (!in_test_head && pos.phase != cfg_phase) { filtered++; continue; }
+        } else {
+            pos.phase = -1;   /* unused when no --phase filter */
+        }
 
         all_positions[n_all++] = pos;
     }
@@ -712,6 +718,16 @@ static void split_data(void) {
         n_test = test_n;
         for (int i = 0; i < test_n; i++) test_idx[i] = i;                /* head (shared) */
     }
+    /* --test-total-playouts: spread a total budget evenly over the test set, so
+     * one teMSE evaluation costs a fixed amount regardless of how many test
+     * positions there are.  teMSE_c subtracts the 0.25/N floor, so the metric
+     * stays comparable even as the per-position count N varies with test size. */
+    if (cfg_test_playouts <= 0 && cfg_test_total_playouts > 0) {
+        cfg_test_playouts = n_test > 0 ? (cfg_test_total_playouts + n_test / 2) / n_test
+                                       : cfg_test_total_playouts;
+        cfg_test_playouts_derived = 1;
+    }
+    if (cfg_test_playouts < 1) cfg_test_playouts = 1;
 }
 
 /* ── Shuffle train indices ─────────────────────────────────────────────────── */
@@ -959,7 +975,7 @@ static void mask_to_phase(float *v) {
             v[k] = 0.0f;
 }
 
-static void update_theta(const Game2 *game, float v_star, int pos_idx) {
+static void update_theta(const Game2 *game, float v_star) {
     int8_t player = game->current;
 
     /* Phase compensation: correction factors refresh once per position from
@@ -970,17 +986,6 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     float V = 0;
     for (int i = 0; i < cfg_value_po; i++) V += rollout(game, player, NULL, NULL);
     V /= cfg_value_po;
-    const float V_fresh = V;   /* trMSE reports THIS (the policy's fit), not the EMA'd V */
-
-    /* --value-ema: blend this visit's V into the position's running EMA and use
-     * the (bias-corrected) EMA as the fitted value.  First visit debiases to
-     * exactly V, so the estimate only ever improves as epochs accumulate. */
-    if (cfg_value_ema > 0.0f && pos_idx >= 0) {
-        const float b = cfg_value_ema;
-        const int c = ++pos_v_seen[pos_idx];
-        pos_v_ema[pos_idx] = b * pos_v_ema[pos_idx] + (1.0f - b) * V;
-        V = pos_v_ema[pos_idx] / (1.0f - powf(b, (float)c));
-    }
 
     /* g: N rollouts with gradient.  Algorithm 1: g ← g + z/(N·T)·Σ_t ψ.  T is the
      * rollout's policy-step count (T_P, the in-phase steps, when a phase is masked).
@@ -1010,11 +1015,15 @@ static void update_theta(const Game2 *game, float v_star, int pos_idx) {
     /* Gradient uses the un-normalised [-1,1] bias (the SB paper's faster-learning
      * -1/1 regime).  The MSE byproduct normalises v* and V to win-probability
      * [0,1] before squaring, so trMSE/teMSE are reported in the paper's units. */
-    float bias = v_star - V;                          /* gradient: EMA'd V (lower variance) */
+    float bias = v_star - V;
     float v01 = 0.5f * (v_star + 1.0f);
-    float V01 = 0.5f * (V_fresh + 1.0f);              /* trMSE: fresh V, so value-ema does not */
-    epoch_sq_sum += (double)(v01 - V01) * (v01 - V01);/* confound the reported policy fit */
+    float V01 = 0.5f * (V + 1.0f);
+    epoch_sq_sum += (double)(v01 - V01) * (v01 - V01);
     epoch_sq_count++;
+    /* trMSE_c floor: variance of V01 as a mean of M=cfg_value_po playout outcomes,
+     * estimated by V01(1-V01)/(M-1).  M<=1 gives no estimate, so contribute 0. */
+    epoch_floor_sum += (cfg_value_po > 1)
+        ? (double)V01 * (1.0 - V01) / (cfg_value_po - 1) : 0.0;
     for (int k = 0; k < TOTAL; k++) batch_buf[k] += bias * g_buf[k];
     batch_count++;
 
@@ -1083,7 +1092,7 @@ static void barrier_sync_average(void) {
     snprintf(tmp,  sizeof(tmp),  "%s/r%d_w%d.stat.tmp", cfg_sync_dir, sync_round, cfg_worker_id);
     snprintf(path, sizeof(path), "%s/r%d_w%d.stat",     cfg_sync_dir, sync_round, cfg_worker_id);
     { FILE *sf = fopen(tmp, "w");
-      if (sf) { fprintf(sf, "%.9g %ld %.9g %ld\n", done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count); fclose(sf); rename(tmp, path); } }
+      if (sf) { fprintf(sf, "%.9g %ld %.9g %ld %.9g\n", done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, done_floor_sum); fclose(sf); rename(tmp, path); } }
     snprintf(tmp,  sizeof(tmp),  "%s/r%d_w%d.tmp", cfg_sync_dir, sync_round, cfg_worker_id);
     snprintf(path, sizeof(path), "%s/r%d_w%d.f32", cfg_sync_dir, sync_round, cfg_worker_id);
     FILE *f = fopen(tmp, "wb");
@@ -1136,15 +1145,19 @@ static void barrier_sync_average(void) {
      * are present without polling. */
     if (cfg_worker_id == 0) {
         agg_train_sq_sum = 0; agg_train_sq_count = 0; agg_part_sq_sum = 0; agg_part_sq_count = 0;
+        agg_train_floor_sum = 0;
         for (int w = 0; w < cfg_workers; w++) {
             char wp[600];
             snprintf(wp, sizeof(wp), "%s/r%d_w%d.stat", cfg_sync_dir, sync_round, w);
             FILE *wf = fopen(wp, "r");
             if (wf) {
-                double ds = 0, ps = 0; long dc = 0, pc = 0;
-                if (fscanf(wf, "%lf %ld %lf %ld", &ds, &dc, &ps, &pc) == 4) {
+                double ds = 0, ps = 0, fs = 0; long dc = 0, pc = 0;
+                /* 5th field (done_floor_sum) is optional: pre-field .stat files
+                 * still aggregate, contributing 0 floor (trMSE_c falls back to trMSE). */
+                if (fscanf(wf, "%lf %ld %lf %ld %lf", &ds, &dc, &ps, &pc, &fs) >= 4) {
                     agg_train_sq_sum += ds; agg_train_sq_count += dc;
                     agg_part_sq_sum  += ps; agg_part_sq_count  += pc;
+                    agg_train_floor_sum += fs;
                 }
                 fclose(wf);
             }
@@ -1274,6 +1287,7 @@ static const char *temse_col(float v, float *best, char *buf, size_t n) {
     return buf;
 }
 
+
 /* Seed the average with the starting weights (after --load / warm-start). */
 static void ema_init(void) {
     if (cfg_ema_window <= 0) return;        /* leave theta_ema NULL: save/report raw */
@@ -1304,12 +1318,14 @@ static void save_weights(int iterations, int total_positions, const char *elapse
     long   dcnt = (cfg_workers > 1) ? agg_train_sq_count : done_sq_count;
     double psum = (cfg_workers > 1) ? agg_part_sq_sum    : epoch_sq_sum;
     long   pcnt = (cfg_workers > 1) ? agg_part_sq_count  : epoch_sq_count;
+    /* trMSE_c floor for the completed epoch (only the full sum is reported). */
+    double fsum = (cfg_workers > 1) ? agg_train_floor_sum : done_floor_sum;
     /* avgW accumulators too: in parallel mode the workers never print, so these
      * stay CUMULATIVE and the monitor differences consecutive checkpoints to get
      * a per-interval mean (worker 0's own updates — a representative sample). */
     snprintf(comment, sizeof(comment),
-             "Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s, phases: %d, trainSqSum: %.9g, trainSqCount: %ld, trainPartSum: %.9g, trainPartCount: %ld, wAbsSum: %.9g, wUpdateCount: %ld, passPhaseSum: %.9g, passPhaseCount: %ld",
-             iterations, total_positions, elapsed, ppat_phase_count, dsum, dcnt, psum, pcnt,
+             "Generated by train_ppat (C) — iterations: %d, positions: %d, elapsed: %s, phases: %d, trainSqSum: %.9g, trainSqCount: %ld, trainPartSum: %.9g, trainPartCount: %ld, trainFloorSum: %.9g, wAbsSum: %.9g, wUpdateCount: %ld, passPhaseSum: %.9g, passPhaseCount: %ld",
+             iterations, total_positions, elapsed, ppat_phase_count, dsum, dcnt, psum, pcnt, fsum,
              w_abs_sum, w_update_count, pass_phase_sum, pass_phase_count);
     /* Atomic: write to a tmp file then rename, so a reader (the monitor) never
      * sees a half-written checkpoint. */
@@ -1380,7 +1396,8 @@ static int ckpt_passphase(const char *path, double *psum, long *pcnt) {
     return got ? 0 : -1;
 }
 
-static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psum, long *pcnt) {
+static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psum, long *pcnt,
+                         double *fsum) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     char buf[1024]; int got = 0;
@@ -1390,6 +1407,10 @@ static int ckpt_train_sq(const char *path, double *dsum, long *dcnt, double *psu
         if (a && b && c && d) {
             *dsum = atof(a + 12); *dcnt = atol(b + 14);
             *psum = atof(c + 14); *pcnt = atol(d + 16);
+            /* trainFloorSum is optional: absent in pre-field checkpoints, so
+             * default 0 (trMSE_c then equals trMSE) rather than failing the parse. */
+            char *e = strstr(buf, "trainFloorSum: ");
+            *fsum = e ? atof(e + 15) : 0.0;
             got = 1; break;
         }
     }
@@ -1445,21 +1466,21 @@ static int live_weights(void) {
  * rollout VALUE).  It is cheap enough to carry alongside teMSE (a few hundred
  * games in ~1s) and gives an independent read when teMSE stops discriminating.
  *
- * The reference must share this run's libCap and phase count: the canonical
+ * The reference must share this run's adjLib and phase count: the canonical
  * pattern table is a global (one active cap at a time), so a mismatched
  * reference cannot be evaluated without rebuilding it every move.  On mismatch
  * the column is disabled at startup rather than silently comparing nonsense. */
 static float *ref_theta = NULL;        /* reference weights, NULL = column off */
 static int    match_truncated;         /* set when a match stopped at MATCH_MAX_S */
 
-/* The reference may be built at a different libCap / phase count than the run.
+/* The reference may be built at a different adjLib / phase count than the run.
  * The canon table is cached per cap (ppat.h), so a match just swaps the active
  * encoding between moves — the two models never need to agree. */
-static int    ref_lib_cap, ref_phases;
-static int    run_lib_cap, run_phases;
+static int    ref_adj_lib, ref_phases;
+static int    run_adj_lib, run_phases;
 
-static void use_run_model(void) { ppat_init(run_lib_cap); ppat_phase_count = run_phases; }
-static void use_ref_model(void) { ppat_init(ref_lib_cap); ppat_phase_count = ref_phases; }
+static void use_run_model(void) { ppat_init(run_adj_lib); ppat_phase_count = run_phases; }
+static void use_ref_model(void) { ppat_init(ref_adj_lib); ppat_phase_count = ref_phases; }
 
 /* Play `games` policy-vs-policy games, alternating colours, and return the
  * CURRENT model's win rate.  A fixed seed each call, so a change in the column
@@ -1616,8 +1637,11 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     else
         printf("data      %s  (%d train, %d test)\n",
                cfg_file, n_train_total, n_test);
-    printf("model     libCap %d%s%s%s\n",
-           ppat_lib_cap,
+    if (cfg_test_playouts_derived)
+        printf("          test-total-playouts %d over %d positions => %d per position\n",
+               cfg_test_total_playouts, n_test, cfg_test_playouts);
+    printf("model     adjLib %d%s%s%s\n",
+           ppat_adj_lib,
            cfg_no_local ? ", no-local" : "",
            feats[0] ? " | " : "", feats);
 
@@ -1630,16 +1654,16 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     if (cfg_overfit)           printf(", overfit");
     if (cfg_no_extreme > 0)    printf(", no-extreme %.1f", cfg_no_extreme);
     if (cfg_init_from_next)    printf(", init-scale %.3g", cfg_init_phase_scale);
-    if (cfg_value_ema > 0.0f)  printf(", value-ema %.3g", (double)cfg_value_ema);
-    if (cfg_progressive > 1.0f) printf(", progressive x%.3g", (double)cfg_progressive);
     printf("\n");
     if (cfg_pc_buckets)
         printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
                cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
     if (cfg_trunc_on)
-        printf("          trunc vpat %s, delta %g, max-phase %g, offset %g,%g\n",
+        printf("          trunc vpat %s, delta %g%s, max-phase %g, offset %g,%g%s\n",
                cfg_trunc_vpat, (double)cfg_trunc_delta,
-               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b);
+               cfg_trunc_delta_from_model ? " (model)" : "",
+               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b,
+               cfg_trunc_off_from_model ? " (model)" : "");
 
     /* The run line carries the only mode-specific facts: worker count, plus the
      * seed (solo, replayable) or a monitor tag (parallel). */
@@ -1660,47 +1684,54 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
  * workers never stall on the (expensive) test. */
 static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
-    printf("%9s  %7s", "positions", "trMSE");
+    printf("%9s  %7s  %7s", "positions", "trMSE", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
+    if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
     wall_start = wall_now();
     float mon_best_te_c = 1e30f; /* lowest teMSE_c seen, for the '*' new-low marker */
+    double mon_cumulative_test_s = 0; /* testM column: running total of eval+match cost in seconds (printed /60), like solo */
 
     /* Baseline row.  Fresh run: the uniform no-skill reference.  --load: the
      * loaded model's actual test + its weights (theta already holds the loaded
      * weights at this point), so the table starts from the real starting point. */
     {
         int loaded = (cfg_load != NULL);
+        double bl_t0 = wall_now();
         TestResult tr = measure_test(loaded ? 0 : 1, n_test);
         char tecbuf[16];
         char dwbuf[16];
         match_cols(dwbuf, sizeof dwbuf);
+        mon_cumulative_test_s += wall_now() - bl_t0;   /* baseline testM: eval + match cost */
         /* elapsed AFTER the match columns, as every later row does — otherwise
          * the baseline row under-reports its own cost by the match time. */
         double el = wall_now() - wall_start;
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         if (loaded) {
-            printf("%9d  %7s", 0, "-");
+            printf("%9d  %7s  %7s", 0, "-", "-");
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+            if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s", eb, "-");
             printf("\n");
         } else {
-            printf("%9d  %7s", 0, "-");
+            printf("%9d  %7s  %7s", 0, "-", "-");
             printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+            if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s\n", eb, "-");
         }
         fflush(stdout);
     }
 
     double mon_last_full = -1;   /* latches the last full-epoch trMSE shown */
+    double mon_last_full_c = -1; /* same, for trMSE_c */
     struct stat mon_last_st; memset(&mon_last_st, 0, sizeof mon_last_st);
     /* Geometric test cadence, same shape as single-process: after a row at
      * elapsed E the next test is due at E + clamp(0.5·E, last_test_s,
@@ -1768,6 +1799,7 @@ static void run_monitor(void) {
         char dwbuf[16];
         match_cols(dwbuf, sizeof dwbuf);
         mon_last_test_s = wall_now() - test_t0;
+        mon_cumulative_test_s += mon_last_test_s;
 
         /* Read the position count AFTER the test so positions and wall are both
          * current — otherwise pos/s is understated by the (long) test duration. */
@@ -1778,17 +1810,20 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
-        double dsum, psum; long dcnt, pcnt; char trbuf[24], tecbuf[16];
-        if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt) == 0)
+        double dsum, psum, fsum; long dcnt, pcnt; char trbuf[24], trcbuf[24], tecbuf[16];
+        if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt, &fsum) == 0) {
             trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
-        else { trbuf[0] = '-'; trbuf[1] = 0; }
+            /* trMSE_c: floor-corrected, same completed-epoch blend as trMSE. */
+            trmse_col(dsum - fsum, dcnt, psum, pcnt, &mon_last_full_c, trcbuf, sizeof trcbuf);
+        } else { trbuf[0] = '-'; trbuf[1] = 0; trcbuf[0] = '-'; trcbuf[1] = 0; }
         int is_best = (n_test > 0) ? (tr.mse_c < mon_best_te_c)
                                    : (ref_theta ? match_score_peak : 0);
-        printf("%9ld  %7s", agg, trbuf);
+        printf("%9ld  %7s  %7s", agg, trbuf, trcbuf);
         printf("  %6d  %7.4f  %6.3f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
         if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+        if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);   /* testM: cumulative teMSE-eval + match cost (minutes) */
         printf("  %8s  %7.1f", eb, posps);
         printf("\n");
         if (is_best) {
@@ -1836,13 +1871,12 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     char dwbuf[16] = "-";
     if (run_tests) {
         tr = measure_test(use_uniform, test_n);
-        /* Inside the test window: the match is part of the per-row cost, so testS
+        /* Inside the test window: the match is part of the per-row cost, so testM
          * and the switch-on threshold both account for it. */
         match_cols(dwbuf, sizeof dwbuf);
         last_print_test_s = (double)(clock() - test_t0) / CLOCKS_PER_SEC;
         cumulative_test_s += last_print_test_s;
     }
-    float mse = tr.mse;
     float mse_c = tr.mse_c;
     double elapsed_s = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     char elapsed_buf[32];
@@ -1859,20 +1893,24 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
      * barrier-locked); posMs stays per-process (worker 0's CPU time / its own count).
      * tPos = how many test positions this row used (always the full test set). */
     static double last_full = -1;
+    static double last_full_c = -1;
     static float best_te_c = 1e30f;
-    char trbuf[24], tecbuf[16];
+    char trbuf[24], trcbuf[24], tecbuf[16];
     /* A test set decides -best by teMSE_c (floor-corrected, a held-out
      * yardstick); without one, fall back to the directWR peak.  With neither,
      * write no -best at all. */
     int is_best = run_tests && (n_test > 0 ? (mse_c < best_te_c)
                                            : (ref_theta ? match_score_peak : 0));
     trmse_col(done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, &last_full, trbuf, sizeof trbuf);
-    printf("%9ld  %7s", (long)cfg_workers * total_positions, trbuf);
+    /* trMSE_c: floor-corrected, same completed-epoch blend as trMSE (solo only). */
+    trmse_col(done_sq_sum - done_floor_sum, done_sq_count, epoch_sq_sum, epoch_sq_count,
+              &last_full_c, trcbuf, sizeof trcbuf);
+    printf("%9ld  %7s  %7s", (long)cfg_workers * total_positions, trbuf, trcbuf);
     printf("  %6d  %7.4f  %6.3f", live_weights(), avg_abs_weight(),
            avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
-    if (n_test > 0) printf("  %6.1f", cumulative_test_s);
+    if (n_test > 0) printf("  %6.1f", cumulative_test_s / 60.0);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
     printf("\n");
@@ -1891,29 +1929,115 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
         else           snprintf(bc, sizeof bc, "Best by teMSE_c: %.6f, positions: %d", mse_c, total_positions);
         save_best(weights_file, bc);
     }
-
-    /* --progressive: an evaluated row that did NOT improve bumps the playout
-     * counts.  is_best already picks the metric — teMSE_c when a test set is
-     * present, else the directWR peak — so this uses whichever is in play. */
-    if (cfg_progressive > 1.0f && run_tests && (n_test > 0 || ref_theta) && !is_best) {
-        cfg_value_po    = (int)ceilf(cfg_value_po    * cfg_progressive);
-        cfg_gradient_po = (int)ceilf(cfg_gradient_po * cfg_progressive);
-        printf("progressive: value-playouts %d, gradient-playouts %d\n",
-               cfg_value_po, cfg_gradient_po);
-    }
 }
 
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
+static void print_help(FILE *out, const char *prog) {
+    fprintf(out,
+"train_ppat — Simulation Balancing trainer for the ppat playout policy\n"
+"(Huang, Coulom, Lin 2010, Algorithm 1).  C port of train-ppat.js.\n"
+"\n"
+"Usage: %s <file> [options]\n"
+"\n"
+"<file>  training corpus, one position per line, either format (discriminated\n"
+"        per line — a move list starts with a coordinate letter, a phase with a\n"
+"        digit):\n"
+"          \"<size> <move1,move2,...> <value> [best_move]\"   (gen_evals)\n"
+"          \"<size> <phase> <move1,move2,...> <winRatio>\"     (gen-agent-evals)\n"
+"        Values in [0,1] map to [-1,1].  One board size per file.\n"
+"\n", prog);
+    fputs(
+"Playouts\n"
+"  --lr F                     learning rate (default 10)\n"
+"  --playouts N               default for --value/--gradient-playouts (default 100)\n"
+"  --value-playouts N         rollouts for the V estimate (default: --playouts)\n"
+"  --gradient-playouts N      rollouts for the gradient (default: --playouts)\n"
+"  --batch N                  positions per weight update (default 1)\n"
+"  --no-extreme F             drop TRAIN positions with |value| > 1-2F (default 0 = keep all)\n"
+"\n"
+"Truncated rollouts (affordable early-band training)\n"
+"  --trunc-vpat PATH          after ceil(delta*area) moves, if phase there is <=\n"
+"                             the gate B the rollout stops and z becomes this vpat\n"
+"                             evaluator's offset-corrected value; a cut past B runs\n"
+"                             full.  Applies to train AND test rollouts.\n"
+"  --trunc-delta F            cut distance in phase units (default: the model's baked delta)\n"
+"  --trunc-offset a,b         TRUNC_VALUE_OFFSET applied at the eval phase; defaults to\n"
+"                             the model's baked offset when --trunc-delta matches its\n"
+"                             baked delta (per (model,delta,band), never transfers)\n"
+"  --trunc-max-phase F        the gate B (default 0.55)\n"
+"\n"
+"Pattern features (all APPENDED blocks; --load of a model without them fine-tunes)\n"
+"  --adj-lib N                orthogonal liberty cap in the 3x3 pattern, 2..4\n"
+"                             (default 2 = atari-only encoding).  Ignored with --load.\n"
+"  --twelvecell               2nd key on an all-empty ninecell (dist-2 orthogonals)\n"
+"  --twelvecell2              same key, looser trigger (adjacent points empty);\n"
+"                             mutually exclusive with --twelvecell\n"
+"  --atari N                  graded gives-atari feature, one-hot on chain size (default 0 = off)\n"
+"  --capture N                graded capture-size feature (default 0 = off)\n"
+"  --atari-by-self-atari N    mutual-atari interaction grid, NxN (default 0 = off)\n"
+"  --capture-by-self-atari N  ko-take / snapback interaction grid (default 0 = off)\n"
+"  --no-local                 freeze the 7 previous-move local features at 0 (ablation)\n"
+"\n"
+"Phases\n"
+"  --phases N                 phase-conditioned weight slices (default 1)\n"
+"  --phase P                  train only phase P; freeze the rest (test set stays unfiltered)\n"
+"  --init-phase-scale F       seed phase P from phase P+1 scaled by F (endgame-first\n"
+"                             warm-start; requires --phase)\n"
+"\n"
+"Test set / teMSE (off by default; the match columns are the primary readout)\n"
+"  --test-pos N               test positions from the head of <file> (default 0 = no teMSE)\n"
+"  --test-file PATH           take the test set from PATH; all of <file> is then training\n"
+"  --test-playouts N          playouts per test position (default: from --test-total-playouts)\n"
+"  --test-total-playouts N    spread this TOTAL over the test set (default 200000; 0 disables)\n"
+"  --train-pos N              cap training positions (default 0 = all)\n"
+"  --overfit                  use the same data for train and test\n"
+"\n"
+"directWR match (move-quality readout: current model vs a fixed reference)\n"
+"  --ref-weights PATH|none    reference model for the directWR/WR columns (default\n"
+"                             out/ppat-data-233162-best-ref-candidate.js; \"none\" off;\n"
+"                             must share this run's adjLib and phase count)\n"
+"  --no-direct                disable the directWR match and hide the column\n"
+"  --match-phases A,B         in-band each side plays its own weights, out-of-band\n"
+"                             both play the reference (default 0.6,1)\n"
+"\n"
+"Gradient shaping\n"
+"  --phase-compensation-buckets N\n"
+"                             make applied gradient pressure uniform by phase\n"
+"                             (default 0 = off; else 2..max)\n"
+"\n"
+"Parallelism (barrier-synced multi-worker; a monitor handles testing)\n"
+"  --workers N                worker count (default 1)\n"
+"  --worker-id N              this worker's id, 0-based (default 0)\n"
+"  --sync-every N             positions between sync barriers (default 30)\n"
+"  --sync-dir PATH            shared sync directory (default out/ppat-sync)\n"
+"  --monitor PATH             run as a test-only monitor of the checkpoint at PATH\n"
+"  --ema-window N             Polyak averaging window in aggregate positions\n"
+"                             (default 2000; 0 = off, save the raw iterate)\n"
+"\n"
+"Checkpoints / reproducibility\n"
+"  --load PATH                initial weights (fine-tune from an existing model)\n"
+"  --save PATH                checkpoint path (default: a random out/ name)\n"
+"  --seed N                   RNG seed; makes a SINGLE-worker run reproducible (default 0)\n"
+"  --test-from N              pin the position where the expensive columns switch on (default 0)\n"
+"\n"
+"Control\n"
+"  --iteration-limit N        stop after N iterations (default 0 = infinite)\n"
+"  --baseline-only            print the uniform-policy baseline row, then exit\n"
+"  -h, --help                 show this help and exit\n"
+"\n"
+"EARLY PASS is always on: PASS is offered as a candidate at logit 0 and every\n"
+"checkpoint is stamped earlyPass, pinning the otherwise-free additive constant on\n"
+"the pattern weights.  There is no flag for it.\n", out);
+}
+
 int main(int argc, char **argv) {
-    if (argc < 2 || has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
-        fprintf(stderr, "Usage: %s <file> [--lr <f>] [--playouts <n>] [--value-playouts <n>] [--gradient-playouts <n>] [--value-ema <f>] [--progressive <X>]\n", argv[0]);
-        fprintf(stderr, "       [--batch <n>] [--test-pos <n>] [--train-pos <n>] [--test-file <path>]\n");
-        fprintf(stderr, "       [--test-playouts <n>] [--no-extreme <f>] [--iteration-limit <n>]\n");
-        fprintf(stderr, "       [--phases <n>] [--phase <p>] [--init-phase-scale <f>] [--lib-cap <n>] [--twelvecell|--twelvecell2] [--atari <n>] [--atari-by-self-atari <n>] [--capture <n>] [--capture-by-self-atari <n>] [--no-local] [--overfit]\n");
-        fprintf(stderr, "       [--ref-weights <path>|none] [--ema-window <n>] [--seed <n>] [--test-from <n>]\n");
-        fprintf(stderr, "       [--trunc-vpat <path> --trunc-delta <f> --trunc-offset a,b [--trunc-max-phase <f>]]\n");
-        fprintf(stderr, "       [--phase-compensation-buckets <n>] [--match-phases A,B]\n");
+    if (has_flag(argc, argv, "--help") || has_flag(argc, argv, "-h")) {
+        print_help(stdout, argv[0]);
+        return 0;
+    }
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <file> [options]   (run with --help for the full list)\n", argv[0]);
         return 1;
     }
 
@@ -1921,23 +2045,14 @@ int main(int argc, char **argv) {
 
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
-    int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N */
+    int playouts     = get_int_arg(argc, argv, "--playouts", 100);  /* default for M, N */
     cfg_value_po     = get_int_arg(argc, argv, "--value-playouts", playouts);
     cfg_gradient_po  = get_int_arg(argc, argv, "--gradient-playouts", playouts);
-    cfg_value_ema    = get_float_arg(argc, argv, "--value-ema", 0.0f);
-    if (cfg_value_ema < 0.0f || cfg_value_ema >= 1.0f) {
-        fprintf(stderr, "error: --value-ema must be in [0, 1) (0 = off)\n");
-        exit(1);
-    }
-    cfg_progressive  = get_float_arg(argc, argv, "--progressive", 1.0f);
-    if (cfg_progressive != 0.0f && cfg_progressive < 1.0f) {
-        fprintf(stderr, "error: --progressive must be >= 1 (1 or 0 = off)\n");
-        exit(1);
-    }
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
     cfg_test_pos     = get_int_arg(argc, argv, "--test-pos", 0);
     cfg_train_pos    = get_int_arg(argc, argv, "--train-pos", 0);
-    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 10);
+    cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 0);
+    cfg_test_total_playouts = get_int_arg(argc, argv, "--test-total-playouts", 200000);
     cfg_no_extreme       = get_float_arg(argc, argv, "--no-extreme", 0.0f);
     cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
@@ -1960,23 +2075,57 @@ int main(int argc, char **argv) {
     cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
     {
         const char *tv = get_str_arg(argc, argv, "--trunc-vpat", NULL);
+        int delta_given     = has_flag(argc, argv, "--trunc-delta");
         cfg_trunc_delta     = get_float_arg(argc, argv, "--trunc-delta", 0.0f);
         cfg_trunc_max_phase = get_float_arg(argc, argv, "--trunc-max-phase", 0.55f);
         const char *toff = get_str_arg(argc, argv, "--trunc-offset", NULL);
         if (tv) {
-            if (cfg_trunc_delta <= 0.0f) {
-                fprintf(stderr, "error: --trunc-vpat requires --trunc-delta > 0\n");
-                exit(1);
-            }
-            if (!toff || sscanf(toff, "%f,%f", &cfg_trunc_off_a, &cfg_trunc_off_b) != 2) {
-                fprintf(stderr, "error: --trunc-vpat requires --trunc-offset a,b — offsets are per "
-                                "(model, delta, band) and never transfer, so there is no default\n");
-                exit(1);
-            }
-            vpat_load(tv);
+            vpat_load(tv);              /* load first so the model's baked delta/offset are available */
             cfg_trunc_vpat = tv;
             cfg_trunc_on = 1;
-        } else if (cfg_trunc_delta != 0.0f || toff || has_flag(argc, argv, "--trunc-max-phase")) {
+            double bd, ba, bb;
+            const int have_baked = vpat_trunc(&bd, &ba, &bb);
+
+            /* Delta: an explicit --trunc-delta wins; otherwise default to the
+             * model's baked delta (as the JS consumers do). */
+            if (!delta_given && have_baked) {
+                cfg_trunc_delta = (float)bd;
+                cfg_trunc_delta_from_model = 1;
+            }
+            if (cfg_trunc_delta <= 0.0f) {
+                fprintf(stderr, "error: --trunc-vpat requires --trunc-delta > 0 "
+                                "(%s has no baked trunc.delta to default from)\n", tv);
+                exit(1);
+            }
+
+            /* Offset: an explicit --trunc-offset wins; otherwise fall back to the
+             * model's baked offset.  It was fitted at the model's baked delta, so
+             * it is valid only when this run's delta matches; offsets are per
+             * (model, delta, band) and never transfer across delta. */
+            if (toff) {
+                if (sscanf(toff, "%f,%f", &cfg_trunc_off_a, &cfg_trunc_off_b) != 2) {
+                    fprintf(stderr, "error: --trunc-offset must be a,b (two numbers)\n");
+                    exit(1);
+                }
+            } else {
+                if (!have_baked) {
+                    fprintf(stderr, "error: --trunc-vpat requires --trunc-offset a,b — %s has no "
+                                    "baked trunc.offset, and offsets are per (model, delta, band) "
+                                    "and never transfer, so there is no default\n", tv);
+                    exit(1);
+                }
+                if (fabsf((float)bd - cfg_trunc_delta) > 1e-4f) {
+                    fprintf(stderr, "error: %s baked its offset at delta %g, but --trunc-delta is %g; "
+                                    "offsets do not transfer across delta — pass --trunc-offset a,b "
+                                    "explicitly, or fit one at this delta\n",
+                            tv, bd, (double)cfg_trunc_delta);
+                    exit(1);
+                }
+                cfg_trunc_off_a = (float)ba;
+                cfg_trunc_off_b = (float)bb;
+                cfg_trunc_off_from_model = 1;
+            }
+        } else if (delta_given || toff || has_flag(argc, argv, "--trunc-max-phase")) {
             fprintf(stderr, "error: --trunc-delta/--trunc-offset/--trunc-max-phase need --trunc-vpat\n");
             exit(1);
         }
@@ -1998,15 +2147,6 @@ int main(int argc, char **argv) {
         exit(1);
     }
     cfg_workers    = get_int_arg(argc, argv, "--workers", 1);
-    /* progressive keys off the inline teMSE test, which only the single-process
-     * path runs — in parallel the monitor tests but the workers train, so it
-     * could never fire.  Error rather than silently ignore it (the banner would
-     * otherwise imply it is active). */
-    if (cfg_progressive > 1.0f && (cfg_workers > 1 || cfg_monitor)) {
-        fprintf(stderr, "error: --progressive is single-process only "
-                        "(the parallel monitor tests, not the workers that train)\n");
-        exit(1);
-    }
     cfg_worker_id  = get_int_arg(argc, argv, "--worker-id", 0);
     /* 30, not 100: rounds are pure approximation error (each worker's later
      * gradients are evaluated away from the common theta0, and the barrier sums
@@ -2015,10 +2155,11 @@ int main(int argc, char **argv) {
      * 100 -> 36 pos/s, 30 -> 37, 25 -> 34, 20 -> 35, 5 -> 28.  Down to ~25 the
      * barrier is nearly free; it only bites below that. */
     cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 30);
-    /* Polyak averaging window in AGGREGATE POSITIONS; 0 = off (save the raw
-     * iterate).  Off by default until swept: a window is a real hyperparameter,
-     * and an untuned one silently lags every column for its first window's worth
-     * of training.  ~30000 (about one report row) is where to start a sweep. */
+    /* Polyak averaging window in AGGREGATE POSITIONS (default 2000; 0 = off,
+     * save the raw iterate).  A window is a real hyperparameter, and an untuned
+     * one silently lags every column for its first window's worth of training;
+     * 2000 is small (well under a report row).  ~30000 is where to start a sweep
+     * if raising it. */
     cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 2000);
     cfg_seed       = get_int_arg(argc, argv, "--seed", 0);
     /* Pin the position where the expensive columns switch on.  Without it the
@@ -2058,8 +2199,8 @@ int main(int argc, char **argv) {
     if (cfg_seed == 0) cfg_seed = (int)((uint32_t)time(NULL) & 0x7fffffff);
     rng_seed(&g_rng, (long)cfg_seed + (long)cfg_worker_id * 0x9e3779b9L);
     /* --load resolves the cap from the file (ppat_load_weights calls ppat_init);
-     * a fresh run takes it from --lib-cap. */
-    int cfg_lib_cap = get_int_arg(argc, argv, "--lib-cap", 2);   /* default: historical encoding */
+     * a fresh run takes it from --adj-lib. */
+    int cfg_adj_lib = get_int_arg(argc, argv, "--adj-lib", 2);   /* default: historical encoding */
     /* Twelvecell extension: a second key for the four distance-2 orthogonals
      * when the ninecell is all-empty.  Its block is APPENDED, so --load of a
      * model without it is a fine-tune: the old weights keep their indices and
@@ -2093,7 +2234,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
     check_unknown_args(argc, argv);
-    ppat_init(cfg_lib_cap);
+    ppat_init(cfg_adj_lib);
 
     load_positions();
     split_data();
@@ -2114,10 +2255,10 @@ int main(int argc, char **argv) {
 
     /* Reference model for the directWR column.  Loaded AFTER the run's own weights,
      * because ppat_load_weights rebuilds the global canon table for the file's
-     * libCap — so we capture the run's cap/phases first, load the reference,
+     * adjLib — so we capture the run's cap/phases first, load the reference,
      * then verify nothing moved.  A mismatch disables the column loudly rather
      * than comparing models built on different tables. */
-    run_lib_cap = ppat_lib_cap;
+    run_adj_lib = ppat_adj_lib;
     run_phases  = ppat_phase_count;
     if (cfg_ref_weights) {
         const int run_total = TOTAL;
@@ -2126,7 +2267,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "WARNING: --ref-weights %s could not be loaded"
                             " — directWR and WR columns disabled\n", cfg_ref_weights);
         } else {
-            ref_lib_cap = ppat_lib_cap;
+            ref_adj_lib = ppat_adj_lib;
             ref_phases  = ppat_phase_count;
         }
         use_run_model();                        /* put the run's encoding back */
@@ -2178,11 +2319,11 @@ int main(int argc, char **argv) {
     if (cfg_worker_id == 0) {
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
     print_banner(false, weights_file, best_file);
-    printf("%9s  %7s", "positions", "trMSE");
+    printf("%9s  %7s  %7s", "positions", "trMSE", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
-    if (n_test > 0) printf("  %6s", "testS");
+    if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
     }
@@ -2252,7 +2393,7 @@ int main(int argc, char **argv) {
             int rp = replay_position(pos, &g, &bad);
             if (rp < 0) { fprintf(stderr, "WARNING: illegal move #%d (idx %d) in training position, skipping\n", bad, pos->history[bad]); continue; }
             if (rp == 0) continue;
-            update_theta(&g, pos->value, train_idx[li]);
+            update_theta(&g, pos->value);
             total_positions++;
 
             /* Under the wrapper, checkpoint on the sync cadence regardless of
@@ -2272,7 +2413,8 @@ int main(int argc, char **argv) {
         /* Epoch boundary: latch this epoch's training-fit over the full fixed set
          * (published in the next sync's .stat / used by the solo column). */
         done_sq_sum = epoch_sq_sum; done_sq_count = epoch_sq_count;
-        epoch_sq_sum = 0; epoch_sq_count = 0;
+        done_floor_sum = epoch_floor_sum;
+        epoch_sq_sum = 0; epoch_sq_count = 0; epoch_floor_sum = 0;
 
         iterations++;
         shuffle_train();

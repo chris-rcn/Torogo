@@ -67,8 +67,7 @@ const agentName = opts.agent;
 const size      = parseInt(opts.size || '9', 10);
 const limit     = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
 const randOpen  = parseInt(opts['rand-open'] !== undefined ? opts['rand-open'] : '4', 10);
-const seed      = opts.seed !== undefined ? (parseInt(opts.seed, 10) >>> 0)
-                                          : (((Date.now() ^ (process.pid << 16)) >>> 0) || 1);
+const seed      = opts.seed !== undefined ? (parseInt(opts.seed, 10) >>> 0) : Util.randomSeed();
 
 // Prefer the create(cfg) factory so a slot-aware agent picks up its env
 // config; fall back to a module-level getMove for the older agents.

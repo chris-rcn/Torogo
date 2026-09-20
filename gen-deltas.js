@@ -38,8 +38,7 @@ const SIZE    = parseInt(opts.size || '13', 10);
 const N       = parseInt(opts.playouts || '30', 10);   // playouts per candidate (3N for pass)
 const SAMPLES = opts.samples !== undefined ? parseInt(opts.samples, 10) : Infinity;
 const EPSILON = opts.epsilon !== undefined ? parseFloat(opts.epsilon) : 0.1;
-const SEED    = opts.seed !== undefined ? parseInt(opts.seed, 10)
-                                        : ((Date.now() ^ (process.pid << 16) ^ (Math.random() * 0x7fffffff | 0)) >>> 0);
+const SEED    = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 
 const agent = require('./ai/' + AGENT + '.js');
 const rng   = makeRng(SEED);

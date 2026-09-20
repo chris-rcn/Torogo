@@ -1,8 +1,10 @@
 'use strict';
 
-// gen-agent-evals.js — label positions from a game corpus with an agent's
-// valueB() oracle, producing (position, value) training data for Simulation
-// Balancing (train_ppat).
+// gen-agent-evals.js — label positions with an agent's valueB() oracle,
+// producing (position, value) training data for Simulation Balancing
+// (train_ppat).  Positions come from a game corpus (--corpus) or from novel
+// self-play games generated on the fly by an agent (--position-agent) — the latter
+// skips the separate gen-games.js corpus step.
 //
 // Positions come from a gen-games.js corpus (lines: "<size> <move1,move2,...>"):
 // pick a uniform random game, replay it once recording phase per ply, reservoir-
@@ -40,7 +42,7 @@
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
 // Non-deterministic.  Usage:
-//   node gen-agent-evals.js --agent <name> --corpus <file>
+//   node gen-agent-evals.js --value-agent <name> (--corpus <file> | --position-agent <name>)
 //        [--min-phase 0] [--max-phase 1] [--prefix-delta D] [--limit N]  > out.txt
 
 const fs = require('fs');
@@ -55,39 +57,45 @@ const Util = require('./util.js');
 console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['agent', 'corpus', 'min-phase', 'max-phase', 'prefix-delta', 'limit', 'komi']);
-if (opts.help || !opts.agent || !opts.corpus) {
-  console.error(`Usage: node gen-agent-evals.js --agent <name> --corpus <file> [options]  > out.txt
+  ['value-agent', 'corpus', 'position-agent', 'size', 'rand-open', 'min-phase', 'max-phase', 'prefix-delta', 'limit', 'komi']);
+if (opts.help || !opts['value-agent'] || (!opts.corpus && !opts['position-agent'])) {
+  console.error(`Usage: node gen-agent-evals.js --value-agent <name> (--corpus <file> | --position-agent <name>) [options]  > out.txt
 
-Label positions from a game corpus with an agent's valueB() oracle,
-producing (position, value) training data.  Each emitted position comes
-from a fresh corpus game (drawn with replacement, one reservoir-sampled
-ply per game inside the phase window), so positions are independent and
-parallel labelers on the same corpus need no coordination.  Output line
-(announced by a '# format:' header; readable by the *-playout-eval
-trainers and train_ppat):
+Label positions with an agent's valueB() oracle, producing (position, value)
+training data.  Positions come from either a game corpus (--corpus) or novel
+self-play games generated on the fly (--position-agent) — one reservoir-sampled ply
+per game inside the phase window.  Positions are independent, so parallel
+labelers need no coordination.  Output line (announced by a '# format:' header;
+readable by the *-playout-eval trainers and train_ppat):
 
   <bsize> <phase> <move1,move2,...> <winRatio>    (winRatio: P(side-to-move wins))
 
 Data goes to stdout (redirect to a file); config and a progress table go
 to stderr.  Non-deterministic; runs until --limit or killed.
 
-  --agent NAME      ai/<name>.js — must export valueB(game, opts) ->
-                    P(BLACK wins), e.g. mc-ppat (mean of PLAYOUTS standard
-                    playouts; set PLAYOUTS in the env), vpatsearch,
+  --value-agent NAME
+                    ai/<name>.js labeling oracle — must export valueB(game,
+                    opts) -> P(BLACK wins), e.g. mc-ppat (mean of PLAYOUTS
+                    standard playouts; set PLAYOUTS in the env), vpatsearch,
                     ref-vlibpat (required)
   --corpus FILE     gen-games.js corpus ("<size> <move1,move2,...>" lines;
-                    mixed sizes fine — size comes from each record) (required)
+                    mixed sizes fine — size comes from each record).  One of
+                    --corpus / --position-agent is required (mutually exclusive)
+  --position-agent NAME
+                    ai/<name>.js self-play policy (needs getMove()) that
+                    generates a novel game per position — no corpus file
+                    needed.  Uses --size and --rand-open
+  --size N          board size for --position-agent games (default 13)
+  --rand-open N     random opening moves per generated game, for diversity
+                    (default 4; --position-agent only)
   --min-phase F     sample plies at board fullness >= F (default 0)
   --max-phase F     sample plies at board fullness <= F (default 1)
   --komi K          scoring komi for the labeling playouts (default 3.5;
                     applied to every board size via setKomi before the
-                    agent loads).  Integer komi allows tied scores on this
-                    area scoring — prefer half-integer values
+                    agent loads).  Must be half-integer.
   --prefix-delta D  treat each sampled ply as a playout-START: advance a
-                    standard-playout prefix (ppat policy, uniform below
-                    fullness 0.6 — the deployed playout) until board
-                    fullness has gained D, then label the ENDPOINT; the
+                    standard-playout prefix until board fullness has gained
+                    D, then label the ENDPOINT; the
                     emitted move list includes the prefix.  The phase
                     window still selects the start, so endpoints land
                     near [min+D, max+D].  Samples whose game ends inside
@@ -98,8 +106,22 @@ to stderr.  Non-deterministic; runs until --limit or killed.
   process.exit(opts.help ? 0 : 1);
 }
 
-const agentName  = opts.agent;
-const corpusPath = opts.corpus;
+const agentName    = opts['value-agent'];
+const corpusPath   = opts.corpus || null;
+const gameAgentName = opts['position-agent'] || null;
+const GAME_MODE     = !!gameAgentName;
+if (corpusPath && gameAgentName) {
+  console.error('--corpus and --position-agent are mutually exclusive'); process.exit(1);
+}
+const GAME_SIZE = opts.size !== undefined ? parseInt(opts.size, 10) : 13;
+const randOpen = opts['rand-open'] !== undefined ? parseInt(opts['rand-open'], 10) : 4;
+if (!GAME_MODE && (opts.size !== undefined || opts['rand-open'] !== undefined)) {
+  console.error('--size/--rand-open apply only with --position-agent'); process.exit(1);
+}
+if (GAME_MODE) {
+  if (!Number.isInteger(GAME_SIZE) || GAME_SIZE < 3) { console.error('--size must be an integer >= 3'); process.exit(1); }
+  if (!Number.isInteger(randOpen) || randOpen < 0) { console.error('--rand-open must be a non-negative integer'); process.exit(1); }
+}
 const minPhase   = parseFloat(opts['min-phase'] !== undefined ? opts['min-phase'] : '0');
 const maxPhase   = parseFloat(opts['max-phase'] !== undefined ? opts['max-phase'] : '1');
 const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
@@ -122,7 +144,19 @@ if (typeof agent.valueB !== 'function') {
   process.exit(1);
 }
 
-const rng = makeRng(((Date.now() ^ (process.pid << 16)) >>> 0) || 1);   // non-deterministic
+// --position-agent: the self-play policy that generates novel games (getMove).
+// Prefer its create(cfg) factory so a slot-aware agent reads its env config.
+let gameAgent = null;
+if (GAME_MODE) {
+  const gm = require(path.join(__dirname, 'ai', gameAgentName + '.js'));
+  gameAgent = typeof gm.create === 'function' ? gm.create(Util.makeCfg()) : gm;
+  if (typeof gameAgent.getMove !== 'function') {
+    console.error(`Position agent '${gameAgentName}' does not export getMove()`);
+    process.exit(1);
+  }
+}
+
+const rng = makeRng(Util.randomSeed());   // non-deterministic
 
 // Standard-playout prefix machinery (--prefix-delta): the same policy the
 // deployed playout uses, matching measure-trunc-bias's defaults.
@@ -134,10 +168,10 @@ if (PREFIX_DELTA !== null) {
   ppatModel.uniformBelowPhase = 0.6;
 }
 
-// Load the corpus up front (token->index only; each game is replay-validated
-// when it is first selected, not eagerly).
-const corpus = [];                   // [{ size, moves: Int16Array }]
-{
+// Corpus mode: load games up front (token->index only; each game is replay-
+// validated when first selected).  Gen-agent mode uses no corpus.
+const corpus = [];                   // corpus mode: [{ size, moves: Int16Array }]
+if (!GAME_MODE) {
   let malformed = 0;
   for (const line of fs.readFileSync(corpusPath, 'utf8').split('\n')) {
     if (!line) continue;
@@ -167,15 +201,22 @@ const corpus = [];                   // [{ size, moves: Int16Array }]
     console.error(`corpus '${corpusPath}' contains no games`);
     process.exit(1);
   }
-  process.stdout.write(`# format: bsize phase moves winRatio\n`);
-  process.stdout.write(`# corpus: ${corpusPath} (${corpus.length} games)\n`);
-  process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
-  if (PREFIX_DELTA !== null) process.stdout.write(
-    `# prefix-delta: ${PREFIX_DELTA} (standard-playout prefix from each sampled ply; endpoint labeled)\n`);
 }
 
-const corpusSizes = [...new Set(corpus.map(g => g.size))].sort((a, b) => a - b).join(',');
-process.stderr.write(`gen-agent-evals: agent: ${agentName}  corpus: ${corpusPath} (${corpus.length} games)  size: ${corpusSizes}  min-phase: ${minPhase}  max-phase: ${maxPhase}${PREFIX_DELTA !== null ? `  prefix-delta: ${PREFIX_DELTA}` : ''}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
+// Provenance / format headers (stdout), both modes.
+process.stdout.write(`# format: bsize phase moves winRatio\n`);
+process.stdout.write(GAME_MODE
+  ? `# position-agent: ${gameAgentName} size: ${GAME_SIZE} rand-open: ${randOpen}\n`
+  : `# corpus: ${corpusPath} (${corpus.length} games)\n`);
+process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
+if (PREFIX_DELTA !== null) process.stdout.write(
+  `# prefix-delta: ${PREFIX_DELTA} (standard-playout prefix from each sampled ply; endpoint labeled)\n`);
+
+const sizeStr   = GAME_MODE ? String(GAME_SIZE)
+                           : [...new Set(corpus.map(g => g.size))].sort((a, b) => a - b).join(',');
+const sourceStr = GAME_MODE ? `position-agent: ${gameAgentName} (rand-open ${randOpen})`
+                           : `corpus: ${corpusPath} (${corpus.length} games)`;
+process.stderr.write(`gen-agent-evals: agent: ${agentName}  ${sourceStr}  size: ${sizeStr}  min-phase: ${minPhase}  max-phase: ${maxPhase}${PREFIX_DELTA !== null ? `  prefix-delta: ${PREFIX_DELTA}` : ''}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
 
 let emitted = 0, misses = 0, prefixSkips = 0, prefixStreak = 0;
 
@@ -202,12 +243,37 @@ function progressRow() {
 }
 const MAX_MISSES = 10000;            // consecutive games with no eligible position
 
+// --position-agent: play a novel game (random opening + self-play) only as far as the
+// phase cap needs — the reservoir sampler below still sees every eligible ply.
+// Returns { size, moves } shaped like a corpus record.
+function generateTrajectory() {
+  const game = new Game2(GAME_SIZE, true);
+  const moves = [];
+  for (let i = 0; i < randOpen && !game.gameOver && game.phase() <= maxPhase; i++) {
+    const m = game.randomLegalMove(rng);
+    if (!game.play(m)) break;
+    moves.push(m);
+  }
+  const guard = GAME_SIZE * GAME_SIZE * 4;
+  while (!game.gameOver && moves.length < guard && game.phase() <= maxPhase) {
+    const m = gameAgent.getMove(game, 0, { rng }).move;
+    if (!game.play(m)) break;
+    moves.push(m);
+  }
+  return { size: GAME_SIZE, moves };
+}
+
 while (emitted < limit) {
-  // Pick a uniform random game; replay it once, reservoir-sampling one ply
-  // inside the phase window (the same replay validates the record).
-  const gi = (rng.random() * corpus.length) | 0;
-  const g  = corpus[gi];
-  const { size, moves } = g;
+  // A trajectory: a corpus game (drawn with replacement) or a freshly generated
+  // one.  Replay it once, reservoir-sampling one ply inside the phase window
+  // (the same replay validates a corpus record).
+  let gi = -1, size, moves;
+  if (GAME_MODE) {
+    ({ size, moves } = generateTrajectory());
+  } else {
+    gi = (rng.random() * corpus.length) | 0;
+    ({ size, moves } = corpus[gi]);
+  }
   const game = new Game2(size, true);
   let chosenPos = -1, seen = 0, ok = true;
   for (let i = 0; i < moves.length; i++) {
@@ -222,7 +288,8 @@ while (emitted < limit) {
     if (!game.play(moves[i])) { ok = false; break; }
   }
   if (!ok) {
-    // Bad record (e.g. torn tail): drop it from the pool, loudly.
+    if (GAME_MODE) { console.error('position-agent: generated game failed replay (bug)'); process.exit(1); }
+    // Bad corpus record (e.g. torn tail): drop it from the pool, loudly.
     process.stderr.write(`corpus: game ${gi} failed replay, dropped (${corpus.length - 1} left)\n`);
     corpus[gi] = corpus[corpus.length - 1];
     corpus.pop();

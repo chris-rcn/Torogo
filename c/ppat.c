@@ -105,11 +105,11 @@ static void ppat_build_t12(void) {
     }
     t12_built = true;
 }
-static int32_t *canon_by_cap[PPAT_MAX_LIB_CAP + 1];
-static int32_t  np_by_cap   [PPAT_MAX_LIB_CAP + 1];
-static int32_t  raw_by_cap  [PPAT_MAX_LIB_CAP + 1];
+static int32_t *canon_by_cap[PPAT_MAX_ADJ_LIB + 1];
+static int32_t  np_by_cap   [PPAT_MAX_ADJ_LIB + 1];
+static int32_t  raw_by_cap  [PPAT_MAX_ADJ_LIB + 1];
 int32_t ppat_num_patterns = 0;
-int32_t ppat_lib_cap = 0;      /* 0 = not yet initialised */
+int32_t ppat_adj_lib = 0;      /* 0 = not yet initialised */
 int32_t ppat_raw_size = 0;
 int     ppat_phase_count = 1;
 float   ppat_uniform_below_phase = 0.0f;
@@ -133,28 +133,28 @@ static int encode8(const int *v, int R) {
     return v[0] + R*(v[1] + R*(v[2] + R*(v[3] + R*(v[4] + 3*(v[5] + 3*(v[6] + 3*v[7]))))));
 }
 
-void ppat_init(int lib_cap) {
+void ppat_init(int adj_lib) {
     ppat_build_t12();                          /* cheap, idempotent, cap-independent */
-    if (lib_cap < PPAT_MIN_LIB_CAP || lib_cap > PPAT_MAX_LIB_CAP) {
-        fprintf(stderr, "ppat_init: lib_cap %d out of range [%d,%d]\n",
-                lib_cap, PPAT_MIN_LIB_CAP, PPAT_MAX_LIB_CAP);
+    if (adj_lib < PPAT_MIN_ADJ_LIB || adj_lib > PPAT_MAX_ADJ_LIB) {
+        fprintf(stderr, "ppat_init: adj_lib %d out of range [%d,%d]\n",
+                adj_lib, PPAT_MIN_ADJ_LIB, PPAT_MAX_ADJ_LIB);
         exit(1);
     }
-    if (ppat_lib_cap == lib_cap) return;      /* already active */
+    if (ppat_adj_lib == adj_lib) return;      /* already active */
 
-    if (canon_by_cap[lib_cap]) {              /* built earlier: just swap it in */
-        ppat_canon_id     = canon_by_cap[lib_cap];
-        ppat_num_patterns = np_by_cap[lib_cap];
-        ppat_raw_size     = raw_by_cap[lib_cap];
-        ppat_lib_cap      = lib_cap;
+    if (canon_by_cap[adj_lib]) {              /* built earlier: just swap it in */
+        ppat_canon_id     = canon_by_cap[adj_lib];
+        ppat_num_patterns = np_by_cap[adj_lib];
+        ppat_raw_size     = raw_by_cap[adj_lib];
+        ppat_adj_lib      = adj_lib;
         return;
     }
 
-    const int R = 2 * lib_cap + 1;            /* orthogonal radix */
+    const int R = 2 * adj_lib + 1;            /* orthogonal radix */
     const int raw_size = R * R * R * R * 81;  /* R^4 * 3^4 */
     int32_t *table = malloc((size_t)raw_size * sizeof(int32_t));
     if (!table) {
-        fprintf(stderr, "ppat_init: out of memory for libCap %d (%d entries)\n", lib_cap, raw_size);
+        fprintf(stderr, "ppat_init: out of memory for adjLib %d (%d entries)\n", adj_lib, raw_size);
         exit(1);
     }
 
@@ -187,12 +187,12 @@ void ppat_init(int lib_cap) {
         if (id_of[min_v] == -1) id_of[min_v] = next_id++;
         table[raw] = id_of[min_v];
     }
-    canon_by_cap[lib_cap] = table;
-    np_by_cap[lib_cap]    = next_id;
-    raw_by_cap[lib_cap]   = raw_size;
+    canon_by_cap[adj_lib] = table;
+    np_by_cap[adj_lib]    = next_id;
+    raw_by_cap[adj_lib]   = raw_size;
     ppat_canon_id     = table;
     ppat_num_patterns = next_id;
-    ppat_lib_cap      = lib_cap;
+    ppat_adj_lib      = adj_lib;
     ppat_raw_size     = raw_size;
 }
 
@@ -206,7 +206,7 @@ void ppat_init(int lib_cap) {
 static inline int adj_val(int32_t ni, const Game2 *g, int8_t cur) {
     int8_t c = g->cells[ni];
     if (c == EMPTY) return 0;
-    const int cap = ppat_lib_cap;
+    const int cap = ppat_adj_lib;
     int lib = g->ls[g->gid[ni]];
     if (lib > cap) lib = cap;
     /* cap 2: lib 1 -> own 2 / enemy 4 (atari), lib 2 -> own 1 / enemy 3.
@@ -574,7 +574,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             int32_t first_gid = -2, same_group = 0;
             /* Mirrors adj_val() exactly (slot = cap+1-lib, ascending in liberties)
              * but reads gid/ls once per neighbour and folds in the true-eye counts. */
-            const int _cap = ppat_lib_cap;
+            const int _cap = ppat_adj_lib;
             #define CHECK_AND_ADJ(c, ni, vout) do { \
                 if ((c) == EMPTY) { \
                     empty_count_e++; \
@@ -611,7 +611,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
          * groups. */
         if (eye) continue;
 
-        const int _R = 2 * ppat_lib_cap + 1;
+        const int _R = 2 * ppat_adj_lib + 1;
         int raw = vN + _R*(vE + _R*(vS + _R*(vW + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
 
         st->moves[count] = idx;
@@ -826,8 +826,8 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     /* earlyPass travels with the weights: a model trained against the pass
      * anchor is a different policy from one trained without it, and its
      * absolute logit level is only meaningful with the anchor in place. */
-    fprintf(f, "]), phases: %d, numPatterns: %d, libCap: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s, atari: %d, atariBySelfAtari: %d, capture: %d, captureBySelfAtari: %d };\n",
-            ppat_phase_count, ppat_num_patterns, ppat_lib_cap,
+    fprintf(f, "]), phases: %d, numPatterns: %d, adjLib: %d, earlyPass: %s, passWeight: %.9g, twelvecell: %s, twelvecell2: %s, selfAtari: %s, atari: %d, atariBySelfAtari: %d, capture: %d, captureBySelfAtari: %d };\n",
+            ppat_phase_count, ppat_num_patterns, ppat_adj_lib,
             early_pass ? "true" : "false", pass_weight,
             ppat_twelvecell == 1 ? "true" : "false",
             ppat_twelvecell == 2 ? "true" : "false",
@@ -858,11 +858,14 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
     }
     int file_phases = atoi(pp + 7);
     int file_np = atoi(np + 12);
-    /* libCap travels with the model; files predating the field are cap 2.  Build
-     * the canon table for the file's cap BEFORE checking numPatterns, so the
-     * check compares like with like (and catches a genuine mismatch). */
-    const char *lc = strstr(buf, "libCap:");
-    int file_cap = lc ? atoi(lc + 7) : PPAT_LEGACY_LIB_CAP;
+    /* adjLib travels with the model; older files spell the field "libCap:"
+     * (both are 7 chars, so the +7 value offset is the same), and files
+     * predating the field entirely are cap 2.  Build the canon table for the
+     * file's cap BEFORE checking numPatterns, so the check compares like with
+     * like (and catches a genuine mismatch). */
+    const char *lc = strstr(buf, "adjLib:");
+    if (!lc) lc = strstr(buf, "libCap:");        /* legacy field name */
+    int file_cap = lc ? atoi(lc + 7) : PPAT_LEGACY_ADJ_LIB;
     ppat_init(file_cap);
     /* earlyPass travels with the model, exactly as in ppat-lib.js: a file that
      * does not declare it was trained without the pass anchor, so its absolute
@@ -874,7 +877,7 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
     const char *pw = strstr(buf, "passWeight:");
     if (out_pass_weight) *out_pass_weight = pw ? (float)atof(pw + 11) : 0.0f;
     if (file_np != ppat_num_patterns) {
-        fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected (libCap %d)\n",
+        fprintf(stderr, "ppat_load_weights: numPatterns: %d in file but %d expected (adjLib %d)\n",
                 file_np, ppat_num_patterns, file_cap);
         free(buf); return NULL;
     }
@@ -910,25 +913,86 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
         const char *cs = strstr(buf, "captureBySelfAtari: ");
         ppat_file_cs = cs ? atoi(cs + 20) : 0;
     }
-    int total = ppat_total_weights();
-    float *weights = calloc(total, sizeof(float));
+    /* Block-aware load.  The weight vector is a sequence of block-major blocks
+     * (each spans all phases contiguously): pattern, 7 local, twelvecell,
+     * self-atari, atari, atari-by-self-atari, capture, capture-by-self-atari.
+     * A dense positional copy silently misaligns whenever the file's set of
+     * enabled blocks differs from the run's (an optional block inserted ahead of
+     * a block the file already populated), so instead we compute both layouts
+     * from the file's header flags and the run's globals and copy block by block.
+     * A block the run enables but the file lacks stays zero (the genuine
+     * fine-tune-into-a-new-feature path); a block the file has but the run
+     * disabled is dropped with a warning; a size mismatch on a shared block is a
+     * hard error rather than a scrambled copy. */
+    enum { B_PAT, B_LOCAL, B_T12, B_SA, B_ATARI, B_XA, B_CAP, B_CS, N_BLOCKS };
+    static const char *block_name[N_BLOCKS] = {
+        "pattern", "local", "twelvecell", "selfAtari",
+        "atari", "atariBySelfAtari", "capture", "captureBySelfAtari" };
+    const int t12_file = ppat_file_twelvecell == 1 ? PPAT_T12_PATTERNS
+                       : ppat_file_twelvecell == 2 ? PPAT_T12B_PATTERNS : 0;
+    /* per-phase block sizes: what the FILE stores vs what the RUN expects */
+    const int fps[N_BLOCKS] = {
+        ppat_num_patterns, 7, t12_file,
+        ppat_file_self_atari ? PPAT_SA_N : 0,
+        ppat_file_atari, ppat_file_xa * ppat_file_xa,
+        ppat_file_capture, ppat_file_cs * ppat_file_cs };
+    const int rps[N_BLOCKS] = {
+        ppat_num_patterns, 7, ppat_t12_block(),
+        ppat_self_atari ? PPAT_SA_N : 0,
+        ppat_atari_n, ppat_xa_n * ppat_xa_n,
+        ppat_capture_n, ppat_cs_n * ppat_cs_n };
 
+    long file_total = 0;
+    for (int b = 0; b < N_BLOCKS; b++) file_total += (long)ppat_phase_count * fps[b];
+
+    /* Parse the file's flat weight list into a temp buffer, then redistribute. */
+    float *file_w = malloc((size_t)file_total * sizeof(float));
     const char *start = strchr(buf, '[');
-    if (!start) { free(buf); free(weights); return NULL; }
+    if (!start) { free(buf); free(file_w); return NULL; }
     start++;
-    int idx = 0;
+    long idx = 0;
     char *end;
-    while (idx < total) {
+    while (idx < file_total) {
         float v = strtof(start, &end);
         if (end == start) break;
-        weights[idx++] = v;
+        file_w[idx++] = v;
         start = end;
         if (*start == ',') start++;
     }
+    if (idx != file_total) {
+        fprintf(stderr, "ppat_load_weights: %s has %ld weights but its header implies %ld\n",
+                path, idx, file_total);
+        free(buf); free(file_w); return NULL;
+    }
     free(buf);
+
+    const int total = ppat_total_weights();
+    float *weights = calloc(total, sizeof(float));
+    long fbase = 0, rbase = 0;
+    for (int b = 0; b < N_BLOCKS; b++) {
+        const long fsz = (long)ppat_phase_count * fps[b];
+        const long rsz = (long)ppat_phase_count * rps[b];
+        if (fps[b] > 0 && rps[b] > 0) {
+            if (fps[b] != rps[b]) {
+                fprintf(stderr, "ppat_load_weights: %s block size mismatch in %s "
+                        "(file %d, run %d per phase) — cross-size fine-tune is not supported\n",
+                        block_name[b], path, fps[b], rps[b]);
+                free(file_w); free(weights); return NULL;
+            }
+            memcpy(weights + rbase, file_w + fbase, (size_t)fsz * sizeof(float));
+        } else if (fps[b] > 0) {   /* file has it, run disabled it: drop, but say so */
+            fprintf(stderr, "ppat_load_weights: WARNING: dropping %s weights from %s "
+                    "(the file carries this feature but the run has it disabled)\n",
+                    block_name[b], path);
+        }
+        /* fps[b] == 0: block absent in the file; the run's slots stay zero. */
+        fbase += fsz;
+        rbase += rsz;
+    }
+    free(file_w);
     if (!ppat_load_quiet)
-        fprintf(stderr, "loaded %d weights from %s (phases: %d)\n",
-                idx, path, file_phases);
+        fprintf(stderr, "loaded %ld weights from %s (phases: %d)\n",
+                file_total, path, file_phases);
     return weights;
 }
 
