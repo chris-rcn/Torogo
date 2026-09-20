@@ -1,12 +1,12 @@
 'use strict';
 
-// puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  A playout runs
-// for the prefix length set by TRUNC_PHASE_DELTA (a move count, or a fullness
-// advance under LEGACY_PHASE_DELTA); if
-// the position's phase is then below TRUNC_MAX_PHASE_B, the playout stops and
-// the leaf value is a static vpatterns evaluation (TRUNC_VPAT_DATA, a
-// train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
-// terminal score.  Otherwise the playout continues to the end as usual.
+// puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  Truncation is a
+// per-decision choice made at the root: when the root phase is below
+// TRUNC_ROOT_PHASE, every playout runs for the prefix length set by
+// TRUNC_PHASE_DELTA (a move count, or a fullness advance under
+// LEGACY_PHASE_DELTA) and then its leaf value is a static vpatterns evaluation
+// (TRUNC_VPAT_DATA, a train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins))
+// instead of the terminal score.  Otherwise every playout runs to the end.
 // The prefix moves still fill the RAVE trace either way.  (An averaged
 // multi-position evaluation window was tried and removed: consecutive-
 // position evaluator errors are near-perfectly correlated, so averaging
@@ -135,19 +135,14 @@ function create(cfg) {
   // pre-2026-09-10 method: descend until the net empty count has dropped by
   // that much, which captures push further away.
   const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
-  // Gate B: the endpoint phase below which the deployed evaluator is trusted.
-  // With root-decision truncation it no longer gates individual playouts; it
-  // only supplies the default TRUNC_ROOT_PHASE below.
-  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', 0.55);   // champion gate
   // Root-decision truncation: the whole decision truncates (every playout
   // substitutes the vpat value at its prefix endpoint) iff the ROOT phase is
   // below this; otherwise every playout runs full.  Deciding once at the root
   // keeps a search self-consistent — no truncated/full mix within one tree, so
-  // no per-leaf gate seam.  Default B - delta puts the shallowest possible
-  // endpoint (root + delta) at the gate B; a lower value leaves a margin against
-  // deeper leaves overshooting B.
-  const TRUNC_ROOT_PHASE = cfg.has('TRUNC_ROOT_PHASE') ? cfg.float('TRUNC_ROOT_PHASE', 0)
-                         : TRUNC_MAX_PHASE_B - TRUNC_PHASE_DELTA;
+  // no per-leaf gate seam.  Default 0.35 is the champion threshold (its old
+  // gate B 0.55 minus delta 0.20 — the point at which the shallowest possible
+  // endpoint, root + delta, would reach the trusted-evaluator band edge).
+  const TRUNC_ROOT_PHASE = cfg.float('TRUNC_ROOT_PHASE', 0.35);
   // Set per decision in runSearch: rootPhase < TRUNC_ROOT_PHASE.
   let _truncActive = false;
 
@@ -165,7 +160,7 @@ function create(cfg) {
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
-    `trunc-max-phase: ${TRUNC_MAX_PHASE_B}, trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}${cfg.has('TRUNC_ROOT_PHASE') ? '' : ' (=B-delta)'}`);
+    `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
