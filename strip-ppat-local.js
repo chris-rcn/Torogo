@@ -41,12 +41,12 @@ const raw = require(inPath);
 if (!raw || !raw.weights) { console.error(`${opts.in}: not a ppat weights file`); process.exit(1); }
 
 const phases  = raw.phases || 1;
-const libCap  = raw.libCap != null ? raw.libCap : 2;
-const nPat    = raw.numPatterns != null ? raw.numPatterns : (PPat.totalWeights(phases, libCap) - phases * 7) / phases;
-const expected = PPat.totalWeights(phases, libCap);
+const adjLib  = raw.adjLib != null ? raw.adjLib : (raw.libCap != null ? raw.libCap : 2);   // legacy field: libCap
+const nPat    = raw.numPatterns != null ? raw.numPatterns : (PPat.totalWeights(phases, adjLib) - phases * 7) / phases;
+const expected = PPat.totalWeights(phases, adjLib);
 if (raw.weights.length !== expected) {
   console.error(`${opts.in}: weights length ${raw.weights.length} but ${expected} expected ` +
-                `(phases ${phases}, libCap ${libCap}, numPatterns ${nPat}) — refusing to guess the layout`);
+                `(phases ${phases}, adjLib ${adjLib}, numPatterns ${nPat}) — refusing to guess the layout`);
   process.exit(1);
 }
 
@@ -72,7 +72,7 @@ if (opts['dry-run']) { console.log('  --dry-run: nothing written'); process.exit
 const outPath = opts.out
   ? path.resolve(opts.out)
   : inPath.replace(/(\.js)?$/, '-nolocal.js').replace('.js-nolocal.js', '-nolocal.js');
-const meta = [`phases: ${phases}`, `numPatterns: ${nPat}`, `libCap: ${libCap}`];
+const meta = [`phases: ${phases}`, `numPatterns: ${nPat}`, `adjLib: ${adjLib}`];
 const src = [
   "'use strict';",
   `// Local (previous-move) features zeroed by strip-ppat-local.js from ${path.basename(inPath)}.`,

@@ -27,12 +27,12 @@ const _D4 = [
 // ── Load-time canonicalisation ────────────────────────────────────────────────
 //
 // Raw pattern index (positions in encoding order: N, E, S, W, NE, SE, SW, NW),
-// with R = 2*libCap + 1 the orthogonal radix and 3 the diagonal radix:
+// with R = 2*adjLib + 1 the orthogonal radix and 3 the diagonal radix:
 //   rawIdx = vN + R*(vE + R*(vS + R*(vW + R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))))
-// Range: [0, R^4 × 3^4).  libCap 2 (R = 5, 50625 configurations) is the
+// Range: [0, R^4 × 3^4).  adjLib 2 (R = 5, 50625 configurations) is the
 // historical encoding and the SB paper's: an orthogonal is atari or not.
 // Higher caps resolve more liberty levels — the cap is a property of a trained
-// model and travels in its weights file as `libCap`; files without the field
+// model and travels in its weights file as `adjLib`; files without the field
 // are cap 2.  MUST stay bit-identical to c/ppat.c (encode8 / adj_val).
 //
 // The encoding is already relative to the current mover (FRIEND/FOE), so color
@@ -40,16 +40,16 @@ const _D4 = [
 // canonId maps raw → dense canonical ID (0-based); Int32Array because cap 4
 // canonicalises to ~71k patterns, past Int16's range.
 
-const MIN_LIB_CAP = 1, MAX_LIB_CAP = 4;   // cap 1 = presence-only (pure shape)
-const _tablesByCap = new Map();   // libCap → { canonId, numPatterns, rawSize }
+const MIN_ADJ_LIB = 1, MAX_ADJ_LIB = 4;   // cap 1 = presence-only (pure shape)
+const _tablesByCap = new Map();   // adjLib → { canonId, numPatterns, rawSize }
 
-function _buildTables(libCap) {
-  if (!(libCap >= MIN_LIB_CAP && libCap <= MAX_LIB_CAP))
-    throw new Error(`ppat: libCap ${libCap} out of range [${MIN_LIB_CAP},${MAX_LIB_CAP}]`);
-  const cached = _tablesByCap.get(libCap);
+function _buildTables(adjLib) {
+  if (!(adjLib >= MIN_ADJ_LIB && adjLib <= MAX_ADJ_LIB))
+    throw new Error(`ppat: adjLib ${adjLib} out of range [${MIN_ADJ_LIB},${MAX_ADJ_LIB}]`);
+  const cached = _tablesByCap.get(adjLib);
   if (cached) return cached;
 
-  const R = 2 * libCap + 1;
+  const R = 2 * adjLib + 1;
   const rawSize = R * R * R * R * 81;
   const canonId = new Int32Array(rawSize);
   const v  = new Int32Array(8);
@@ -81,8 +81,8 @@ function _buildTables(libCap) {
     if (!idMap.has(minV)) idMap.set(minV, nextId++);
     canonId[raw] = idMap.get(minV);
   }
-  const t = { canonId, numPatterns: nextId, rawSize, R, libCap };
-  _tablesByCap.set(libCap, t);
+  const t = { canonId, numPatterns: nextId, rawSize, R, adjLib };
+  _tablesByCap.set(adjLib, t);
   return t;
 }
 
@@ -344,8 +344,8 @@ function _selfAtariSize(game, idx, cur) {
   return libs >= 2 ? 0 : size;
 }
 
-function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false, atariN = 0) {
-  return phaseCount * (_buildTables(libCap).numPatterns + 7) +
+function totalWeights(phaseCount, adjLib = 2, t12mode = 0, selfAtari = false, atariN = 0) {
+  return phaseCount * (_buildTables(adjLib).numPatterns + 7) +
          phaseCount * t12Block(t12mode | 0) +
          (selfAtari ? phaseCount * SA_N : 0) +
          phaseCount * (atariN | 0);
@@ -368,13 +368,13 @@ function totalWeights(phaseCount, libCap = 2, t12mode = 0, selfAtari = false, at
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0) {
+function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
-  const _tab   = libCap === 2 ? _T2 : _buildTables(libCap);
+  const _tab   = adjLib === 2 ? _T2 : _buildTables(adjLib);
   const _CANON = _tab.canonId, _NPAT = _tab.numPatterns, _R = _tab.R;
-  const _LC    = libCap;
+  const _LC    = adjLib;
   if (_sbcCells.length < cap) {
     _sbcCells = new Int32Array(cap);
   }
@@ -622,7 +622,7 @@ function extractFeatures(game, state, phaseCount = 1, libCap = 2, skipLocal = fa
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
+  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -668,7 +668,7 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.libCap, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
+  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -728,16 +728,18 @@ function loadWeights(pathOrObj) {
     try { raw = require(_path.resolve(raw)); } catch (e) { return null; }
   }
   if (!raw || !raw.weights) return null;
-  // libCap travels with the model; files predating the field are the historical
+  // adjLib travels with the model; files predating the field are the historical
   // cap 2.  Build that cap's tables first so numPatterns is checked like-for-like.
-  const libCap = raw.libCap != null ? raw.libCap : 2;   // pre-libCap files are cap 2
-  if (!(libCap >= MIN_LIB_CAP && libCap <= MAX_LIB_CAP)) {
-    console.error(`ppat loadWeights: libCap=${libCap} out of range [${MIN_LIB_CAP},${MAX_LIB_CAP}]`);
+  // adjLib travels with the model; older files spell the field `libCap`, and
+  // files predating it entirely are cap 2.
+  const adjLib = raw.adjLib != null ? raw.adjLib : (raw.libCap != null ? raw.libCap : 2);
+  if (!(adjLib >= MIN_ADJ_LIB && adjLib <= MAX_ADJ_LIB)) {
+    console.error(`ppat loadWeights: adjLib=${adjLib} out of range [${MIN_ADJ_LIB},${MAX_ADJ_LIB}]`);
     return null;
   }
-  const nPat = _buildTables(libCap).numPatterns;
+  const nPat = _buildTables(adjLib).numPatterns;
   if (raw.numPatterns != null && raw.numPatterns !== nPat) {
-    console.error(`ppat loadWeights: numPatterns=${raw.numPatterns} in file but ${nPat} expected (libCap ${libCap})`);
+    console.error(`ppat loadWeights: numPatterns=${raw.numPatterns} in file but ${nPat} expected (adjLib ${adjLib})`);
     return null;
   }
   if (raw.ladder === true) {
@@ -772,7 +774,7 @@ function loadWeights(pathOrObj) {
   // pattern weight shifts all logits equally and leaves the softmax unchanged.
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
-  return { phaseCount: phases, weights: raw.weights, libCap, skipLocal,
+  return { phaseCount: phases, weights: raw.weights, adjLib, skipLocal,
            twelvecell, twelvecell2, t12mode, selfAtari, atariN,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };

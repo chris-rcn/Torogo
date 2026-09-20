@@ -40,7 +40,7 @@ function create(cfg) {
   _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
 
   console.log(`ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} weights ` +
-              `(${_model.phaseCount} phase(s), libCap ${_model.libCap}) from ` +
+              `(${_model.phaseCount} phase(s), adjLib ${_model.adjLib}) from ` +
               `${_isNode ? require('path').basename(_ppatPath) : 'window.PPATWeights'} [policy sampling, no search]`);
 
   let _ppatState = null;
