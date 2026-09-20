@@ -365,15 +365,26 @@ function create(cfg) {
     return result;
   }
 
+  // P(BLACK wins) from the same RAVE search getMove runs: rootWinRatio is
+  // P(side-to-move wins), mapped to BLACK's frame.  Terminal positions are
+  // scored directly.  PLAYOUTS defaults to 1000 here so valueB always searches
+  // even on a time-budget-configured instance.
+  function valueB(game, options = {}) {
+    const game2 = game.cells ? game : game.toGame2();
+    if (game2.gameOver) return game2.calcWinner() === BLACK ? 1 : 0;
+    const playoutLimit = options.playoutLimit || PLAYOUTS || 1000;
+    const res = getMove(game2, 0, { rng: options.rng, playoutLimit });
+    return game2.current === BLACK ? res.rootWinRatio : 1 - res.rootWinRatio;
+  }
 
-  return { getMove };
+  return { getMove, valueB };
 }
 
 // Lazy default instance for direct-require callers.
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
 
-if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
-else window.getMove = (g, b, o) => _def().getMove(g, b, o);
+if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), valueB: (g, o) => _def().valueB(g, o) };
+else { window.getMove = (g, b, o) => _def().getMove(g, b, o); window.valueB = (g, o) => _def().valueB(g, o); }
 
 })();
