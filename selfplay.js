@@ -41,7 +41,7 @@ const { performance } = require('perf_hooks');
  *                        fallback plays the opening up to it       (default 0)
  *   --max-phase <f>      p1/p2 stop once phase > f; the fallback completes the
  *                        game                                      (default 1)
- *   --fallback <policy>  Agent that plays outside the phase window (default ref-npat)
+ *   --fallback <policy>  Agent that plays outside the phase window (default ref-ab2-fp4-vpat)
  *   --help               Show this help message
  *
  * Env variables:
@@ -146,7 +146,7 @@ const randMoves = parseInt(opts['rand-moves'] ?? '0', 10);
 // game-played strength-by-phase profile.  Defaults (0,1) = whole game, no fallback.
 const minPhase     = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
 const maxPhase     = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
-const fallbackName = opts.fallback || 'ref-featurepol-softmax';
+const fallbackName = opts.fallback || 'ref-ab2-fp4-vpat';
 const adjudicationPlayouts = parseInt(opts['adjudication-playouts'] || '0', 10);
 if (!(adjudicationPlayouts >= 0)) {
   console.error('--adjudication-playouts must be a non-negative integer');
