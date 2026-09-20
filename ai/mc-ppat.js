@@ -71,14 +71,14 @@
 //   TRUNC_VPAT_DATA   vpatterns evaluator for the truncation point.  Its
 //                 PRESENCE turns truncation ON (absent = plain full playouts):
 //                 a playout whose START phase ph satisfies ph + delta <=
-//                 TRUNC_MAX_PHASE_B stops after the board fullness has gained
+//                 TRUNC_MAX_PHASE stops after the board fullness has gained
 //                 delta and returns the vpat value at the truncation point
 //                 instead of playing out (other playouts run to the end).
 //   TRUNC_PHASE_DELTA  truncation delta; overrides the model file's baked
 //                 'trunc.delta'.  0 is valid — truncate at the leaf, i.e. a
 //                 pure static vpat evaluation.  With TRUNC_VPAT_DATA set and no
 //                 delta from either source the agent throws.
-//   TRUNC_MAX_PHASE_B gate bound on the truncated ENDPOINT (default 0.55)
+//   TRUNC_MAX_PHASE gate bound on the truncated ENDPOINT (default 0.55)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -132,7 +132,7 @@ function create(cfg) {
   // also uses the evaluator, so it requires TRUNC_VPAT_DATA too.
   const TRUNC_VPAT = cfg.str('TRUNC_VPAT_DATA', '');
   const TRUNC_ON   = TRUNC_VPAT !== '';
-  const TRUNC_B    = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
+  const TRUNC_MAX_PHASE = cfg.float('TRUNC_MAX_PHASE', 0.55);
   let vpatModel = null, TRUNC_DELTA = 0, _deltaSrc = '';
   if (TRUNC_ON || VPAT_PICK) {
     if (VPAT_PICK && !TRUNC_ON) {
@@ -162,7 +162,7 @@ function create(cfg) {
               (VPAT_PICK ? `  vpat-pick below the gate` : '') +
               (FP_GAP_SKIP > 0 ? `  gap-skip>${FP_GAP_SKIP}` : '') +
               (VOTE_BLOCK > 0 ? `  seq-vote block=${VOTE_BLOCK} z=${VOTE_Z}` : '') +
-              (TRUNC_ON ? `  trunc: delta=${TRUNC_DELTA}${_deltaSrc === 'model' ? '(model)' : ''} B=${TRUNC_B}` : ''));
+              (TRUNC_ON ? `  trunc: delta=${TRUNC_DELTA}${_deltaSrc === 'model' ? '(model)' : ''} max-phase=${TRUNC_MAX_PHASE}` : ''));
 
   const rng = makeRng();
   let ppatState = null;
@@ -184,7 +184,7 @@ function create(cfg) {
     // per-move check descends further whenever the prefix captures.  Matches
     // ai/puct-ppat-fp-trunc.js and the offline prefix generators.
     let prefixLen = -1;
-    if (TRUNC_ON && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_B) {
+    if (TRUNC_ON && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_MAX_PHASE) {
       prefixLen = Math.ceil(TRUNC_DELTA * area);   // 0 when delta == 0 → static eval at the leaf
     }
     const moveLimit = 3 * game2.emptyCount + 20;
