@@ -3,7 +3,7 @@
 // puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  A playout runs
 // for the prefix length set by TRUNC_PHASE_DELTA (a move count, or a fullness
 // advance under LEGACY_PHASE_DELTA); if
-// the position's phase is then below TRUNC_MAX_PHASE, the playout stops and
+// the position's phase is then below TRUNC_MAX_PHASE_B, the playout stops and
 // the leaf value is a static vpatterns evaluation (TRUNC_VPAT_DATA, a
 // train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins)) instead of the
 // terminal score.  Otherwise the playout continues to the end as usual.
@@ -129,43 +129,17 @@ function create(cfg) {
                           : (_deltaFromModel ? _truncMeta.delta : 0.2);
   // Prefix length in moves, set once per turn from the board size (getMove).
   let _prefixLen = 0;
-  // Truncate only when the position's phase at the truncation point is below
-  // this; at or above it the playout runs to the end (late playouts are short
-  // and nearly exact, so substitution there is pure downside).
-  const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 1);
   // How the truncation prefix is measured.  Default: descend a fixed number of
   // MOVES, ceil(TRUNC_PHASE_DELTA * area), so every truncated playout goes the
   // same distance whatever it captures.  LEGACY_PHASE_DELTA=true restores the
   // pre-2026-09-10 method: descend until the net empty count has dropped by
   // that much, which captures push further away.
   const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
-  // Gate ramp: truncation probability is 1 at or below _A, 0 at or above _B,
-  // linear between (drawn once per playout, anchored on the leaf — the
-  // endpoint phase is leaf + delta by construction).  Both default to
-  // TRUNC_MAX_PHASE, i.e. the hard cliff.  The ramp exists to smooth the
-  // truncate/no-truncate currency seam between sibling branches: a k-stone
-  // capture shifts the leaf by (k-1)/cap of phase, which across a hard gate
-  // flips the subtree's value source outright.
-  // TRUNC_MAX_PHASE_A also accepts the sentinel 'auto': the ramp start is
-  // then dynamic, the midpoint of (rootPhase + TRUNC_PHASE_DELTA) — the
-  // minimum endpoint this decision can produce — and _B.  Shallow leaves
-  // (the bulk of the frontier) sit on the p=1 plateau, so the truncation
-  // throughput survives; only the deeper half of the reachable range ramps
-  // toward full-playout (unbiased) returns.  (The full-span variant, ramp
-  // start at root+delta itself, measured a clear loss at budget 500 —
-  // 2026-09-06: too many full playouts across the whole zone.)
-  const _gateARaw = cfg.str('TRUNC_MAX_PHASE_A', 'auto');   // champion: auto ramp start
-  const GATE_A_AUTO = _gateARaw === 'auto';
-  const TRUNC_MAX_PHASE_A = GATE_A_AUTO ? NaN
-    : _gateARaw !== '' ? parseFloat(_gateARaw) : TRUNC_MAX_PHASE;
-  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', 0.55);   // champion gate B
-  if (!GATE_A_AUTO && !(TRUNC_MAX_PHASE_A <= TRUNC_MAX_PHASE_B)) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-      `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
-  }
-  // Ramp start used by playout(); in auto mode runSearch refreshes it per
-  // decision from the root position.
-  let _gateA = TRUNC_MAX_PHASE_A;
+  // Truncation gate (hard cliff): a playout truncates (substitutes the vpat
+  // value) iff the endpoint phase (leaf + delta) is below this; at or above it
+  // the playout runs to the end (late playouts are short and nearly exact, so
+  // substitution there is pure downside).
+  const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', 0.55);   // champion gate
 
   // Static evaluator weights (the model itself was loaded up top so its baked
   // truncation defaults could feed the knobs above).
@@ -180,10 +154,8 @@ function create(cfg) {
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-max-phase: ` +
-    (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
-     : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
-     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`));
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
+    `trunc-max-phase: ${TRUNC_MAX_PHASE_B}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -248,7 +220,7 @@ function create(cfg) {
 
   // ppat-policy playout from `game2` (mutates it), truncated: after the
   // turn's fixed prefix length in moves, a position still below
-  // TRUNC_MAX_PHASE returns the static vpatterns value; otherwise the playout
+  // TRUNC_MAX_PHASE_B returns the static vpatterns value; otherwise the playout
   // runs to the end.  Fills `played` (pre-zeroed by the caller) with the
   // colour-signed first-occupancy RAVE trace.  Returns P(BLACK wins) — a
   // fraction at a truncation, {0,1} at the end of a full playout.
@@ -266,18 +238,12 @@ function create(cfg) {
     // dropped by that much, which captures push further away.
     const truncMoves = _prefixLen;
     const truncEmpty = game2.emptyCount - _prefixLen;
-    // Gate, decided up front from the leaf.  The endpoint phase is the leaf's
-    // plus the prefix — exact under FULLNESS (the trigger fires at precisely
-    // that empty count), an upper bound under MOVES when the prefix captures.
-    // p = 1 at/below _A, 0 at/above _B, linear ramp
-    // between; the cliff (_A === _B) takes the no-draw paths, leaving the rng
-    // stream untouched.
+    // Hard gate, decided up front from the leaf: truncate iff the endpoint phase
+    // is below TRUNC_MAX_PHASE_B.  The endpoint phase is the leaf's plus the
+    // prefix — exact under FULLNESS (the trigger fires at precisely that empty
+    // count), an upper bound under MOVES when the prefix captures.
     const epPhase = (cap - (game2.emptyCount - truncMoves)) / cap;
-    let truncArmed;
-    if (epPhase >= TRUNC_MAX_PHASE_B) truncArmed = false;
-    else if (epPhase <= _gateA)       truncArmed = true;
-    else truncArmed = rng.random() <
-      (TRUNC_MAX_PHASE_B - epPhase) / (TRUNC_MAX_PHASE_B - _gateA);
+    const truncArmed = epPhase < TRUNC_MAX_PHASE_B;
 
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
@@ -518,12 +484,6 @@ function create(cfg) {
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
-    // Root-anchored ramp start: the minimum endpoint phase this decision can
-    // produce (see TRUNC_MAX_PHASE_A='auto').
-    if (GATE_A_AUTO) {
-      const minEp = (N * N - game2.emptyCount) / (N * N) + TRUNC_PHASE_DELTA;
-      _gateA = (minEp + TRUNC_MAX_PHASE_B) / 2;
-    }
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
