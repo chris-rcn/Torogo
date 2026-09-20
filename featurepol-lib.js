@@ -38,26 +38,6 @@
 //               same canonical pattern reached at a different extent is a
 //               distinct feature.  Larger N reaches further and yields more,
 //               rarer keys.  A descriptor.
-//   emptyExpand<R>  Adaptive-diamond opening shape: the smallest L1 diamond
-//               around the move that is NOT completely empty, hashed with the
-//               stones12b recursion (level 1 = the 5-point plus, level k = a
-//               plus of five level-(k-1) hashes), radius capped at R.  A move
-//               with a stone in its level-1 diamond emits NOTHING (that
-//               4-informative-cell pattern carries almost no information), so
-//               the minimum emission is the 12-cell level-2 pattern.  The
-//               level is folded into the key; an all-empty radius-R diamond is
-//               one shared key.  Invariant by construction at every level, so
-//               unlike stoneExpand it scales past 20 cells (radius 3/4/5/6 =
-//               25/41/61/85 cells).  STACKS: alongside the pattern key it
-//               emits one shared "the radius-j diamond was empty" key per
-//               level expanded through (a thermometer riding the same
-//               computation), so those weights carry the distance-to-stone
-//               prior and the rare deep pattern keys learn residuals — the
-//               twelvecell-on-ninecell logic.  R 0 = board maximum (the
-//               largest toroidal L1 distance, 12 on 13x13), resolved when the
-//               board is known — which makes the R-0 feature set
-//               board-size-dependent; a fixed R is the cross-size-safe
-//               spelling.  A descriptor plus its stack.
 //   stoneLimit<N>  Adaptive-diamond sparse shape: the LARGEST L1 diamond
 //               around the move containing at most N stones (stoneLimit0 =
 //               the largest empty diamond, a pure distance profile;
@@ -398,103 +378,11 @@ function _t13Prepare(ctx) {
                                     _uh(t5[nn[base + 1]], t5[nn[base + 3]])), t5[idx]);
   }
 }
-// emptyExpand: hash of an ALL-EMPTY radius-k diamond, per level.  Empty leaves
-// code 1 regardless of cur, so the value is a constant — which makes "is this
-// diamond empty" a single compare against it instead of a second AND-recursion
-// pass.  A false positive needs a non-empty region colliding into the constant,
-// the same per-key 2^-32 event the hash family already accepts everywhere.
-// Signed (Int32Array domain), matching the stored t-values it is compared to.
-const _eeEmptyConst = [0];   // 1-indexed: [k] = the level-k all-empty hash
-function _eeEmpty(k) {
-  while (_eeEmptyConst.length <= k) {
-    const j = _eeEmptyConst.length;                  // computing level j
-    const e = j === 1 ? 1 : _eeEmptyConst[j - 1];    // level 1's leaves are the empty symbol
-    _eeEmptyConst.push(_hashCombine(_uh(_uh(e, e), _uh(e, e)), e) | 0);
-  }
-  return _eeEmptyConst[k];
-}
-
-// Fill st.key[idx] for every cell: the level-k diamond hash with k folded in,
-// k = the smallest non-empty level, or the shared all-empty key.  One O(area)
-// pass per level, five reads each — the same shape as _t13Prepare — and the
-// key assignment rides those passes: level 1 initialises every cell (its own
-// key if non-empty, the all-empty key otherwise), and level k overwrites
-// exactly the cells whose level k-1 was empty and level k is not, so a cell
-// empty through R keeps the all-empty initialisation with no final pass.
-// st is shared PER R via _eeShared, so emptyExpand<R> and its thermometer with
-// the same R run one computation (parseSpec dedupes prepares by identity) and
-// terms with different R keep separate buffers.  Alongside each key, depth[idx]
-// records how many levels were fully empty (reached level − 1; R when empty all
-// the way out) — the thermometer's size — riding the same assignments.
-function _eePrepare(ctx, R0, st) {
-  const game = ctx.game, area = game.N * game.N, cur = ctx.cur;
-  const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
-  // R 0 = board maximum: the largest toroidal L1 distance, beyond which a
-  // diamond has already seen every cell.  Resolved here, where N is known —
-  // which makes the R-0 feature set board-size-dependent (deeper levels and a
-  // different all-empty key on a bigger board): fine for a model living on one
-  // size, the cross-size trap if it migrates.
-  const R = R0 === 0 ? (game.N >> 1) * 2 : R0;
-  if (!st.key || st.key.length < area) {
-    st.key = new Int32Array(area); st.depth = new Int32Array(area);
-    st.a = new Int32Array(area); st.b = new Int32Array(area);
-  }
-  const key = st.key, depth = st.depth, allEmptyKey = _hashCombine(_eeEmpty(R), R + 1) | 0;
-  let a = st.a, b = st.b;
-  // nEmpty: cells still all-empty at the level just computed.  Emptiness is
-  // monotone (the radius-k ball contains the radius-(k-1) ball), so once it
-  // hits zero no later level can assign anything — every key is final and the
-  // remaining passes are dead work.  On a midgame board that ends the loop at
-  // the deepest actual gap, which is what keeps a large R (emptyExpand0's 12)
-  // priced by the position, not the cap.
-  let nEmpty = 0;
-  {
-    const eCur = _eeEmpty(1);
-    for (let idx = 0; idx < area; idx++) {
-      const base = idx * stride;
-      const cN = cells[nn[base]],     sN = cN === 0 ? 1 : cN === cur ? 2 : 3;
-      const cE = cells[nn[base + 1]], sE = cE === 0 ? 1 : cE === cur ? 2 : 3;
-      const cS = cells[nn[base + 2]], sS = cS === 0 ? 1 : cS === cur ? 2 : 3;
-      const cW = cells[nn[base + 3]], sW = cW === 0 ? 1 : cW === cur ? 2 : 3;
-      const cC = cells[idx],          sC = cC === 0 ? 1 : cC === cur ? 2 : 3;
-      const v = _hashCombine(_uh(_uh(sN, sS), _uh(sE, sW)), sC) | 0;
-      a[idx] = v;
-      if (v !== eCur) { key[idx] = _hashCombine(v, 1) | 0; depth[idx] = 0; }
-      else            { key[idx] = allEmptyKey;            depth[idx] = R; nEmpty++; }
-    }
-  }
-  for (let k = 2; k <= R && nEmpty > 0; k++) {
-    const ePrev = _eeEmpty(k - 1), eCur = _eeEmpty(k);
-    nEmpty = 0;
-    for (let idx = 0; idx < area; idx++) {
-      const base = idx * stride;
-      const v = _hashCombine(_uh(_uh(a[nn[base]], a[nn[base + 2]]),
-                                 _uh(a[nn[base + 1]], a[nn[base + 3]])), a[idx]) | 0;
-      b[idx] = v;
-      if (v === eCur) nEmpty++;
-      else if (a[idx] === ePrev) { key[idx] = _hashCombine(v, k) | 0; depth[idx] = k - 1; }
-    }
-    const t = a; a = b; b = t;
-  }
-}
-
-// One shared { st, prepare } per R, so a term and its thermometer companion
-// dedupe to a single prepare run.
-const _eeByR = new Map();
-function _eeShared(R) {
-  let sh = _eeByR.get(R);
-  if (!sh) {
-    const st = { key: null, depth: null, a: null, b: null };
-    sh = { st, prepare: ctx => _eePrepare(ctx, R, st) };
-    _eeByR.set(R, sh);
-  }
-  return sh;
-}
 
 // ── stoneLimit<N>: the largest diamond holding at most N stones ──────────────
 // Exact counts come from a per-stone scatter into per-distance planes
-// (stones x area), each cell's level from a prefix walk, and the SAME t-hash
-// pyramid as emptyExpand run only to the deepest level any cell reached.
+// (stones x area), each cell's level from a prefix walk, and a t-hash
+// pyramid run only to the deepest level any cell reached.
 let _slCnt = null;        // (Rmax+1) x area stone counts by exact distance
 const _slRowD = new Int32Array(64), _slColD = new Int32Array(64);   // per-stone wrapped deltas
 const _listBuf = new Int32Array(64);        // list-term emission scratch
@@ -505,10 +393,18 @@ let _slDistN = 0;
 // under SL_MAX_PHASE, and outside that window the prepare exits before any
 // work, so mid- and endgame positions pay nothing.
 const SL_MAX_PHASE = 0.1;
+// Training-time dropout: within the phase<SL_MAX_PHASE window, keep stoneLimit
+// active for only this fraction of positions (1 = always, the inference/eval
+// default).  The featurepol trainer lowers it (setStoneLimitTrainKeep) so the
+// shared features can't co-adapt to a memorising opening feature and its noisy
+// opening keys steer fewer self-play games.  The window is unchanged — this is
+// a coin flip inside it, not a wider/narrower gate.
+let _slTrainKeep = 1;
 
 function _slPrepare(ctx, limit, st) {
   const game = ctx.game, N = game.N, area = N * N, cur = ctx.cur;
-  st.active = (1 - game.emptyCount / area) < SL_MAX_PHASE;
+  st.active = (1 - game.emptyCount / area) < SL_MAX_PHASE
+              && (_slTrainKeep >= 1 || Math.random() < _slTrainKeep);
   if (!st.active) return;
   const cells = game.cells, nn = ctx.nearNbr, stride = ctx.nearStride;
   const Rmax = (N >> 1) * 2;
@@ -952,9 +848,8 @@ function _makeTerm(str) {
     }
     case 'stoneLimit': {
       // The largest diamond holding at most N stones, hashed at its reached
-      // level; a reached-level thermometer stacks and gates like
-      // emptyExpand's.  N is semantic (patterns mean "<= N stones"), so it
-      // stays in the salts.
+      // level; a reached-level thermometer stacks alongside it.  N is semantic
+      // (patterns mean "<= N stones"), so it stays in the salts.
       if (param === null || param < 0 || param > 8) throw new Error(`featurepol: stoneLimit<N> needs a stone limit N in 0..8, got "${str}"`);
       {
         maxNear = 4;
@@ -975,49 +870,6 @@ function _makeTerm(str) {
                     salt: _hashStr(`_stoneLimitThermometer${param}`),
                     cumulative: true, maxLevel: 0, maxNear: 4, needsLadder: false,
                     prepare: sh.prepare, sizeFn: (ctx, idx) => st.active ? st.depth[idx] : 0 };
-      }
-      break;
-    }
-    case 'emptyExpand': {
-      // Adaptive-diamond opening shape: the smallest L1 diamond around the move
-      // that is NOT completely empty, radius capped at R, hashed with the
-      // stones12b recursion — invariant by construction, so no canonicalisation
-      // cap; each extra level is one more O(area) prepare pass.  Expansion
-      // happens exactly while the pattern carries no information, so the key
-      // always describes a region whose outer shell holds the nearest stones.
-      // The level is folded into the key; an all-empty radius-R diamond is one
-      // shared key.  A descriptor — all work is in prepare, one read per move.
-      if (param === null || param === 1) throw new Error(`featurepol: emptyExpand<R> needs a max radius R >= 2, or 0 = board maximum, got "${str}"`);
-      {
-        maxNear = 4;
-        // R is NOT part of the key namespace: the salts hash 'emptyExpand' /
-        // '_emptyExpandThermometer' with the R stripped (the space salt strips it too, in
-        // parseSpec), so retraining with a different R keeps every weight the
-        // two caps agree on — pattern levels up to min(Rold, Rnew) and the
-        // thermometer below it; only the deeper levels and the all-empty key
-        // (whose VALUE folds R+1) orphan.  Corollary: two emptyExpand terms
-        // with different R in one spec would silently share a memo slot, so
-        // parseSpec forbids that.
-        salt = _hashStr('emptyExpand');
-        const sh = _eeShared(param), st = sh.st;
-        prepare = sh.prepare;
-        evalFn = (ctx, idx) => st.key[idx];
-        // The stack: emptyExpand's second key family — a thermometer over the
-        // fully-empty levels (size = reached level − 1, R when empty through
-        // R), one shared weight per "the radius-j diamond was empty", emitted
-        // additively alongside the pattern key.  parseSpec registers it as its
-        // own weight space.  Same prepare object, so the identity-dedupe runs
-        // the computation once; depth 0 emits nothing (the gated-event
-        // reference: stones already adjacent).
-        // gatesHost: the depth slot also gates the pattern space, so a move
-        // whose level-1 diamond already holds a stone (depth 0) emits NOTHING
-        // from emptyExpand — the 4-informative-cell level-1 pattern carries
-        // almost no information, and absence is the gated-event reference.
-        // The minimum emission is therefore the 12-cell level-2 pattern.
-        stacked = { str: `_emptyExpandThermometer${param}`, saltStr: '_emptyExpandThermometer',
-                    salt: _hashStr('_emptyExpandThermometer'),
-                    cumulative: true, maxLevel: param, maxNear: 4, needsLadder: false,
-                    prepare: sh.prepare, sizeFn: (ctx, idx) => st.depth[idx], gatesHost: true };
       }
       break;
     }
@@ -1306,9 +1158,8 @@ function parseSpec(specStr) {
     if (slot === undefined) { slot = computers.length; slotOf.set(t.salt, slot); computers.push(t.cumulative ? t.sizeFn : t.evalFn); }
     return slot;
   }
-  const stackedTerms = [];    // synthetic companion terms (emptyExpand's depth thermometer), deduped by salt
+  const stackedTerms = [];    // synthetic companion terms (a feature's depth thermometer), deduped by salt
   let boardMaxSpaces = 0;     // spaces whose key count resolves at createState (board maximum)
-  let eeR = null;             // the one emptyExpand R this spec may use (R-free salts share slots)
   for (const spaceStr of str.split(',').map(s => s.trim()).filter(Boolean)) {
     const terms = spaceStr.split('+').map(t => t.trim()).filter(Boolean).map(_makeTerm);
     if (terms.length === 0) throw new Error(`featurepol: empty feature space in "${spaceStr}"`);
@@ -1332,11 +1183,6 @@ function parseSpec(specStr) {
       continue;
     }
     for (const t of terms) {
-      if (t.kind === 'emptyExpand') {
-        if (eeR !== null && t.param !== eeR)
-          throw new Error(`featurepol: one spec cannot mix emptyExpand radii (${eeR} and ${t.param}) — the R-free salts would share a memo slot`);
-        eeR = t.param;
-      }
       if (t.needsLadder) needsLadder = true;
       if (t.maxNear > nearMax) nearMax = t.maxNear;
       const slot = slotFor(t);
@@ -1344,26 +1190,17 @@ function parseSpec(specStr) {
       if (t.cumulative)       { gate.push(slot); cumTerms.push({ salt: t.salt, slot, maxLevel: t.maxLevel, oneHot: t.oneHot }); }
       else if (t.binary)      { gate.push(slot); baseTerms.push({ salt: t.salt, slot, bin: true }); }
       else                    { baseTerms.push({ salt: t.salt, slot, bin: false }); }
-      if (t.stacked) {
-        if (!stackedTerms.some(s => s.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
-        // A stacked term may gate its host's space too (emptyExpand: the
-        // pattern key is emitted only when the depth slot is >= 1, i.e. the
-        // move actually expanded).  slotFor is idempotent by salt, so the
-        // synthetic-space loop below reuses this slot.
-        if (t.stacked.gatesHost) gate.push(slotFor(t.stacked));
-      }
+      if (t.stacked && !stackedTerms.some(s => s.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
     }
     let maxKeys = 1;
     for (const c of cumTerms) maxKeys *= (c.oneHot ? 1 : c.maxLevel);
     const usesRank = terms.some(t => t.prepare && t.prepare._isRank);
-    // The space salt strips emptyExpand's R (matching its R-free term salt),
-    // so a retrain at a different R lands on the same weight space.
-    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr.replace(/emptyExpand\d+/g, 'emptyExpand')),
+    spaces.push({ str: spaceStr, salt: _hashStr('space:' + spaceStr),
                   gate, baseTerms, cumTerms, maxKeys, usesRank });
   }
   // A keyword is not limited to one key family: `stacked` is an additional
-  // weight space the keyword emits into (emptyExpand's per-level emptiness
-  // thermometer, 0..R keys per move) alongside whatever its host space emits.
+  // weight space the keyword emits into (a per-level thermometer, e.g.
+  // stoneLimit's, 0..N keys per move) alongside whatever its host space emits.
   // Its prepare is the parent term's object, so the includes() dedupe above
   // already covered it.  maxLevel 0 = board maximum: the size values the
   // prepare produces are already capped at the board's largest L1 distance, so
@@ -1443,7 +1280,7 @@ function createState(N, spec) {
   spec = parseSpec(spec);
   const cap = N * N;
   // Upper bound on keys emitted per move; a board-maximum thermometer space
-  // (emptyExpand0) contributes its resolved depth here, N finally being known.
+  // (a list term's) contributes its resolved depth here, N finally being known.
   const maxK = spec.maxKeysPerMove + spec.boardMaxSpaces * ((N >> 1) * 2);
   // Toroidal nearest-cell table: nearNbr[idx*stride + k] = flat index of the k-th
   // nearest cell to idx.  The stride is sized to the spec's actual reach (the max
@@ -1978,6 +1815,7 @@ const FeaturePol = {
   _setRankAllow: (set) => { _rankAllow = set; },
   setRankTopN: (n) => { _rankTopN = n | 0; },
   setRankPositionRatio: (p) => { _rankPosRatio = p; },
+  setStoneLimitTrainKeep: (p) => { _slTrainKeep = p; },
   getRankPositionRatio: () => _rankPosRatio,
   getRankTopN: () => _rankTopN,
 };
