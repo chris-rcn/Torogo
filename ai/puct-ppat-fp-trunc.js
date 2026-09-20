@@ -135,11 +135,21 @@ function create(cfg) {
   // pre-2026-09-10 method: descend until the net empty count has dropped by
   // that much, which captures push further away.
   const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
-  // Truncation gate (hard cliff): a playout truncates (substitutes the vpat
-  // value) iff the endpoint phase (leaf + delta) is below this; at or above it
-  // the playout runs to the end (late playouts are short and nearly exact, so
-  // substitution there is pure downside).
+  // Gate B: the endpoint phase below which the deployed evaluator is trusted.
+  // With root-decision truncation it no longer gates individual playouts; it
+  // only supplies the default TRUNC_ROOT_PHASE below.
   const TRUNC_MAX_PHASE_B = cfg.float('TRUNC_MAX_PHASE_B', 0.55);   // champion gate
+  // Root-decision truncation: the whole decision truncates (every playout
+  // substitutes the vpat value at its prefix endpoint) iff the ROOT phase is
+  // below this; otherwise every playout runs full.  Deciding once at the root
+  // keeps a search self-consistent — no truncated/full mix within one tree, so
+  // no per-leaf gate seam.  Default B - delta puts the shallowest possible
+  // endpoint (root + delta) at the gate B; a lower value leaves a margin against
+  // deeper leaves overshooting B.
+  const TRUNC_ROOT_PHASE = cfg.has('TRUNC_ROOT_PHASE') ? cfg.float('TRUNC_ROOT_PHASE', 0)
+                         : TRUNC_MAX_PHASE_B - TRUNC_PHASE_DELTA;
+  // Set per decision in runSearch: rootPhase < TRUNC_ROOT_PHASE.
+  let _truncActive = false;
 
   // Static evaluator weights (the model itself was loaded up top so its baked
   // truncation defaults could feed the knobs above).
@@ -155,7 +165,7 @@ function create(cfg) {
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
-    `trunc-max-phase: ${TRUNC_MAX_PHASE_B}`);
+    `trunc-max-phase: ${TRUNC_MAX_PHASE_B}, trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}${cfg.has('TRUNC_ROOT_PHASE') ? '' : ' (=B-delta)'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -218,10 +228,10 @@ function create(cfg) {
     return state;
   }
 
-  // ppat-policy playout from `game2` (mutates it), truncated: after the
-  // turn's fixed prefix length in moves, a position still below
-  // TRUNC_MAX_PHASE_B returns the static vpatterns value; otherwise the playout
-  // runs to the end.  Fills `played` (pre-zeroed by the caller) with the
+  // ppat-policy playout from `game2` (mutates it), truncated: when this decision
+  // is truncating (root phase below TRUNC_ROOT_PHASE), after the turn's fixed
+  // prefix length in moves it returns the static vpatterns value; otherwise the
+  // playout runs to the end.  Fills `played` (pre-zeroed by the caller) with the
   // colour-signed first-occupancy RAVE trace.  Returns P(BLACK wins) — a
   // fraction at a truncation, {0,1} at the end of a full playout.
   function playout(game2, played, rng) {
@@ -238,12 +248,11 @@ function create(cfg) {
     // dropped by that much, which captures push further away.
     const truncMoves = _prefixLen;
     const truncEmpty = game2.emptyCount - _prefixLen;
-    // Hard gate, decided up front from the leaf: truncate iff the endpoint phase
-    // is below TRUNC_MAX_PHASE_B.  The endpoint phase is the leaf's plus the
-    // prefix — exact under FULLNESS (the trigger fires at precisely that empty
-    // count), an upper bound under MOVES when the prefix captures.
-    const epPhase = (cap - (game2.emptyCount - truncMoves)) / cap;
-    const truncArmed = epPhase < TRUNC_MAX_PHASE_B;
+    // Root-decision truncation: whether this decision truncates was decided once
+    // from the root phase (runSearch, TRUNC_ROOT_PHASE).  Every playout in a
+    // truncating decision substitutes the vpat value at its prefix endpoint,
+    // wherever that endpoint's phase lands.
+    let truncArmed = _truncActive;
 
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
@@ -484,6 +493,9 @@ function create(cfg) {
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
+    // Root-decision truncation: this decision truncates iff the root phase is
+    // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout.
+    _truncActive = (1 - game2.emptyCount / (N * N)) < TRUNC_ROOT_PHASE;
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
