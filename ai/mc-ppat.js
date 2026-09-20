@@ -79,10 +79,6 @@
 //                 pure static vpat evaluation.  With TRUNC_VPAT_DATA set and no
 //                 delta from either source the agent throws.
 //   TRUNC_MAX_PHASE_B gate bound on the truncated ENDPOINT (default 0.55)
-//   TRUNC_VALUE_OFFSET "a,b": measured lean correction, applied as a logit
-//                 shift 4*(a + b*ph) at the endpoint phase; overrides the
-//                 model file's baked 'trunc.offset' (default: model's, else
-//                 0,0 — offsets are per (model, delta, band) and never transfer)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -131,13 +127,13 @@ function create(cfg) {
   }
 
   // Truncation is ON when a vpat evaluator is specified (TRUNC_VPAT_DATA);
-  // absent = plain full playouts.  delta and offset come from the env vars,
-  // else the model file's baked 'trunc' block (train-vpat-playout-eval writes
-  // it).  VPAT_PICK also uses the evaluator, so it requires TRUNC_VPAT_DATA too.
+  // absent = plain full playouts.  delta comes from the env var, else the model
+  // file's baked 'trunc' block (train-vpat-playout-eval writes it).  VPAT_PICK
+  // also uses the evaluator, so it requires TRUNC_VPAT_DATA too.
   const TRUNC_VPAT = cfg.str('TRUNC_VPAT_DATA', '');
   const TRUNC_ON   = TRUNC_VPAT !== '';
   const TRUNC_B    = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
-  let vpatModel = null, TRUNC_DELTA = 0, VO_A = 0, VO_B = 0, _deltaSrc = '', _voSrc = '';
+  let vpatModel = null, TRUNC_DELTA = 0, _deltaSrc = '';
   if (TRUNC_ON || VPAT_PICK) {
     if (VPAT_PICK && !TRUNC_ON) {
       throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: VPAT_PICK needs TRUNC_VPAT_DATA (the evaluator it picks with)`);
@@ -157,12 +153,6 @@ function create(cfg) {
     if (TRUNC_DELTA < 0) {
       throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_PHASE_DELTA must be >= 0 (got ${TRUNC_DELTA})`);
     }
-    // offset: env override, else the model's baked offset, else none.
-    if (cfg.has('TRUNC_VALUE_OFFSET')) {
-      const vo = cfg.str('TRUNC_VALUE_OFFSET', '0,0').split(',').map(parseFloat); VO_A = vo[0]; VO_B = vo[1] || 0; _voSrc = 'env';
-    } else if (Array.isArray(tm.offset)) {
-      VO_A = tm.offset[0]; VO_B = tm.offset[1] || 0; _voSrc = 'model';
-    }
   }
   console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
@@ -172,18 +162,14 @@ function create(cfg) {
               (VPAT_PICK ? `  vpat-pick below the gate` : '') +
               (FP_GAP_SKIP > 0 ? `  gap-skip>${FP_GAP_SKIP}` : '') +
               (VOTE_BLOCK > 0 ? `  seq-vote block=${VOTE_BLOCK} z=${VOTE_Z}` : '') +
-              (TRUNC_ON ? `  trunc: delta=${TRUNC_DELTA}${_deltaSrc === 'model' ? '(model)' : ''} B=${TRUNC_B} ` +
-                          `offset=${VO_A},${VO_B}${_voSrc === 'model' ? '(model)' : ''}` : ''));
+              (TRUNC_ON ? `  trunc: delta=${TRUNC_DELTA}${_deltaSrc === 'model' ? '(model)' : ''} B=${TRUNC_B}` : ''));
 
   const rng = makeRng();
   let ppatState = null;
 
-  // vpat value at a truncation point, offset-corrected: P(BLACK wins).
+  // vpat value at a truncation point: P(BLACK wins).
   function vpatValueB(g) {
-    const f = VPat.extractFeatures(g, vpatModel.preparedSpecs);
-    VPat.evaluateFeatures(f, vpatModel.weights);
-    const ph = 1 - g.emptyCount / (g.N * g.N);
-    return 1 / (1 + Math.exp(-(f.z - 4 * (VO_A + VO_B * ph))));
+    return VPat.evaluateFeatures(VPat.extractFeatures(g, vpatModel.preparedSpecs), vpatModel.weights);
   }
 
   // ppat playout (mutates game2).  Returns P(BLACK wins): 1/0 from the

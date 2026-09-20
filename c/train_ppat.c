@@ -21,8 +21,8 @@
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
  *                           moves, if the phase there is <= --trunc-max-phase
  *                           (default 0.55, the deployed gate) the rollout stops
- *                           and z becomes this vpat evaluator's offset-corrected
- *                           value; a cut past the gate runs full as before.
+ *                           and z becomes this vpat evaluator's value; a cut past
+ *                           the gate runs full as before.
  *                           Makes an early band mouth affordable: playout cost
  *                           becomes delta*area moves + one eval, flat in the
  *                           mouth's phase, with the evaluator confined to the
@@ -34,12 +34,6 @@
  *                           to the model file's baked delta (trunc.delta) when
  *                           omitted; required if the model has none.
  *     --trunc-max-phase <f> the gate B (default 0.55)
- *     --trunc-offset a,b    TRUNC_VALUE_OFFSET pair, applied at the eval phase.
- *                           Defaults to the offset baked into the model file
- *                           (trunc.offset), valid only when --trunc-delta equals
- *                           the model's baked delta — offsets are per (model,
- *                           delta, band) and never transfer.  Required when the
- *                           model has no baked offset or the deltas differ.
  *     --match-phases A,B    directWR match band (default 0.6,1): inside [A, B]
  *                           each side plays its own weights; outside, BOTH
  *                           sides play reference moves, so games differ only
@@ -259,18 +253,14 @@ static int    cfg_workers;
 
 /* Truncated training rollouts (--trunc-vpat + friends): after ceil(delta *
  * area) moves, if the phase there is <= trunc-max-phase the rollout stops and
- * z becomes the offset-corrected vpat value — the same estimator deployment
- * trusts, gated to the same band (the evaluator is never consulted past B; a
- * rollout whose cut overshoots the gate just runs to the end as before).
- * Offsets are per (model, delta, band) and never transfer, so --trunc-offset
- * defaults to the model file's baked offset only when --trunc-delta matches the
- * model's baked delta; otherwise it must be given explicitly. */
+ * z becomes the vpat value — the same estimator deployment trusts, gated to the
+ * same band (the evaluator is never consulted past B; a rollout whose cut
+ * overshoots the gate just runs to the end as before).  --trunc-delta defaults
+ * to the model file's baked delta when omitted. */
 static int    cfg_trunc_on;
 static float  cfg_trunc_delta;
 static float  cfg_trunc_max_phase;
-static float  cfg_trunc_off_a, cfg_trunc_off_b;
 static int    cfg_trunc_delta_from_model;  /* delta defaulted from the model's baked trunc block, not --trunc-delta */
-static int    cfg_trunc_off_from_model;    /* offset came from the model's baked trunc block, not --trunc-offset */
 static const char *cfg_trunc_vpat = "";
 static int    cfg_init_from_next;
 static float  cfg_init_phase_scale = 1.0f;
@@ -829,14 +819,9 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
             const float area = (float)(sim.N * sim.N);
             const float ph = 1.0f - (float)sim.empty_count / area;
             if (ph <= cfg_trunc_max_phase) {
-                /* Evaluate here.  The offset is applied exactly as deployment
-                 * does (puct-ppat-fp-trunc): SUBTRACTED in logit space scaled
-                 * by 4 (the sigmoid slope at 1/2), v = sigma(z - 4*(a+b*ph)) —
-                 * so fitted TRUNC_VALUE_OFFSET pairs transfer verbatim.  Then
-                 * mapped to the rollout's [-1, 1] convention. */
-                const double zv = vpat_evaluate_z(&sim)
-                                - 4.0 * (double)(cfg_trunc_off_a + cfg_trunc_off_b * ph);
-                float v = (float)(1.0 / (1.0 + exp(-zv)));
+                /* Evaluate here, exactly as deployment does (puct-ppat-fp-trunc):
+                 * v = sigma(z), mapped to the rollout's [-1, 1] convention. */
+                float v = (float)(1.0 / (1.0 + exp(-vpat_evaluate_z(&sim))));
                 if (player != BLACK) v = 1.0f - v;
                 if (out_steps) *out_steps = steps;
                 return 2.0f * v - 1.0f;
@@ -1659,11 +1644,10 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
         printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
                cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
     if (cfg_trunc_on)
-        printf("          trunc vpat %s, delta %g%s, max-phase %g, offset %g,%g%s\n",
+        printf("          trunc vpat %s, delta %g%s, max-phase %g\n",
                cfg_trunc_vpat, (double)cfg_trunc_delta,
                cfg_trunc_delta_from_model ? " (model)" : "",
-               (double)cfg_trunc_max_phase, (double)cfg_trunc_off_a, (double)cfg_trunc_off_b,
-               cfg_trunc_off_from_model ? " (model)" : "");
+               (double)cfg_trunc_max_phase);
 
     /* The run line carries the only mode-specific facts: worker count, plus the
      * seed (solo, replayable) or a monitor tag (parallel). */
@@ -1959,12 +1943,9 @@ static void print_help(FILE *out, const char *prog) {
 "Truncated rollouts (affordable early-band training)\n"
 "  --trunc-vpat PATH          after ceil(delta*area) moves, if phase there is <=\n"
 "                             the gate B the rollout stops and z becomes this vpat\n"
-"                             evaluator's offset-corrected value; a cut past B runs\n"
-"                             full.  Applies to train AND test rollouts.\n"
+"                             evaluator's value; a cut past B runs full.  Applies\n"
+"                             to train AND test rollouts.\n"
 "  --trunc-delta F            cut distance in phase units (default: the model's baked delta)\n"
-"  --trunc-offset a,b         TRUNC_VALUE_OFFSET applied at the eval phase; defaults to\n"
-"                             the model's baked offset when --trunc-delta matches its\n"
-"                             baked delta (per (model,delta,band), never transfers)\n"
 "  --trunc-max-phase F        the gate B (default 0.55)\n"
 "\n"
 "Pattern features (all APPENDED blocks; --load of a model without them fine-tunes)\n"
@@ -2078,17 +2059,15 @@ int main(int argc, char **argv) {
         int delta_given     = has_flag(argc, argv, "--trunc-delta");
         cfg_trunc_delta     = get_float_arg(argc, argv, "--trunc-delta", 0.0f);
         cfg_trunc_max_phase = get_float_arg(argc, argv, "--trunc-max-phase", 0.55f);
-        const char *toff = get_str_arg(argc, argv, "--trunc-offset", NULL);
         if (tv) {
-            vpat_load(tv);              /* load first so the model's baked delta/offset are available */
+            vpat_load(tv);              /* load first so the model's baked delta is available */
             cfg_trunc_vpat = tv;
             cfg_trunc_on = 1;
-            double bd, ba, bb;
-            const int have_baked = vpat_trunc(&bd, &ba, &bb);
 
             /* Delta: an explicit --trunc-delta wins; otherwise default to the
              * model's baked delta (as the JS consumers do). */
-            if (!delta_given && have_baked) {
+            double bd;
+            if (!delta_given && vpat_trunc(&bd)) {
                 cfg_trunc_delta = (float)bd;
                 cfg_trunc_delta_from_model = 1;
             }
@@ -2097,36 +2076,8 @@ int main(int argc, char **argv) {
                                 "(%s has no baked trunc.delta to default from)\n", tv);
                 exit(1);
             }
-
-            /* Offset: an explicit --trunc-offset wins; otherwise fall back to the
-             * model's baked offset.  It was fitted at the model's baked delta, so
-             * it is valid only when this run's delta matches; offsets are per
-             * (model, delta, band) and never transfer across delta. */
-            if (toff) {
-                if (sscanf(toff, "%f,%f", &cfg_trunc_off_a, &cfg_trunc_off_b) != 2) {
-                    fprintf(stderr, "error: --trunc-offset must be a,b (two numbers)\n");
-                    exit(1);
-                }
-            } else {
-                if (!have_baked) {
-                    fprintf(stderr, "error: --trunc-vpat requires --trunc-offset a,b — %s has no "
-                                    "baked trunc.offset, and offsets are per (model, delta, band) "
-                                    "and never transfer, so there is no default\n", tv);
-                    exit(1);
-                }
-                if (fabsf((float)bd - cfg_trunc_delta) > 1e-4f) {
-                    fprintf(stderr, "error: %s baked its offset at delta %g, but --trunc-delta is %g; "
-                                    "offsets do not transfer across delta — pass --trunc-offset a,b "
-                                    "explicitly, or fit one at this delta\n",
-                            tv, bd, (double)cfg_trunc_delta);
-                    exit(1);
-                }
-                cfg_trunc_off_a = (float)ba;
-                cfg_trunc_off_b = (float)bb;
-                cfg_trunc_off_from_model = 1;
-            }
-        } else if (delta_given || toff || has_flag(argc, argv, "--trunc-max-phase")) {
-            fprintf(stderr, "error: --trunc-delta/--trunc-offset/--trunc-max-phase need --trunc-vpat\n");
+        } else if (delta_given || has_flag(argc, argv, "--trunc-max-phase")) {
+            fprintf(stderr, "error: --trunc-delta/--trunc-max-phase need --trunc-vpat\n");
             exit(1);
         }
     }

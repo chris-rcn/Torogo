@@ -47,16 +47,13 @@ print, and each new best teMSE also writes the -best checkpoint.
                     pairs, adding b2 and bias columns — the truncation bias
                     floor E[b^2] and its shared lean, the deployment
                     quantities teMSE cannot see.  Reported only; -best
-                    stays teMSE-selected.  Also fits the offset line
-                    bias(ph) = a + b*ph over these pairs and writes it, with
-                    --delta, into every saved checkpoint's 'trunc' block
-                    (puct-ppat-fp-trunc reads it as a default, so
-                    score-bias-curve need not be run).  Requires --delta
-  --delta D         deployment truncation delta to measure the bias at and
-                    fit the offset for; the recorded prefixes are truncated
-                    to ceil(D*area) moves past the start.  The bias file's
-                    header delta is only its MAXIMUM; D must not exceed it.
-                    Required with --bias-file
+                    stays teMSE-selected.  Requires --delta
+  --delta D         deployment truncation delta: the bias is measured at it, and
+                    it is baked into every saved checkpoint's 'trunc' block (so
+                    puct-ppat-fp-trunc / mc-ppat read it as a default).  The
+                    recorded prefixes are truncated to ceil(D*area) moves past
+                    the start; the bias file's header delta is only its MAXIMUM,
+                    D must not exceed it.  Required with --bias-file
   --test-file F     data file supplying the held-out test set (band-filtered);
                     all of --data is the train pool.  This is the ONLY source of
                     the test set / teMSE — without --test-file there is none
@@ -121,14 +118,14 @@ if (opts['test-pos'] !== undefined && !opts['test-file']) {
   console.error('--test-pos requires --test-file (the test set comes only from --test-file)');
   process.exit(1);
 }
-// --delta D: the DEPLOYMENT truncation delta to measure the bias at and fit the
-// offset for.  The bias artifact is emitted at a MAXIMUM delta (its header); any
-// D up to that is valid — the recorded prefixes are truncated to ceil(D*area)
-// moves past the start, exactly as score-bias-curve --delta and the deployed
-// agent do.  Required with --bias-file; the fitted offset is stamped with D.
+// --delta D: the DEPLOYMENT truncation delta to measure the bias at, and to bake
+// into saved checkpoints' 'trunc' block.  The bias artifact is emitted at a
+// MAXIMUM delta (its header); any D up to that is valid — the recorded prefixes
+// are truncated to ceil(D*area) moves past the start, exactly as the deployed
+// agent does.  Required with --bias-file.
 const DELTA = opts.delta !== undefined ? parseFloat(opts.delta) : null;
 if (opts['bias-file'] && DELTA === null) {
-  console.error("--bias-file requires --delta: the deployment delta to measure and fit the offset at " +
+  console.error("--bias-file requires --delta: the deployment delta to measure the bias at " +
                 "(the bias file's header delta is only its maximum)");
   process.exit(1);
 }
@@ -451,27 +448,10 @@ function biasStats() {
   return { b2: prod / biasPairs.length, lean: lean / biasPairs.length };
 }
 
-// The truncation offset for the CURRENT weights: an OLS line bias(ph) = a + b*ph
-// over the loaded bias pairs (rescored at --delta, filtered to the training band,
-// which by the band-matching convention is the deployed band).  Written into
-// every saved checkpoint's 'trunc' block with DELTA, so puct-ppat-fp-trunc reads
-// (delta, offset) as defaults and score-bias-curve never has to be run.
-function fitTrunc() {
-  if (!biasPairs || DELTA === null || biasPairs.length === 0) return null;
-  const evalW = saveEvalW();
-  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (const rec of biasPairs) {
-    const v1 = evaluateFeatures(rec.f1, evalW);
-    const v2 = evaluateFeatures(rec.f2, evalW);
-    const y = (v1 + v2) / 2 - (rec.pa + rec.pb) / 2;   // this pair's lean at rec.ph
-    n++; sx += rec.ph; sy += y; sxx += rec.ph * rec.ph; sxy += rec.ph * y;
-  }
-  const denom = n * sxx - sx * sx;
-  // Degenerate phase spread (all pairs at one phase): fit a flat offset.
-  const b = denom > 1e-12 ? (n * sxy - sx * sy) / denom : 0;
-  const a = (sy - b * sx) / n;
-  return { delta: DELTA, offset: [+a.toFixed(3), +b.toFixed(3)] };
-}
+// Truncation delta baked into every saved checkpoint's 'trunc' block (from
+// --delta), so consumers (puct-ppat-fp-trunc, mc-ppat) read it as a default.
+// undefined when --delta was not given.
+const TRUNC_META = DELTA !== null ? { delta: DELTA } : undefined;
 
 function testMSE() {
   if (testRecs.length === 0) return null;
@@ -690,11 +670,10 @@ function statusPrint() {
   if (mdRms !== null) cols.push(Util.fmtRatio4(mdRms));
   printRow(cols);
 
-  // Fit the truncation offset for the just-saved weights and bake it in, so the
-  // model file carries its own (delta, offset) defaults (no score-bias-curve run).
-  const trunc = fitTrunc();
-  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc });
-  if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc });
+  // Bake the deployment delta (--delta) into the checkpoint so consumers read
+  // it as a default.
+  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META });
+  if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META });
   nextPrintPos = Math.max(Math.ceil(nPos * 1.5), nPos + 1);
   nextPrintAt  = Date.now() + MAX_PRINT_GAP_MS;
 }

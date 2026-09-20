@@ -942,15 +942,12 @@ function saveWeights(filePath, model) {
                 `stoneSalt: ${h.stoneSalt}, ` +
                 `bias: ${h.bias}, nWeights: ${h.weights.size} }`;
   }
-  // Truncation defaults for consumers (puct-ppat-fp-trunc): the matched
-  // (delta, offset) pair from score-bias-curve --write, so a model carries its
-  // own inference config instead of it being passed alongside every time.  The
-  // offset is per (model, delta, band); the stored pair assumes the deployed
-  // band, and an explicit env var still overrides it.
+  // Truncation default for consumers (puct-ppat-fp-trunc, mc-ppat): the delta
+  // the model was fitted for, so a model carries its own inference config
+  // instead of it being passed alongside every time.  An env var still overrides.
   let truncStr = '';
-  if (model.trunc && Array.isArray(model.trunc.offset)) {
-    const t = model.trunc;
-    truncStr = `, trunc: { delta: ${t.delta}, offset: [${t.offset[0]}, ${t.offset[1]}] }`;
+  if (model.trunc && model.trunc.delta != null) {
+    truncStr = `, trunc: { delta: ${model.trunc.delta} }`;
   }
   const pairs = [];
   model.weights.forEach((k, v) => pairs.push(`[${k},${+v.toFixed(6)}]`));

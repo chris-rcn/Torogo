@@ -90,8 +90,8 @@ function create(cfg) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
       (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
   }
-  // Truncation defaults baked into the model by score-bias-curve --write:
-  // { delta, offset: [a, b] }.  A matching env var still overrides.
+  // Truncation default baked into the model file: { delta }.  An env var
+  // (TRUNC_PHASE_DELTA) still overrides.
   const _truncMeta = (_vpatRaw && _vpatRaw.trunc) || {};
 
   // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
@@ -137,10 +137,7 @@ function create(cfg) {
   // MOVES, ceil(TRUNC_PHASE_DELTA * area), so every truncated playout goes the
   // same distance whatever it captures.  LEGACY_PHASE_DELTA=true restores the
   // pre-2026-09-10 method: descend until the net empty count has dropped by
-  // that much, which captures push further away.  The two put the endpoint in
-  // different places, so TRUNC_VALUE_OFFSET is fitted per method and does NOT
-  // transfer between them — set this to match the artifact the model's offset
-  // was fitted on.
+  // that much, which captures push further away.
   const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
   // Gate ramp: truncation probability is 1 at or below _A, 0 at or above _B,
   // linear between (drawn once per playout, anchored on the leaf — the
@@ -166,34 +163,6 @@ function create(cfg) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
       `TRUNC_MAX_PHASE_A (${_gateARaw || TRUNC_MAX_PHASE}) must be 'auto' or a number <= TRUNC_MAX_PHASE_B (${TRUNC_MAX_PHASE_B})`);
   }
-  // Measured deployment correction for the truncated evals (step 2 of the
-  // komi/bias program): the evaluator's lean vs the deployed playout
-  // currency, as a linear function of the EVAL-POINT phase — measured per
-  // model by measure-trunc-bias / score-bias-curve.  "a,b" means
-  // offset(ph) = a + b*ph in win-probability units; it is applied as a
-  // LOGIT shift (4*offset, the slope match at v = 0.5), whose natural
-  // attenuation at extreme values matches the komi effect shrinking in
-  // decided positions.
-  // Resolution order: env var (an explicit empty string DISABLES the offset,
-  // overriding a model default), else the model file's baked offset, else the
-  // champion default 0.077,-0.023.
-  let VO_A = 0, VO_B = 0, VO_ON = false, _voFromModel = false;
-  if (cfg.has('TRUNC_VALUE_OFFSET')) {
-    const _voRaw = cfg.str('TRUNC_VALUE_OFFSET', '');
-    if (_voRaw !== '') {
-      const parts = _voRaw.split(',').map(parseFloat);
-      if (parts.length < 1 || parts.length > 2 || parts.some(x => !Number.isFinite(x))) {
-        throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-          `TRUNC_VALUE_OFFSET must be "a" or "a,b" (offset = a + b*phase), got "${_voRaw}"`);
-      }
-      VO_A = parts[0]; VO_B = parts.length === 2 ? parts[1] : 0; VO_ON = true;
-    }
-  } else if (Array.isArray(_truncMeta.offset)) {
-    VO_A = _truncMeta.offset[0]; VO_B = _truncMeta.offset[1] || 0; VO_ON = true; _voFromModel = true;
-  } else {
-    VO_A = 0.077; VO_B = -0.023; VO_ON = true;   // champion default offset
-  }
-
   // Ramp start used by playout(); in auto mode runSearch refreshes it per
   // decision from the root position.
   let _gateA = TRUNC_MAX_PHASE_A;
@@ -214,17 +183,11 @@ function create(cfg) {
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-max-phase: ` +
     (GATE_A_AUTO ? `auto(mid(root+delta,B))..${TRUNC_MAX_PHASE_B} (ramp)`
      : TRUNC_MAX_PHASE_A === TRUNC_MAX_PHASE_B ? `${TRUNC_MAX_PHASE_A}`
-     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`) +
-    (VO_ON ? `, trunc-value-offset: ${VO_A}${VO_B !== 0 ? `${VO_B >= 0 ? '+' : ''}${VO_B}*ph` : ''}${_voFromModel ? ' (model)' : ''}` : ''));
+     : `${TRUNC_MAX_PHASE_A}..${TRUNC_MAX_PHASE_B} (ramp)`));
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
-    const f = VPat.extractFeatures(game2, _vpatModel.preparedSpecs);
-    const v = VPat.evaluateFeatures(f, _vpatModel.weights);
-    if (!VO_ON) return v;
-    const cap = game2.N * game2.N;
-    const ph = (cap - game2.emptyCount) / cap;
-    return 1 / (1 + Math.exp(-(f.z - 4 * (VO_A + VO_B * ph))));
+    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs), _vpatModel.weights);
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
