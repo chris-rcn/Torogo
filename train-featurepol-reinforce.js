@@ -20,7 +20,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'ladder-file', 'md-file', 'load', 'max-weights', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'max-weights', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -54,6 +54,13 @@ if (opts.help || (!opts.spec && !opts.load)) {
                     feature dropout — positions without the crutch keep the
                     other features earning gradient (measured 2026-09: same
                     eval strength, maxP ~0.76, and faster per game).
+  --sl-train-keep K  keep prob for the stoneLimit feature within its phase<0.1
+                    window during SELF-PLAY (default 0.5; eval/inference use 1).
+                    Same feature-dropout idea as --rank-pos-ratio: stoneLimit's
+                    large-diamond opening keys memorise and, undropped, corrupt
+                    the opening and starve the shared features.  The window is
+                    unchanged — this is a coin flip inside phase<0.1, not a
+                    wider/narrower gate.
   --komi K          'auto' (default) runs a controller that steps the SELF-PLAY
                     komi by +/-1 every 500 games while black's win share sits
                     outside [0.45, 0.55], keeping the training signal balanced;
@@ -99,6 +106,9 @@ const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '0', 10);
 // Self-play may compute the rank feature in only a fraction of positions; eval always uses
 // the feature, since that is how the policy would be deployed.
 const RANK_POS_RATIO = opts['rank-pos-ratio'] !== undefined ? parseFloat(opts['rank-pos-ratio']) : 1;
+// stoneLimit training dropout: keep it active for this fraction of self-play
+// positions within its phase<0.1 window (eval and inference always use 1).
+const SL_TRAIN_KEEP = opts['sl-train-keep'] !== undefined ? parseFloat(opts['sl-train-keep']) : 0.5;
 
 // Komi.  Default: auto — a controller that steps the TRAIN_SIZE komi by +/-1
 // every KOMI_WINDOW (500) self-play games while black's win share sits outside
@@ -177,12 +187,9 @@ if (loaded) {
   // specs resume with its trained weights; CLI-only spaces start at 0; saved-only
   // spaces are dropped (their imported weights are never regenerated under the new
   // spec, so they sit unused).
-  // Synthetic spaces (emptyExpand's internal depth thermometer) track their
+  // Synthetic spaces (a feature's internal depth thermometer) track their
   // parent term and are not part of the user's spec — keep them out of the diff.
-  // Weight carry-over follows the SALTS, which strip emptyExpand's radius, so
-  // the diff compares the same normalized spelling: emptyExpand5 -> emptyExpand0
-  // is a kept space (radius change), not a remove+add.
-  const spaceId = s => s.str.replace(/emptyExpand\d+/g, 'emptyExpand');
+  const spaceId = s => s.str;
   const cliSpaces   = new Set(weights.spec.spaces.filter(s => !s.synthetic).map(spaceId));
   const savedSpaces = new Set(loaded.weights.spec.spaces.filter(s => !s.synthetic).map(spaceId));
   const kept    = [...cliSpaces].filter(s => savedSpaces.has(s));
@@ -405,6 +412,10 @@ if (RANK_POS_RATIO < 1) {
   FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
   console.log(`rank-pos-ratio=${RANK_POS_RATIO} (self-play positions using the rank feature; eval uses 1)`);
 }
+FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
+if (SL_TRAIN_KEEP < 1) {
+  console.log(`sl-train-keep=${SL_TRAIN_KEEP} (self-play keep prob for stoneLimit within phase<0.1; eval/inference use 1)`);
+}
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
@@ -474,6 +485,7 @@ while (true) {
       setKomi(EVAL_SIZE, EVAL_KOMI);
       if (EVAL_RANK_TOPN > 0) FeaturePol.setRankTopN(EVAL_RANK_TOPN);
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(1);
+      if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
       while (evalGames < MAX_EVAL_GAMES && Date.now() - evalStart < evalBudget) {
@@ -482,6 +494,7 @@ while (true) {
       }
       if (EVAL_RANK_TOPN > 0) FeaturePol.setRankTopN(0);
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
+      if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
       setKomi(TRAIN_SIZE, trainKomi);
       // avg: rolling win ratio over the most recent half of all eval games.
       const avgHalf = Math.max(1, Math.floor(evalHistory.length / 2));
