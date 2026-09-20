@@ -20,7 +20,7 @@ const { Game2, PASS } = require('./game2.js');
 const VPat = require('./vpatterns.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'file', 'fit', 'bin', 'delta']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'write'], ['model', 'file', 'fit', 'bin', 'delta']);
 if (opts.help || !opts.model || !opts.file) {
   console.error(`Usage: node score-bias-curve.js --model <vpat.js> --file <bias-pairs.txt> [options]
 
@@ -42,8 +42,15 @@ return product) and varB (E[b2] - bias^2) per bin.
                  the natural fit band is [D, gate].  D=0 evaluates the start
                  itself.  Offsets are per (model, delta, band) — a D fitted
                  here pairs only with TRUNC_PHASE_DELTA=D
+  --write        stamp the fitted (delta, offset) into the model file as a
+                 'trunc' block, so puct-ppat-fp-trunc uses them as defaults.
+                 Requires --fit; the delta is --delta (else the artifact's own)
   --help         show this message`);
   process.exit(opts.help ? 0 : 1);
+}
+if (opts.write && opts.fit === undefined) {
+  console.error('--write requires --fit (the offset comes from the fitted line)');
+  process.exit(1);
 }
 const BIN = parseFloat(opts.bin || '0.05');
 if (!(BIN > 0 && BIN <= 0.5)) { console.error('--bin: bad width'); process.exit(1); }
@@ -130,5 +137,26 @@ if (FIT) {
   let maxResid = 0;
   for (const c of pts) maxResid = Math.max(maxResid, Math.abs(c.y - (a + slope * c.x)));
   console.log(`fit [${FIT[0]}, ${FIT[1]}] (${pts.length} bins, n-weighted)  maxResid: ${maxResid.toFixed(4)}`);
-  console.log(`TRUNC_VALUE_OFFSET=${a.toFixed(3)},${slope.toFixed(3)}`);
+  const offA = +a.toFixed(3), offB = +slope.toFixed(3);
+  console.log(`TRUNC_VALUE_OFFSET=${offA},${offB}`);
+
+  if (opts.write) {
+    // The stamped delta is the one the fit was performed at: --delta if given,
+    // else the artifact's own (from the '# bias-pairs: delta:' header).
+    let stampDelta = DELTA;
+    if (stampDelta === null) {
+      for (const line of fs.readFileSync(files[0], 'utf8').split('\n')) {
+        const m = line.match(/^#\s*bias-pairs:\s*delta:\s*([0-9.]+)/);
+        if (m) { stampDelta = parseFloat(m[1]); break; }
+      }
+    }
+    if (stampDelta === null || !(stampDelta >= 0)) {
+      console.error('--write: could not determine the fit delta — pass --delta explicitly'); process.exit(1);
+    }
+    // loadWeights returns everything saveWeights needs (specs/health/komi/weights);
+    // add the trunc block and round-trip the file (weights already 6-dp, idempotent).
+    model.trunc = { delta: stampDelta, offset: [offA, offB] };
+    VPat.saveWeights(opts.model, model);
+    console.log(`wrote trunc { delta: ${stampDelta}, offset: [${offA}, ${offB}] } to ${opts.model}`);
+  }
 }

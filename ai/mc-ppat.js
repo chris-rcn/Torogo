@@ -68,17 +68,21 @@
 //   PPAT_DATA     ppat weight file                 (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE  uniform playout moves below this board fullness
 //                 (default 0.6, matching the standard playout)
-//   TRUNC_PHASE_DELTA  optional truncation: a playout whose START phase ph
-//                 satisfies ph + delta <= TRUNC_MAX_PHASE_B stops after the
-//                 board fullness has gained delta and returns the vpat value
-//                 at the truncation point instead of playing out (other
-//                 playouts run to the end as usual).  0 = off (default);
-//                 when on, TRUNC_VPAT_DATA must load or the agent throws
-//   TRUNC_VPAT_DATA   vpatterns evaluator for the truncation point
+//   TRUNC_VPAT_DATA   vpatterns evaluator for the truncation point.  Its
+//                 PRESENCE turns truncation ON (absent = plain full playouts):
+//                 a playout whose START phase ph satisfies ph + delta <=
+//                 TRUNC_MAX_PHASE_B stops after the board fullness has gained
+//                 delta and returns the vpat value at the truncation point
+//                 instead of playing out (other playouts run to the end).
+//   TRUNC_PHASE_DELTA  truncation delta; overrides the model file's baked
+//                 'trunc.delta'.  0 is valid — truncate at the leaf, i.e. a
+//                 pure static vpat evaluation.  With TRUNC_VPAT_DATA set and no
+//                 delta from either source the agent throws.
 //   TRUNC_MAX_PHASE_B gate bound on the truncated ENDPOINT (default 0.55)
 //   TRUNC_VALUE_OFFSET "a,b": measured lean correction, applied as a logit
-//                 shift 4*(a + b*ph) at the endpoint phase (default 0,0 —
-//                 offsets are per (model, delta, band) and never transfer)
+//                 shift 4*(a + b*ph) at the endpoint phase; overrides the
+//                 model file's baked 'trunc.offset' (default: model's, else
+//                 0,0 — offsets are per (model, delta, band) and never transfer)
 
 const path = require('path');
 const Util = require('../util.js');
@@ -126,14 +130,39 @@ function create(cfg) {
       path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
   }
 
-  // Optional truncation (off unless TRUNC_PHASE_DELTA > 0).
-  const TRUNC_DELTA = cfg.float('TRUNC_PHASE_DELTA', 0);
-  const TRUNC_B     = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
-  let vpatModel = null, VO_A = 0, VO_B = 0;
-  if (TRUNC_DELTA > 0 || VPAT_PICK) {
-    vpatModel = VPat.loadWeights(cfg.str('TRUNC_VPAT_DATA', ''), cfg.str('HEALTH_DATA', ''));   // throws if unset/unloadable — no silent full-playout fallback
-    const vo = cfg.str('TRUNC_VALUE_OFFSET', '0,0').split(',').map(parseFloat);
-    VO_A = vo[0]; VO_B = vo[1];
+  // Truncation is ON when a vpat evaluator is specified (TRUNC_VPAT_DATA);
+  // absent = plain full playouts.  delta and offset come from the env vars,
+  // else the model file's baked 'trunc' block (train-vpat-playout-eval writes
+  // it).  VPAT_PICK also uses the evaluator, so it requires TRUNC_VPAT_DATA too.
+  const TRUNC_VPAT = cfg.str('TRUNC_VPAT_DATA', '');
+  const TRUNC_ON   = TRUNC_VPAT !== '';
+  const TRUNC_B    = cfg.float('TRUNC_MAX_PHASE_B', 0.55);
+  let vpatModel = null, TRUNC_DELTA = 0, VO_A = 0, VO_B = 0, _deltaSrc = '', _voSrc = '';
+  if (TRUNC_ON || VPAT_PICK) {
+    if (VPAT_PICK && !TRUNC_ON) {
+      throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: VPAT_PICK needs TRUNC_VPAT_DATA (the evaluator it picks with)`);
+    }
+    vpatModel = VPat.loadWeights(TRUNC_VPAT, cfg.str('HEALTH_DATA', ''));   // throws if unset/unloadable — no silent full-playout fallback
+    const tm = vpatModel.trunc || {};
+    // delta: env override, else the model's baked delta.  delta 0 is valid
+    // (truncate at the leaf — a pure static vpat evaluation); only a delta from
+    // NEITHER source is an error.
+    let deltaResolved = false;
+    if (cfg.has('TRUNC_PHASE_DELTA')) { TRUNC_DELTA = cfg.float('TRUNC_PHASE_DELTA', 0); deltaResolved = true; _deltaSrc = 'env'; }
+    else if (tm.delta != null)        { TRUNC_DELTA = tm.delta;                          deltaResolved = true; _deltaSrc = 'model'; }
+    if (!deltaResolved) {
+      throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is set (truncation on) but no ` +
+        `delta — pass TRUNC_PHASE_DELTA or use a model with a baked trunc block`);
+    }
+    if (TRUNC_DELTA < 0) {
+      throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_PHASE_DELTA must be >= 0 (got ${TRUNC_DELTA})`);
+    }
+    // offset: env override, else the model's baked offset, else none.
+    if (cfg.has('TRUNC_VALUE_OFFSET')) {
+      const vo = cfg.str('TRUNC_VALUE_OFFSET', '0,0').split(',').map(parseFloat); VO_A = vo[0]; VO_B = vo[1] || 0; _voSrc = 'env';
+    } else if (Array.isArray(tm.offset)) {
+      VO_A = tm.offset[0]; VO_B = tm.offset[1] || 0; _voSrc = 'model';
+    }
   }
   console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
@@ -143,7 +172,8 @@ function create(cfg) {
               (VPAT_PICK ? `  vpat-pick below the gate` : '') +
               (FP_GAP_SKIP > 0 ? `  gap-skip>${FP_GAP_SKIP}` : '') +
               (VOTE_BLOCK > 0 ? `  seq-vote block=${VOTE_BLOCK} z=${VOTE_Z}` : '') +
-              (TRUNC_DELTA > 0 ? `  trunc: delta=${TRUNC_DELTA} B=${TRUNC_B} offset=${VO_A},${VO_B}` : ''));
+              (TRUNC_ON ? `  trunc: delta=${TRUNC_DELTA}${_deltaSrc === 'model' ? '(model)' : ''} B=${TRUNC_B} ` +
+                          `offset=${VO_A},${VO_B}${_voSrc === 'model' ? '(model)' : ''}` : ''));
 
   const rng = makeRng();
   let ppatState = null;
@@ -168,8 +198,8 @@ function create(cfg) {
     // per-move check descends further whenever the prefix captures.  Matches
     // ai/puct-ppat-fp-trunc.js and the offline prefix generators.
     let prefixLen = -1;
-    if (TRUNC_DELTA > 0 && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_B) {
-      prefixLen = Math.ceil(TRUNC_DELTA * area);
+    if (TRUNC_ON && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_B) {
+      prefixLen = Math.ceil(TRUNC_DELTA * area);   // 0 when delta == 0 → static eval at the leaf
     }
     const moveLimit = 3 * game2.emptyCount + 20;
     let moves = 0;
