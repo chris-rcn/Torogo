@@ -30,7 +30,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
+const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help', 'no-cache-features'],
   ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
    'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
@@ -86,6 +86,9 @@ print, and each new best teMSE also writes the -best checkpoint.
   --load PATH       resume from a checkpoint.  --spec overrides its specs
                     (shared specs keep their weights; freeze with 'f')
   --no-add          fine-tune ONLY the patterns already in the loaded model
+  --no-cache-features  do NOT cache extracted features across epochs (replay +
+                    re-extract every position every epoch).  Caching is on by
+                    default (test eager, train lazy) and auto-off with frozen specs
   --save PATH       checkpoint path (default out/vpat-pe-<random>.js)
 
   --eval AGENT      ai/<name>.js played as the reference in test games
@@ -457,9 +460,17 @@ function testMSE() {
   if (testRecs.length === 0) return null;
   const evalW = saveEvalW();
   let se = 0;
-  for (const rec of testRecs) {
-    const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
-    se += (rec.targetB - v) * (rec.targetB - v);
+  if (teKeys) {
+    for (let i = 0; i < testRecs.length; i++) {
+      const v = evalSplit(teKeys, teOff[i], teNPos[i], teOff[i + 1] - teOff[i], evalW);
+      const d = testRecs[i].targetB - v;
+      se += d * d;
+    }
+  } else {
+    for (const rec of testRecs) {
+      const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
+      se += (rec.targetB - v) * (rec.targetB - v);
+    }
   }
   return se / testRecs.length;
 }
@@ -491,6 +502,128 @@ if (LOAD_PATH) {
 if (NO_ADD && weights.size === 0) {
   console.error('error: --no-add needs a loaded model to fine-tune (pass --load with a non-empty checkpoint)');
   process.exit(1);
+}
+
+// ── Feature cache ────────────────────────────────────────────────────────────
+// Replaying a record and re-extracting its pattern features is the bulk of the
+// per-position cost, and it is identical every epoch.  So convert each record's
+// features to a flat list of weight keys ONCE and reuse it thereafter.  Every
+// polarity is +/-1, so a record's keys are stored split into a +1 run followed
+// by a -1 run — no per-feature polarity byte — and the value is
+//   V = sigma( sum_{+keys} w[k]  -  sum_{-keys} w[k] ).
+// Test data is cached EAGERLY (small, and the first status row — before any
+// training — needs it); train data LAZILY, filled on first touch during epoch 1
+// into an estimate-and-grow buffer (a single-epoch run then pays almost no
+// conversion overhead, and the fill cost lands honestly inside epoch 1's time).
+//
+// The compact cache keeps no spec tags, so it cannot honour a frozen spec's
+// per-feature skip; caching is disabled when any spec is frozen (and by
+// --no-cache-features).  The +/-1 assumption is checked as records are cached.
+const CACHE_FEATURES = !opts['no-cache-features'] && FROZEN.size === 0;
+
+// Copy a feature set's keys into dst[at..], +1 keys first then -1 keys, and
+// return the number of +1 keys (nPos); total written == f.count.  Throws on a
+// polarity that is not +/-1 (such a spec is not cacheable).
+function splitInto(f, dst, at) {
+  const { keys, pols, count } = f;
+  let p = at, nPos = 0;
+  for (let i = 0; i < count; i++) if (pols[i] === 1) { dst[p++] = keys[i]; nPos++; }
+  for (let i = 0; i < count; i++) {
+    const pol = pols[i];
+    if (pol === -1) dst[p++] = keys[i];
+    else if (pol !== 1) throw new Error(`feature cache: polarity ${pol} is not +/-1 (spec not cacheable)`);
+  }
+  return nPos;
+}
+
+// Evaluate a polarity-split key run: keysArr[start .. start+nPos) are +1,
+// keysArr[start+nPos .. start+cnt) are -1.
+function evalSplit(keysArr, start, nPos, cnt, w) {
+  let z = 0;
+  const posEnd = start + nPos, end = start + cnt;
+  for (let j = start; j < posEnd; j++) z += w.get(keysArr[j]) ?? 0;
+  for (let j = posEnd; j < end;    j++) z -= w.get(keysArr[j]) ?? 0;
+  return 1 / (1 + Math.exp(-z));
+}
+
+// Test cache (eager): built now so the baseline status row can read it.  Sizes
+// are known exactly, so a single flat buffer plus off[n+1] and nPos[n].
+let teKeys = null, teOff = null, teNPos = null;
+if (CACHE_FEATURES && testRecs.length > 0) {
+  const fs = testRecs.map(rec => extractFeatures(replayRecord(rec), prepSpecs));
+  let total = 0;
+  for (const f of fs) total += f.count;
+  teKeys = new Int32Array(total);
+  teOff  = new Int32Array(testRecs.length + 1);
+  teNPos = new Int32Array(testRecs.length);
+  let at = 0;
+  for (let i = 0; i < fs.length; i++) {
+    teOff[i]  = at;
+    teNPos[i] = splitInto(fs[i], teKeys, at);
+    at += fs[i].count;
+  }
+  teOff[testRecs.length] = at;
+}
+
+// Train cache (lazy): filled in shuffled order during epoch 1, so fill order
+// != index order and each record needs its own off/cnt/nPos.  off[i] == -1
+// marks a record not yet cached.  Buffer size is estimated from a small sample
+// and grown x1.5 on overflow.
+let trKeys = null;   // Int32Array (estimate-and-grow)
+let trEnd  = 0;      // fill pointer / count of cached keys so far
+const trOff  = CACHE_FEATURES ? new Int32Array(trainRecs.length).fill(-1) : null;
+const trNPos = CACHE_FEATURES ? new Int32Array(trainRecs.length) : null;
+const trCnt  = CACHE_FEATURES ? new Int32Array(trainRecs.length) : null;
+if (CACHE_FEATURES) {
+  const K = Math.min(500, trainRecs.length);
+  let sum = 0;
+  for (let i = 0; i < K; i++) sum += extractFeatures(replayRecord(trainRecs[i]), prepSpecs).count;
+  const avg = K > 0 ? sum / K : 64;
+  trKeys = new Int32Array(Math.max(1, Math.ceil(trainRecs.length * avg * 1.2)));
+}
+function trGrow(need) {
+  if (trEnd + need <= trKeys.length) return;
+  let cap = trKeys.length;
+  while (cap < trEnd + need) cap = Math.ceil(cap * 1.5);
+  const bigger = new Int32Array(cap);
+  bigger.set(trKeys.subarray(0, trEnd));
+  trKeys = bigger;
+}
+// Lazy fill: copy record oi's split keys into the flat buffer.
+function cacheTrain(oi, f) {
+  trGrow(f.count);
+  trNPos[oi] = splitInto(f, trKeys, trEnd);
+  trCnt[oi]  = f.count;
+  trOff[oi]  = trEnd;
+  trEnd += f.count;
+}
+// Cached logistic update — the polarity-split twin of tdUpdate (frozen never
+// applies here, since caching is off when any spec is frozen).
+function tdUpdateCached(oi, target, V, lr) {
+  const start = trOff[oi], nP = trNPos[oi], cnt = trCnt[oi];
+  if (cnt === 0) return;
+  const posEnd = start + nP, end = start + cnt;
+  const atCap = MAX_WEIGHTS > 0 && weights.size >= MAX_WEIGHTS;
+  const gated = NO_ADD || atCap;
+  let nActive = cnt;
+  if (gated) {
+    nActive = 0;
+    for (let j = start; j < end; j++) if (weights.get(trKeys[j]) !== undefined) nActive++;
+    if (nActive === 0) return;
+  }
+  const step = lr * (target - V) / nActive;
+  for (let j = start; j < posEnd; j++) {
+    const k = trKeys[j];
+    if (gated && weights.get(k) === undefined) continue;
+    const w = (weights.get(k) ?? 0) + step;
+    weights.set(k, w); wAbsSum += Math.abs(w); wUpdateCount++;
+  }
+  for (let j = posEnd; j < end; j++) {
+    const k = trKeys[j];
+    if (gated && weights.get(k) === undefined) continue;
+    const w = (weights.get(k) ?? 0) - step;
+    weights.set(k, w); wAbsSum += Math.abs(w); wUpdateCount++;
+  }
 }
 
 loadBiasPairs();
@@ -529,6 +662,9 @@ bline('model:', `${specString(specs)}` +
 bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
   (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
+bline('cache:', CACHE_FEATURES
+  ? `features (test eager${testRecs.length ? ` ${f4(teKeys.length)} keys` : ``}, train lazy)`
+  : (FROZEN.size > 0 ? `off (frozen specs)` : `off (--no-cache-features)`));
 if (ladderCases) bline('ladder:', `${LADDER_FILE}  ${f4(ladderCases.length)} cases`);
 if (mdPositions) bline('md:', `${MD_FILE}  ${f4(mdPositions.length)} positions`);
 bline('out:', `${SAVE_PATH}${hasBest ? `  (best ${BEST_PATH})` : ``}`);
@@ -688,11 +824,20 @@ while (!done) {
   for (const oi of order) {
     const tStartMs = Date.now();
     const rec  = trainRecs[oi];
-    const game = replayRecord(rec);
-    const f = extractFeatures(game, prepSpecs);
-    evaluateFeatures(f, weights);
-    trSE += (rec.targetB - f.val) * (rec.targetB - f.val); trSEN++;
-    tdUpdate(f, rec.targetB, LR);
+    let V;
+    if (trOff && trOff[oi] >= 0) {
+      // Cached: skip replay + extraction, evaluate and update from flat keys.
+      V = evalSplit(trKeys, trOff[oi], trNPos[oi], trCnt[oi], weights);
+      tdUpdateCached(oi, rec.targetB, V, LR);
+    } else {
+      const game = replayRecord(rec);
+      const f = extractFeatures(game, prepSpecs);
+      if (trOff) cacheTrain(oi, f);   // lazy fill on first touch (epoch 1)
+      evaluateFeatures(f, weights);
+      V = f.val;
+      tdUpdate(f, rec.targetB, LR);
+    }
+    trSE += (rec.targetB - V) * (rec.targetB - V); trSEN++;
     nPos++; intervalPos++;
     intervalTrainMs += Date.now() - tStartMs;
 
