@@ -125,7 +125,7 @@ function create(cfg) {
   // the end — plain puct-ppat-fp behaviour until the knobs are set.  Resolution
   // order: env var, else the model file's baked delta, else 0.2 (the champion).
   const _deltaFromModel = !cfg.has('TRUNC_PHASE_DELTA') && _truncMeta.delta != null;
-  const TRUNC_PHASE_DELTA = cfg.has('TRUNC_PHASE_DELTA') ? cfg.float('TRUNC_PHASE_DELTA', 0.2)
+  const TRUNC_PHASE_DELTA = cfg.has('TRUNC_PHASE_DELTA') ? cfg.float('TRUNC_PHASE_DELTA', 0.21)
                           : (_deltaFromModel ? _truncMeta.delta : 0.2);
   // Prefix length in moves, set once per turn from the board size (getMove).
   let _prefixLen = 0;
@@ -142,7 +142,7 @@ function create(cfg) {
   // no per-leaf gate seam.  Default 0.35 is the champion threshold (its old
   // gate B 0.55 minus delta 0.20 — the point at which the shallowest possible
   // endpoint, root + delta, would reach the trusted-evaluator band edge).
-  const TRUNC_ROOT_PHASE = cfg.float('TRUNC_ROOT_PHASE', 0.35);
+  const TRUNC_ROOT_PHASE = cfg.float('TRUNC_ROOT_PHASE', 0.30);
   // Set per decision in runSearch: rootPhase < TRUNC_ROOT_PHASE.
   let _truncActive = false;
 
