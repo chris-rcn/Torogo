@@ -252,16 +252,33 @@ function prepareSpecs(specs, opts) {
 //   - Raw cell states are precomputed once per unique maxLibs value.
 //   - size:2 and size:3 hash via whole-board X-hash planes (see above).
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
-function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
+function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse) {
   const cells = game.cells;
   const cap   = game.N * game.N;
   const N     = game.N;
 
-  // Pre-allocate flat typed output arrays; max one feature per cell per size entry.
+  // Flat typed output arrays; max one feature per cell per size entry.  A hot
+  // inference caller that consumes the result before its NEXT extract on this
+  // prepSpecs can pass reuse=true to draw them from a scratch buffer kept on
+  // prepSpecs — no per-call allocation, no GC churn.  Only up to `count` is ever
+  // read, so stale tail entries from a prior call are harmless; base and
+  // fallback searches use different prepSpecs, so their buffers never collide.
+  // Default (reuse falsy) allocates fresh, safe for callers that RETAIN the
+  // result across later extracts (the trainer's bias pairs / eager test cache).
   const maxF   = cap * prepSpecs.totalSizes;
-  const outKeys = new Int32Array(maxF);
-  const outPols = new Int8Array(maxF);
-  const outTags = new Int16Array(maxF);  // spec tag: (tagBase << 3) | size
+  let outKeys, outPols, outTags;
+  if (reuse) {
+    let sc = prepSpecs._out;
+    if (!sc || sc.keys.length < maxF) {
+      sc = { keys: new Int32Array(maxF), pols: new Int8Array(maxF), tags: new Int16Array(maxF) };
+      prepSpecs._out = sc;
+    }
+    outKeys = sc.keys; outPols = sc.pols; outTags = sc.tags;
+  } else {
+    outKeys = new Int32Array(maxF);
+    outPols = new Int8Array(maxF);
+    outTags = new Int16Array(maxF);
+  }
   let   count   = 0;
 
   if (nextMove === PASS) doSetNext = false;
@@ -903,7 +920,7 @@ function evaluateFeatures(features, weights) {
 // Convenience: extract features and evaluate in one call.
 // model must have a preparedSpecs property (see prepareSpecs).
 function evaluate(game, model) {
-  return evaluateFeatures(extractFeatures(game, model.preparedSpecs), model.weights);
+  return evaluateFeatures(extractFeatures(game, model.preparedSpecs, false, undefined, true), model.weights);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

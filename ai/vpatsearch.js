@@ -46,7 +46,7 @@ let model = { weights: makeWeights(), specs: defaultSpecs, preparedSpecs: prepar
 
 function search(game, m, depth = 1, dither = 0) {
   if (depth === 1) return search1(game, m, dither);
-  const evaluate = g => evaluateFeatures(extractFeatures(g, m.preparedSpecs), m.weights);
+  const evaluate = g => evaluateFeatures(extractFeatures(g, m.preparedSpecs, false, undefined, true), m.weights);
   return abSearch(game, depth, evaluate, dither);
 }
 
@@ -62,7 +62,7 @@ function search(game, m, depth = 1, dither = 0) {
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
   const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
-  const f = extractFeatures(game, prep);
+  const f = extractFeatures(game, prep, false, undefined, true);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;
   const cap = game.N * game.N;
@@ -81,7 +81,7 @@ function search1(game, m, dither) {
         { health: m.preparedSpecs && m.preparedSpecs.healthModel }));
       const g = game.clone();
       g.play(i);
-      s = evaluateFeatures(extractFeatures(g, fb), m.weights) + (dither > 0 ? Math.random() * dither : 0);
+      s = evaluateFeatures(extractFeatures(g, fb, false, undefined, true), m.weights) + (dither > 0 ? Math.random() * dither : 0);
     }
     if (isBlack ? s > v : s < v) { v = s; best = i; }
   }
@@ -103,7 +103,7 @@ function getMove(game) {
 function valueB(game) {
   const g = game.cells ? game : game.toGame2();
   if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
-  return evaluateFeatures(extractFeatures(g, model.preparedSpecs), model.weights);
+  return evaluateFeatures(extractFeatures(g, model.preparedSpecs, false, undefined, true), model.weights);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

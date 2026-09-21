@@ -160,7 +160,7 @@ function create(cfg) {
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
-    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs), _vpatModel.weights);
+    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs, false, undefined, true), _vpatModel.weights);
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
