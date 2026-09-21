@@ -722,6 +722,11 @@ const MAX_EVAL_GAMES = 2000;
 let nextPrintPos = PRINT_START_POS, nextPrintAt = t0 + MAX_PRINT_GAP_MS;
 let nPos = 0, epoch = 0;
 let intervalPos = 0, intervalTrainMs = 0, trSE = 0, trSEN = 0;
+// tPos reports the epoch-1 overall average per-position cost, frozen once epoch
+// 1 finishes: from epoch 2 on the feature cache serves positions from memory,
+// so per-interval time is a fraction of the real replay+extract+update cost and
+// would make both tPos and varB×t (which scales varB by it) read far too low.
+let ep1TrainMs = 0, ep1Pos = 0, tPosEp1 = null;
 const evalHistory = [];
 
 const order = trainRecs.map((_, i) => i);
@@ -749,7 +754,9 @@ function statusPrint() {
     avgWR     = evalHistory.slice(-evalHalf).reduce((s, r) => s + r, 0) / evalHalf;
   }
 
-  const tPosMs = intervalTrainMs / Math.max(1, intervalPos);
+  // Epoch-1 average (running while in epoch 1, then the frozen value); see the
+  // ep1/tPosEp1 declaration for why per-interval time is not used.
+  const tPosMs = tPosEp1 !== null ? tPosEp1 : (ep1Pos > 0 ? ep1TrainMs / ep1Pos : 0);
   const trMSE  = trSEN > 0 ? trSE / trSEN : null;   // null on the pre-training baseline row
   const teMSE  = testMSE();
   const bs = biasPairs ? biasStats() : null;
@@ -839,11 +846,14 @@ while (!done) {
     }
     trSE += (rec.targetB - V) * (rec.targetB - V); trSEN++;
     nPos++; intervalPos++;
-    intervalTrainMs += Date.now() - tStartMs;
+    const dt = Date.now() - tStartMs;
+    intervalTrainMs += dt;
+    if (epoch === 1) { ep1TrainMs += dt; ep1Pos++; }
 
     if (EMA_ALPHA > 0 && nPos % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
     if (nPos >= nextPrintPos || Date.now() >= nextPrintAt) statusPrint();
   }
+  if (epoch === 1) tPosEp1 = ep1Pos > 0 ? ep1TrainMs / ep1Pos : null;   // freeze tPos
   LR *= LR_DECAY;
   if (EPOCHS > 0 && epoch >= EPOCHS) done = true;
 }
