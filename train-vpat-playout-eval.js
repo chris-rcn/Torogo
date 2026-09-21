@@ -91,7 +91,8 @@ print, and each new best teMSE also writes the -best checkpoint.
                     Zero-initialised head, so it starts identical to the linear
                     model.  trMSE/teMSE report the COMBINED prediction.  The net
                     is trained but NOT yet saved or used at inference (follow-up).
-  --nn-lr F         step size for the net's params (default 0.05; --nn-hidden only)
+  --nn-lr F         step size for the net's params, normalised by active-feature
+                    count like --lr (default 0.3; --nn-hidden only)
 
   --load PATH       resume from a checkpoint.  --spec overrides its specs
                     (shared specs keep their weights; freeze with 'f')
@@ -261,7 +262,7 @@ function saveEvalW() {
 // hidden-layer prototype; deepen by inserting an H->H layer if it earns its cost.
 const NN_H     = opts['nn-hidden'] !== undefined ? parseInt(opts['nn-hidden'], 10) : 0;
 const NN_ON    = NN_H > 0;
-const NN_LR    = parseFloat(opts['nn-lr'] || '0.05');
+const NN_LR    = parseFloat(opts['nn-lr'] || '0.3');   // normalised by cnt, so on the linear --lr scale
 const NN_TABLE = 1 << 16;                 // embedding hash-table rows (hashing trick)
 const NN_MASK  = NN_TABLE - 1;
 let nnE, nnB1, nnW2, nnB2 = 0;
@@ -298,7 +299,11 @@ function nnForward(f) {
 // nnA activations from the last nnForward.  Updates E, b1, W2, b2 in place.
 function nnBackward(f, target) {
   const H = NN_H, keys = f.keys, pols = f.pols, cnt = f.count, a = nnA, dH = nnDH;
-  const g = (target - f.val) * NN_LR;      // dLL/dz, scaled by the step
+  // Normalise by the active-feature count, exactly as the linear tdUpdate does:
+  // the summed-polarity embedding makes the step's effect on the hidden layer
+  // scale with cnt, so without this the effective rate is ~cnt (hundreds) times
+  // too hot and the net diverges.  With it, NN_LR is on the linear lr's scale.
+  const g = (target - f.val) * NN_LR / (cnt || 1);
   nnB2 += g;
   for (let k = 0; k < H; k++) {
     dH[k] = g * nnW2[k] * (1 - a[k] * a[k]);   // through the head + tanh' (uses OLD W2)
