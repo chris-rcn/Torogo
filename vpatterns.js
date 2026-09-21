@@ -950,7 +950,9 @@ function saveWeights(filePath, model) {
     truncStr = `, trunc: { delta: ${model.trunc.delta} }`;
   }
   const pairs = [];
-  model.weights.forEach((k, v) => pairs.push(`[${k},${+v.toFixed(6)}]`));
+  // Skip weights that quantize to zero: they read back as 0 anyway (a missing
+  // key looks up to 0 in every consumer), so writing them is pure file bloat.
+  model.weights.forEach((k, v) => { const q = +v.toFixed(6); if (q !== 0) pairs.push(`[${k},${q}]`); });
   const weightsStr = '[' + pairs.join(',') + ']';
   const src = [
     "'use strict';",
