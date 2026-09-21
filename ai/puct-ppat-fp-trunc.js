@@ -115,8 +115,6 @@ function create(cfg) {
   const N_EXPAND   = cfg.int('N_EXPAND', 2);
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
-  // Per-move probability of using the ppat policy (vs a uniform-random move).
-  const PPAT_RATIO = cfg.float('PPAT_RATIO', 1);
   // Truncation point: net board-fullness advance past the leaf before the
   // playout stops for a static evaluation (board-size invariant).  The
   // default 1 can never be reached, so out of the box every playout runs to
@@ -254,11 +252,7 @@ function create(cfg) {
 
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
-      // usePolicy: use the ppat policy this move (subject to PPAT_RATIO), else a
-      // uniform-random move.
-      const usePolicy  = PPAT_RATIO >= 1 || rng.random() < PPAT_RATIO;
-      const idx = usePolicy ? ppatMove(game2, _ppatState, _model, rng)
-                            : game2.randomLegalMove(rng);
+      const idx = ppatMove(game2, _ppatState, _model, rng);
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
       }
