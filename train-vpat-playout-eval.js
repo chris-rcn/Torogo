@@ -32,8 +32,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
   ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
-   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta',
-   'nn4', 'nn4-lr', 'nn4-cap']);
+   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
 
@@ -83,18 +82,6 @@ print, and each new best teMSE also writes the -best checkpoint.
                     what teMSE / ladder / md / eval games measure
   --max-weights N   stop admitting NEW patterns once the weight table holds
                     N entries; existing weights keep training.  0 = unlimited
-  --nn4 H           PROTOTYPE: add a residual 4x4-window value net of H softsign units
-                    on top of the LUT (0 = off).  A shared tiny MLP scores every
-                    4x4 board window from its cells' signed capped liberties
-                    (BLACK +lib, WHITE -lib, empty 0), summed over windows:
-                    V = sigma(z_lut + z_nn4).  No biases + softsign => the scorer is
-                    ODD, so a colour swap negates it (antisymmetry); W2 zero-init
-                    => starts identical to the LUT.  A 4x4 LUT is infeasible, so
-                    this is exactly where a net earns its keep: it generalises and
-                    sees the outer ring the 2x2/3x3 windows can't.  trMSE/teMSE
-                    report the combined V; the net is not saved/fielded yet.
-  --nn4-cap C       liberty cap for the net's per-cell input (default 8)
-  --nn4-lr F        step size for the net, normalised by active windows (default 0.3)
 
   --load PATH       resume from a checkpoint.  --spec overrides its specs
                     (shared specs keep their weights; freeze with 'f')
@@ -254,110 +241,6 @@ function applyEMA(alpha) {
 // measures the weights the model save would write.
 function saveEvalW() {
   return (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
-}
-
-// ── PROTOTYPE: residual 4x4-window value net ───────────────────────────────────
-// A shared tiny MLP f(x) = W2·softsign(W1·x) scores every toroidal 4x4 board window
-// from its 16 cells' signed capped liberties (BLACK +lib, WHITE -lib, empty 0 —
-// ABSOLUTE colour, matching the LUT patterns).  z_nn4 = sum over non-empty
-// windows of f; V = sigma(z_lut + z_nn4).  No biases + softsign (odd) => f is ODD, so a
-// colour swap (x -> -x) negates f: antisymmetric like the LUT's pol·w.  W2
-// zero-init => z_nn4 = 0 at start (residual warm-start).  A 4x4 LUT is infeasible
-// (~10^10 canonical patterns), so this is where a net beats a table: it
-// generalises and sees an outer ring the 2x2/3x3 windows never touch.  No D4
-// symmetrisation yet (the net must learn the 8 orientations — follow-up).
-const NN4_H   = opts['nn4'] !== undefined ? parseInt(opts['nn4'], 10) : 0;
-const NN4_ON  = NN4_H > 0;
-const NN4_LR  = parseFloat(opts['nn4-lr'] || '0.3');
-const NN4_CAP = opts['nn4-cap'] !== undefined ? parseInt(opts['nn4-cap'], 10) : 8;
-const NN4_D   = 16;
-let nn4W1, nn4W2, nn4gW1, nn4gW2, nn4actX, nn4actA, _nn4Cell = new Float32Array(0), _nn4ActN = 0;
-if (NN4_ON) {
-  nn4W1 = new Float32Array(NN4_H * NN4_D);
-  nn4W2 = new Float32Array(NN4_H);                              // zero -> z_nn4 = 0 at init
-  for (let i = 0; i < nn4W1.length; i++) nn4W1[i] = (Math.random() - 0.5) * 0.2;   // break symmetry
-  nn4gW1 = new Float32Array(NN4_H * NN4_D);
-  nn4gW2 = new Float32Array(NN4_H);
-}
-
-// Toroidal 4x4 window cell indices — 16 per anchor cell, cached per board size.
-const _nn4WinByN = new Map();
-function nn4Win(N) {
-  let w = _nn4WinByN.get(N);
-  if (w) return w;
-  const area = N * N;
-  w = new Int32Array(area * 16);
-  for (let a = 0; a < area; a++) {
-    const r = (a / N) | 0, c = a % N;
-    let j = 0;
-    for (let dr = 0; dr < 4; dr++) for (let dc = 0; dc < 4; dc++) w[a * 16 + j++] = ((r + dr) % N) * N + (c + dc) % N;
-  }
-  _nn4WinByN.set(N, w);
-  return w;
-}
-
-// Forward: z_nn4 over all non-empty 4x4 windows; stashes each active window's
-// input x and hidden activations for the immediately-following nn4Backward.
-function nn4Forward(g) {
-  const H = NN4_H, N = g.N, area = N * N, cells = g.cells, ls = g._ls, gid = g._gid;
-  if (_nn4Cell.length < area) _nn4Cell = new Float32Array(area);
-  const cv = _nn4Cell;
-  for (let i = 0; i < area; i++) {                              // per-cell signed capped libs (absolute colour)
-    const s = cells[i];
-    if (s === 0) { cv[i] = 0; continue; }
-    let lib = ls[gid[i]]; if (lib > NN4_CAP) lib = NN4_CAP;
-    cv[i] = s * lib;
-  }
-  const win = nn4Win(N);
-  if (!nn4actX || nn4actX.length < area * 16) { nn4actX = new Float32Array(area * 16); nn4actA = new Float32Array(area * H); }
-  const actX = nn4actX, actA = nn4actA;
-  let z = 0, ai = 0;
-  for (let a = 0; a < area; a++) {
-    const wb = a * 16, xb = ai * 16;
-    let any = 0;
-    for (let d = 0; d < 16; d++) { const x = cv[win[wb + d]]; if (x !== 0) any = 1; actX[xb + d] = x; }
-    if (!any) continue;                                        // empty window: f = 0
-    const ab = ai * H;
-    for (let k = 0; k < H; k++) {
-      let sdot = 0; const w1b = k * 16;
-      for (let d = 0; d < 16; d++) sdot += nn4W1[w1b + d] * actX[xb + d];
-      const av = sdot / (1 + (sdot < 0 ? -sdot : sdot));   // softsign: odd, bounded, ~10x cheaper than tanh
-      actA[ab + k] = av; z += nn4W2[k] * av;
-    }
-    ai++;
-  }
-  _nn4ActN = ai;
-  return z;
-}
-
-// Backward (semi-grad SGD, batch of 1): accumulate the shared net's gradient over
-// this position's active windows, then apply.  Normalise by the active-window
-// count (the shared weights amplify the step ~nWin-fold, as the linear tdUpdate
-// normalises by nActive).  Uses the pre-update W2 for all windows.
-function nn4Backward(target, V) {
-  const H = NN4_H, actN = _nn4ActN;
-  if (actN === 0) return;
-  const delta = (target - V) * NN4_LR / actN;
-  const gW1 = nn4gW1, gW2 = nn4gW2, actX = nn4actX, actA = nn4actA;
-  gW1.fill(0); gW2.fill(0);
-  for (let i = 0; i < actN; i++) {
-    const xb = i * 16, ab = i * H;
-    for (let k = 0; k < H; k++) {
-      const av = actA[ab + k];
-      gW2[k] += delta * av;
-      const d1 = 1 - (av < 0 ? -av : av);                 // softsign derivative = (1-|a|)^2
-      const dh = delta * nn4W2[k] * d1 * d1;
-      const w1b = k * 16;
-      for (let d = 0; d < 16; d++) gW1[w1b + d] += dh * actX[xb + d];
-    }
-  }
-  for (let k = 0; k < H; k++) nn4W2[k] += gW2[k];
-  for (let i = 0; i < nn4W1.length; i++) nn4W1[i] += gW1[i];
-}
-
-// Combined V for an eval path that holds the game: sigma(z_lut + z_nn4).
-function nn4Combine(g, f) {
-  return NN4_ON ? 1 / (1 + Math.exp(-(f.z + nn4Forward(g)))) : f.val;
 }
 
 // Logistic update; a feature is skipped (and takes no share of the error)
@@ -575,10 +458,7 @@ function testMSE() {
   const evalW = saveEvalW();
   let se = 0;
   for (const rec of testRecs) {
-    const g = replayRecord(rec);
-    const f = extractFeatures(g, prepSpecs);
-    evaluateFeatures(f, evalW);
-    const v = nn4Combine(g, f);
+    const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
     se += (rec.targetB - v) * (rec.targetB - v);
   }
   return se / testRecs.length;
@@ -649,8 +529,6 @@ bline('model:', `${specString(specs)}` +
 bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
   (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
-if (NN4_ON) bline('nn4:', `4x4-window residual net, H=${NN4_H} softsign, cap ${NN4_CAP}, nn4-lr ${NN4_LR} ` +
-  `(PROTOTYPE: trMSE/teMSE combined; net not saved/fielded; no D4 yet)`);
 if (ladderCases) bline('ladder:', `${LADDER_FILE}  ${f4(ladderCases.length)} cases`);
 if (mdPositions) bline('md:', `${MD_FILE}  ${f4(mdPositions.length)} positions`);
 bline('out:', `${SAVE_PATH}${hasBest ? `  (best ${BEST_PATH})` : ``}`);
@@ -813,10 +691,8 @@ while (!done) {
     const game = replayRecord(rec);
     const f = extractFeatures(game, prepSpecs);
     evaluateFeatures(f, weights);
-    if (NN4_ON) f.val = 1 / (1 + Math.exp(-(f.z + nn4Forward(game))));   // combined V; stashes for backward
     trSE += (rec.targetB - f.val) * (rec.targetB - f.val); trSEN++;
-    tdUpdate(f, rec.targetB, LR);                                        // linear step on the combined error
-    if (NN4_ON) nn4Backward(rec.targetB, f.val);                         // net step (uses the stash)
+    tdUpdate(f, rec.targetB, LR);
     nPos++; intervalPos++;
     intervalTrainMs += Date.now() - tStartMs;
 
