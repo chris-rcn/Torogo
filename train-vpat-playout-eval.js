@@ -32,7 +32,8 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'],
   ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
-   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
+   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta',
+   'nn-hidden', 'nn-lr']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
 
@@ -82,6 +83,15 @@ print, and each new best teMSE also writes the -best checkpoint.
                     what teMSE / ladder / md / eval games measure
   --max-weights N   stop admitting NEW patterns once the weight table holds
                     N entries; existing weights keep training.  0 = unlimited
+  --nn-hidden H     PROTOTYPE: add a residual value net of H tanh units on top of
+                    the linear model (0 = off, linear only).  Its first layer is a
+                    sparse embedding: each active feature key hashes into a table
+                    and contributes an H-vector (signed by its polarity); the sum
+                    feeds tanh then a linear head, and V = sigma(z_linear + z_nn).
+                    Zero-initialised head, so it starts identical to the linear
+                    model.  trMSE/teMSE report the COMBINED prediction.  The net
+                    is trained but NOT yet saved or used at inference (follow-up).
+  --nn-lr F         step size for the net's params (default 0.05; --nn-hidden only)
 
   --load PATH       resume from a checkpoint.  --spec overrides its specs
                     (shared specs keep their weights; freeze with 'f')
@@ -241,6 +251,71 @@ function applyEMA(alpha) {
 // measures the weights the model save would write.
 function saveEvalW() {
   return (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
+}
+
+// ── PROTOTYPE: residual value net (embedding-sum -> tanh(H) -> linear head) ─────
+// V = sigma(z_linear + z_nn).  z_nn = b2 + sum_k W2[k]·tanh(b1[k] + hsum[k]),
+// where hsum is a sparse embedding: hsum[k] = sum over active features i of
+// pol_i · E[hash(key_i)*H + k].  The head (W2, b2) starts at zero, so z_nn = 0
+// and the net begins identical to the linear model (residual warm-start).  One-
+// hidden-layer prototype; deepen by inserting an H->H layer if it earns its cost.
+const NN_H     = opts['nn-hidden'] !== undefined ? parseInt(opts['nn-hidden'], 10) : 0;
+const NN_ON    = NN_H > 0;
+const NN_LR    = parseFloat(opts['nn-lr'] || '0.05');
+const NN_TABLE = 1 << 16;                 // embedding hash-table rows (hashing trick)
+const NN_MASK  = NN_TABLE - 1;
+let nnE, nnB1, nnW2, nnB2 = 0;
+let nnHidden, nnA, nnDH;                   // per-eval scratch (forward -> backward)
+if (NN_ON) {
+  nnE  = new Float32Array(NN_TABLE * NN_H);
+  nnB1 = new Float32Array(NN_H);
+  nnW2 = new Float32Array(NN_H);           // zero -> z_nn = 0 at init
+  for (let i = 0; i < nnE.length; i++) nnE[i] = (Math.random() - 0.5) * 0.1;  // break symmetry
+  nnHidden = new Float32Array(NN_H);
+  nnA      = new Float32Array(NN_H);
+  nnDH     = new Float32Array(NN_H);
+}
+
+// Forward: assumes evaluateFeatures already set f.z (= z_linear).  Overrides
+// f.val with sigma(z_linear + z_nn) and leaves nnA holding the hidden activations
+// for the immediately-following nnBackward.
+function nnForward(f) {
+  const H = NN_H, keys = f.keys, pols = f.pols, cnt = f.count;
+  const hid = nnHidden, a = nnA;
+  for (let k = 0; k < H; k++) hid[k] = nnB1[k];
+  for (let i = 0; i < cnt; i++) {
+    const base = (keys[i] & NN_MASK) * H, p = pols[i];
+    for (let k = 0; k < H; k++) hid[k] += p * nnE[base + k];
+  }
+  let zNN = nnB2;
+  for (let k = 0; k < H; k++) { const av = Math.tanh(hid[k]); a[k] = av; zNN += nnW2[k] * av; }
+  const v = 1 / (1 + Math.exp(-(f.z + zNN)));
+  f.val = v;
+  return v;
+}
+
+// Backward (semi-grad SGD, batch of 1): ascend the log-likelihood on z, using the
+// nnA activations from the last nnForward.  Updates E, b1, W2, b2 in place.
+function nnBackward(f, target) {
+  const H = NN_H, keys = f.keys, pols = f.pols, cnt = f.count, a = nnA, dH = nnDH;
+  const g = (target - f.val) * NN_LR;      // dLL/dz, scaled by the step
+  nnB2 += g;
+  for (let k = 0; k < H; k++) {
+    dH[k] = g * nnW2[k] * (1 - a[k] * a[k]);   // through the head + tanh' (uses OLD W2)
+    nnW2[k] += g * a[k];
+    nnB1[k] += dH[k];
+  }
+  for (let i = 0; i < cnt; i++) {
+    const base = (keys[i] & NN_MASK) * H, p = pols[i];
+    for (let k = 0; k < H; k++) nnE[base + k] += dH[k] * p;
+  }
+}
+
+// Combined prediction for eval paths (teMSE, bias): linear via evaluateFeatures,
+// then the residual net if enabled.  Returns V and leaves f.val set.
+function predictVal(f, evalW) {
+  evaluateFeatures(f, evalW);
+  return NN_ON ? nnForward(f) : f.val;
 }
 
 // Logistic update; a feature is skipped (and takes no share of the error)
@@ -440,8 +515,8 @@ function biasStats() {
   const evalW = saveEvalW();
   let prod = 0, lean = 0;
   for (const rec of biasPairs) {
-    const v1 = evaluateFeatures(rec.f1, evalW);
-    const v2 = evaluateFeatures(rec.f2, evalW);
+    const v1 = predictVal(rec.f1, evalW);
+    const v2 = predictVal(rec.f2, evalW);
     prod += (v1 - rec.pa) * (v2 - rec.pb);
     lean += (v1 + v2) / 2 - (rec.pa + rec.pb) / 2;
   }
@@ -458,7 +533,7 @@ function testMSE() {
   const evalW = saveEvalW();
   let se = 0;
   for (const rec of testRecs) {
-    const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
+    const v = predictVal(extractFeatures(replayRecord(rec), prepSpecs), evalW);
     se += (rec.targetB - v) * (rec.targetB - v);
   }
   return se / testRecs.length;
@@ -529,6 +604,8 @@ bline('model:', `${specString(specs)}` +
 bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
   (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
+if (NN_ON) bline('nn:', `residual value net, H=${NN_H} tanh, embed-table 2^16, nn-lr ${NN_LR} ` +
+  `(PROTOTYPE: trMSE/teMSE are combined; net not saved/fielded yet)`);
 if (ladderCases) bline('ladder:', `${LADDER_FILE}  ${f4(ladderCases.length)} cases`);
 if (mdPositions) bline('md:', `${MD_FILE}  ${f4(mdPositions.length)} positions`);
 bline('out:', `${SAVE_PATH}${hasBest ? `  (best ${BEST_PATH})` : ``}`);
@@ -691,8 +768,10 @@ while (!done) {
     const game = replayRecord(rec);
     const f = extractFeatures(game, prepSpecs);
     evaluateFeatures(f, weights);
+    if (NN_ON) nnForward(f);                    // f.val = sigma(z_lin + z_nn); fills nnA
     trSE += (rec.targetB - f.val) * (rec.targetB - f.val); trSEN++;
-    tdUpdate(f, rec.targetB, LR);
+    tdUpdate(f, rec.targetB, LR);               // linear step on the combined error
+    if (NN_ON) nnBackward(f, rec.targetB);      // net step (uses nnA from nnForward)
     nPos++; intervalPos++;
     intervalTrainMs += Date.now() - tStartMs;
 
