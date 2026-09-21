@@ -149,6 +149,18 @@ function _cellLibCounts(game, out) {
 }
 let _libStack = new Int32Array(0), _libSeen = new Int32Array(0),
     _libMark = new Int32Array(0), _libGroup = new Int32Array(0);
+
+// Non-speculative fast path.  When cells have NOT been speculatively mutated
+// (doSetNext is false), the game's incremental chain structures are current, so
+// a stone's liberty count is simply _ls[_gid[i]] — one array read per cell, no
+// flood (the same source rawState() already trusts).  Used for every real-
+// position extraction (search base, playout-truncation eval, training); the
+// flood in _cellLibCounts is kept only for the doSetNext path, where the
+// speculative cells make _gid/_ls stale.
+function _cellLibCountsFast(game, out) {
+  const cells = game.cells, gid = game._gid, ls = game._ls, cap = game.N * game.N;
+  for (let i = 0; i < cap; i++) out[i] = cells[i] === 0 ? 0 : ls[gid[i]];
+}
 // deltaZ scratch (module-level, reused; stamped arrays reset on wrap).
 let _dzStamp = 0;
 let _dzMark2 = new Int32Array(0), _dzMark3 = new Int32Array(0), _dzMark4 = new Int32Array(0),
@@ -343,11 +355,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove) {
       if (maxLibs === 1) {
         for (let i = 0; i < cap; i++) raw[i] = cells[i];
       } else {
-        // Liberty counts from cells alone (NOT the game's _gid/_ls): under
-        // doSetNext the cells are speculatively mutated and the incremental
-        // structures are stale — see _cellLibCounts.
+        // Liberty counts.  Under doSetNext the cells are speculatively mutated
+        // and the incremental _gid/_ls are stale, so flood from cells alone;
+        // otherwise read the current incremental structures directly.
         const libs = _libCounts.length >= cap ? _libCounts : (_libCounts = new Int32Array(cap));
-        _cellLibCounts(game, libs);
+        if (doSetNext) _cellLibCounts(game, libs);
+        else           _cellLibCountsFast(game, libs);
         for (let i = 0; i < cap; i++) {
           const c = cells[i];
           raw[i] = c === 0 ? 0 : (libs[i] < maxLibs ? c * libs[i] : c * maxLibs);
