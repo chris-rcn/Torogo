@@ -83,11 +83,11 @@ print, and each new best teMSE also writes the -best checkpoint.
                     what teMSE / ladder / md / eval games measure
   --max-weights N   stop admitting NEW patterns once the weight table holds
                     N entries; existing weights keep training.  0 = unlimited
-  --nn4 H           PROTOTYPE: add a residual 4x4-window value net of H tanh units
+  --nn4 H           PROTOTYPE: add a residual 4x4-window value net of H softsign units
                     on top of the LUT (0 = off).  A shared tiny MLP scores every
                     4x4 board window from its cells' signed capped liberties
                     (BLACK +lib, WHITE -lib, empty 0), summed over windows:
-                    V = sigma(z_lut + z_nn4).  No biases + tanh => the scorer is
+                    V = sigma(z_lut + z_nn4).  No biases + softsign => the scorer is
                     ODD, so a colour swap negates it (antisymmetry); W2 zero-init
                     => starts identical to the LUT.  A 4x4 LUT is infeasible, so
                     this is exactly where a net earns its keep: it generalises and
@@ -257,10 +257,10 @@ function saveEvalW() {
 }
 
 // ── PROTOTYPE: residual 4x4-window value net ───────────────────────────────────
-// A shared tiny MLP f(x) = W2·tanh(W1·x) scores every toroidal 4x4 board window
+// A shared tiny MLP f(x) = W2·softsign(W1·x) scores every toroidal 4x4 board window
 // from its 16 cells' signed capped liberties (BLACK +lib, WHITE -lib, empty 0 —
 // ABSOLUTE colour, matching the LUT patterns).  z_nn4 = sum over non-empty
-// windows of f; V = sigma(z_lut + z_nn4).  No biases + tanh => f is ODD, so a
+// windows of f; V = sigma(z_lut + z_nn4).  No biases + softsign (odd) => f is ODD, so a
 // colour swap (x -> -x) negates f: antisymmetric like the LUT's pol·w.  W2
 // zero-init => z_nn4 = 0 at start (residual warm-start).  A 4x4 LUT is infeasible
 // (~10^10 canonical patterns), so this is where a net beats a table: it
@@ -321,7 +321,8 @@ function nn4Forward(g) {
     for (let k = 0; k < H; k++) {
       let sdot = 0; const w1b = k * 16;
       for (let d = 0; d < 16; d++) sdot += nn4W1[w1b + d] * actX[xb + d];
-      const av = Math.tanh(sdot); actA[ab + k] = av; z += nn4W2[k] * av;
+      const av = sdot / (1 + (sdot < 0 ? -sdot : sdot));   // softsign: odd, bounded, ~10x cheaper than tanh
+      actA[ab + k] = av; z += nn4W2[k] * av;
     }
     ai++;
   }
@@ -344,7 +345,8 @@ function nn4Backward(target, V) {
     for (let k = 0; k < H; k++) {
       const av = actA[ab + k];
       gW2[k] += delta * av;
-      const dh = delta * nn4W2[k] * (1 - av * av);
+      const d1 = 1 - (av < 0 ? -av : av);                 // softsign derivative = (1-|a|)^2
+      const dh = delta * nn4W2[k] * d1 * d1;
       const w1b = k * 16;
       for (let d = 0; d < 16; d++) gW1[w1b + d] += dh * actX[xb + d];
     }
@@ -647,7 +649,7 @@ bline('model:', `${specString(specs)}` +
 bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
   (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
-if (NN4_ON) bline('nn4:', `4x4-window residual net, H=${NN4_H} tanh, cap ${NN4_CAP}, nn4-lr ${NN4_LR} ` +
+if (NN4_ON) bline('nn4:', `4x4-window residual net, H=${NN4_H} softsign, cap ${NN4_CAP}, nn4-lr ${NN4_LR} ` +
   `(PROTOTYPE: trMSE/teMSE combined; net not saved/fielded; no D4 yet)`);
 if (ladderCases) bline('ladder:', `${LADDER_FILE}  ${f4(ladderCases.length)} cases`);
 if (mdPositions) bline('md:', `${MD_FILE}  ${f4(mdPositions.length)} positions`);
