@@ -1,6 +1,6 @@
 'use strict';
 
-// ab-fp-vpat: EXPERIMENTAL — shallow alpha-beta with featurepol move
+// ab-fp-vpat: shallow alpha-beta with featurepol move
 // ordering/pruning at every node and a vpatterns pattern evaluator at the
 // leaves.  Probes whether search depth can substitute for the evaluator's
 // missing tactics at low time scales (the mc-ppat vote frontier's rival).
@@ -37,6 +37,10 @@
 //               (temperature 1) instead of searching, scaled by (1 - phase):
 //               FP_SOFTMAX_RATIO on an empty board, tapering to 0 at the
 //               endgame (default 0.4; 0 = off)
+//   ROOT_SYMMETRY  prune symmetry-equivalent root candidates (default 1; 0=off).
+//               A symmetric root (common in the opening) has orbits of equal-
+//               value moves, so searching one representative per orbit is exact
+//               and concentrates the width on distinct moves.
 
 const path = require('path');
 const Util = require('../util.js');
@@ -45,6 +49,7 @@ const { game3FromGame2 } = require('../game3.js');
 const { makeRng } = require('../xorshift.js');
 const FeaturePol = require('../featurepol-lib.js');
 const VPat = require('../vpatterns.js');
+const Symmetry = require('../symmetry.js');
 
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -64,6 +69,7 @@ function create(cfg) {
   const DITHER   = cfg.float('DITHER', 0.001);
   const AB_TEMP  = cfg.float('AB_TEMP', 0.003);
   const FP_SOFTMAX_RATIO = cfg.float('FP_SOFTMAX_RATIO', 0.4);
+  const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
 
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
     path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
@@ -73,7 +79,8 @@ function create(cfg) {
   console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH}` +
               (AB_WIDTH_SHRINK > 0 ? ` shrink=${AB_WIDTH_SHRINK} (${[...Array(AB_DEPTH).keys()].map(widthAt).join('/')})` : '') +
               (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
-              (FP_SOFTMAX_RATIO > 0 ? ` fp-softmax-ratio=${FP_SOFTMAX_RATIO}` : '') + `  ` +
+              (FP_SOFTMAX_RATIO > 0 ? ` fp-softmax-ratio=${FP_SOFTMAX_RATIO}` : '') +
+              (ROOT_SYMMETRY ? '' : ` root-symmetry=off`) + `  ` +
               `fp=${fpWeights.map.size}w  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${VPat.specString(vpatModel.specs)})`);
 
   const rng = makeRng();
@@ -144,18 +151,25 @@ function create(cfg) {
       return { move: m, info: 'fp-softmax (ratio)' };
     }
     const cand = new Int32Array(AB_WIDTH);
-    const k = fpTopK(game, cand, AB_WIDTH);
+    let k = fpTopK(game, cand, AB_WIDTH);
     if (k === 0) return { move: PASS };
+    // Root symmetry pruning: a symmetric root has orbits of equal-value moves,
+    // so search one representative per orbit and skip the duplicates.
+    let roots = cand.subarray(0, k);
+    if (ROOT_SYMMETRY) {
+      const sym = Symmetry.of(game);
+      if (sym.hasSymmetry()) { roots = sym.distinctMoves(Array.from(roots)); k = roots.length; }
+    }
     const mover = game.current;
     const vals = new Float64Array(k);
-    let best = cand[0], bestV = -Infinity;
+    let best = roots[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
       const c = game.clone();
-      c.play(cand[j]);
+      c.play(roots[j]);
       const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity);
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? r.random() * dither : 0);
       vals[j] = mv;
-      if (mv > bestV) { bestV = mv; best = cand[j]; }
+      if (mv > bestV) { bestV = mv; best = roots[j]; }
     }
     if (temp > 0 && k > 1) {
       // Root value-softmax over the searched candidates' minimax values.
@@ -163,7 +177,7 @@ function create(cfg) {
       const w = new Float64Array(k);
       for (let j = 0; j < k; j++) { w[j] = Math.exp((vals[j] - bestV) / temp); sum += w[j]; }
       let u = r.random() * sum;
-      for (let j = 0; j < k; j++) { u -= w[j]; if (u <= 0) return { move: cand[j], info: `ab~=${vals[j].toFixed(3)} d${AB_DEPTH}k${AB_WIDTH}t${AB_TEMP}` }; }
+      for (let j = 0; j < k; j++) { u -= w[j]; if (u <= 0) return { move: roots[j], info: `ab~=${vals[j].toFixed(3)} d${AB_DEPTH}k${AB_WIDTH}t${AB_TEMP}` }; }
     }
     return { move: best, info: `ab=${bestV.toFixed(3)} d${AB_DEPTH}k${AB_WIDTH}` };
   }
