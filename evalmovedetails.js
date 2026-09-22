@@ -226,8 +226,7 @@ const agent = (typeof _agentMod.create === 'function'
   }
 
   const startTime = performance.now();
-  let printPeriodMs = 1000;
-  let lastPrintTime = startTime;
+  let nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
   let gapSum = 0;
 
   function printStats(count) {
@@ -294,16 +293,15 @@ const agent = (typeof _agentMod.create === 'function'
         `${gap.toFixed(3)}` + (agentMove.info ? `  ${agentMove.info}` : '')
       );
 
-      const now = performance.now();
-      if (now - lastPrintTime >= printPeriodMs) {
-        lastPrintTime = now;
-        printPeriodMs = Math.round(printPeriodMs * 1.5);
+      if (evals >= nextPrintPos) {
         printStats(evals);
+        printedAt = evals;
+        nextPrintPos = Math.max(Math.ceil(nextPrintPos * 1.5), nextPrintPos + 1);
       }
     }
   }
 
-  printStats(evals);
+  if (evals !== printedAt) printStats(evals);   // final total, unless the loop just printed it
 
   if (worst.length) {
     console.log(`\nworst ${worst.length} samples:`);
