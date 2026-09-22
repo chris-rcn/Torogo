@@ -105,9 +105,9 @@ function create(cfg) {
   // root's best top-K tracks the interior's), and a phase interpolation —
   // TOP_K_A at phase 0 (empty board), TOP_K_B at phase 1 (full board), rounded
   // to nearest — since the best top-K rises with phase (tight opening, wider
-  // late).  A == B is a flat top-K.
+  // late).  A == B is a flat top-K; the defaults ramp 30 (opening) -> 40 (late).
   const TOP_K_A   = cfg.int('TOP_K_A', 30);
-  const TOP_K_B   = cfg.int('TOP_K_B', 30);
+  const TOP_K_B   = cfg.int('TOP_K_B', 40);
   // Prune symmetry-equivalent root moves.  When the root position has a board
   // symmetry (common in the opening — see symmetry.js), moves in the same orbit
   // lead to positions identical up to that symmetry, so they have equal value;
