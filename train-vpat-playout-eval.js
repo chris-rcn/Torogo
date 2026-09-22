@@ -168,7 +168,7 @@ if (opts.spec) {
         console.error(`--spec: bad t token '${tok}' (expected t or t p<1-64>, e.g. tp9)`);
         process.exit(1);
       }
-      return phaseBins > 1 ? { size: 5, maxLibs: 0, phaseBins } : { size: 5, maxLibs: 0 };
+      return phaseBins > 1 ? { turn: true, phaseBins } : { turn: true };
     }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
@@ -216,10 +216,10 @@ if (opts.spec) {
   // variable truncation bias into constant lean for five extra weights.
   specs = [{ size: 1, maxLibs: -15, phaseBins: 3 }, { size: 2, maxLibs: -6, phaseBins: 3 },
            { size: 23, maxLibs: -3, phaseBins: 3 }, { size: 3, maxLibs: 1, phaseBins: 3 },
-           { size: 5, maxLibs: 0, phaseBins: 9 }];
+           { turn: true, phaseBins: 9 }];
 }
 let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
-const specKey = sp => sp.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
+const specKey = sp => sp.map(x => x.turn ? 't' : `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 

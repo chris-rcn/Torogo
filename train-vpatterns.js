@@ -171,7 +171,7 @@ if (opts.spec) {
         console.error(`--spec: bad t token '${tok}' (expected t or t p<1-64>, e.g. tp9)`);
         process.exit(1);
       }
-      return phaseBins > 1 ? { size: 5, maxLibs: 0, phaseBins } : { size: 5, maxLibs: 0 };
+      return phaseBins > 1 ? { turn: true, phaseBins } : { turn: true };
     }
     const [s, mRaw] = tok.split(':');
     const size = parseInt(s, 10);
@@ -433,7 +433,7 @@ if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     // Compare canonical fields, not whole objects (spec objects can carry
     // derived properties that would false-positive the comparison).
-    const specKey = ss => ss.map(x => `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
+    const specKey = ss => ss.map(x => x.turn ? 't' : `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
     const cliSpecs = opts.spec ? specs : null;
     const loaded = loadWeights(LOAD_PATH, HEALTH_PATH);
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);

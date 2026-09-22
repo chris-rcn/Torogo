@@ -47,7 +47,7 @@ function mixTag(h, tag) {
 // --spec parser, so what a run prints can be pasted into the next one.
 function specToken(sp) {
   const ph = sp.phaseBins > 1 ? 'p' + sp.phaseBins : '';
-  if (sp.size === 5) return 't' + ph;
+  if (sp.turn) return 't' + ph;
   const body = sp.maxLibs === 0 ? 'L'
              : sp.maxLibs < 0 ? 'H' + (-sp.maxLibs)
              : String(sp.maxLibs);
@@ -56,14 +56,14 @@ function specToken(sp) {
 function specString(specs) { return specs.map(specToken).join(','); }
 
 function sizeCode(size) { return size === 34 ? 5 : size === 23 ? 7 : size; }
-// The turn family (spec size 5, token 't') has no alphabet and no window, so it
+// The turn family (spec {turn:true}, token 't') has no alphabet and no window, so it
 // cannot share a tag base with a pattern spec.  tagBaseOf never returns 16 —
 // non-negative maxLibs give 0-15 and health families give 17+ — so tag base 16
 // is permanently free, and the family takes code 0 within it.
 const TURN_TAG = 16 << 3;
 const TURN_SALT = 0x5ce7a13b | 0;
 function specTag(spec) {
-  if (spec.size === 5) return TURN_TAG;
+  if (spec.turn) return TURN_TAG;
   return (tagBaseOf(spec.maxLibs) << 3) | sizeCode(spec.size);
 }
 
@@ -194,6 +194,13 @@ function prepareSpecs(specs, opts) {
     throw new Error('vpatterns: this model uses the chain-attribute family (spec C), which was ' +
                     'removed on 2026-09-11 — retrain it without the C term');
   }
+  // size 5 was the turn family; it is now an explicit {turn:true} spec.  A model
+  // that still carries {size:5} predates that change and would misload as a 5x5
+  // window, so reject it rather than score silently wrong.
+  if (specs.some(sp => sp.size === 5)) {
+    throw new Error('vpatterns: size 5 was the turn family, now spec {turn:true} — ' +
+                    'this model predates that change; retrain it');
+  }
   const byMaxLibs = new Map();
   // Per-PATTERN-spec phase bins (token suffix pN on size:maxLibs): emitted
   // keys are salted by floor(phase * N), giving each spec its own phase-
@@ -202,21 +209,21 @@ function prepareSpecs(specs, opts) {
   const patPhaseBins = new Int32Array(256);
   let hasPhasedPatterns = false;
   for (const sp of specs) {
-    if (sp.size !== 0 && sp.size !== 5 && sp.phaseBins > 1) {
+    if (!sp.turn && sp.size !== 0 && sp.phaseBins > 1) {
       patPhaseBins[(tagBaseOf(sp.maxLibs) << 3) | sizeCode(sp.size)] = sp.phaseBins;
       hasPhasedPatterns = true;
     }
   }
-  // The TURN feature (size 5): one antisymmetric feature per position, +1 when
+  // The TURN feature (spec {turn:true}): one antisymmetric feature per position, +1 when
   // BLACK is to move, keyed by phase bucket.  z has no tempo term otherwise,
   // and the value of holding the move plainly varies with fullness.  It lives
   // at its own tag base, so it registers its bins directly.
-  const turnSpec = specs.find(sp => sp.size === 5);
+  const turnSpec = specs.find(sp => sp.turn);
   const hasTurn = turnSpec !== undefined;
   const turnPhaseBins = hasTurn ? (turnSpec.phaseBins || 1) : 1;
   if (turnPhaseBins > 1) { patPhaseBins[TURN_TAG] = turnPhaseBins; hasPhasedPatterns = true; }
   for (const spec of specs) {
-    if (spec.size === 5) continue;
+    if (spec.turn) continue;
     if (!byMaxLibs.has(spec.maxLibs)) byMaxLibs.set(spec.maxLibs, []);
     byMaxLibs.get(spec.maxLibs).push(spec.size);
   }
