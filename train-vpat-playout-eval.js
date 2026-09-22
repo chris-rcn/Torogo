@@ -89,7 +89,7 @@ print, and each new best teMSE also writes the -best checkpoint.
   --no-cache-features  do NOT cache extracted features across epochs (replay +
                     re-extract every position every epoch).  Caching is on by
                     default (test eager, train lazy) and auto-off with frozen specs
-  --save PATH       checkpoint path (default out/vpat-pe-<random>.js)
+  --save PATH       checkpoint path (default out/vpat-<random>.js)
 
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
@@ -103,7 +103,7 @@ print, and each new best teMSE also writes the -best checkpoint.
 const DATA_PATH  = opts.data;
 const TEST_FILE  = opts['test-file'] || null;
 const EVAL_SIZE  = parseInt(opts['eval-size'] || '13', 10);
-const SAVE_PATH  = opts.save || `out/vpat-pe-${Math.random().toString(36).slice(2, 10)}.js`;
+const SAVE_PATH  = opts.save || `out/vpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';
