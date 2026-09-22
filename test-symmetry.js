@@ -186,5 +186,46 @@ section('PASS handling');
   check(withPass.filter(m => m === PASS).length === 1, 'PASS retained exactly once');
 }
 
+// ── Distinct-move counts: empty board and a lone stone ───────────────────────
+section('distinct-move counts');
+{
+  // Empty board: every cell is one orbit under the full group -> ONE distinct move.
+  const g = parseBoard(`
+    . . . . .
+    . . . . .
+    . . . . .
+    . . . . .
+    . . . . .`);
+  const sym = Symmetry.of(g);
+  const area = g.N * g.N;
+  const all = []; for (let i = 0; i < area; i++) all.push(i);
+  check(sym.hasSymmetry(), 'empty board: hasSymmetry');
+  check(sym.distinctMoves(all).length === 1, 'empty board: 1 distinct move');
+  let oneOrbit = true;
+  for (let i = 0; i < area; i++) if (sym.canonical(i) !== sym.canonical(0)) oneOrbit = false;
+  check(oneOrbit, 'empty board: all cells fall in one orbit');
+}
+{
+  // A single stone is 8-fold (D4 about it) ANYWHERE on the torus, so the 24
+  // empty cells of a 5x5 collapse to 5 orbits regardless of the stone's spot.
+  const centre = parseBoard(`
+    . . . . .
+    . . . . .
+    . . X . .
+    . . . . .
+    . . . . .`);
+  const rc = agrees('single stone (centre)', centre, 8);
+  check(rc.dm.length === 5, 'single centre stone: 5 distinct moves');
+
+  const corner = parseBoard(`
+    X . . . .
+    . . . . .
+    . . . . .
+    . . . . .
+    . . . . .`);
+  const ro = agrees('single stone (corner)', corner, 8);
+  check(ro.dm.length === 5, 'single off-centre stone: also 5 distinct moves (torus)');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
