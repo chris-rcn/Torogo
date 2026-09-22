@@ -79,7 +79,7 @@ function create(cfg) {
   // block baked into the model file can supply their defaults.
   const _vpatPath = _isNode
     ? cfg.str('TRUNC_VPAT_DATA',
-        require('path').join(__dirname, '..', 'out', 'vpat-pe-ib06cpml-best-frozen-0912.js'))  // champion
+        require('path').join(__dirname, '..', 'out', 'vpat-pe-ghzlf3wg-best.js'))
     : null;
   if (_isNode && !_vpatPath) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
@@ -105,8 +105,8 @@ function create(cfg) {
   // root's best top-K tracks the interior's), and a phase interpolation —
   // TOP_K_A at phase 0 (empty board), TOP_K_B at phase 1 (full board), rounded
   // to nearest — since the best top-K rises with phase (tight opening, wider
-  // late).  A == B is a flat top-K; the defaults ramp 30 (opening) -> 40 (late).
-  const TOP_K_A   = cfg.int('TOP_K_A', 30);
+  // late).  A == B is a flat top-K; the defaults ramp 10 (opening) -> 40 (late).
+  const TOP_K_A   = cfg.int('TOP_K_A', 10);
   const TOP_K_B   = cfg.int('TOP_K_B', 40);
   // Prune symmetry-equivalent root moves.  When the root position has a board
   // symmetry (common in the opening — see symmetry.js), moves in the same orbit

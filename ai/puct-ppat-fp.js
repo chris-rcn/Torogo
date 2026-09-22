@@ -68,8 +68,8 @@ function create(cfg) {
   // root's best top-K tracks the interior's), and a phase interpolation —
   // TOP_K_A at phase 0 (empty board), TOP_K_B at phase 1 (full board), rounded
   // to nearest — since the best top-K rises with phase (tight opening, wider
-  // late).  A == B is a flat top-K; the defaults ramp 30 (opening) -> 40 (late).
-  const TOP_K_A   = cfg.int('TOP_K_A', 30);
+  // late).  A == B is a flat top-K; the defaults ramp 10 (opening) -> 40 (late).
+  const TOP_K_A   = cfg.int('TOP_K_A', 10);
   const TOP_K_B   = cfg.int('TOP_K_B', 40);
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
