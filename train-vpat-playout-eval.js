@@ -31,7 +31,7 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help', 'no-cache-features'],
-  ['data', 'test-file', 'test-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
+  ['data', 'test-file', 'test-pos', 'train-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
    'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
@@ -59,6 +59,7 @@ print, and each new best teMSE also writes the -best checkpoint.
                     the test set / teMSE — without --test-file there is none
   --test-pos N      cap the --test-file test set to N records (default: all);
                     requires --test-file
+  --train-pos N     cap the training pool to the first N records (default: all)
   --min-phase F     train only on records with phase >= F (default: --delta
                     if given, else 0 — the endpoint phase is never below delta)
   --max-phase F     train only on records with phase <= F (default 1);
@@ -119,6 +120,12 @@ const EPOCHS     = opts.epochs !== undefined ? parseInt(opts.epochs, 10) : 0;
 const TEST_POS_RAW = opts['test-pos'] !== undefined ? parseInt(opts['test-pos'], 10) : Infinity;
 if (opts['test-pos'] !== undefined && !opts['test-file']) {
   console.error('--test-pos requires --test-file (the test set comes only from --test-file)');
+  process.exit(1);
+}
+// --train-pos caps the number of training positions used (default: all of --data).
+const TRAIN_POS_RAW = opts['train-pos'] !== undefined ? parseInt(opts['train-pos'], 10) : Infinity;
+if (opts['train-pos'] !== undefined && !(TRAIN_POS_RAW >= 1)) {
+  console.error(`--train-pos must be a positive integer, got ${opts['train-pos']}`);
   process.exit(1);
 }
 // --delta D: the DEPLOYMENT truncation delta to measure the bias at, and to bake
@@ -323,7 +330,7 @@ function loadRecords(filePath) {
 
 // All of --data is the train pool; the test set comes only from --test-file.
 const records = loadRecords(DATA_PATH);
-const trainRecs = records;
+const trainRecs = records.slice(0, TRAIN_POS_RAW);
 const _testAll = TEST_FILE ? loadRecords(TEST_FILE) : null;
 const testRecs  = TEST_FILE ? _testAll.slice(0, TEST_POS_RAW) : [];
 if (TEST_FILE && testRecs.length === 0) {
@@ -644,6 +651,7 @@ const testAgent = gm => ({ move: gm.gameOver ? PASS
 const bline = (label, content) => console.log(label.padEnd(8) + content);
 const f4 = (n) => Util.fmt4i(n).trim();   // compact integer count (3418 -> "3418", 360427 -> "360K")
 bline('data:', `${DATA_PATH}  ${f4(trainRecs.length)} train` +
+  (Number.isFinite(TRAIN_POS_RAW) ? ` (capped ${f4(TRAIN_POS_RAW)})` : ``) +
   (BAND_ACTIVE ? `  band [${MIN_PHASE}, ${MAX_PHASE}]` : ``) +
   (records.malformed ? `  ${f4(records.malformed)} malformed` : ``) +
   (records.outsideBand ? `  ${f4(records.outsideBand)} out-of-band` : ``));
