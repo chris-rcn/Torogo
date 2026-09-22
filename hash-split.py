@@ -16,19 +16,45 @@ Comment lines (starting with '#') are copied to BOTH outputs so provenance
 headers survive on each side; blank lines are dropped.
 """
 import sys
+import argparse
 import hashlib
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("usage: hash-split.py <infile> <nth>   (nth=3 => ~1/3 to test)")
-    infile = sys.argv[1]
-    try:
-        nth = int(sys.argv[2])
-    except ValueError:
-        sys.exit(f"nth must be a positive integer, got {sys.argv[2]!r}")
-    if nth < 1:
-        sys.exit(f"nth must be >= 1, got {nth}")
+    p = argparse.ArgumentParser(
+        prog="hash-split.py",
+        description="Stable train/test split of a line-based file by a content hash.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Each DATA line is hashed (md5 of its content) and bucketed by\n"
+            "hash % nth: bucket 0 -> <infile>-test, everything else ->\n"
+            "<infile>-train.  So nth=3 sends ~1/3 of the lines to test, nth=10\n"
+            "~1/10, and so on.\n"
+            "\n"
+            "The bucket is a hash of the line's CONTENT, not its position, so the\n"
+            "split is deterministic and order-independent: the same line always\n"
+            "lands on the same side, in every run and across files -- an identical\n"
+            "record can never end up in both train and test, and regenerating a\n"
+            "corpus never reshuffles the split.\n"
+            "\n"
+            "Comment lines (starting with '#') are copied to BOTH outputs so\n"
+            "provenance headers survive on each side; blank lines are dropped.\n"
+            "\n"
+            "Outputs (overwritten): <infile>-train and <infile>-test.\n"
+            "A per-run summary (counts, % test) is written to stderr.\n"
+            "\n"
+            "Examples:\n"
+            "  hash-split.py corpus.txt 10     # ~10% of data lines to corpus.txt-test\n"
+            "  hash-split.py corpus.txt 3      # ~1/3 to corpus.txt-test\n"
+        ),
+    )
+    p.add_argument("infile", help="line-based input file to split")
+    p.add_argument("nth", type=int,
+                   help="test-bucket size: ~1/nth of data lines go to test (integer >= 1)")
+    args = p.parse_args()
+    if args.nth < 1:
+        p.error(f"nth must be >= 1, got {args.nth}")
+    infile, nth = args.infile, args.nth
 
     train_path = infile + "-train"
     test_path = infile + "-test"
