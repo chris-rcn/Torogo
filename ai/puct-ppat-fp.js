@@ -62,12 +62,15 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.5);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
-  // Top-K kept move count (applies only below root).  30 beat 40 by 52.3%
-  // over 1427 games (match8, 2026-09-09), measured on puct-ppat-fp-trunc.
-  // Applied at EVERY node including the root (0 = full width).  A phase sweep
-  // found the root's best top-K tracks the interior's, so the separate
-  // ROOT_TOP_K knob (formerly 50 at the root) was folded into this one.
-  const TOP_K     = cfg.int('TOP_K', 30);
+  // Top-K kept move count, applied at EVERY node including the root (0 = full
+  // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  Two
+  // things were folded in here: the old separate ROOT_TOP_K (a sweep found the
+  // root's best top-K tracks the interior's), and a phase interpolation —
+  // TOP_K_A at phase 0 (empty board), TOP_K_B at phase 1 (full board), rounded
+  // to nearest — since the best top-K rises with phase (tight opening, wider
+  // late).  A == B is a flat top-K.
+  const TOP_K_A   = cfg.int('TOP_K_A', 30);
+  const TOP_K_B   = cfg.int('TOP_K_B', 30);
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
   // run from the unexpanded position.  1 = expand on first contact (the
@@ -166,9 +169,9 @@ function create(cfg) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
     const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
-    // Top-K pruning: keep the policy's top TOP_K candidates at every node,
-    // the root included.
-    const k = TOP_K;
+    // Top-K pruning at every node (root included): keep the policy's top K,
+    // interpolated by this node's phase between TOP_K_A (phase 0) and TOP_K_B.
+    const k = Math.round(TOP_K_A + (TOP_K_B - TOP_K_A) * game2.phase());
     if (k > 0) {
       movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }

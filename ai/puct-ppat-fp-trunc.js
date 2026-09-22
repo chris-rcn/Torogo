@@ -100,10 +100,14 @@ function create(cfg) {
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
   // Top-K kept move count, applied at EVERY node including the root (0 = full
-  // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  A phase
-  // sweep found the root's best top-K tracks the interior's, so the separate
-  // ROOT_TOP_K knob (formerly 50 at the root) was folded into this one.
-  const TOP_K     = cfg.int('TOP_K', 30);
+  // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  Two
+  // things were folded in here: the old separate ROOT_TOP_K (a sweep found the
+  // root's best top-K tracks the interior's), and a phase interpolation —
+  // TOP_K_A at phase 0 (empty board), TOP_K_B at phase 1 (full board), rounded
+  // to nearest — since the best top-K rises with phase (tight opening, wider
+  // late).  A == B is a flat top-K.
+  const TOP_K_A   = cfg.int('TOP_K_A', 30);
+  const TOP_K_B   = cfg.int('TOP_K_B', 30);
   // Prune symmetry-equivalent root moves.  When the root position has a board
   // symmetry (common in the opening — see symmetry.js), moves in the same orbit
   // lead to positions identical up to that symmetry, so they have equal value;
@@ -286,9 +290,10 @@ function create(cfg) {
       const sym = Symmetry.of(game2);
       if (sym.hasSymmetry()) movesArr = sym.distinctMoves(movesArr);
     }
-    // Top-K pruning: keep the policy's top TOP_K candidates at every node,
-    // the root included (the symmetry dedup above has already run at the root).
-    const k = TOP_K;
+    // Top-K pruning at every node (root included; symmetry dedup above ran at
+    // the root): keep the policy's top K, interpolated by this node's phase
+    // between TOP_K_A (phase 0) and TOP_K_B (phase 1).
+    const k = Math.round(TOP_K_A + (TOP_K_B - TOP_K_A) * game2.phase());
     if (k > 0) {
       movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
