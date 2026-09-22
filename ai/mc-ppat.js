@@ -128,7 +128,7 @@ function create(cfg) {
 
   // Truncation is ON when a vpat evaluator is specified (TRUNC_VPAT_DATA);
   // absent = plain full playouts.  delta comes from the env var, else the model
-  // file's baked 'trunc' block (train-vpat-playout-eval writes it).  VPAT_PICK
+  // file's baked 'trunc' block (train-vpat-supervised writes it).  VPAT_PICK
   // also uses the evaluator, so it requires TRUNC_VPAT_DATA too.
   const TRUNC_VPAT = cfg.str('TRUNC_VPAT_DATA', '');
   const TRUNC_ON   = TRUNC_VPAT !== '';

@@ -5,7 +5,7 @@
 // TRUNC_ROOT_PHASE, every playout runs for the prefix length set by
 // TRUNC_PHASE_DELTA (a move count, or a fullness advance under
 // LEGACY_PHASE_DELTA) and then its leaf value is a static vpatterns evaluation
-// (TRUNC_VPAT_DATA, a train-vpat-playout-eval checkpoint: V(s) = P(BLACK wins))
+// (TRUNC_VPAT_DATA, a train-vpat-supervised checkpoint: V(s) = P(BLACK wins))
 // instead of the terminal score.  Otherwise every playout runs to the end.
 // The prefix moves still fill the RAVE trace either way.  (An averaged
 // multi-position evaluation window was tried and removed: consecutive-
@@ -72,7 +72,7 @@ const RESIGN_MIN_PLAYOUTS = 20000;
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  // Static evaluator: a vpatterns checkpoint (train-vpat-playout-eval).  Hard
+  // Static evaluator: a vpatterns checkpoint (train-vpat-supervised).  Hard
   // failure, not a fallback — this agent's identity IS its truncated playouts,
   // and a silently-missing evaluator would field plain puct-ppat-fp under the
   // wrong name.  Loaded up front (before the truncation knobs) so a 'trunc'

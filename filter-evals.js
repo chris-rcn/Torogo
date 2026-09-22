@@ -86,7 +86,7 @@ function processLine(line) {
   if (noExtreme > 0 && (w < noExtreme || w > 1 - noExtreme)) { dropExtreme++; return; }
 
   // Phase filter: current-format lines carry the phase in the file (as
-  // train-vpat-playout-eval trusts it); legacy lines must be replayed.
+  // train-vpat-supervised trusts it); legacy lines must be replayed.
   if (needPhase) {
     let phase;
     if (cur) {

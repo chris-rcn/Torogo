@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-vpat-playout-eval.js — supervised training of vpatterns weights on a
+// train-vpat-supervised.js — supervised training of vpatterns weights on a
 // gen-agent-evals data file (static playout-value evaluator).
 //
 // Value function (absolute, P(BLACK wins)):
@@ -34,7 +34,7 @@ const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help', 'no-cache-
   ['data', 'test-file', 'test-pos', 'train-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
    'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
-  console.log(`Usage: node train-vpat-playout-eval.js --data <file> [options]
+  console.log(`Usage: node train-vpat-supervised.js --data <file> [options]
 
 Supervised trainer: fits vpatterns weights to the playout-value labels of a
 gen-agent-evals data file (logistic regression on P(BLACK wins)).  Runs
