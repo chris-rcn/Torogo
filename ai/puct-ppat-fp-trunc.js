@@ -50,6 +50,7 @@ const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat                  = Util.load('./vpatterns.js', 'VPatterns');
+const Symmetry              = Util.load('./symmetry.js', 'Symmetry');
 const { createState, ppatMove, loadWeights } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
@@ -106,6 +107,13 @@ function create(cfg) {
   // games pooled across K 40-80 (matchSweepROOT_TOP_K, 2026-09-10, z = +6.5);
   // 40 and 50 led the sweep, and 30 gave the benefit up entirely at 51.2%.
   const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 50);
+  // Prune symmetry-equivalent root moves.  When the root position has a board
+  // symmetry (common in the opening — see symmetry.js), moves in the same orbit
+  // lead to positions identical up to that symmetry, so they have equal value;
+  // keeping one representative concentrates the search budget on distinct moves
+  // at no accuracy cost.  Exact and self-limiting (does nothing once the board
+  // is asymmetric).  1 = on (default), 0 = off (for A/B).
+  const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
   // run from the unexpanded position.  1 = expand on first contact (the
@@ -156,7 +164,8 @@ function create(cfg) {
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
-    `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}`);
+    `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
+    `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -274,6 +283,12 @@ function create(cfg) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
     const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
+    // Root symmetry pruning (before top-K, so top-K keeps K DISTINCT moves):
+    // drop symmetry-equivalent duplicates so the budget lands on distinct moves.
+    if (parent === null && ROOT_SYMMETRY) {
+      const sym = Symmetry.of(game2);
+      if (sym.hasSymmetry()) movesArr = sym.distinctMoves(movesArr);
+    }
     // Top-K pruning: TOP_K below the root; at the root, full width unless
     // ROOT_TOP_K caps the actual decision's candidate set.
     const k = parent !== null ? TOP_K : ROOT_TOP_K;
