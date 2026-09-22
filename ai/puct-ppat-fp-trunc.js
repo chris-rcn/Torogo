@@ -16,8 +16,8 @@
 // captures during the prefix delay it correctly: the point is defined by net
 // board-filling progress, not move count.
 //
-// PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes and ROOT_TOP_K at the root (0 = full width), RAVE, and
+// PUCT MCTS with policy-driven priors, top-K candidate pruning at every node
+// including the root (TOP_K, 0 = full width), RAVE, and
 // ppat-policy full-playout leaf
 // evaluation.
 //
@@ -99,14 +99,11 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.5);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
-  // Top-K kept move count (applies only below root).  30 beat 40 by 52.3%
-  // over 1427 games (match8, 2026-09-09).
+  // Top-K kept move count, applied at EVERY node including the root (0 = full
+  // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  A phase
+  // sweep found the root's best top-K tracks the interior's, so the separate
+  // ROOT_TOP_K knob (formerly 50 at the root) was folded into this one.
   const TOP_K     = cfg.int('TOP_K', 30);
-  // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
-  // the classic full-width root).  50 beat full width by 56.7% over 2387
-  // games pooled across K 40-80 (matchSweepROOT_TOP_K, 2026-09-10, z = +6.5);
-  // 40 and 50 led the sweep, and 30 gave the benefit up entirely at 51.2%.
-  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 50);
   // Prune symmetry-equivalent root moves.  When the root position has a board
   // symmetry (common in the opening — see symmetry.js), moves in the same orbit
   // lead to positions identical up to that symmetry, so they have equal value;
@@ -289,9 +286,9 @@ function create(cfg) {
       const sym = Symmetry.of(game2);
       if (sym.hasSymmetry()) movesArr = sym.distinctMoves(movesArr);
     }
-    // Top-K pruning: TOP_K below the root; at the root, full width unless
-    // ROOT_TOP_K caps the actual decision's candidate set.
-    const k = parent !== null ? TOP_K : ROOT_TOP_K;
+    // Top-K pruning: keep the policy's top TOP_K candidates at every node,
+    // the root included (the symmetry dedup above has already run at the root).
+    const k = TOP_K;
     if (k > 0) {
       movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }

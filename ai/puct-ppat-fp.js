@@ -4,8 +4,8 @@
 // place of npat (featurepol-softmax rated ~+150 over npat-softmax on the
 // CGOS ladder, so its priors and top-K candidate sets should be sharper).
 //
-// PUCT MCTS with policy-driven priors, top-K candidate pruning at interior
-// nodes and ROOT_TOP_K at the root (0 = full width), RAVE, and
+// PUCT MCTS with policy-driven priors, top-K candidate pruning at every node
+// including the root (TOP_K, 0 = full width), RAVE, and
 // ppat-policy full-playout leaf
 // evaluation.
 //
@@ -64,12 +64,10 @@ function create(cfg) {
   const RAVE_K     = cfg.float('RAVE_K', 400);
   // Top-K kept move count (applies only below root).  30 beat 40 by 52.3%
   // over 1427 games (match8, 2026-09-09), measured on puct-ppat-fp-trunc.
+  // Applied at EVERY node including the root (0 = full width).  A phase sweep
+  // found the root's best top-K tracks the interior's, so the separate
+  // ROOT_TOP_K knob (formerly 50 at the root) was folded into this one.
   const TOP_K     = cfg.int('TOP_K', 30);
-  // Root candidate cap: keep only the policy's top K at the ROOT (0 = all,
-  // the classic full-width root).  50 beat full width by 56.7% over 2387
-  // games pooled across K 40-80 (matchSweepROOT_TOP_K, 2026-09-10, z = +6.5);
-  // 40 and 50 led the sweep, and 30 gave the benefit up entirely at 51.2%.
-  const ROOT_TOP_K = cfg.int('ROOT_TOP_K', 50);
   // Lazy expansion: an edge must accumulate this many visits before its child
   // node (featurepol extraction + priors) is created; playouts before that
   // run from the unexpanded position.  1 = expand on first contact (the
@@ -168,9 +166,9 @@ function create(cfg) {
     // Compute the policy softmax once — reused for top-K pruning and the PUCT priors.
     const fpState = _runFp(game2, game3);
     let movesArr = getLegalMoves(game2);
-    // Top-K pruning: TOP_K below the root; at the root, full width unless
-    // ROOT_TOP_K caps the actual decision's candidate set.
-    const k = parent !== null ? TOP_K : ROOT_TOP_K;
+    // Top-K pruning: keep the policy's top TOP_K candidates at every node,
+    // the root included.
+    const k = TOP_K;
     if (k > 0) {
       movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
