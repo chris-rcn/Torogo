@@ -38,7 +38,7 @@ function mixTag(h, tag) {
 }
 // Spec size → 3-bit tag code.  Sizes 1-4 are themselves; the rectangle pairs
 // take the free codes — 34 (the 3×4 ∪ 4×3 pair) is 5, 23 (the 2×3 ∪ 3×2 pair)
-// is 7, with 6 already spoken for by the E family.  maxLibs 0 is the
+// is 7 (6 is currently unused).  maxLibs 0 is the
 // LADDER-CODED family ('size:L' in the trainers): raw is vlibpat's 7-state
 // turn-independent tactical alphabet (0 empty, ±1 alive, ±2 dead, ±3
 // unsettled) instead of capped liberty counts — structurally identical to

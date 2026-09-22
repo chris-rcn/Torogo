@@ -8,7 +8,7 @@
 //
 // Model: P(chain survives to game end) = sigmoid(bias + sum of feature
 // logits).  Features per chain, all t-hashed NINECELLS — the 3x3 region
-// hash the E family uses) on a 2 + 2*--max-libs state alphabet: empty, this
+// hash — on a 2 + 2*--max-libs state alphabet: empty, this
 // chain, and then friendly-other and enemy each split by liberty count capped
 // at --max-libs.  At the default 2 that is six states — empty / this chain /
 // friendly-other in atari / friendly-other with 2+ / enemy in atari / enemy

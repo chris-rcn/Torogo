@@ -55,8 +55,8 @@ function uh(a, b) {
 // only the eight surrounding cells are coded, the centre being the anchor.
 // The same function therefore serves a stone (its own chain's surround) and an
 // empty point such as a liberty.  Two xh4 combines, orthogonals and diagonals,
-// each pairing opposite cells, giving D4 invariance.  Shared by the E
-// (eye-pair) family and train-health.js.
+// each pairing opposite cells, giving D4 invariance.  Shared with
+// train-health.js.
 //
 // Three-state alphabet by default (empty / owner's color / enemy).  Pass
 // gid and chainGid for the FOUR-state alphabet, which splits the owner's
