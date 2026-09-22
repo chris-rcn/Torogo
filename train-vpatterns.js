@@ -82,7 +82,7 @@ checkpoint is written at every print.
                     normal training moves begin (backward curriculum)
 
   --load PATH       resume from a checkpoint
-  --save PATH       checkpoint path (default out/vpatterns-<random>.js)
+  --save PATH       checkpoint path (default out/vpat-<random>.js)
 
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
@@ -102,7 +102,7 @@ checkpoint is written at every print.
 }
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
-const SAVE_PATH  = opts.save  || `out/vpatterns-${Math.random().toString(36).slice(2, 10)}.js`;
+const SAVE_PATH  = opts.save  || `out/vpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
