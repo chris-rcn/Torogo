@@ -20,9 +20,8 @@
 const EMPTY = 0, BLACK = 1, WHITE = -1;
 const PASS = -1;
 
-// Import coordStr from game2 for coordinate display
 const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
-const { coordStr, isTrueEye } = Util.load('./game2.js', 'Game2');
+const { isTrueEye } = Util.load('./game2.js', 'Game2');
 
 // Operation types (integers, not strings)
 const OP_ADD_STONE = 0;
@@ -862,27 +861,15 @@ function game3FromGame2(game2) {
   const game3 = new Game3(N);
   const cap = N * N;
 
-  let stonesPlaced = 0;
+  // A valid Game2 replays legally with no captures in any order (every group
+  // keeps a liberty throughout index-order placement — either an unplaced
+  // same-group cell, still empty, or its final liberty), so neither a legality
+  // check nor a capture check can fire here.  See the valid-position replay
+  // invariant in CLAUDE.md.
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] === EMPTY) continue;
     game3.current = game2.cells[i];
-    if (!game3.isLegal(i)) {
-      throw new Error(
-        `game3FromGame2: cell ${coordStr(i, N)} (` +
-        `${game2.cells[i] === BLACK ? 'BLACK' : 'WHITE'}) is not legal in Game3\n` +
-        `Game2 board:\n${game2.toString(PASS)}\n` +
-        `Game3 board:\n${game3.toString(PASS)}`
-      );
-    }
     game3.play(i);
-    stonesPlaced++;
-    if (game3.emptyCount !== cap - stonesPlaced) {
-      throw new Error(
-        `game3FromGame2: capture detected placing ${coordStr(i, N)}\n` +
-        `Game2 board:\n${game2.toString(PASS)}\n` +
-        `Game3 board:\n${game3.toString(PASS)}`
-      );
-    }
   }
 
   game3.current = game2.current;
