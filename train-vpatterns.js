@@ -100,7 +100,7 @@ checkpoint is written at every print.
   --positions-n N   positions sampled per print from --positions-file
                     (default 0 = all)
   --md-file F       evalmovedetails positions, single full pass each print
-                    (mdRms column)
+                    (mdMae column)
   --ladder-file F   evalladders2 suite scored each print (ladr column)
   --accuracy-file F game corpus for winner-prediction accuracy each print
                     (vacc column)
@@ -121,7 +121,7 @@ const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 1
 const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'featurepol-0fg36nkw.js');
 const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
 const POSITIONS_FILE  = opts['positions-file']   || null;
-const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
+const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
@@ -498,7 +498,7 @@ if (POSITIONS_FILE) {
 }
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the trainee
-// against --md-file at each status print (the `mdRms` column — RMS win-ratio
+// against --md-file at each status print (the `mdMae` column — mean win-ratio
 // gap to the top move).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
@@ -565,7 +565,7 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
-  ...(mdPositions ? ['mdRms'.padStart(5)] : []),
+  ...(mdPositions ? ['mdMae'.padStart(5)] : []),
   // tTest = whole eval pass; the trailing turn = wall-clock per move of the
   // reference MATCHES only (both sides' moves), vs the left turn = training.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
@@ -660,10 +660,10 @@ while (true) {
       rmsCol    = Util.fmt4(rmsErr);
       rmsAvgCol = Util.fmt4(rmsAvg);
     }
-    let mdRmsCol = null;
+    let mdMaeCol = null;
     if (mdPositions) {
-      const { rmsErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
-      mdRmsCol = Util.fmtRatio4(rmsErr).padStart(5);
+      const { maeErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
+      mdMaeCol = Util.fmtRatio4(maeErr).padStart(5);
     }
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
     wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
@@ -691,7 +691,7 @@ while (true) {
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
-      ...(mdRmsCol ? [mdRmsCol]             : []),
+      ...(mdMaeCol ? [mdMaeCol]             : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
     ].join('  '));
