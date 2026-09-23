@@ -419,6 +419,15 @@ if (SL_TRAIN_KEEP < 1) {
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
+
+// Warm up lazy feature loads (e.g. the vpat<n> rank model, which logs a notice
+// the first time it extracts) so their startup messages land here with the
+// banner rather than splitting the header from the first data row.
+{
+  const g = new Game2(TRAIN_SIZE, true);
+  const st = FeaturePol.createState(g.N, weights.spec);
+  FeaturePol.extractFeatures(g, st, weights, weights.spec.needsLadder ? game3FromGame2(g) : undefined);
+}
 console.log();
 // Fixed per-column widths; header and data rows pad to the same widths so they
 // line up regardless of the individual formatters' string lengths.
