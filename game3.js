@@ -254,6 +254,45 @@ class Game3 {
     }
   }
 
+  // ── One-way (irreversible) variants, used by playOneWay ──────────────────
+  // Guarded liberty updates that skip the op-stack push.  The _raw variants
+  // can't be used directly: they always adjust _ls, so re-adding a liberty a
+  // group already holds (or removing one it lacks) would corrupt the count.
+  // These keep the wasSet guard but record nothing.
+  _addLiberty_norec(gid, idx) {
+    const W = this._W;
+    const m = 1 << (idx & 31);
+    const lb = gid * W + (idx >> 5);
+    if (!(this._lw[lb] & m)) { this._lw[lb] |= m; this._ls[gid]++; }
+  }
+
+  _removeLiberty_norec(gid, idx) {
+    const W = this._W;
+    const m = 1 << (idx & 31);
+    const lb = gid * W + (idx >> 5);
+    if (this._lw[lb] & m) { this._lw[lb] &= ~m; this._ls[gid]--; }
+  }
+
+  // Merge otherId into mainGid without the mainLibs snapshot / op push that
+  // _mergeGroups needs for reversal.
+  _mergeGroups_norec(mainGid, otherId) {
+    const W = this._W;
+    const gb = mainGid * W;
+    const ob = otherId * W;
+    for (let wi = 0; wi < W; wi++) {
+      let w = this._sw[ob + wi];
+      while (w) {
+        const bit = 31 - Math.clz32(w & -w);
+        this._gid[wi * 32 + bit] = mainGid;
+        w &= w - 1;
+      }
+      this._sw[gb + wi] |= this._sw[ob + wi];
+    }
+    this._ss[mainGid] += this._ss[otherId];
+    for (let wi = 0; wi < W; wi++) this._lw[gb + wi] |= this._lw[ob + wi];
+    this._ls[mainGid] = this._pop32Count(mainGid, W);
+  }
+
   _mergeGroups(mainGid, otherId) {
     // Merge other group into main, recording just enough to reverse.
     //
@@ -548,6 +587,128 @@ class Game3 {
       opsStart: opCountBefore,
       captured: captured,
     });
+
+    this.consecutivePasses = 0;
+    this.current = oppColor;
+    this.moveCount++;
+    return true;
+  }
+
+  // Irreversible play: identical state transition to play(), but records
+  // nothing on the op stack.  Roughly halves the per-move cost (no op-object
+  // allocation, no OP_MOVE record, no merge snapshot) at the price of
+  // reversibility: a one-way move CANNOT be undone, and undo() must never be
+  // driven past one.  For build-once-then-read positions — game3FromGame2 and
+  // the tactical rebuilds layered on it — that trade is free, and callers that
+  // read ladders on top still push their own probe moves with play()/undo()
+  // above the one-way base without touching it.
+  playOneWay(move) {
+    if (move === PASS) {
+      this.consecutivePasses++;
+      if (this.consecutivePasses >= 2) this.gameOver = true;
+      this.ko = PASS;
+      this.current = -this.current;
+      this.moveCount++;
+      return true;
+    }
+
+    if (!this.isLegal(move)) return false;
+
+    const color = this.current;
+    const oppColor = -color;
+    const nbr = this._nbr;
+    const base = move * 4;
+    const W = this._W;
+
+    this.cells[move] = color;
+    this.emptyCount--;
+    this.lastMove = move;
+
+    // Remove the placed cell from adjacent opponent groups' liberties.
+    const oppGroupIds = [];
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      if (this.cells[ni] === oppColor) {
+        const gid = this._gid[ni];
+        if (gid !== -1 && !oppGroupIds.includes(gid)) {
+          oppGroupIds.push(gid);
+          this._removeLiberty_norec(gid, move);
+        }
+      }
+    }
+
+    // Adjacent same-colour groups and empty neighbours.
+    const sameColorGroupIds = [];
+    const emptyNeighbors = [];
+    for (let i = 0; i < 4; i++) {
+      const ni = nbr[base + i];
+      const c = this.cells[ni];
+      if (c === color) {
+        const gid = this._gid[ni];
+        if (!sameColorGroupIds.includes(gid)) sameColorGroupIds.push(gid);
+      } else if (c === EMPTY && !emptyNeighbors.includes(ni)) {
+        emptyNeighbors.push(ni);
+      }
+    }
+
+    let mainGid;
+    if (sameColorGroupIds.length === 0) {
+      if (this._nextGid >= this._maxG) {
+        throw new Error(`game3: group ids exhausted (${this._maxG}) — board size ${this.N}`);
+      }
+      mainGid = this._nextGid++;
+      this._gc[mainGid] = color;
+      this._gid[move] = mainGid;
+      this._addStone_raw(move, mainGid);
+    } else {
+      mainGid = sameColorGroupIds[0];
+      for (let i = 1; i < sameColorGroupIds.length; i++) {
+        if (this._ss[sameColorGroupIds[i]] > this._ss[mainGid]) mainGid = sameColorGroupIds[i];
+      }
+      this._gid[move] = mainGid;
+      this._addStone_raw(move, mainGid);
+      for (const otherId of sameColorGroupIds) {
+        if (otherId !== mainGid) this._mergeGroups_norec(mainGid, otherId);
+      }
+      this._removeLiberty_norec(mainGid, move);
+    }
+
+    for (const lib of emptyNeighbors) this._addLiberty_norec(mainGid, lib);
+
+    // Capture opponent groups left with no liberties.
+    let capturedCount = 0;
+    let lastCapturedIdx = -1;
+    for (const oppGid of oppGroupIds) {
+      if (this._ls[oppGid] === 0) {
+        const gb = oppGid * W;
+        for (let wi = 0; wi < W; wi++) {
+          let w = this._sw[gb + wi];
+          while (w) {
+            const bit = 31 - Math.clz32(w & -w);
+            const stoneIdx = wi * 32 + bit;
+            this.cells[stoneIdx] = EMPTY;
+            this._gid[stoneIdx] = -1;
+            this._removeStone_raw(stoneIdx, oppGid);
+            capturedCount++;
+            lastCapturedIdx = stoneIdx;
+            this.emptyCount++;
+            const sBase = stoneIdx * 4;
+            for (let j = 0; j < 4; j++) {
+              const nGid = this._gid[nbr[sBase + j]];
+              if (nGid !== -1 && nGid !== oppGid) this._addLiberty_norec(nGid, stoneIdx);
+            }
+            w &= w - 1;
+          }
+        }
+      }
+    }
+
+    this.ko = PASS;
+    if (capturedCount === 1 &&
+        this._ss[mainGid] === 1 && this._ls[mainGid] === 1 &&
+        ((this._lw[mainGid * W + (lastCapturedIdx >> 5)] >>> (lastCapturedIdx & 31)) & 1)) {
+      this.ko = lastCapturedIdx;
+    }
 
     this.consecutivePasses = 0;
     this.current = oppColor;
@@ -869,7 +1030,7 @@ function game3FromGame2(game2) {
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] === EMPTY) continue;
     game3.current = game2.cells[i];
-    game3.play(i);
+    game3.playOneWay(i);
   }
 
   game3.current = game2.current;
