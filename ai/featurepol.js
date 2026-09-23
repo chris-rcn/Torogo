@@ -23,9 +23,9 @@ function create(cfg) {
   // Rank-feature shortlist (the deployment analogue of the trainer's
   // --eval-rank-topn): rank the vpat<n> feature over only the best N moves by
   // the other feature spaces.  0 = rank every candidate.  No-op for specs
-  // without vpat<n>.  NOTE: setRankTopN is a featurepol-lib GLOBAL, so two slots
-  // cannot yet hold different values — last create wins — the same lib-global
-  // limitation as the vpat<n> model path (FP_VPAT_DATA).
+  // without vpat<n>.  NOTE: setRankTopN is still a featurepol-lib GLOBAL, so two
+  // slots cannot yet hold different values (last create wins).  The vpat<n> model
+  // itself is no longer global — it rides embedded in each model file.
   const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 5);
   if (FPOL_RANK_TOPN > 0) FeaturePol.setRankTopN(FPOL_RANK_TOPN);
 

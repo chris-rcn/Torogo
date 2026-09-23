@@ -2,8 +2,8 @@
 // Standalone eval of a saved featurepol model against a reference agent.
 // Mirrors train-featurepol-reinforce.js evalVsReference() exactly:
 //   3 random opening moves, alternating colours, move limit N*N*4, calcWinner().
-// The rank feature's value model comes from FP_VPAT_DATA, so the same fp
-// weights can be scored against different ranking models.
+// The rank feature's value model is embedded in the featurepol file, so the
+// model is self-contained — no external ranking model is configured here.
 const path = require('path');
 const FeaturePol = require('./featurepol-lib.js');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
@@ -26,7 +26,7 @@ FeaturePol.setRankPositionRatio(1);
 
 const state = FeaturePol.createState(N, weights.spec);
 const needTac = weights.spec.needsLadder;
-console.log(`model=${MODEL}  spec='${weights.spec.str}'  FP_VPAT_DATA=${process.env.FP_VPAT_DATA || '(none)'}`);
+console.log(`model=${MODEL}  spec='${weights.spec.str}'  vpat=${weights.vpatModel ? 'embedded' : '(none)'}`);
 console.log(`size=${N}  komi=${KOMI(N)}  ref=${REF}  eval-rank-topn=${TOPN}  games=${GAMES}`);
 
 let wins = 0;
@@ -54,4 +54,4 @@ for (let g = 0; g < GAMES; g++) {
   }
 }
 const p = wins / GAMES, se = Math.sqrt(p * (1 - p) / GAMES);
-console.log(`\nFINAL  ${path.basename(MODEL)}  vpat=${path.basename(process.env.FP_VPAT_DATA || 'none')}  ${wins}/${GAMES} = ${(100 * p).toFixed(2)}%  95%CI +/-${(196 * se).toFixed(2)}`);
+console.log(`\nFINAL  ${path.basename(MODEL)}  vpat=${weights.vpatModel ? 'embedded' : 'none'}  ${wins}/${GAMES} = ${(100 * p).toFixed(2)}%  95%CI +/-${(196 * se).toFixed(2)}`);

@@ -12,6 +12,7 @@ const fs   = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
 const FeaturePol = require('./featurepol-lib.js');
+const VPatterns = require('./vpatterns.js');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
@@ -29,7 +30,8 @@ if (opts.help || (!opts.spec && !opts.load)) {
                                 capture<n>  atari<n>  selfAtari<n>  lib<n>  joins  flags  ko  anyKo  local  localAlways  koSolve  dist<n>
                                 ladderStatus  {urgentKill,urgentSave,wastedExtend,wastedAttack}<n>
                                 vpat<n>: rank of the move under an external vpatterns value model
-                                (loaded from FP_VPAT_DATA; never trained here)
+                                (from FP_VPAT_DATA, or inherited from --load; never trained here;
+                                 embedded into every save so inference needs no FP_VPAT_DATA)
   --train-size N | --size N   self-play board size (default 9)
   --eval-size N     evaluation board size (default 13)
   --lr F            learning rate (default 0.02)
@@ -206,6 +208,27 @@ if (loaded) {
               `, removed ${removed.length}${removed.length ? ` (${removed.join(', ')})` : ''}`);
   if (kept.length === 0) {
     console.warn('  WARNING: CLI --spec shares no feature space with the saved model — nothing carried over (effectively a fresh start).');
+  }
+}
+
+// The vpat<n> feature ranks candidates by an external vpatterns value model.
+// That model is a fixed dependency of the trained policy (its level weights are
+// calibrated to this model's ranking), so it is attached to the trainee here and
+// embedded into every save — the deployed featurepol file is self-contained and
+// needs no FP_VPAT_DATA at inference.  Source: FP_VPAT_DATA overrides; otherwise
+// inherit the model embedded in the --load checkpoint.
+if (weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) {
+  const vpatOverride = process.env.FP_VPAT_DATA;
+  if (vpatOverride) {
+    weights.vpatModel = VPatterns.loadWeights(vpatOverride);
+    console.log(`vpat model: ${vpatOverride} (FP_VPAT_DATA override)`);
+  } else if (loaded && loaded.weights.vpatModel) {
+    weights.vpatModel = loaded.weights.vpatModel;
+    console.log(`vpat model: inherited from ${LOAD_PATH} (embedded)`);
+  } else {
+    console.error('Error: the spec has vpat<n> but no vpat model is available — ' +
+      'set FP_VPAT_DATA, or --load a checkpoint that embeds one.');
+    process.exit(1);
   }
 }
 // After the import, so the loaded keys are all interned first.
