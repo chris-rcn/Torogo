@@ -103,8 +103,9 @@
 //               only level 1; rank past n emits nothing and shares the implicit
 //               zero baseline.  Still exactly n weights per space combination,
 //               but level k is estimated from every move ranked <= n+1-k rather
-//               than from one rank alone.  The model file comes from FP_VPAT_DATA
-//               and is never trained here.  Pattern-only models rank
+//               than from one rank alone.  The value model is embedded in the
+//               featurepol file (attached to the weights) and is never trained
+//               here.  Pattern-only models rank
 //               incrementally (deltaZ); ladder-coded models (size:L) are
 //               supported but rank NON-incrementally — a full extraction on a
 //               clone per candidate, several times slower per position.
@@ -632,10 +633,10 @@ function _rankBlank(cap) {
 
 // The vpat<n> value model is NOT a process-global: it is embedded in the
 // featurepol file (loadModel reconstructs it onto weights.vpatModel) or attached
-// by the trainer from FP_VPAT_DATA, and reaches the ranking through ctx.vpatModel.
+// to the weights by a trainer, and reaches the ranking through ctx.vpatModel.
 // This keeps the model bound to the policy it was trained against — two policies
-// in one process can hold different vpat models — and there is no inference-time
-// FP_VPAT_DATA to drift from the training model.
+// in one process can hold different vpat models, and the ranking model can never
+// drift from the one training used.
 
 // Fill the rank arrays for every legal non-true-eye move of ctx.game.  Runs
 // once per position; each vpat<n> evalFn then just reads and clamps.
@@ -675,8 +676,7 @@ function _vpatPrepare(ctx) {
   const game = ctx.game, N = game.N, cap = N * N;
   const model = ctx.vpatModel;
   if (!model) throw new Error('featurepol: the vpat<n> feature needs a vpat model, but none is ' +
-    'attached — the featurepol model has no embedded vpat (inference), or the trainer set no ' +
-    'FP_VPAT_DATA / --load checkpoint carrying one.');
+    'attached to the weights — the featurepol file has no embedded vpat model.');
   if (model.preparedSpecs.hasLadder && !model._ladderNoticed) {
     model._ladderNoticed = true;
     console.error('featurepol vpat<n>: ladder-coded model — ranking non-incrementally (full extraction per candidate)');
@@ -1744,7 +1744,7 @@ function serialize(weights, meta = {}, saveZeros = false) {
     b64 = btoa(s);
   }
   // A vpat<n> spec's value model is embedded so it travels with the policy it
-  // was trained against — the sole source at inference (no FP_VPAT_DATA there).
+  // was trained against — the sole source at inference.
   const vpatModel = meta.vpat || weights.vpatModel || null;
   const vpatLine = vpatModel ? `  const vpat = ${VPatterns.modelLiteral(vpatModel)};` : null;
   const returnLine = vpatModel
