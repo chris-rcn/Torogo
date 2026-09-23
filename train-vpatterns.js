@@ -80,10 +80,11 @@ checkpoint is written at every print.
                     search; the rest come from --ext (default 1)
   --ext AGENT       ai/<name>.js supplying the off-policy moves; only
                     consulted when --on-policy < 1
-  --fp-width K      restrict the trainee's greedy AND epsilon moves to
-                    featurepol's top-K candidates (0 = off, default), in
-                    self-play and in the --eval reference games — matches
-                    deploying the vpat as a re-ranker after an fp filter
+  --fp-width K      restrict the trainee's GREEDY move to featurepol's top-K
+                    candidates (0 = off, default), in self-play and in the
+                    --eval reference games — matches deploying the vpat as a
+                    re-ranker after an fp filter.  Epsilon exploration stays
+                    full-width, for coverage of off-filter states
   --fp-data PATH    featurepol weights for --fp-width (default featurepol-0fg36nkw.js)
   --start-phase F   fill the board with random stones to this phase before
                     normal training moves begin (backward curriculum)
@@ -324,14 +325,16 @@ function trainGame(N) {
     featsArr.push(features);
     vals.push(features.val);
 
-    const cand = fpWeights ? fpTopK(game, FP_WIDTH) : null;
     let move;
     if (Math.random() < EPSILON) {
-      move = (cand && cand.length) ? cand[(Math.random() * cand.length) | 0] : game.randomLegalMove();
+      move = game.randomLegalMove();                 // full-width exploration (coverage off the filter)
     } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
-    } else {
+    } else if (fpWeights) {
+      const cand = fpTopK(game, FP_WIDTH);           // greedy only within the fp filter
       move = (cand && cand.length) ? bestFiltered(game, cand, weights) : search1ply(game);
+    } else {
+      move = search1ply(game);
     }
     game.play(move);
     moves++;
