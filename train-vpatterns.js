@@ -36,6 +36,8 @@ const path = require('path');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
 const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag, specString } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
+const FeaturePol = require('./featurepol-lib.js');
+const { game3FromGame2 } = require('./game3.js');
 const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
@@ -44,7 +46,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -78,6 +80,11 @@ checkpoint is written at every print.
                     search; the rest come from --ext (default 1)
   --ext AGENT       ai/<name>.js supplying the off-policy moves; only
                     consulted when --on-policy < 1
+  --fp-width K      restrict the trainee's greedy AND epsilon moves to
+                    featurepol's top-K candidates (0 = off, default), in
+                    self-play and in the --eval reference games — matches
+                    deploying the vpat as a re-ranker after an fp filter
+  --fp-data PATH    featurepol weights for --fp-width (default featurepol-0fg36nkw.js)
   --start-phase F   fill the board with random stones to this phase before
                     normal training moves begin (backward curriculum)
 
@@ -109,6 +116,8 @@ const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) 
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
+const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
+const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'featurepol-0fg36nkw.js');
 const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
 const POSITIONS_FILE  = opts['positions-file']   || null;
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
@@ -315,13 +324,14 @@ function trainGame(N) {
     featsArr.push(features);
     vals.push(features.val);
 
+    const cand = fpWeights ? fpTopK(game, FP_WIDTH) : null;
     let move;
     if (Math.random() < EPSILON) {
-      move = game.randomLegalMove();
+      move = (cand && cand.length) ? cand[(Math.random() * cand.length) | 0] : game.randomLegalMove();
     } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
     } else {
-      move = search1ply(game);
+      move = (cand && cand.length) ? bestFiltered(game, cand, weights) : search1ply(game);
     }
     game.play(move);
     moves++;
@@ -374,7 +384,9 @@ function evalVsReference(N, refGetMove, nGames, budget) {
       gameVals.push(f.val);
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
-        idx = search(game, { weights: evalW, specs, preparedSpecs: prepSpecs });
+        const cand = fpWeights ? fpTopK(game, FP_WIDTH) : null;
+        idx = (cand && cand.length) ? bestFiltered(game, cand, evalW)
+                                    : search(game, { weights: evalW, specs, preparedSpecs: prepSpecs });
       } else {
         const mv = refGetMove(game, budget);
         idx = mv.move !== undefined ? mv.move : PASS;
@@ -409,6 +421,45 @@ const evalGetMove = EVAL_AGENT
 const extGetMove = EXT_AGENT
   ? require(path.join(__dirname, 'ai', EXT_AGENT + '.js')).getMove
   : null;
+
+// Featurepol candidate filter (--fp-width): restrict the trainee's greedy and
+// epsilon moves — in self-play AND in the --eval reference games — to
+// featurepol's top-K, matching how the vpat is deployed as a re-ranker after an
+// fp filter.  Off when FP_WIDTH is 0.
+const fpWeights = FP_WIDTH > 0 ? FeaturePol.loadModel({ name: 'td-fp-filter', path: FP_DATA }).weights : null;
+let _fpState = null, _fpScores = null;
+function fpTopK(game, K) {
+  const N = game.N;
+  if (!_fpState || _fpState.moves.length < N * N) {
+    _fpState  = FeaturePol.createState(N, fpWeights.spec);
+    _fpScores = new Float64Array(N * N + 1);
+  }
+  const game3 = fpWeights.spec.needsLadder ? game3FromGame2(game) : undefined;
+  FeaturePol.extractFeatures(game, _fpState, fpWeights, game3);
+  const n = FeaturePol.scoreAll(_fpState, fpWeights, _fpScores);
+  if (n === 0) return null;
+  const k = Math.min(K, n);
+  const order = new Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort((a, b) => _fpScores[b] - _fpScores[a]);
+  const out = new Int32Array(k);
+  for (let j = 0; j < k; j++) out[j] = _fpState.moves[order[j]];
+  return out;
+}
+// Greedy vpat move within the filtered set under weights w.  Full extraction
+// per candidate (K is small) — correct for any spec, mover-relative like
+// vpatsearch (BLACK maximises V, WHITE minimises).
+function bestFiltered(game, cand, w) {
+  const black = game.current === BLACK;
+  let best = cand[0], bestV = -Infinity;
+  for (let i = 0; i < cand.length; i++) {
+    const g = game.clone(); g.play(cand[i]);
+    const ff = extractFeatures(g, prepSpecs); evaluateFeatures(ff, w);
+    const v = black ? ff.val : 1 - ff.val;
+    if (v > bestV) { bestV = v; best = cand[i]; }
+  }
+  return best;
+}
 
 // Load positions for move-quality eval (optional).
 let evalPositionsPool = null;
@@ -461,7 +512,7 @@ if (LOAD_PATH) {
 }
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}`);
 console.log();
