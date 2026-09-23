@@ -38,7 +38,7 @@ const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, sa
 const { search } = require('./ai/vpatsearch.js');
 const FeaturePol = require('./featurepol-lib.js');
 const { game3FromGame2 } = require('./game3.js');
-const { loadPositions, evalPositions, evalPositionsSample } = require('./evalmovedetails.js');
+const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
@@ -46,7 +46,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -95,10 +95,6 @@ checkpoint is written at every print.
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
   --budget MS       per-move time budget for the reference agent (default 1)
-  --positions-file F  evalmovedetails positions scored each print (rms/rAvg
-                    columns; sampled per print)
-  --positions-n N   positions sampled per print from --positions-file
-                    (default 0 = all)
   --md-file F       evalmovedetails positions, single full pass each print
                     (mdMae column)
   --ladder-file F   evalladders2 suite scored each print (ladr column)
@@ -120,10 +116,8 @@ const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-rando
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
 const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'featurepol-0fg36nkw.js');
 const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
-const POSITIONS_FILE  = opts['positions-file']   || null;
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
-const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
@@ -490,13 +484,6 @@ function bestFiltered(game, cand, w) {
   return best;
 }
 
-// Load positions for move-quality eval (optional).
-let evalPositionsPool = null;
-if (POSITIONS_FILE) {
-  evalPositionsPool = loadPositions(POSITIONS_FILE);
-  console.log(`Loaded ${evalPositionsPool.length} positions from ${POSITIONS_FILE}  batch=${POSITIONS_N || 'all'}`);
-}
-
 // Move-quality suite (evalmovedetails): a single full pass scoring the trainee
 // against --md-file at each status print (the `mdMae` column — mean win-ratio
 // gap to the top move).
@@ -542,7 +529,7 @@ if (LOAD_PATH) {
 
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
-console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}${evalPositionsPool ? `  positions: ${evalPositionsPool.length} batch=${POSITIONS_N || 'all'}` : ''}`);
+console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}`);
 console.log();
 
@@ -564,7 +551,6 @@ console.log([
   ...(evalGetMove ? ['winRatio'.padStart(21), ' acc'.padStart(4)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
-  ...(evalPositionsPool ? ['rms '.padStart(4), 'rAvg'.padStart(4)] : []),
   ...(mdPositions ? ['mdMae'.padStart(5)] : []),
   // tTest = whole eval pass; the trailing turn = wall-clock per move of the
   // reference MATCHES only (both sides' moves), vs the left turn = training.
@@ -582,7 +568,6 @@ let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
 const evalHistory = [];   // per-interval game results (1/0.5/0)
-const rmsHistory  = [];   // per-interval rmsErr values
 
 while (true) {
   g++;
@@ -651,15 +636,6 @@ while (true) {
       const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
       vaccCol = Util.fmtRatio4(accuracy);
     }
-    let rmsCol = null, rmsAvgCol = null;
-    if (evalPositionsPool) {
-      const { rmsErr } = evalPositionsSample(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), evalPositionsPool, POSITIONS_N || evalPositionsPool.length, 0);
-      rmsHistory.push(rmsErr);
-      const rmsHalf = Math.max(1, Math.floor(rmsHistory.length / 2));
-      const rmsAvg  = rmsHistory.slice(-rmsHalf).reduce((s, r) => s + r, 0) / rmsHalf;
-      rmsCol    = Util.fmt4(rmsErr);
-      rmsAvgCol = Util.fmt4(rmsAvg);
-    }
     let mdMaeCol = null;
     if (mdPositions) {
       const { maeErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
@@ -690,7 +666,6 @@ while (true) {
                          Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0)] : []),
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
-      ...(rmsCol  ? [rmsCol, rmsAvgCol]     : []),
       ...(mdMaeCol ? [mdMaeCol]             : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
