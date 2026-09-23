@@ -71,7 +71,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --eval-agent S    reference agent in ai/ for eval games; if omitted, eval is skipped
   --ladder-file P   evalladders2 suite scored each status print (ladr column)
   --md-file P       evalmovedetails positions scored each status print; greedy
-                    move-quality RMS gap to best (mdRms column)
+                    move-quality mean gap to best (mdMae column)
   --load PATH       resume from saved weights
   --max-weights N   stop interning NEW keys once the table holds N;
                     existing weights keep training (0 = unlimited, default).
@@ -97,7 +97,7 @@ const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');
 const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
 const EVAL_AGENT  = opts.eval || opts['eval-agent'] || null;   // no default — eval is skipped unless given
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored each status print (ladr column)
-const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdRms column)
+const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdMae column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
 const LOAD_PATH   = opts.load || null;
@@ -441,7 +441,7 @@ console.log();
 // winRatio column: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game
 // counts (this interval's, and the rolling-half window).  Fixed 21 chars wide.
 const COLS = ['elapsed', 'game', 'tMv', 'nWts', 'avgW', 'maxP', 'avgK', 'avgF',
-  ...(EVAL_AGENT ? ['winRatio', 'tMv'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
+  ...(EVAL_AGENT ? ['winRatio', 'tMv'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdMae'] : [])];
 const COLW = [7, 5, 6, 6, 7, 5, 6, 6,
   ...(EVAL_AGENT ? [21, 6] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
@@ -526,8 +526,8 @@ while (true) {
       row.push(Util.fmtRatio4(total ? passed / total : 0));
     }
     if (mdPositions) {
-      const { rmsErr } = evalPositions(fpGreedyMove, mdPositions, 0);
-      row.push(Util.fmtRatio4(rmsErr));
+      const { maeErr } = evalPositions(fpGreedyMove, mdPositions, 0);
+      row.push(Util.fmtRatio4(maeErr));
     }
     printRow(row);
     saveWeights();
