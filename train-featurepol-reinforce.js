@@ -426,7 +426,9 @@ console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''
 {
   const g = new Game2(TRAIN_SIZE, true);
   const st = FeaturePol.createState(g.N, weights.spec);
+  FeaturePol.setRankPositionRatio(1);   // force the rank prepare so the vpat<n> model loads (and warns) now
   FeaturePol.extractFeatures(g, st, weights, weights.spec.needsLadder ? game3FromGame2(g) : undefined);
+  if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
 }
 console.log();
 // Fixed per-column widths; header and data rows pad to the same widths so they
