@@ -446,17 +446,43 @@ function fpTopK(game, K) {
   for (let j = 0; j < k; j++) out[j] = _fpState.moves[order[j]];
   return out;
 }
-// Greedy vpat move within the filtered set under weights w.  Full extraction
-// per candidate (K is small) — correct for any spec, mover-relative like
-// vpatsearch (BLACK maximises V, WHITE minimises).
+// Greedy vpat move within the filtered set under weights w, mirroring
+// vpatsearch's depth-1 loop: extract the base once, then deltaZ per candidate
+// (a capture returns NaN -> full extraction on a SEPARATE prep so the base
+// planes survive).  Non-incremental specs (turn/ladder/health/phased) have no
+// incremental contract, so they fall back to full extraction per candidate.
+// Mover-relative like vpatsearch (BLACK maximises V, WHITE minimises).
+let _fbPrep = null;
 function bestFiltered(game, cand, w) {
+  const prep = prepSpecs;
+  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
   const black = game.current === BLACK;
+  let zBase = 0;
+  if (incremental) {
+    const f = extractFeatures(game, prep);   // primes the base planes deltaZ reads
+    evaluateFeatures(f, w);
+    zBase = f.z;
+  }
   let best = cand[0], bestV = -Infinity;
   for (let i = 0; i < cand.length; i++) {
-    const g = game.clone(); g.play(cand[i]);
-    const ff = extractFeatures(g, prepSpecs); evaluateFeatures(ff, w);
-    const v = black ? ff.val : 1 - ff.val;
-    if (v > bestV) { bestV = v; best = cand[i]; }
+    const c = cand[i];
+    let z;
+    if (incremental) {
+      const d = deltaZ(game, prep, w, c);
+      if (d === d) {
+        z = zBase + d;
+      } else {                               // capture: full extraction on a separate prep
+        const g = game.clone(); g.play(c);
+        const ff = extractFeatures(g, _fbPrep || (_fbPrep = prepareSpecs(specs)));
+        evaluateFeatures(ff, w); z = ff.z;
+      }
+    } else {
+      const g = game.clone(); g.play(c);
+      const ff = extractFeatures(g, prep); evaluateFeatures(ff, w); z = ff.z;
+    }
+    const V = 1 / (1 + Math.exp(-z));
+    const v = black ? V : 1 - V;
+    if (v > bestV) { bestV = v; best = c; }
   }
   return best;
 }
