@@ -366,6 +366,9 @@ function trainGame(N) {
 }
 
 // ── Eval vs reference ─────────────────────────────────────────────────────────
+// Per-print eval move-time accumulator (the trainee's greedyMove during eval
+// games); reset before each print's eval loop, read into the eval tMv column.
+let _evalMoveMs = 0, _evalMoveN = 0;
 function evalVsReference(N, nGames) {
   const state = FeaturePol.createState(N, weights.spec);
   const needTac = weights.spec.needsLadder;
@@ -384,7 +387,9 @@ function evalVsReference(N, nGames) {
     while (!game.gameOver && m++ < N * N * 4) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
+        const _tMv = performance.now();
         idx = FeaturePol.greedyMove(game, state, weights, needTac ? game3 : undefined);
+        _evalMoveMs += performance.now() - _tMv; _evalMoveN++;
       } else {
         const mv = evalGetMove(game);
         idx = mv && mv.move !== undefined ? mv.move : PASS;
@@ -436,9 +441,9 @@ console.log();
 // winRatio column: "wr(g)/avg(ga)" — wr/avg are fmtRatio4, g/ga are fmt4 game
 // counts (this interval's, and the rolling-half window).  Fixed 21 chars wide.
 const COLS = ['elapsed', 'game', 'tMv', 'nWts', 'avgW', 'maxP', 'avgK', 'avgF',
-  ...(EVAL_AGENT ? ['winRatio'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
+  ...(EVAL_AGENT ? ['winRatio', 'tMv'] : []), ...(ladderCases ? ['ladr'] : []), ...(mdPositions ? ['mdRms'] : [])];
 const COLW = [7, 5, 6, 6, 7, 5, 6, 6,
-  ...(EVAL_AGENT ? [21] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
+  ...(EVAL_AGENT ? [21, 6] : []), ...(ladderCases ? [6] : []), ...(mdPositions ? [6] : [])];
 const printRow = cells => console.log(cells.map((c, i) => String(c).padStart(COLW[i])).join('  '));
 printRow(COLS);
 
@@ -499,6 +504,7 @@ while (true) {
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
+      _evalMoveMs = 0; _evalMoveN = 0;
       while (evalGames < MAX_EVAL_GAMES && Date.now() - evalStart < evalBudget) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
@@ -513,6 +519,7 @@ while (true) {
         ? evalHistory.slice(-avgHalf).reduce((s, x) => s + x, 0) / avgHalf : 0;
       row.push(`${Util.fmtRatio4(evalGames > 0 ? evalWins / evalGames : 0)}(${Util.fmt4i(evalGames)})` +
                `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(avgHalf)})`);
+      row.push(Util.fmtMs(_evalMoveN > 0 ? _evalMoveMs / _evalMoveN : 0));   // eval move time
     }
     if (ladderCases) {
       const { passed, total } = evalCases(ladderCases, fpGreedyMove, { budgetMs: 1, oversample: 1 });
