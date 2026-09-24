@@ -27,7 +27,6 @@ Keep the most extreme |weight| fraction of a featurepol or vpatterns checkpoint
 }
 const IN = path.resolve(opts.in);
 const OUT = opts.out || opts.in.replace(/\.js$/, '') + '-pruned.js';
-console.log('out: ' + OUT);
 const KEEP = opts.keep !== undefined ? parseFloat(opts.keep) : 0.5;
 if (!(KEEP > 0 && KEEP < 1)) { console.error('--keep must be in (0, 1)'); process.exit(1); }
 
@@ -84,3 +83,4 @@ if (isVpat) {
   require('fs').writeFileSync(OUT, FP.serialize(out, { spec: weights.spec.str, ema, totalUpdates, komi }));
   console.log(`featurepol: ${total} weights -> kept ${kept}, dropped ${dropped} (max dropped |w| ${maxDropped.toFixed(6)})`);
 }
+console.log('out: ' + OUT);
