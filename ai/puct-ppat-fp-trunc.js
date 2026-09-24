@@ -116,12 +116,16 @@ function create(cfg) {
   // is asymmetric).  1 = on (default), 0 = off (for A/B).
   const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
   // Lazy expansion: an edge must accumulate this many visits before its child
-  // node (featurepol extraction + priors) is created; playouts before that
-  // run from the unexpanded position.  1 = expand on first contact (the
-  // original economics, tuned for cheap npat extraction).  Featurepol
-  // extraction is pricier, so 2 skips the extraction for the many leaves
-  // that are only ever visited once.
-  const N_EXPAND   = cfg.int('N_EXPAND', 2);
+  // node (featurepol extraction + priors) is created; playouts before that run
+  // from the unexpanded position.  1 = expand on first contact; higher skips the
+  // (pricey featurepol) extraction for leaves visited only a few times.  Split
+  // by regime because the expansion-vs-playout cost ratio differs: a truncated
+  // playout (short prefix + vpat leaf) is cheap, a full playout runs to the end,
+  // so the break-even count is not the same.  The per-decision value is chosen
+  // in runSearch from the truncation flag.
+  const N_EXPAND_TRUNC = cfg.int('N_EXPAND_TRUNC', 2);
+  const N_EXPAND_FULL  = cfg.int('N_EXPAND_FULL', 2);
+  let _nExpand = N_EXPAND_FULL;   // set per decision in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Truncation point: net board-fullness advance past the leaf before the
@@ -166,6 +170,7 @@ function create(cfg) {
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
+    `n-expand: ${N_EXPAND_TRUNC}/${N_EXPAND_FULL} (trunc/full), ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
@@ -413,11 +418,11 @@ function create(cfg) {
       }
 
       // Expansion: create the child (featurepol extraction + priors) once its
-      // edge has N_EXPAND visits; before that, run the playout from the
+      // edge has _nExpand visits; before that, run the playout from the
       // unexpanded position with stats accumulating on the parent's edge
       // (same backprop shape as the pass-break case above).
       if (node.children[best] === null) {
-        if (node.visits[best] >= N_EXPAND - 1 + PRIOR_VISITS - 1e-9) {
+        if (node.visits[best] >= _nExpand - 1 + PRIOR_VISITS - 1e-9) {
           node.children[best] = makeNode(move, node, best, game2, N, game3);
           node = node.children[best];
           node.selectedChild = -1;
@@ -500,8 +505,10 @@ function create(cfg) {
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
     // Root-decision truncation: this decision truncates iff the root phase is
-    // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout.
+    // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout, and
+    // it also picks the expansion threshold for the regime's playout cost.
     _truncActive = (1 - game2.emptyCount / (N * N)) < TRUNC_ROOT_PHASE;
+    _nExpand = _truncActive ? N_EXPAND_TRUNC : N_EXPAND_FULL;
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
