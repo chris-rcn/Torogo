@@ -523,7 +523,7 @@ while (true) {
       // same game2 entry, so save and restore around the batch.
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
-      if (EVAL_RANK_TOPN > 0) FeaturePol.setRankTopN(EVAL_RANK_TOPN);
+      weights.rankTopN = EVAL_RANK_TOPN;   // eval ranks the best N; restored to whole-board (0) after
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(1);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
@@ -533,7 +533,7 @@ while (true) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
-      if (EVAL_RANK_TOPN > 0) FeaturePol.setRankTopN(0);
+      weights.rankTopN = 0;   // self-play ranks every candidate
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
       setKomi(TRAIN_SIZE, trainKomi);

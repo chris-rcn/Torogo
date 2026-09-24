@@ -601,12 +601,15 @@ function _slShared(limit) {
 // every legal non-true-eye move, which is the normal behaviour.
 let _rankAllow = null;     // Set of board indices, or null -- external tooling
 let _rankMask  = null;     // Uint8Array board mask, or null -- the top-N path
-let _rankTopN = 0;         // 0 = rank the whole board (the default)
+// The rank-topn shortlist (rank only the best N moves by the other spaces; 0 =
+// rank the whole board) is NOT a process global: it is a per-weights field,
+// weights.rankTopN, set by each caller and read by extractFeatures.  Two models
+// in one process can therefore rank at different widths.
 // Fraction of positions in which the rank feature is computed at all.  1 = every
 // position (the default).  Below 1, the ranking is skipped on the rest and the
 // rank spaces emit nothing there, so the feature keeps its whole-board meaning
 // -- rank 1 is still "best on the board" -- and only its FREQUENCY drops.  That
-// is the difference from _rankTopN, which narrows what rank means.
+// is the difference from weights.rankTopN, which narrows what rank means.
 let _rankPosRatio = 1;
 let _rank = null;      // _rank[boardIdx] = 1-based rank, 0 = not a candidate
 let _rankOrder = null;     // scratch: candidate board indices, sorted best-first
@@ -1240,6 +1243,7 @@ function createWeights(opts = {}) {
     delta: new Float32Array(initialCapacity),  // reusable scatter buffer
     count: new Int32Array(initialCapacity),    // per-key contributor count (for per-key gradient mean)
     size:  0,
+    rankTopN: 0,   // vpat<n> rank shortlist width; 0 = rank the whole board (per-instance, set by the caller)
   };
 }
 
@@ -1357,7 +1361,7 @@ function _emitSpace(sp, memo, weights, out, pos, accA, accB, ctx, idx) {
 }
 
 // Top-N extraction: score every candidate on the spaces that do NOT need the
-// ranking, then rank within the best `_rankTopN` of them only.  The
+// ranking, then rank within the best `weights.rankTopN` of them only.  The
 // whole point is that the ranking -- the expensive part -- runs over a handful
 // of candidates instead of the whole board.  Ranks are then 1..N within that
 // shortlist, so this is an APPROXIMATION of the whole-board feature: a move the
@@ -1395,7 +1399,7 @@ function _extractTopN(game, state, weights, ctx, spec, useRank) {
   // Phase B — run the ranking over the top-N by plain score, then emit their keys.
   // Partial selection, not a sort: n is 2-6 against ~30 candidates, so a few
   // linear max passes beat a comparator sort and allocate nothing.
-  const n = Math.min(_rankTopN, count), rank = state.pOrder, mask = state.rMask;
+  const n = Math.min(weights.rankTopN, count), rank = state.pOrder, mask = state.rMask;
   for (let i = 0; i < n; i++) {
     let best = -1, bestS = -Infinity;
     for (let j = 0; j < count; j++) {
@@ -1450,7 +1454,7 @@ function extractFeatures(game, state, weights, game3) {
   // Is the rank feature live for this position at all?
   const useRank = _rankPosRatio >= 1 || Math.random() < _rankPosRatio;
   // Top-N: run the ranking over a shortlist instead of the whole board.
-  if (_rankTopN > 0 && spec.rankSpaces && spec.rankSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useRank);
+  if (weights.rankTopN > 0 && spec.rankSpaces && spec.rankSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useRank);
   // Whole-position precomputes (e.g. the vpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
@@ -1820,11 +1824,9 @@ const FeaturePol = {
   _hashStr, _captureCount, _atariStones,
   _ranks: () => _rank,
   _setRankAllow: (set) => { _rankAllow = set; },
-  setRankTopN: (n) => { _rankTopN = n | 0; },
   setRankPositionRatio: (p) => { _rankPosRatio = p; },
   setStoneLimitTrainKeep: (p) => { _slTrainKeep = p; },
   getRankPositionRatio: () => _rankPosRatio,
-  getRankTopN: () => _rankTopN,
 };
 
 if (typeof module !== 'undefined') module.exports = FeaturePol;

@@ -21,7 +21,7 @@ if (opt('komi') !== undefined) setKomi(N, parseFloat(opt('komi')));
 const evalGetMove = require('./ai/' + REF + '.js').getMove;
 const loaded = FeaturePol.loadModel({ path: MODEL });
 const weights = loaded.weights;
-if (TOPN > 0) FeaturePol.setRankTopN(TOPN);
+weights.rankTopN = TOPN;
 FeaturePol.setRankPositionRatio(1);
 
 const state = FeaturePol.createState(N, weights.spec);

@@ -22,8 +22,8 @@ const WEIGHTS   = path.join(__dirname, '..', 'ref', 'ref-fp2-data.js');
 const TEMP      = 1;
 const RANK_TOPN = 3;
 
-FeaturePol.setRankTopN(RANK_TOPN);
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-fp2', path: WEIGHTS });
+weights.rankTopN = RANK_TOPN;
 const stateByN = new Map();
 
 function getMove(game, _budgetMs, opts) {
