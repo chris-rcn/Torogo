@@ -115,17 +115,19 @@ function create(cfg) {
   // at no accuracy cost.  Exact and self-limiting (does nothing once the board
   // is asymmetric).  1 = on (default), 0 = off (for A/B).
   const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
-  // Lazy expansion: an edge must accumulate this many visits before its child
-  // node (featurepol extraction + priors) is created; playouts before that run
-  // from the unexpanded position.  1 = expand on first contact; higher skips the
-  // (pricey featurepol) extraction for leaves visited only a few times.  Split
-  // by regime because the expansion-vs-playout cost ratio differs: a truncated
-  // playout (short prefix + vpat leaf) is cheap, a full playout runs to the end,
-  // so the break-even count is not the same.  The per-decision value is chosen
-  // in runSearch from the truncation flag.
-  const N_EXPAND_TRUNC = cfg.int('N_EXPAND_TRUNC', 3);
-  const N_EXPAND_FULL  = cfg.int('N_EXPAND_FULL', 2);
-  let _nExpand = N_EXPAND_FULL;   // set per decision in runSearch
+  // Lazy expansion, priced by WORK.  An edge's child node (featurepol extraction
+  // + priors) is created once the playout work accrued on it reaches EXPAND_WORK;
+  // playouts before that run from the unexpanded position.  A playout's work is
+  // PLAYOUT_OVERHEAD + moves played, plus TRUNC_OVERHEAD when it ran the vpat leaf
+  // eval — so a cheap short (endgame / truncated) playout and an expensive long
+  // (midgame) one are weighed by their real cost, and one threshold governs both
+  // regimes.  Units are ppat-move-equivalents; the two overheads are calibration
+  // constants (the per-playout setup and vpat-eval cost measured against one ppat
+  // move), EXPAND_WORK is the tuning dial.
+  const EXPAND_WORK      = cfg.float('EXPAND_WORK', 150);
+  const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 10);
+  const TRUNC_OVERHEAD   = cfg.float('TRUNC_OVERHEAD', 8);
+  let _lastPlayoutMoves = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Truncation point: net board-fullness advance past the leaf before the
@@ -170,7 +172,7 @@ function create(cfg) {
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
-    `n-expand: ${N_EXPAND_TRUNC}/${N_EXPAND_FULL} (trunc/full), ` +
+    `expand-work: ${EXPAND_WORK} (overhead ${PLAYOUT_OVERHEAD}+${TRUNC_OVERHEAD}trunc), ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
@@ -280,11 +282,12 @@ function create(cfg) {
       if (truncArmed && (LEGACY_PHASE_DELTA ? game2.emptyCount <= truncEmpty
                                             : moves >= truncMoves)) {
         // The gate itself was decided at playout start (leaf-anchored draw).
-        if (!game2.gameOver) return vpatValueB(game2);
+        if (!game2.gameOver) { _lastPlayoutMoves = moves; _lastPlayoutTrunc = true; return vpatValueB(game2); }
         truncArmed = false;
       }
     }
 
+    _lastPlayoutMoves = moves; _lastPlayoutTrunc = false;
     return game2.estimateWinner() === BLACK ? 1 : 0;
   }
 
@@ -314,6 +317,7 @@ function create(cfg) {
     const children   = new Array(M).fill(null);
     const wins       = new Float32Array(M).fill(PRIOR_WINS);
     const visits     = new Float32Array(M).fill(PRIOR_VISITS);
+    const work       = new Float32Array(M);   // accrued playout work per edge (expansion gate)
     const raveWins   = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_WINS)   : null;
     const raveVisits = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_VISITS) : null;
 
@@ -356,6 +360,7 @@ function create(cfg) {
 
       wins,
       visits,
+      work,
 
       raveWins,
       raveVisits
@@ -418,11 +423,11 @@ function create(cfg) {
       }
 
       // Expansion: create the child (featurepol extraction + priors) once its
-      // edge has _nExpand visits; before that, run the playout from the
-      // unexpanded position with stats accumulating on the parent's edge
+      // edge has accrued EXPAND_WORK of playout work; before that, run the playout
+      // from the unexpanded position with stats accumulating on the parent's edge
       // (same backprop shape as the pass-break case above).
       if (node.children[best] === null) {
-        if (node.visits[best] >= _nExpand - 1 + PRIOR_VISITS - 1e-9) {
+        if (node.work[best] >= EXPAND_WORK) {
           node.children[best] = makeNode(move, node, best, game2, N, game3);
           node = node.children[best];
           node.selectedChild = -1;
@@ -442,7 +447,7 @@ function create(cfg) {
 
   // `played` is the playout's colour-signed RAVE trace, or null for simulations
   // that ended in terminal scoring.
-  function backpropagate(node, value, path, played) {
+  function backpropagate(node, value, path, played, work) {
     function childMover(n) {
       return -n.mover;
     }
@@ -482,6 +487,7 @@ function create(cfg) {
       const won     = chooser === BLACK ? value : 1 - value;
       node.visits[leafIdx]++;
       node.wins[leafIdx] += won;
+      node.work[leafIdx] += work;
       node.totalVisits++;
       if (RAVE_K > 0) updateRave(node, d, won, chooser);
     } else {
@@ -495,6 +501,7 @@ function create(cfg) {
       const won     = chooser === BLACK ? value : 1 - value;
       node.parent.visits[ci]++;
       node.parent.wins[ci] += won;
+      node.parent.work[ci] += work;
       node.parent.totalVisits++;
       if (RAVE_K > 0) updateRave(node.parent, d, won, chooser);
       node = node.parent;
@@ -505,10 +512,8 @@ function create(cfg) {
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
     // Root-decision truncation: this decision truncates iff the root phase is
-    // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout, and
-    // it also picks the expansion threshold for the regime's playout cost.
+    // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout.
     _truncActive = (1 - game2.emptyCount / (N * N)) < TRUNC_ROOT_PHASE;
-    _nExpand = _truncActive ? N_EXPAND_TRUNC : N_EXPAND_FULL;
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
@@ -523,18 +528,19 @@ function create(cfg) {
     do {
       playouts++;
       const { node, game2: simGame2, path, depth, doPlayout } = selectAndExpand(root, game2, N, rng, game3);
-      let value, trace = null;
+      let value, trace = null, work = PLAYOUT_OVERHEAD;
       if (doPlayout && !simGame2.gameOver) {
         played.fill(0);
         value = playout(simGame2, played, rng);
         trace = played;
+        work = PLAYOUT_OVERHEAD + _lastPlayoutMoves + (_lastPlayoutTrunc ? TRUNC_OVERHEAD : 0);
       } else {
         // Simulations that end without a playout are at terminal positions
         // (double pass or descent into a finished game) — score them exactly.
         value = simGame2.calcWinner() === BLACK ? 1 : 0;
       }
       for (let i = 0; i < depth; i++) game3.undo();
-      backpropagate(node, value, path, trace);
+      backpropagate(node, value, path, trace, work);
     } while (playoutLimit > 0 ? playouts < playoutLimit : performance.now() < deadline);
 
     return { root, playouts };
