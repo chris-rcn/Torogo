@@ -92,6 +92,7 @@ if (isVpat) {
     out.vals[FP.internKey(out, key)] = weights.vals[d];
     kept++;
   });
+  out.vpatModel = weights.vpatModel;   // carry the embedded vpat<n> model through the prune
   require('fs').writeFileSync(OUT, FP.serialize(out, { spec: weights.spec.str, ema, totalUpdates, komi }));
   console.log(`featurepol: ${total} weights -> kept ${kept}, dropped ${dropped} (max dropped |w| ${maxDropped.toFixed(6)})`);
 }
