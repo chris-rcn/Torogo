@@ -39,12 +39,12 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
   --eval-rank-topn N  in EVAL games, rank the vpat<n> feature over only the best N
-                    moves by the OTHER feature spaces rather than every
-                    candidate (default 3; 0 = every candidate).  This is the
-                    deployment setting: ~2x cheaper per move with no measurable
-                    strength cost.  Self-play always ranks every candidate --
-                    restricting it there makes rank mean "best among moves this
-                    policy already likes", which collapses training.
+                    moves by the OTHER feature spaces (default 3; 0 = off,
+                    N<0 = every candidate).  Top-N is the deployment setting:
+                    ~2x cheaper per move with no measurable strength cost.
+                    Self-play always ranks every candidate -- restricting it
+                    there makes rank mean "best among moves this policy already
+                    likes", which collapses training.
   --rank-pos-ratio R  compute the vpat<n> feature in only this fraction of SELF-PLAY
                     positions (default 1 = all).  Cuts self-play cost without
                     touching what the feature MEANS: in a position where it
