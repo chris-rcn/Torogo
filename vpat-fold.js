@@ -46,12 +46,9 @@ is needed.  The z_flat-vs-z_composite measurement uses a held-out set from the
 same agent.
 
   --model PATH       composite vpat model (exactly two terms: the source and dest)
-  --position-agent X ai/<X>.js self-play generates the fold positions
-                     (X='random' = uniform random playout).  Required.
-  --games N          self-play games to generate (default: unlimited — runs
-                     forever, saving/measuring each row until stopped)
-  --budget MS        per-move budget for the position agent (default 100; policy
-                     agents like rfs ignore it)
+  --position-agent X ai/<X>.js self-play generates the fold positions.  Required.
+  --games N          self-play games to generate (default: unlimited)
+  --budget MS        per-move budget for the position agent (default 100)
   --source S:M       term to fold away (required)
   --dest   S:M       term to fold into  (required)
   --save PATH        output flat single-term model (default out/vpat-fold-<rand>.js)
