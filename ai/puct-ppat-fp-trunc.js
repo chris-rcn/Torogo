@@ -123,7 +123,7 @@ function create(cfg) {
   // playout (short prefix + vpat leaf) is cheap, a full playout runs to the end,
   // so the break-even count is not the same.  The per-decision value is chosen
   // in runSearch from the truncation flag.
-  const N_EXPAND_TRUNC = cfg.int('N_EXPAND_TRUNC', 2);
+  const N_EXPAND_TRUNC = cfg.int('N_EXPAND_TRUNC', 3);
   const N_EXPAND_FULL  = cfg.int('N_EXPAND_FULL', 2);
   let _nExpand = N_EXPAND_FULL;   // set per decision in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
