@@ -20,7 +20,7 @@ const { game3FromGame2 } = require('../game3.js');
 
 const WEIGHTS   = path.join(__dirname, '..', 'ref', 'ref-fp2-data.js');
 const TEMP      = 1;
-const RANK_TOPN = 0;
+const RANK_TOPN = 3;
 
 FeaturePol.setRankTopN(RANK_TOPN);
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-fp2', path: WEIGHTS });
