@@ -125,8 +125,8 @@ function create(cfg) {
   // constants (the per-playout setup and vpat-eval cost measured against one ppat
   // move), EXPAND_WORK is the tuning dial.
   const EXPAND_WORK      = cfg.float('EXPAND_WORK', 150);
-  const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 10);
-  const TRUNC_OVERHEAD   = cfg.float('TRUNC_OVERHEAD', 8);
+  const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 7);
+  const TRUNC_OVERHEAD   = cfg.float('TRUNC_OVERHEAD', 4);
   let _lastPlayoutMoves = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
