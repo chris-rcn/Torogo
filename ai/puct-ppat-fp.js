@@ -110,7 +110,7 @@ function create(cfg) {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'puct-ppat-fp',
     path: _isBrowser ? undefined
-                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-0fg36nkw.js')) });
+                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) });
   const fpWeights   = fpModel.weights;
   // Rank the vpat<n> feature over the best 3 candidates when the fp spec ranks
   // (matching featurepol's / the trainer's default); no-op for specs without it.
