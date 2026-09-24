@@ -8,8 +8,8 @@
 //                 embedded in the file, so no external vpat model is needed)
 //   temperature:  1  (samples from the softmax over the logits — a stochastic
 //                 reference, like ref-featurepol-softmax)
-//   rank shortlist: top-5  (featurepol's deployment default; the vpat9 rank
-//                 feature scores only the best 5 candidates by the other spaces)
+//   rank shortlist: 0  (whole-board ranking — the vpat9 rank feature scores
+//                 every candidate, matching featurepol's and the trainer's default)
 //
 // Node-only (loads a weights file at startup).
 
@@ -20,7 +20,7 @@ const { game3FromGame2 } = require('../game3.js');
 
 const WEIGHTS   = path.join(__dirname, '..', 'ref', 'ref-fp2-data.js');
 const TEMP      = 1;
-const RANK_TOPN = 5;
+const RANK_TOPN = 0;
 
 FeaturePol.setRankTopN(RANK_TOPN);
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-fp2', path: WEIGHTS });
