@@ -1051,6 +1051,11 @@ const Patterns = {
   specToken,
   specString,
   ninecellId,
+  // Key primitives, exposed for offline tooling (vpat-distill) that must
+  // reproduce the exact output keys a size-2/size-3 extraction emits.
+  mixTag,
+  tagBaseOf,
+  sizeCode,
 };
 
 if (typeof module !== 'undefined') module.exports = Patterns;
