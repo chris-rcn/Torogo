@@ -207,21 +207,22 @@ function create(cfg) {
   // policy is ≈ uniform.
   _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
-  // Auto-calibrate TRUNC_OVERHEAD for the loaded ppat/vpat models: time a ppat
-  // rollout (c_move) and a batch of leaf evals (t_vpat); TRUNC_OVERHEAD is their
-  // ratio, in ppat-move-equivalents.  Board size 13 (the target); the ratio is
-  // ~size-stable.  Skipped when the env pins TRUNC_OVERHEAD.
+  // Auto-calibrate TRUNC_OVERHEAD = t_vpat / c_move for the loaded ppat/vpat
+  // models (skipped when the env pins it), where
+  //   c_move = mean wall-time of ONE ppat playout move (rollout time / #moves),
+  //   t_vpat = mean wall-time of ONE vpat leaf eval  (batch time / #evals),
+  // so TRUNC_OVERHEAD is the cost of one leaf eval expressed in ppat-move units.
+  // Both are timed here at construction, before the JIT is warm, so each absolute
+  // time is inflated; but c_move and t_vpat are measured one immediately after the
+  // other with the same short warm-up beforehand, so the same inflation factor
+  // applies to both and divides out of the ratio.  (Only the ratio is kept — the
+  // absolute times are discarded.)  Board size 13, the target; the ratio is
+  // ~size-stable.
   if (_autoTruncOvh && _isNode) {
     const cN = 13, cst = createState(cN), crng = makeRng(1);
     const cg = new Game2(cN, false);
     while (!cg.gameOver && (cN * cN - cg.emptyCount) < cN * cN * 0.5) cg.play(ppatMove(cg, cst, _model, crng));
-    // c_move and t_vpat are timed back-to-back with the same light warm-up, so
-    // JIT/GC warmth is common to both and cancels in the ratio (the absolute
-    // times are unreliable at startup; only their ratio is used).
-    { const w = cg.clone(); for (let m = 0; m < 40 && !w.gameOver; m++) w.play(ppatMove(w, cst, _model, crng)); vpatValueB(cg); }
-    // c_move then t_vpat, back-to-back with the same minimal warm-up: both sit in
-    // the same (lightly-warmed) JIT/GC state, so that shared warmth cancels in the
-    // ratio.  Absolute times are unreliable at startup; only the ratio is used.
+    { const w = cg.clone(); for (let m = 0; m < 40 && !w.gameOver; m++) w.play(ppatMove(w, cst, _model, crng)); vpatValueB(cg); }  // warm-up
     const rg = cg.clone(), rcap = 3 * rg.emptyCount + 20, rt0 = performance.now();
     let rm = 0;
     while (!rg.gameOver && rm < rcap) { rg.play(ppatMove(rg, cst, _model, crng)); rm++; }
