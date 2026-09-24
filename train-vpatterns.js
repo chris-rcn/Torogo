@@ -85,7 +85,7 @@ checkpoint is written at every print.
                     --eval reference games — matches deploying the vpat as a
                     re-ranker after an fp filter.  Epsilon exploration stays
                     full-width, for coverage of off-filter states
-  --fp-data PATH    featurepol weights for --fp-width (default featurepol-0fg36nkw.js)
+  --fp-data PATH    featurepol weights for --fp-width (default ref/ref-fp2-data.js)
   --start-phase F   fill the board with random stones to this phase before
                     normal training moves begin (backward curriculum)
 
@@ -114,7 +114,7 @@ const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
-const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'featurepol-0fg36nkw.js');
+const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'ref', 'ref-fp2-data.js');
 const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
