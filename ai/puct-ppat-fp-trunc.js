@@ -117,20 +117,23 @@ function create(cfg) {
   const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
   // Lazy expansion, priced by WORK.  An edge's child node (featurepol extraction
   // + priors) is created once the playout work accrued on it reaches EXPAND_WORK;
-  // playouts before that run from the unexpanded position.  A playout's work is
-  // PLAYOUT_OVERHEAD + moves played, plus TRUNC_OVERHEAD when it ran the vpat leaf
-  // eval — so a cheap short (endgame / truncated) playout and an expensive long
-  // (midgame) one are weighed by their real cost, and one threshold governs both
-  // regimes.  Units are ppat-move-equivalents; the two overheads are calibration
-  // constants (the per-playout setup and vpat-eval cost measured against one ppat
-  // move), EXPAND_WORK is the tuning dial.
+  // playouts before that run from the unexpanded position.  A playout's work, in
+  // units of one ppat (feature-extraction) move, is
+  //   PLAYOUT_OVERHEAD + ppatMoves + uniformMoves*UNIFORM_WEIGHT + [trunc]TRUNC_OVERHEAD
+  // so it tracks real cost across regimes with one threshold: a ppat move is a
+  // full unit, an early uniform-random move (below PPAT_MIN_PHASE, no extraction)
+  // a fraction, and a truncated playout — all uniform prefix moves plus one vpat
+  // leaf eval — is correctly cheap.  PLAYOUT_OVERHEAD (fixed tree-machinery cost)
+  // is a constant; UNIFORM_WEIGHT (c_uniform/c_ppat) and TRUNC_OVERHEAD
+  // (t_vpat/c_ppat) are auto-calibrated at construction for the loaded models
+  // unless the env pins them.  EXPAND_WORK is the tuning dial.
   const EXPAND_WORK      = cfg.float('EXPAND_WORK', 150);
   const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 7);
-  // TRUNC_OVERHEAD (vpat leaf eval in ppat-move-equivalents) is auto-calibrated
-  // at construction for the loaded models, unless the env pins it.
+  const _autoUniformWt   = !cfg.has('UNIFORM_WEIGHT');
+  let UNIFORM_WEIGHT     = cfg.float('UNIFORM_WEIGHT', 0.15);
   const _autoTruncOvh    = !cfg.has('TRUNC_OVERHEAD');
   let TRUNC_OVERHEAD     = cfg.float('TRUNC_OVERHEAD', 4);
-  let _lastPlayoutMoves = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
+  let _lastPlayoutPpat = 0, _lastPlayoutUniform = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
   // Truncation point: net board-fullness advance past the leaf before the
@@ -207,36 +210,36 @@ function create(cfg) {
   // policy is ≈ uniform.
   _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
-  // Auto-calibrate TRUNC_OVERHEAD = t_vpat / c_move for the loaded ppat/vpat
-  // models (skipped when the env pins it), where
-  //   c_move = mean wall-time of ONE ppat playout move (rollout time / #moves),
-  //   t_vpat = mean wall-time of ONE vpat leaf eval  (batch time / #evals),
-  // so TRUNC_OVERHEAD is the cost of one leaf eval expressed in ppat-move units.
-  // Both are timed here at construction, before the JIT is warm, so each absolute
-  // time is inflated; but c_move and t_vpat are measured one immediately after the
-  // other with the same short warm-up beforehand, so the same inflation factor
-  // applies to both and divides out of the ratio.  (Only the ratio is kept — the
-  // absolute times are discarded.)  Board size 13, the target; the ratio is
-  // ~size-stable.
-  if (_autoTruncOvh && _isNode) {
+  // Auto-calibrate the two model-dependent work ratios for the loaded ppat/vpat
+  // models (each skipped when its env var pins it):
+  //   c_ppat    = mean time of ONE ppat feature-extraction move,
+  //   c_uniform = mean time of ONE uniform-random move (no extraction),
+  //   t_vpat    = mean time of ONE vpat leaf eval,
+  //   UNIFORM_WEIGHT = c_uniform / c_ppat,   TRUNC_OVERHEAD = t_vpat / c_ppat.
+  // All three are timed here at construction, before the JIT is warm, so each
+  // absolute time is inflated; but they are measured back-to-back after a common
+  // short warm-up, so the shared inflation factor divides out of the ratios (only
+  // the ratios are kept).  Board size 13, the target; the ratios are ~size-stable.
+  // c_ppat/c_uniform force the mode via a temporary uniformBelowPhase (restored).
+  if ((_autoUniformWt || _autoTruncOvh) && _isNode) {
     const cN = 13, cst = createState(cN), crng = makeRng(1);
     const cg = new Game2(cN, false);
     while (!cg.gameOver && (cN * cN - cg.emptyCount) < cN * cN * 0.5) cg.play(ppatMove(cg, cst, _model, crng));
-    { const w = cg.clone(); for (let m = 0; m < 40 && !w.gameOver; m++) w.play(ppatMove(w, cst, _model, crng)); vpatValueB(cg); }  // warm-up
-    const rg = cg.clone(), rcap = 3 * rg.emptyCount + 20, rt0 = performance.now();
-    let rm = 0;
-    while (!rg.gameOver && rm < rcap) { rg.play(ppatMove(rg, cst, _model, crng)); rm++; }
-    const cMove = (performance.now() - rt0) / Math.max(1, rm);
+    const savedUbp = _model.uniformBelowPhase;
+    const rollUs = () => { const rg = cg.clone(), rcap = 3 * rg.emptyCount + 20, t0 = performance.now(); let m = 0; while (!rg.gameOver && m < rcap) { rg.play(ppatMove(rg, cst, _model, crng)); m++; } return (performance.now() - t0) / Math.max(1, m); };
+    _model.uniformBelowPhase = 0; rollUs(); vpatValueB(cg);   // warm-up (ppat path + eval)
+    _model.uniformBelowPhase = 0; const cPpat    = rollUs();  // force every move to extract
+    _model.uniformBelowPhase = 1; const cUniform = rollUs();  // force every move uniform
+    _model.uniformBelowPhase = savedUbp;
     const vt0 = performance.now();
     for (let r = 0; r < 300; r++) vpatValueB(cg);
     const tVpat = (performance.now() - vt0) / 300;
-    TRUNC_OVERHEAD = tVpat / cMove;
-    console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-      `expand overhead: playout ${PLAYOUT_OVERHEAD}, trunc ${TRUNC_OVERHEAD.toFixed(2)} (auto-calibrated)`);
-  } else {
-    console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-      `expand overhead: playout ${PLAYOUT_OVERHEAD}, trunc ${TRUNC_OVERHEAD} (env)`);
+    if (_autoUniformWt) UNIFORM_WEIGHT = cUniform / cPpat;
+    if (_autoTruncOvh)  TRUNC_OVERHEAD = tVpat / cPpat;
   }
+  console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+    `expand costs: playout ${PLAYOUT_OVERHEAD}, uniform-move ${UNIFORM_WEIGHT.toFixed(2)}${_autoUniformWt ? '' : '(env)'}, ` +
+    `trunc ${TRUNC_OVERHEAD.toFixed(2)}${_autoTruncOvh ? '' : '(env)'}`);
 
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).
@@ -299,13 +302,16 @@ function create(cfg) {
     // wherever that endpoint's phase lands.
     let truncArmed = _truncActive;
 
+    const ubp = _model.uniformBelowPhase;   // moves below this fullness skip extraction (uniform)
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
-    let moves = 0;
+    let moves = 0, uniformMoves = 0;
     let weight = 1.0;
 
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
+      // Classify BEFORE the move, the same way ppatMove does (fullness < ubp).
+      if (ubp > 0 && (cap - game2.emptyCount) / cap < ubp) uniformMoves++;
       const idx = ppatMove(game2, _ppatState, _model, rng);
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
@@ -316,12 +322,12 @@ function create(cfg) {
       if (truncArmed && (LEGACY_PHASE_DELTA ? game2.emptyCount <= truncEmpty
                                             : moves >= truncMoves)) {
         // The gate itself was decided at playout start (leaf-anchored draw).
-        if (!game2.gameOver) { _lastPlayoutMoves = moves; _lastPlayoutTrunc = true; return vpatValueB(game2); }
+        if (!game2.gameOver) { _lastPlayoutPpat = moves - uniformMoves; _lastPlayoutUniform = uniformMoves; _lastPlayoutTrunc = true; return vpatValueB(game2); }
         truncArmed = false;
       }
     }
 
-    _lastPlayoutMoves = moves; _lastPlayoutTrunc = false;
+    _lastPlayoutPpat = moves - uniformMoves; _lastPlayoutUniform = uniformMoves; _lastPlayoutTrunc = false;
     return game2.estimateWinner() === BLACK ? 1 : 0;
   }
 
@@ -567,7 +573,7 @@ function create(cfg) {
         played.fill(0);
         value = playout(simGame2, played, rng);
         trace = played;
-        work = PLAYOUT_OVERHEAD + _lastPlayoutMoves + (_lastPlayoutTrunc ? TRUNC_OVERHEAD : 0);
+        work = PLAYOUT_OVERHEAD + _lastPlayoutPpat + _lastPlayoutUniform * UNIFORM_WEIGHT + (_lastPlayoutTrunc ? TRUNC_OVERHEAD : 0);
       } else {
         // Simulations that end without a playout are at terminal positions
         // (double pass or descent into a finished game) — score them exactly.
