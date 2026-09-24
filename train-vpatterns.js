@@ -414,9 +414,15 @@ const evalGetMove = EVAL_AGENT
   ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
   : null;
 
-// Load off-policy move-source agent (only when --ext was supplied).
+// Load off-policy move-source agent (only when --ext was supplied).  Factory
+// agents (exporting create) are instantiated eagerly here — before the header
+// prints — so their load banner lands in the startup block rather than splitting
+// the header from the first data row.  Non-factory agents load at require.
 const extGetMove = EXT_AGENT
-  ? require(path.join(__dirname, 'ai', EXT_AGENT + '.js')).getMove
+  ? (() => {
+      const m = require(path.join(__dirname, 'ai', EXT_AGENT + '.js'));
+      return (typeof m.create === 'function' ? m.create(Util.makeCfg()) : m).getMove;
+    })()
   : null;
 
 // Featurepol candidate filter (--fp-width): restrict the trainee's greedy and
