@@ -35,7 +35,7 @@ const Util = require('./util.js');
 const opts       = Util.parseArgs(process.argv.slice(2),
   ['help', 'use-p1', 'use-p5', 'use-p8', 'use-p9', 'use-p12', 'use-p13', 'captures'],
   ['size', 'train-size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'eval', 'eval-agent', 'ladder-file', 'md-file', 'load', 'save']);
-const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
+const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '13', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || '13', 10);
 const LR         = parseFloat(opts.lr || '0.02');
 const REWARD_EMA = parseFloat(opts['reward-ema'] || '0.99');   // EMA decay for the reward baseline (variance reduction); 0 disables
@@ -271,7 +271,7 @@ function evalVsReference(N, refGetMove, nGames) {
 
 if (opts.help) {
   console.log(`Usage: node train-npat.js [options]
-  --size N         | --train-size N (default 9) | --eval-size N (default 13)
+  --size N         | --train-size N (default 13) | --eval-size N (default 13)
   --lr F           learning rate (default 0.02)
   --reward-ema F   EMA decay for the reward baseline (variance reduction).
                    Default 0.99; 0 disables.

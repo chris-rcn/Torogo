@@ -43,7 +43,7 @@ const fs = require('fs');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'lambda', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'tactics', 'train-size']);
-const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '9',  10);
+const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '13',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vlibpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;

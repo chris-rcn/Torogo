@@ -32,7 +32,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
                                 vpat<n>: rank of the move under an external vpatterns value model
                                 (from FP_VPAT_DATA, or inherited from --load; never trained here;
                                  embedded into every save so inference needs no FP_VPAT_DATA)
-  --train-size N | --size N   self-play board size (default 9)
+  --train-size N | --size N   self-play board size (default 13)
   --eval-size N     evaluation board size (default 13)
   --lr F            learning rate (default 0.02)
   --reward-ema F    EMA decay for the reward baseline; 0 disables (default 0.99)
@@ -91,7 +91,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
   process.exit(opts.help ? 0 : 1);
 }
 
-const TRAIN_SIZE  = parseInt(opts['train-size'] || opts.size || '9', 10);
+const TRAIN_SIZE  = parseInt(opts['train-size'] || opts.size || '13', 10);
 const EVAL_SIZE   = parseInt(opts['eval-size'] || opts.size || '13', 10);
 const LR          = parseFloat(opts.lr || '0.02');
 const REWARD_EMA  = parseFloat(opts['reward-ema'] || '0.99');

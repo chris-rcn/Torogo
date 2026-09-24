@@ -52,7 +52,7 @@ indefinitely unless --limit is given; the checkpoint is written at every print.
                     room (default 4000000)
   --prune-ratio F   a prune drops this fraction of the weights admitted since
                     the last prune, taking those nearest zero (default 0.5)
-  --train-size N    self-play board size (default 9)
+  --train-size N    self-play board size (default 13)
   --eval-size N     evaluation board size (default 13)
   --size N          sets both of the above
   --komi K          auto | auto:<start> | <number>; auto (default) steps komi
@@ -83,7 +83,7 @@ indefinitely unless --limit is given; the checkpoint is written at every print.
   process.exit(0);
 }
 
-const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '9', 10);
+const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '13', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || '13', 10);
 const SAVE_PATH  = opts.save || `out/jpats-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
