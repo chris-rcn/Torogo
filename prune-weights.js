@@ -12,8 +12,8 @@ const path = require('path');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out', 'keep']);
-if (opts.help || !opts.in || opts.keep === undefined) {
-  console.error(`Usage: node prune-weights.js --in <model.js> --out <model.js> --keep F
+if (opts.help || !opts.in) {
+  console.error(`Usage: node prune-weights.js --in <model.js> [--out <model.js>] [--keep F]
 
 Keep the most extreme |weight| fraction of a featurepol or vpatterns checkpoint
 (family auto-detected).  For hpatterns files use filter-hpat-extreme.js.
@@ -21,14 +21,14 @@ Keep the most extreme |weight| fraction of a featurepol or vpatterns checkpoint
   --in PATH       checkpoint to prune (required)
   --out PATH      pruned checkpoint to write (default: <in>-pruned.js,
                   echoed on start)
-  --keep F        keep the most extreme |weight| fraction F (0 < F < 1)
+  --keep F        keep the most extreme |weight| fraction F, 0 < F < 1 (default 0.5)
   --help          show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 const IN = path.resolve(opts.in);
 const OUT = opts.out || opts.in.replace(/\.js$/, '') + '-pruned.js';
 console.log('out: ' + OUT);
-const KEEP = parseFloat(opts.keep);
+const KEEP = opts.keep !== undefined ? parseFloat(opts.keep) : 0.5;
 if (!(KEEP > 0 && KEEP < 1)) { console.error('--keep must be in (0, 1)'); process.exit(1); }
 
 const raw = require(IN);
