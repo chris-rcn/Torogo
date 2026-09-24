@@ -46,7 +46,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -90,6 +90,8 @@ checkpoint is written at every print.
                     normal training moves begin (backward curriculum)
 
   --load PATH       resume from a checkpoint
+  --no-add          fine-tune ONLY the keys already in the loaded model; never
+                    intern new ones (requires --load)
   --save PATH       checkpoint path (default out/vpat-<random>.js)
 
   --eval AGENT      ai/<name>.js played as the reference in test games
@@ -108,6 +110,8 @@ const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '13',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load  || null;
+const NO_ADD     = opts['no-add'] === true;   // fine-tune ONLY the loaded keys; never intern new ones
+if (NO_ADD && !LOAD_PATH) { console.error('Error: --no-add needs a loaded model to fine-tune (pass --load).'); process.exit(1); }
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
@@ -279,7 +283,9 @@ function tdUpdate(features, target, lr) {
   for (let i = 0; i < n; i++) {
     if (hasFrozen && FROZEN.has(tags[i])) continue;
     const k = keys[i];
-    const w = (weights.get(k) ?? 0) + pols[i] * step;
+    const cur = weights.get(k);
+    if (NO_ADD && cur === undefined) continue;   // key not in the loaded model: skip, don't intern
+    const w = (cur ?? 0) + pols[i] * step;
     weights.set(k, w);
     wAbsSum += Math.abs(w);
     wUpdateCount++;
@@ -532,6 +538,7 @@ if (LOAD_PATH) {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
   }
 }
+if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
