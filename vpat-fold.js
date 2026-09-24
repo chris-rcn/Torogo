@@ -33,16 +33,21 @@ const fs = require('fs');
 const path = require('path');
 const VPatterns = require('./vpatterns.js');
 const { Game2, parseMove } = require('./game2.js');
+const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['model', 'games', 'save', 'source', 'dest', 'eval-games', 'ply-stride', 'size']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'random'],
+  ['model', 'games', 'save', 'source', 'dest', 'eval-games', 'random-games', 'ply-stride', 'size']);
 
-if (opts.help || !opts.model || !opts.games) {
+if (opts.help || !opts.model || (!opts.games && !opts.random)) {
   console.log(`vpat-fold: fold one term of a two-term composite vpat model into the other.
 
   --model PATH       composite vpat model (exactly two terms: the source and dest)
-  --games PATH       game corpus (all games are folded, minus the eval slice)
+  --games PATH       game corpus to fold over (and to eval on)
+  --random           fold over RANDOM self-play positions instead of a corpus
+                     (no --games needed); if --games is also given, the eval is
+                     still measured on that real corpus (a transfer test)
+  --random-games N   random games to fold when --random (default 20000)
   --source S:M       term to fold away (default: the 2:M term of a 2:M,3:M model)
   --dest   S:M       term to fold into  (default: the 3:M term of a 2:M,3:M model)
   --save PATH        output flat single-term model (default out/vpat-fold-<rand>.js)
@@ -56,9 +61,11 @@ Foldable when source.size <= dest.size and source.maxLibs <= dest.maxLibs
 }
 
 const MODEL_PATH = opts.model;
-const GAMES_PATH = opts.games;
+const GAMES_PATH = opts.games || null;
 const SAVE_PATH  = opts.save || `out/vpat-fold-${Math.random().toString(36).slice(2, 10)}.js`;
 const EVAL_GAMES = parseInt(opts['eval-games'] || '300', 10);
+const RANDOM       = !!opts.random;
+const RANDOM_GAMES = parseInt(opts['random-games'] || '20000', 10);
 const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '2', 10));
 const SIZE       = parseInt(opts.size || '13', 10);
 
@@ -103,17 +110,21 @@ const flatSpecs = [{ size: DST.size, maxLibs: DST.maxLibs }];
 const flatPrep = VPatterns.prepareSpecs(flatSpecs);
 
 console.log(`composite: ${path.basename(MODEL_PATH)}  specs='${VPatterns.specString(specs)}'  weights=${comp.weights.size}`);
-console.log(`fold: ${tok(SRC)} -> ${tok(DST)}   corpus=${path.basename(GAMES_PATH)}   ply-stride=${PLY_STRIDE}`);
+console.log(`fold: ${tok(SRC)} -> ${tok(DST)}   source=${RANDOM ? `random (${RANDOM_GAMES} games)` : path.basename(GAMES_PATH)}   ` +
+            `eval=${GAMES_PATH ? path.basename(GAMES_PATH) : 'random'}   ply-stride=${PLY_STRIDE}`);
 console.log(`out: ${SAVE_PATH}`);
 
-// ── Corpus ───────────────────────────────────────────────────────────────────
-const lines = fs.readFileSync(GAMES_PATH, 'utf8').split('\n').filter(l => l && l[0] !== '#');
-if (lines.length <= EVAL_GAMES) fail(`corpus has only ${lines.length} games, need > --eval-games (${EVAL_GAMES}).`);
-const evalLines = lines.slice(0, EVAL_GAMES);
-const foldLines = lines.slice(EVAL_GAMES);
-console.log(`corpus games: ${lines.length}  (eval ${evalLines.length}, fold ${foldLines.length})`);
+// ── Position sources: a game corpus and/or random self-play ──────────────────
+let lines = null, evalLines = null, foldLines = null;
+if (GAMES_PATH) {
+  lines = fs.readFileSync(GAMES_PATH, 'utf8').split('\n').filter(l => l && l[0] !== '#');
+  if (!RANDOM && lines.length <= EVAL_GAMES) fail(`corpus has only ${lines.length} games, need > --eval-games (${EVAL_GAMES}).`);
+  evalLines = lines.slice(0, EVAL_GAMES);
+  foldLines = RANDOM ? null : lines.slice(EVAL_GAMES);
+  console.log(`corpus games: ${lines.length}  (eval ${evalLines.length}${RANDOM ? '' : `, fold ${foldLines.length}`})`);
+}
 
-// Yield sampled positions (Game2) from a game line, one every PLY_STRIDE plies.
+// Sampled positions (Game2) from a corpus game line, one every PLY_STRIDE plies.
 function* positions(line) {
   const parts = line.trim().split(/\s+/);
   const N = parseInt(parts[0], 10);
@@ -128,13 +139,46 @@ function* positions(line) {
   }
 }
 
+// One random self-play game: uniform over legal non-true-eye moves (a uniform
+// playout), sampled every PLY_STRIDE plies.  Runs to a natural end (no valid
+// move) or a 2*area ply cap.
+function* randomGamePositions(rng) {
+  const g = new Game2(SIZE, false), plyCap = SIZE * SIZE * 2;
+  for (let m = 0; m < plyCap; m++) {
+    const ec = g.emptyCount, emC = g._emptyCells;
+    let pick = -1, nValid = 0;
+    for (let ei = 0; ei < ec; ei++) {
+      const idx = emC[ei];
+      if (g.isLegal(idx) && !g.isTrueEye(idx) && rng.random() * (++nValid) < 1) pick = idx;
+    }
+    if (pick < 0) break;
+    g.play(pick);
+    if (m % PLY_STRIDE === 0) yield g;
+  }
+}
+
+// Game sources (each yields one per-game position generator).  Distinct RNG
+// seeds keep the random fold, eval, and self-check sets disjoint.
+function* foldGames() {
+  if (RANDOM) { const rng = makeRng(1001); for (let i = 0; i < RANDOM_GAMES; i++) yield randomGamePositions(rng); }
+  else for (const line of foldLines) yield positions(line);
+}
+function* evalGames() {
+  if (GAMES_PATH) { for (const line of evalLines) yield positions(line); }
+  else { const rng = makeRng(2002); for (let i = 0; i < EVAL_GAMES; i++) yield randomGamePositions(rng); }
+}
+function* selfCheckGames() {
+  if (GAMES_PATH) { for (const line of lines.slice(0, 40)) yield positions(line); }
+  else { const rng = makeRng(3003); for (let i = 0; i < 40; i++) yield randomGamePositions(rng); }
+}
+
 // ── Self-check: per-cell source/dest keys must match the extraction's emit ────
 function multiset(arr) { const m = new Map(); for (const k of arr) m.set(k, (m.get(k) || 0) + 1); return m; }
 function eqMultiset(a, b) { if (a.size !== b.size) return false; for (const [k, v] of a) if (b.get(k) !== v) return false; return true; }
 (function selfCheck() {
   let checked = 0;
-  for (const line of lines.slice(0, 40)) {
-    for (const g of positions(line)) {
+  for (const gamePositions of selfCheckGames()) {
+    for (const g of gamePositions) {
       const f = VPatterns.extractFeatures(g, comp.preparedSpecs);
       const sp = comp.preparedSpecs._planes.get(SRC.maxLibs), dp = comp.preparedSpecs._planes.get(DST.maxLibs);
       const cap = g.N * g.N, mySrc = [], myDst = [];
@@ -154,8 +198,8 @@ function eqMultiset(a, b) { if (a.size !== b.size) return false; for (const [k, 
 
 // ── Pre-extract the held-out eval set: composite z (fixed) + flat dest keys ──
 const evalSet = [];
-for (const line of evalLines) {
-  for (const g of positions(line)) {
+for (const gamePositions of evalGames()) {
+  for (const g of gamePositions) {
     const fc = VPatterns.extractFeatures(g, comp.preparedSpecs);
     VPatterns.evaluateFeatures(fc, comp.weights);
     const ff = VPatterns.extractFeatures(g, flatPrep);   // flat dest-term keys (weights irrelevant)
@@ -223,15 +267,15 @@ function row(games, positionsFolded) {
   ].join('  '));
 }
 
-// ── Stream the corpus, geometric row schedule by games folded ────────────────
-let positionsFolded = 0, nextRow = 1, printedAt = -1;
-for (let gi = 0; gi < foldLines.length; gi++) {
-  for (const g of positions(foldLines[gi])) { foldPosition(g); positionsFolded++; }
-  const games = gi + 1;
+// ── Stream the fold source, geometric row schedule by games folded ───────────
+let positionsFolded = 0, gamesFolded = 0, nextRow = 1, printedAt = -1;
+for (const gamePositions of foldGames()) {
+  for (const g of gamePositions) { foldPosition(g); positionsFolded++; }
+  const games = ++gamesFolded;
   if (games >= nextRow) {
     row(games, positionsFolded);
     printedAt = games;
     nextRow = Math.max(Math.ceil(nextRow * 1.5), nextRow + 1);
   }
 }
-if (foldLines.length !== printedAt) row(foldLines.length, positionsFolded);
+if (gamesFolded !== printedAt) row(gamesFolded, positionsFolded);
