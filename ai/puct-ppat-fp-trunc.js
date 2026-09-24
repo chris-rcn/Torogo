@@ -79,7 +79,7 @@ function create(cfg) {
   // block baked into the model file can supply their defaults.
   const _vpatPath = _isNode
     ? cfg.str('TRUNC_VPAT_DATA',
-        require('path').join(__dirname, '..', 'out', 'vpat-pe-ghzlf3wg-best.js'))
+        require('path').join(__dirname, '..', 'out', 'vpat-1j9ad1fk.js'))
     : null;
   if (_isNode && !_vpatPath) {
     throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
