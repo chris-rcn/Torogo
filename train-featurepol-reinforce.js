@@ -40,7 +40,7 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --temperature F   softmax sampling temperature for training (default 1)
   --eval-rank-topn N  in EVAL games, rank the vpat<n> feature over only the best N
                     moves by the OTHER feature spaces rather than every
-                    candidate (default 0 = every candidate).  This is the
+                    candidate (default 3; 0 = every candidate).  This is the
                     deployment setting: ~2x cheaper per move with no measurable
                     strength cost.  Self-play always ranks every candidate --
                     restricting it there makes rank mean "best among moves this
@@ -104,7 +104,7 @@ const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).sl
 const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
 const LOAD_PATH   = opts.load || null;
 // Eval may shortlist the rank-feature ranking; self-play never does (see the usage note).
-const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '0', 10);
+const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '3', 10);
 // Self-play may compute the rank feature in only a fraction of positions; eval always uses
 // the feature, since that is how the policy would be deployed.
 const RANK_POS_RATIO = opts['rank-pos-ratio'] !== undefined ? parseFloat(opts['rank-pos-ratio']) : 1;

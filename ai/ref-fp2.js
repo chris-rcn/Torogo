@@ -8,8 +8,8 @@
 //                 embedded in the file, so no external vpat model is needed)
 //   temperature:  1  (samples from the softmax over the logits — a stochastic
 //                 reference, like ref-featurepol-softmax)
-//   rank shortlist: 0  (whole-board ranking — the vpat9 rank feature scores
-//                 every candidate, matching featurepol's and the trainer's default)
+//   rank shortlist: 3  (the vpat9 rank feature scores only the best 3 candidates
+//                 by the other spaces — featurepol's and the trainer's default)
 //
 // Node-only (loads a weights file at startup).
 
