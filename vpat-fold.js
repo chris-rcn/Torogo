@@ -32,22 +32,29 @@
 const fs = require('fs');
 const path = require('path');
 const VPatterns = require('./vpatterns.js');
-const { Game2, parseMove } = require('./game2.js');
+const { Game2, parseMove, PASS } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'random'],
-  ['model', 'games', 'save', 'source', 'dest', 'eval-games', 'random-games', 'ply-stride', 'size']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'],
+  ['model', 'games', 'position-agent', 'gen-games', 'gen-budget', 'save', 'source', 'dest', 'eval-games', 'ply-stride', 'size']);
 
-if (opts.help || !opts.model || (!opts.games && !opts.random)) {
+if (opts.help || !opts.model || (!opts.games && !opts['position-agent'])) {
   console.log(`vpat-fold: fold one term of a two-term composite vpat model into the other.
+
+Positions come from a game corpus (--games) and/or a self-play agent
+(--position-agent); at least one is required.
 
   --model PATH       composite vpat model (exactly two terms: the source and dest)
   --games PATH       game corpus to fold over (and to eval on)
-  --random           fold over RANDOM self-play positions instead of a corpus
-                     (no --games needed); if --games is also given, the eval is
-                     still measured on that real corpus (a transfer test)
-  --random-games N   random games to fold when --random (default 20000)
+  --position-agent X ai/<X>.js self-play generates fold positions instead of a
+                     corpus (X='random' = uniform random playout).  If --games is
+                     also given, the eval is still measured on that real corpus
+                     (a transfer test); otherwise eval is on generated positions.
+  --gen-games N      self-play games to generate when --position-agent (default:
+                     unlimited — runs forever, saving/measuring each row until stopped)
+  --gen-budget MS    per-move budget for the position agent (default 100; policy
+                     agents like rfs ignore it)
   --source S:M       term to fold away (default: the 2:M term of a 2:M,3:M model)
   --dest   S:M       term to fold into  (default: the 3:M term of a 2:M,3:M model)
   --save PATH        output flat single-term model (default out/vpat-fold-<rand>.js)
@@ -64,8 +71,9 @@ const MODEL_PATH = opts.model;
 const GAMES_PATH = opts.games || null;
 const SAVE_PATH  = opts.save || `out/vpat-fold-${Math.random().toString(36).slice(2, 10)}.js`;
 const EVAL_GAMES = parseInt(opts['eval-games'] || '300', 10);
-const RANDOM       = !!opts.random;
-const RANDOM_GAMES = parseInt(opts['random-games'] || '20000', 10);
+const POS_AGENT  = opts['position-agent'] || null;
+const GEN_GAMES  = opts['gen-games'] !== undefined ? parseInt(opts['gen-games'], 10) : Infinity;
+const GEN_BUDGET = parseInt(opts['gen-budget'] || '100', 10);
 const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '2', 10));
 const SIZE       = parseInt(opts.size || '13', 10);
 
@@ -110,18 +118,18 @@ const flatSpecs = [{ size: DST.size, maxLibs: DST.maxLibs }];
 const flatPrep = VPatterns.prepareSpecs(flatSpecs);
 
 console.log(`composite: ${path.basename(MODEL_PATH)}  specs='${VPatterns.specString(specs)}'  weights=${comp.weights.size}`);
-console.log(`fold: ${tok(SRC)} -> ${tok(DST)}   source=${RANDOM ? `random (${RANDOM_GAMES} games)` : path.basename(GAMES_PATH)}   ` +
-            `eval=${GAMES_PATH ? path.basename(GAMES_PATH) : 'random'}   ply-stride=${PLY_STRIDE}`);
+console.log(`fold: ${tok(SRC)} -> ${tok(DST)}   source=${POS_AGENT ? `${POS_AGENT} (${GEN_GAMES === Infinity ? 'unlimited' : GEN_GAMES} games)` : path.basename(GAMES_PATH)}   ` +
+            `eval=${GAMES_PATH ? path.basename(GAMES_PATH) : POS_AGENT}   ply-stride=${PLY_STRIDE}`);
 console.log(`out: ${SAVE_PATH}`);
 
-// ── Position sources: a game corpus and/or random self-play ──────────────────
+// ── Position sources: a game corpus and/or a self-play agent ─────────────────
 let lines = null, evalLines = null, foldLines = null;
 if (GAMES_PATH) {
   lines = fs.readFileSync(GAMES_PATH, 'utf8').split('\n').filter(l => l && l[0] !== '#');
-  if (!RANDOM && lines.length <= EVAL_GAMES) fail(`corpus has only ${lines.length} games, need > --eval-games (${EVAL_GAMES}).`);
+  if (!POS_AGENT && lines.length <= EVAL_GAMES) fail(`corpus has only ${lines.length} games, need > --eval-games (${EVAL_GAMES}).`);
   evalLines = lines.slice(0, EVAL_GAMES);
-  foldLines = RANDOM ? null : lines.slice(EVAL_GAMES);
-  console.log(`corpus games: ${lines.length}  (eval ${evalLines.length}${RANDOM ? '' : `, fold ${foldLines.length}`})`);
+  foldLines = POS_AGENT ? null : lines.slice(EVAL_GAMES);
+  console.log(`corpus games: ${lines.length}  (eval ${evalLines.length}${POS_AGENT ? '' : `, fold ${foldLines.length}`})`);
 }
 
 // Sampled positions (Game2) from a corpus game line, one every PLY_STRIDE plies.
@@ -139,37 +147,44 @@ function* positions(line) {
   }
 }
 
-// One random self-play game: uniform over legal non-true-eye moves (a uniform
-// playout), sampled every PLY_STRIDE plies.  Runs to a natural end (no valid
-// move) or a 2*area ply cap.
-function* randomGamePositions(rng) {
-  const g = new Game2(SIZE, false), plyCap = SIZE * SIZE * 2;
-  for (let m = 0; m < plyCap; m++) {
-    const ec = g.emptyCount, emC = g._emptyCells;
-    let pick = -1, nValid = 0;
-    for (let ei = 0; ei < ec; ei++) {
-      const idx = emC[ei];
-      if (g.isLegal(idx) && !g.isTrueEye(idx) && rng.random() * (++nValid) < 1) pick = idx;
+// Position-agent getMove: 'random' is a uniform playout over legal non-true-eye
+// moves; anything else is the ai/<name>.js agent (factory-aware).
+const posGetMove = POS_AGENT ? (POS_AGENT === 'random'
+  ? (game, _b, o) => {
+      const rng = o.rng, ec = game.emptyCount, emC = game._emptyCells;
+      let pick = PASS, nValid = 0;
+      for (let ei = 0; ei < ec; ei++) { const idx = emC[ei]; if (game.isLegal(idx) && !game.isTrueEye(idx) && rng.random() * (++nValid) < 1) pick = idx; }
+      return { move: pick };
     }
-    if (pick < 0) break;
-    g.play(pick);
+  : (() => { const m = require(path.join(__dirname, 'ai', POS_AGENT + '.js')); return (typeof m.create === 'function' ? m.create(Util.makeCfg()) : m).getMove; })()
+) : null;
+
+// One self-play game from the position agent, sampled every PLY_STRIDE plies.
+// Ends on two passes / no legal move, or a 2*area ply cap.
+function* agentGamePositions(rng) {
+  const g = new Game2(SIZE, false), plyCap = SIZE * SIZE * 2;
+  let passes = 0;
+  for (let m = 0; m < plyCap; m++) {
+    const mv = posGetMove(g, GEN_BUDGET, { rng }).move;
+    if (mv === PASS) { if (++passes >= 2) break; g.play(PASS); }
+    else { passes = 0; if (!g.isLegal(mv)) break; g.play(mv); }
     if (m % PLY_STRIDE === 0) yield g;
   }
 }
 
 // Game sources (each yields one per-game position generator).  Distinct RNG
-// seeds keep the random fold, eval, and self-check sets disjoint.
+// seeds keep the agent-generated fold, eval, and self-check sets disjoint.
 function* foldGames() {
-  if (RANDOM) { const rng = makeRng(1001); for (let i = 0; i < RANDOM_GAMES; i++) yield randomGamePositions(rng); }
+  if (POS_AGENT) { const rng = makeRng(1001); for (let i = 0; i < GEN_GAMES; i++) yield agentGamePositions(rng); }
   else for (const line of foldLines) yield positions(line);
 }
 function* evalGames() {
   if (GAMES_PATH) { for (const line of evalLines) yield positions(line); }
-  else { const rng = makeRng(2002); for (let i = 0; i < EVAL_GAMES; i++) yield randomGamePositions(rng); }
+  else { const rng = makeRng(2002); for (let i = 0; i < EVAL_GAMES; i++) yield agentGamePositions(rng); }
 }
 function* selfCheckGames() {
   if (GAMES_PATH) { for (const line of lines.slice(0, 40)) yield positions(line); }
-  else { const rng = makeRng(3003); for (let i = 0; i < 40; i++) yield randomGamePositions(rng); }
+  else { const rng = makeRng(3003); for (let i = 0; i < 40; i++) yield agentGamePositions(rng); }
 }
 
 // ── Self-check: per-cell source/dest keys must match the extraction's emit ────
