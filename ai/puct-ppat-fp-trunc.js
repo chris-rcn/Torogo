@@ -44,7 +44,7 @@
 (function () {
 
 const Util = (typeof require === 'function') ? require('../util.js') : window.Util;
-const { PASS, BLACK } = Util.load('./game2.js', 'Game2');
+const { PASS, BLACK, Game2 } = Util.load('./game2.js', 'Game2');
 const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
 const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
@@ -126,7 +126,10 @@ function create(cfg) {
   // move), EXPAND_WORK is the tuning dial.
   const EXPAND_WORK      = cfg.float('EXPAND_WORK', 150);
   const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 7);
-  const TRUNC_OVERHEAD   = cfg.float('TRUNC_OVERHEAD', 4);
+  // TRUNC_OVERHEAD (vpat leaf eval in ppat-move-equivalents) is auto-calibrated
+  // at construction for the loaded models, unless the env pins it.
+  const _autoTruncOvh    = !cfg.has('TRUNC_OVERHEAD');
+  let TRUNC_OVERHEAD     = cfg.float('TRUNC_OVERHEAD', 4);
   let _lastPlayoutMoves = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
@@ -172,7 +175,7 @@ function create(cfg) {
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
-    `expand-work: ${EXPAND_WORK} (overhead ${PLAYOUT_OVERHEAD}+${TRUNC_OVERHEAD}trunc), ` +
+    `expand-work: ${EXPAND_WORK}, ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
@@ -203,6 +206,36 @@ function create(cfg) {
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
   _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+
+  // Auto-calibrate TRUNC_OVERHEAD for the loaded ppat/vpat models: time a ppat
+  // rollout (c_move) and a batch of leaf evals (t_vpat); TRUNC_OVERHEAD is their
+  // ratio, in ppat-move-equivalents.  Board size 13 (the target); the ratio is
+  // ~size-stable.  Skipped when the env pins TRUNC_OVERHEAD.
+  if (_autoTruncOvh && _isNode) {
+    const cN = 13, cst = createState(cN), crng = makeRng(1);
+    const cg = new Game2(cN, false);
+    while (!cg.gameOver && (cN * cN - cg.emptyCount) < cN * cN * 0.5) cg.play(ppatMove(cg, cst, _model, crng));
+    // c_move and t_vpat are timed back-to-back with the same light warm-up, so
+    // JIT/GC warmth is common to both and cancels in the ratio (the absolute
+    // times are unreliable at startup; only their ratio is used).
+    { const w = cg.clone(); for (let m = 0; m < 40 && !w.gameOver; m++) w.play(ppatMove(w, cst, _model, crng)); vpatValueB(cg); }
+    // c_move then t_vpat, back-to-back with the same minimal warm-up: both sit in
+    // the same (lightly-warmed) JIT/GC state, so that shared warmth cancels in the
+    // ratio.  Absolute times are unreliable at startup; only the ratio is used.
+    const rg = cg.clone(), rcap = 3 * rg.emptyCount + 20, rt0 = performance.now();
+    let rm = 0;
+    while (!rg.gameOver && rm < rcap) { rg.play(ppatMove(rg, cst, _model, crng)); rm++; }
+    const cMove = (performance.now() - rt0) / Math.max(1, rm);
+    const vt0 = performance.now();
+    for (let r = 0; r < 300; r++) vpatValueB(cg);
+    const tVpat = (performance.now() - vt0) / 300;
+    TRUNC_OVERHEAD = tVpat / cMove;
+    console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+      `expand overhead: playout ${PLAYOUT_OVERHEAD}, trunc ${TRUNC_OVERHEAD.toFixed(2)} (auto-calibrated)`);
+  } else {
+    console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+      `expand overhead: playout ${PLAYOUT_OVERHEAD}, trunc ${TRUNC_OVERHEAD} (env)`);
+  }
 
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).
