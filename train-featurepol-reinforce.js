@@ -230,6 +230,7 @@ if (weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) {
       'set FP_VPAT_DATA, or --load a checkpoint that embeds one.');
     process.exit(1);
   }
+  weights.rankTopN = -1;   // self-play ranks every candidate (whole board); eval toggles to EVAL_RANK_TOPN
 }
 // After the import, so the loaded keys are all interned first.
 if (NO_ADD) {
@@ -523,7 +524,7 @@ while (true) {
       // same game2 entry, so save and restore around the batch.
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
-      weights.rankTopN = EVAL_RANK_TOPN;   // eval ranks the best N; restored to whole-board (0) after
+      weights.rankTopN = EVAL_RANK_TOPN;   // eval ranks the best N; restored to whole-board (-1) after
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(1);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
@@ -533,7 +534,7 @@ while (true) {
         const w1 = evalVsReference(EVAL_SIZE, 1);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
-      weights.rankTopN = 0;   // self-play ranks every candidate
+      weights.rankTopN = -1;   // self-play ranks every candidate (whole board)
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
       setKomi(TRAIN_SIZE, trainKomi);

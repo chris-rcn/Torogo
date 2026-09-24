@@ -601,10 +601,15 @@ function _slShared(limit) {
 // every legal non-true-eye move, which is the normal behaviour.
 let _rankAllow = null;     // Set of board indices, or null -- external tooling
 let _rankMask  = null;     // Uint8Array board mask, or null -- the top-N path
-// The rank-topn shortlist (rank only the best N moves by the other spaces; 0 =
-// rank the whole board) is NOT a process global: it is a per-weights field,
-// weights.rankTopN, set by each caller and read by extractFeatures.  Two models
-// in one process can therefore rank at different widths.
+// The rank-topn width is NOT a process global: it is a per-weights field,
+// weights.rankTopN, set by each caller and read by extractFeatures, so two
+// models in one process can rank at different widths.  Its value:
+//   0  (the default) — the rank feature is OFF: no ranking pass, the rank
+//                      spaces emit nothing.  A model whose caller never opts in
+//                      pays nothing for a vpat<n> term.
+//   N > 0            — rank only the best N moves by the other spaces (a
+//                      shortlist), the deployment setting.
+//   N < 0            — rank the whole board (every candidate).
 // Fraction of positions in which the rank feature is computed at all.  1 = every
 // position (the default).  Below 1, the ranking is skipped on the rest and the
 // rank spaces emit nothing there, so the feature keeps its whole-board meaning
@@ -1243,7 +1248,7 @@ function createWeights(opts = {}) {
     delta: new Float32Array(initialCapacity),  // reusable scatter buffer
     count: new Int32Array(initialCapacity),    // per-key contributor count (for per-key gradient mean)
     size:  0,
-    rankTopN: 0,   // vpat<n> rank shortlist width; 0 = rank the whole board (per-instance, set by the caller)
+    rankTopN: 0,   // vpat<n> rank width (per-instance): 0 = OFF (default), N>0 = top-N, N<0 = whole board
   };
 }
 
@@ -1453,16 +1458,18 @@ function extractFeatures(game, state, weights, game3) {
   }
   // Is the rank feature live for this position at all?
   const useRank = _rankPosRatio >= 1 || Math.random() < _rankPosRatio;
-  // Top-N: run the ranking over a shortlist instead of the whole board.
+  // rankTopN > 0: rank a top-N shortlist.  (rankTopN == 0 is OFF; < 0 is
+  // whole-board — both handled in the whole-position branch below.)
   if (weights.rankTopN > 0 && spec.rankSpaces && spec.rankSpaces.length > 0) return _extractTopN(game, state, weights, ctx, spec, useRank);
   // Whole-position precomputes (e.g. the vpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
   if (preps) for (let i = 0; i < preps.length; i++) {
-    // useRank is about whether the RANKING runs this position; it must not
-    // gate unrelated whole-position precomputes, whose consumers always read.
+    // Non-rank precomputes always run.  The rank prepare runs only in whole-board
+    // mode (rankTopN < 0); at rankTopN == 0 the feature is off, so the rank stays
+    // blank and the rank spaces emit nothing.  (useRank gates it per position.)
     if (!preps[i]._isRank) preps[i](ctx);
-    else if (useRank) preps[i](ctx);
+    else if (weights.rankTopN < 0 && useRank) preps[i](ctx);
     else _rankBlank(game.N * game.N);
   }
   const computers = spec.computers, numSlots = spec.numSlots;
