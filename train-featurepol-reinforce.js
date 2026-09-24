@@ -440,8 +440,9 @@ if (RANK_POS_RATIO < 1) {
   FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
   console.log(`rank-pos-ratio=${RANK_POS_RATIO} (self-play positions using the rank feature; eval uses 1)`);
 }
+const HAS_STONE_LIMIT = weights.spec.str.includes('stoneLimit');
 FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
-if (SL_TRAIN_KEEP < 1) {
+if (HAS_STONE_LIMIT && SL_TRAIN_KEEP < 1) {
   console.log(`sl-train-keep=${SL_TRAIN_KEEP} (self-play keep prob for stoneLimit within phase<0.1; eval/inference use 1)`);
 }
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
