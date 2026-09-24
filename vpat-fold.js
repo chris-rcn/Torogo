@@ -26,7 +26,7 @@
 //
 // Usage:
 //   node vpat-fold.js --model out/vpat-<composite>.js --position-agent rfs \
-//        --source S:M --dest S:M [--save PATH] [--gen-games N] [--eval-games N] \
+//        --source S:M --dest S:M [--save PATH] [--games N] [--eval-games N] \
 //        [--ply-stride K] [--size N]
 
 const path = require('path');
@@ -36,7 +36,7 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['model', 'position-agent', 'gen-games', 'gen-budget', 'save', 'source', 'dest', 'eval-games', 'ply-stride', 'size']);
+  ['model', 'position-agent', 'games', 'budget', 'save', 'source', 'dest', 'eval-games', 'ply-stride', 'size']);
 
 if (opts.help || !opts.model || !opts['position-agent'] || !opts.source || !opts.dest) {
   console.log(`vpat-fold: fold one term of a two-term composite vpat model into the other.
@@ -48,9 +48,9 @@ same agent.
   --model PATH       composite vpat model (exactly two terms: the source and dest)
   --position-agent X ai/<X>.js self-play generates the fold positions
                      (X='random' = uniform random playout).  Required.
-  --gen-games N      self-play games to generate (default: unlimited — runs
+  --games N          self-play games to generate (default: unlimited — runs
                      forever, saving/measuring each row until stopped)
-  --gen-budget MS    per-move budget for the position agent (default 100; policy
+  --budget MS        per-move budget for the position agent (default 100; policy
                      agents like rfs ignore it)
   --source S:M       term to fold away (required)
   --dest   S:M       term to fold into  (required)
@@ -68,8 +68,8 @@ const MODEL_PATH = opts.model;
 const SAVE_PATH  = opts.save || `out/vpat-fold-${Math.random().toString(36).slice(2, 10)}.js`;
 const EVAL_GAMES = parseInt(opts['eval-games'] || '300', 10);
 const POS_AGENT  = opts['position-agent'];
-const GEN_GAMES  = opts['gen-games'] !== undefined ? parseInt(opts['gen-games'], 10) : Infinity;
-const GEN_BUDGET = parseInt(opts['gen-budget'] || '100', 10);
+const GEN_GAMES  = opts['games'] !== undefined ? parseInt(opts['games'], 10) : Infinity;
+const GEN_BUDGET = parseInt(opts['budget'] || '100', 10);
 const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '5', 10));
 const SIZE       = parseInt(opts.size || '13', 10);
 
