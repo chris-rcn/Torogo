@@ -112,7 +112,10 @@ function create(cfg) {
     path: _isBrowser ? undefined
                      : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-0fg36nkw.js')) });
   const fpWeights   = fpModel.weights;
-  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}`);
+  // Rank the vpat<n> feature over the best 3 candidates when the fp spec ranks
+  // (matching featurepol's / the trainer's default); no-op for specs without it.
+  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = 3;
+  console.log(`puct-ppat-fp[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
