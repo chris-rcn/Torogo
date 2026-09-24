@@ -25,9 +25,9 @@
 // the flat model, writes it to --save, and measures it on a held-out eval slice.
 //
 // Usage:
-//   node vpat-fold.js --model out/vpat-<composite>.js --games out/games.txt \
-//        [--source S:M --dest S:M] [--save PATH] [--eval-games N] [--ply-stride K] [--size N]
-//   --source/--dest default to the 2:M / 3:M terms of a 2:M,3:M composite.
+//   node vpat-fold.js --model out/vpat-<composite>.js --position-agent rfs \
+//        --source S:M --dest S:M [--save PATH] [--gen-games N] [--eval-games N] \
+//        [--ply-stride K] [--size N]
 
 const path = require('path');
 const VPatterns = require('./vpatterns.js');
@@ -38,7 +38,7 @@ const Util = require('./util.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['model', 'position-agent', 'gen-games', 'gen-budget', 'save', 'source', 'dest', 'eval-games', 'ply-stride', 'size']);
 
-if (opts.help || !opts.model || !opts['position-agent']) {
+if (opts.help || !opts.model || !opts['position-agent'] || !opts.source || !opts.dest) {
   console.log(`vpat-fold: fold one term of a two-term composite vpat model into the other.
 
 Fold positions come from a self-play agent (--position-agent), so no game corpus
@@ -52,11 +52,11 @@ same agent.
                      forever, saving/measuring each row until stopped)
   --gen-budget MS    per-move budget for the position agent (default 100; policy
                      agents like rfs ignore it)
-  --source S:M       term to fold away (default: the 2:M term of a 2:M,3:M model)
-  --dest   S:M       term to fold into  (default: the 3:M term of a 2:M,3:M model)
+  --source S:M       term to fold away (required)
+  --dest   S:M       term to fold into  (required)
   --save PATH        output flat single-term model (default out/vpat-fold-<rand>.js)
   --eval-games N     held-out games for the z_flat-vs-z_composite measurement (default 300)
-  --ply-stride K     sample every K-th position within a game (default 2)
+  --ply-stride K     sample every K-th position within a game (default 5)
   --size N           board size (default 13)
 
 Foldable when source.size <= dest.size and source.maxLibs <= dest.maxLibs
@@ -70,7 +70,7 @@ const EVAL_GAMES = parseInt(opts['eval-games'] || '300', 10);
 const POS_AGENT  = opts['position-agent'];
 const GEN_GAMES  = opts['gen-games'] !== undefined ? parseInt(opts['gen-games'], 10) : Infinity;
 const GEN_BUDGET = parseInt(opts['gen-budget'] || '100', 10);
-const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '2', 10));
+const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '5', 10));
 const SIZE       = parseInt(opts.size || '13', 10);
 
 // ── Load, resolve the source/dest terms, validate foldability ────────────────
@@ -83,19 +83,10 @@ const specs = comp.specs;
 const tok = sp => VPatterns.specToken(sp);
 function fail(msg) { console.error('Error: ' + msg); process.exit(1); }
 
-let SRC, DST;
-if (opts.source || opts.dest) {
-  if (!opts.source || !opts.dest) fail('pass both --source and --dest, or neither.');
-  SRC = specs.find(sp => tok(sp) === opts.source);
-  DST = specs.find(sp => tok(sp) === opts.dest);
-  if (!SRC) fail(`--source '${opts.source}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
-  if (!DST) fail(`--dest '${opts.dest}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
-} else {
-  const s2 = specs.find(s => s.size === 2), s3 = specs.find(s => s.size === 3);
-  if (specs.length !== 2 || !s2 || !s3 || s2.maxLibs !== s3.maxLibs)
-    fail(`no --source/--dest and the model is not a plain 2:M,3:M composite ('${VPatterns.specString(specs)}').`);
-  SRC = s2; DST = s3;
-}
+const SRC = specs.find(sp => tok(sp) === opts.source);
+const DST = specs.find(sp => tok(sp) === opts.dest);
+if (!SRC) fail(`--source '${opts.source}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
+if (!DST) fail(`--dest '${opts.dest}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
 if (specs.length !== 2) fail(`the composite must have exactly the two terms {source, dest}; got '${VPatterns.specString(specs)}'.`);
 if (tok(SRC) === tok(DST)) fail('source and dest are the same term.');
 if (!(SRC.size === 2 || SRC.size === 3) || !(DST.size === 2 || DST.size === 3)) fail('only size 2 and 3 terms are supported.');
