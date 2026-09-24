@@ -123,12 +123,14 @@ function create(cfg) {
   // so it tracks real cost across regimes with one threshold: a ppat move is a
   // full unit, an early uniform-random move (below PPAT_MIN_PHASE, no extraction)
   // a fraction, and a truncated playout — all uniform prefix moves plus one vpat
-  // leaf eval — is correctly cheap.  PLAYOUT_OVERHEAD (fixed tree-machinery cost)
-  // is a constant; UNIFORM_WEIGHT (c_uniform/c_ppat) and TRUNC_OVERHEAD
-  // (t_vpat/c_ppat) are auto-calibrated at construction for the loaded models
-  // unless the env pins them.  EXPAND_WORK is the tuning dial.
+  // leaf eval — is correctly cheap.  PLAYOUT_OVERHEAD (full-playout fixed cost:
+  // clone + tree machinery + terminal scoring), UNIFORM_WEIGHT (c_uniform/c_ppat)
+  // and TRUNC_OVERHEAD (the EXTRA fixed cost of a truncated playout — one vpat
+  // leaf eval in place of scoring) are all auto-calibrated at construction for
+  // the loaded models unless the env pins them.  EXPAND_WORK is the tuning dial.
   const EXPAND_WORK      = cfg.float('EXPAND_WORK', 150);
-  const PLAYOUT_OVERHEAD = cfg.float('PLAYOUT_OVERHEAD', 7);
+  const _autoPlayoutOvh  = !cfg.has('PLAYOUT_OVERHEAD');
+  let PLAYOUT_OVERHEAD   = cfg.float('PLAYOUT_OVERHEAD', 7);
   const _autoUniformWt   = !cfg.has('UNIFORM_WEIGHT');
   let UNIFORM_WEIGHT     = cfg.float('UNIFORM_WEIGHT', 0.15);
   const _autoTruncOvh    = !cfg.has('TRUNC_OVERHEAD');
@@ -210,35 +212,49 @@ function create(cfg) {
   // policy is ≈ uniform.
   _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
-  // Auto-calibrate the two model-dependent work ratios for the loaded ppat/vpat
-  // models (each skipped when its env var pins it):
-  //   c_ppat    = mean time of ONE ppat feature-extraction move,
-  //   c_uniform = mean time of ONE uniform-random move (no extraction),
-  //   t_vpat    = mean time of ONE vpat leaf eval,
-  //   UNIFORM_WEIGHT = c_uniform / c_ppat,   TRUNC_OVERHEAD = t_vpat / c_ppat.
-  // All three are timed here at construction, before the JIT is warm, so each
-  // absolute time is inflated; but they are measured back-to-back after a common
-  // short warm-up, so the shared inflation factor divides out of the ratios (only
-  // the ratios are kept).  Board size 13, the target; the ratios are ~size-stable.
-  // c_ppat/c_uniform force the mode via a temporary uniformBelowPhase (restored).
-  if ((_autoUniformWt || _autoTruncOvh) && _isNode) {
-    const cN = 13, cst = createState(cN), crng = makeRng(1);
-    const cg = new Game2(cN, false);
-    while (!cg.gameOver && (cN * cN - cg.emptyCount) < cN * cN * 0.5) cg.play(ppatMove(cg, cst, _model, crng));
-    const savedUbp = _model.uniformBelowPhase;
-    const rollUs = () => { const rg = cg.clone(), rcap = 3 * rg.emptyCount + 20, t0 = performance.now(); let m = 0; while (!rg.gameOver && m < rcap) { rg.play(ppatMove(rg, cst, _model, crng)); m++; } return (performance.now() - t0) / Math.max(1, m); };
-    _model.uniformBelowPhase = 0; rollUs(); vpatValueB(cg);   // warm-up (ppat path + eval)
-    _model.uniformBelowPhase = 0; const cPpat    = rollUs();  // force every move to extract
-    _model.uniformBelowPhase = 1; const cUniform = rollUs();  // force every move uniform
-    _model.uniformBelowPhase = savedUbp;
-    const vt0 = performance.now();
-    for (let r = 0; r < 300; r++) vpatValueB(cg);
-    const tVpat = (performance.now() - vt0) / 300;
-    if (_autoUniformWt) UNIFORM_WEIGHT = cUniform / cPpat;
-    if (_autoTruncOvh)  TRUNC_OVERHEAD = tVpat / cPpat;
+  // Auto-calibrate the work-model coefficients for the loaded ppat/vpat models
+  // (each skipped when its env var pins it).  Time four playout-shaped loops, each
+  // an average over ITERS iterations, with two move counts per shape so the
+  // per-move slope and the fixed intercept separate by differencing:
+  //   uniform prefix + trunc eval, at 20 and 40 moves (in its own phase-0.2 band):
+  //       T_u20 = O_trunc + 20*c_uniform,   T_u40 = O_trunc + 40*c_uniform
+  //   ppat rollout + terminal score, at 10 and 20 moves (in the phase-0.6 band):
+  //       T_p10 = O_score + 10*c_ppat,      T_p20 = O_score + 20*c_ppat
+  // Solve: c_uniform=(T_u40-T_u20)/20, c_ppat=(T_p20-T_p10)/10, then the intercepts
+  // O_trunc / O_score by back-substitution.  In c_ppat units the work model wants
+  //   PLAYOUT_OVERHEAD = O_score / c_ppat            (full playout: score at the end)
+  //   UNIFORM_WEIGHT   = c_uniform / c_ppat
+  //   TRUNC_OVERHEAD   = (O_trunc - O_score) / c_ppat (the EXTRA a trunc eval costs
+  //                                                    over scoring)
+  // G1 sits below PPAT_MIN_PHASE so its moves are naturally uniform, G2 at/above so
+  // its moves extract — the exact code paths used in play.  The whole thing repeats
+  // REPS times and each loop keeps its MIN per-iteration time, discarding the cold
+  // early reps and per-rep GC/scheduling noise; differencing warm mins is clean.
+  if ((_autoPlayoutOvh || _autoUniformWt || _autoTruncOvh) && _isNode) {
+    const cN = 13, cst = createState(cN), crng = makeRng(1), REPS = 20, ITERS = 50;
+    const G1 = new Game2(cN, false);
+    while (!G1.gameOver && (cN * cN - G1.emptyCount) < cN * cN * 0.20) G1.play(ppatMove(G1, cst, _model, crng));
+    const G2 = G1.clone();
+    while (!G2.gameOver && (cN * cN - G2.emptyCount) < cN * cN * 0.60) G2.play(ppatMove(G2, cst, _model, crng));
+    const uni = (n) => { const g = G1.clone(); for (let m = 0; m < n && !g.gameOver; m++) g.play(ppatMove(g, cst, _model, crng)); vpatValueB(g); };
+    const ppt = (n) => { const g = G2.clone(); for (let m = 0; m < n && !g.gameOver; m++) g.play(ppatMove(g, cst, _model, crng)); g.estimateWinner(); };
+    const timeLoop = (fn, n) => { const t0 = performance.now(); for (let i = 0; i < ITERS; i++) fn(n); return (performance.now() - t0) / ITERS; };
+    let Tu20 = Infinity, Tu40 = Infinity, Tp10 = Infinity, Tp20 = Infinity;
+    for (let r = 0; r < REPS; r++) {
+      Tu20 = Math.min(Tu20, timeLoop(uni, 20));
+      Tu40 = Math.min(Tu40, timeLoop(uni, 40));
+      Tp10 = Math.min(Tp10, timeLoop(ppt, 10));
+      Tp20 = Math.min(Tp20, timeLoop(ppt, 20));
+    }
+    const cUniform = (Tu40 - Tu20) / 20, cPpat = (Tp20 - Tp10) / 10;
+    const oTrunc = Tu20 - 20 * cUniform, oScore = Tp10 - 10 * cPpat;
+    if (_autoPlayoutOvh) PLAYOUT_OVERHEAD = oScore / cPpat;
+    if (_autoUniformWt)  UNIFORM_WEIGHT   = cUniform / cPpat;
+    if (_autoTruncOvh)   TRUNC_OVERHEAD   = (oTrunc - oScore) / cPpat;
   }
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
-    `expand costs: playout ${PLAYOUT_OVERHEAD}, uniform-move ${UNIFORM_WEIGHT.toFixed(2)}${_autoUniformWt ? '' : '(env)'}, ` +
+    `expand costs: playout ${PLAYOUT_OVERHEAD.toFixed(2)}${_autoPlayoutOvh ? '' : '(env)'}, ` +
+    `uniform-move ${UNIFORM_WEIGHT.toFixed(2)}${_autoUniformWt ? '' : '(env)'}, ` +
     `trunc ${TRUNC_OVERHEAD.toFixed(2)}${_autoTruncOvh ? '' : '(env)'}`);
 
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
