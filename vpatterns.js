@@ -1051,7 +1051,7 @@ const Patterns = {
   specToken,
   specString,
   ninecellId,
-  // Key primitives, exposed for offline tooling (vpat-distill) that must
+  // Key primitives, exposed for offline tooling (vpat-fold) that must
   // reproduce the exact output keys a size-2/size-3 extraction emits.
   mixTag,
   tagBaseOf,

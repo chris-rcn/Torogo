@@ -1,6 +1,6 @@
 'use strict';
 
-// vpat-distill: fold a composite '2:M,3:M' vpat model into a flat '3:M' model.
+// vpat-fold: fold a composite '2:M,3:M' vpat model into a flat '3:M' model.
 //
 // The 2×2 and 3×3 families each extract one window per cell; the 2×2 anchored at
 // cell i is the top-left corner sub-window of the 3×3 anchored at i.  So the
@@ -20,7 +20,7 @@
 // so the RMS-vs-games curve is visible and the output file is always current.
 //
 // Usage:
-//   node vpat-distill.js --model out/vpat-<composite>.js --games out/games.txt \
+//   node vpat-fold.js --model out/vpat-<composite>.js --games out/games.txt \
 //        [--save out/vpat-<x>.js] [--eval-games N] [--ply-stride K] [--size N]
 
 const fs = require('fs');
@@ -33,11 +33,11 @@ const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['model', 'games', 'save', 'eval-games', 'ply-stride', 'size']);
 
 if (opts.help || !opts.model || !opts.games) {
-  console.log(`vpat-distill: fold a composite 2:M,3:M vpat model into a flat 3:M model.
+  console.log(`vpat-fold: fold a composite 2:M,3:M vpat model into a flat 3:M model.
 
   --model PATH       composite vpat model (specs must be exactly 2:M,3:M)
   --games PATH       game corpus (all games are folded, minus the eval slice)
-  --save PATH        output flat 3:M model (default out/vpat-distill-<rand>.js)
+  --save PATH        output flat 3:M model (default out/vpat-fold-<rand>.js)
   --eval-games N     held-out games for the z_flat-vs-z_composite measurement (default 300)
   --ply-stride K     sample every K-th position within a game (default 2)
   --size N           board size (default 13)`);
@@ -46,7 +46,7 @@ if (opts.help || !opts.model || !opts.games) {
 
 const MODEL_PATH = opts.model;
 const GAMES_PATH = opts.games;
-const SAVE_PATH  = opts.save || `out/vpat-distill-${Math.random().toString(36).slice(2, 10)}.js`;
+const SAVE_PATH  = opts.save || `out/vpat-fold-${Math.random().toString(36).slice(2, 10)}.js`;
 const EVAL_GAMES = parseInt(opts['eval-games'] || '300', 10);
 const PLY_STRIDE = Math.max(1, parseInt(opts['ply-stride'] || '2', 10));
 const SIZE       = parseInt(opts.size || '13', 10);
