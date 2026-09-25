@@ -188,6 +188,37 @@ function create(cfg) {
     return VPat.evaluateFeatures(VPat.extractFeatures(game2, _vpatModel.preparedSpecs, false, undefined, true), _vpatModel.weights);
   }
 
+  // ── Value augmentation (optional; dormant unless AUGVAL_VPAT_DATA is set) ──
+  // A separate, stronger vpatterns value model.  The first simulation that
+  // brings a tree edge to AUGVAL_VISIT_THRESH visits injects AUGVAL_WEIGHT
+  // virtual visits carrying this model's value for the child position:
+  //   wins[i] += V(child)·AUGVAL_WEIGHT ; visits[i] += AUGVAL_WEIGHT   (once).
+  // It is a decaying blend — subsequent real playouts outweigh it as the edge
+  // is explored, so a wrong value self-corrects rather than sticking.
+  const AUGVAL_WEIGHT       = cfg.float('AUGVAL_WEIGHT', 6);
+  const AUGVAL_VISIT_THRESH = cfg.int('AUGVAL_VISIT_THRESH', 48);
+  const _augPath = _isNode ? cfg.str('AUGVAL_VPAT_DATA', '') : '';
+  const _augRaw  = _augPath
+    ? require(require('path').resolve(_augPath))
+    : ((!_isNode && typeof window !== 'undefined' && window.augVpatModel) || null);
+  let _augModel = null;
+  if (_augRaw) {
+    const _augW = VPat.makeWeights(Math.max(1024, (_augRaw.weights.size ?? _augRaw.weights.length) * 2));
+    for (const [k, v] of _augRaw.weights) _augW.set(k, v);
+    _augModel = { specs: _augRaw.specs,
+                  preparedSpecs: VPat.prepareSpecs(_augRaw.specs, { health: cfg.str('HEALTH_DATA', '') }),
+                  weights: _augW };
+    console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+      `augval: ${_augModel.weights.size} weights (${VPat.specString(_augModel.specs)}) from ` +
+      `${_isNode ? require('path').basename(_augPath) : 'window.augVpatModel'}, ` +
+      `visit-thresh ${AUGVAL_VISIT_THRESH}, weight ${AUGVAL_WEIGHT}`);
+  }
+  const AUGVAL_ON = _augModel !== null;
+  // P(BLACK wins) from the augmentation model.
+  function augValueB(game2) {
+    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _augModel.preparedSpecs, false, undefined, true), _augModel.weights);
+  }
+
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
   // (the current single-phase model, as cascade.js does); window.PPATWeights in
   // the browser.  Hard failure, not a fallback: this agent's strength IS its
@@ -469,6 +500,20 @@ function create(cfg) {
       game2.play(move);
       game3.play(move);
       depth++;
+
+      // Value augmentation: the first sim that brings this edge into
+      // [THRESH-1, THRESH) injects AUGVAL_WEIGHT virtual visits carrying the
+      // strong model's value for the child position (game2, now played).  The
+      // chooser (-node.mover, the player to move at `node`) is whose
+      // win-probability node.wins[best] accumulates, matching backpropagate.
+      // The +AUGVAL_WEIGHT jump lifts the count clear of the window, so it fires
+      // exactly once per edge.
+      if (AUGVAL_ON && node.visits[best] >= AUGVAL_VISIT_THRESH - 1 && node.visits[best] < AUGVAL_VISIT_THRESH) {
+        const vb  = augValueB(game2);
+        const won = (-node.mover === BLACK) ? vb : 1 - vb;
+        node.wins[best]   += won * AUGVAL_WEIGHT;
+        node.visits[best] += AUGVAL_WEIGHT;
+      }
 
       if (!game2.gameOver && game2.consecutivePasses > 0) {
         game2.play(PASS);
