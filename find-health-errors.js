@@ -151,8 +151,10 @@ for (let gi = 0; gi < GAMES; gi++) {
   const pos = sampleEndpoint(corpus[gi]);
   if (!pos) continue;
   nPos++;
-  // chains of this position, each with the model's prediction
-  const chains = HL.chainHealthAll(health, pos);
+  // chains of this position, each with the model's prediction.  This offline
+  // tool scores independent sampled positions with no Game3 to reuse, so it
+  // acknowledges the ladder2 rebuild rather than warning per position.
+  const chains = HL.chainHealthAll(health, pos, undefined, true);
   const pred = new Float64Array(chains.length);
   for (let i = 0; i < chains.length; i++) pred[i] = chains[i].p;
 

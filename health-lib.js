@@ -769,12 +769,19 @@ function _markLiveFromEyes(byGid) {
 // trained with different settings still scores correctly.
 const _survScratch = [];
 let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Array(0);
+// A ladder2 model's ladder read needs a Game3.  When a caller doesn't supply
+// one, chainHealthAll builds it (game3FromGame2), but that is the slow path, so
+// it is warned once per process — unless the caller passed game3RebuildOk to say
+// it legitimately has no Game3 to reuse (a one-shot offline scorer).
+let _warnedHealthGame3Rebuild = false;
+
 // The health system's entry point: given a Game2 (and optionally a synced Game3,
 // which it builds itself when a ladder2 model needs one and none is supplied),
 // return every chain with its survival probability in `.p`.  All the position
 // machinery it needs — the chain list, the ninecell/one-hot features, and the
-// ladder read — is derived here; callers pass games, not arrays.
-function chainHealthAll(model, game2, game3) {
+// ladder read — is derived here; callers pass games, not arrays.  game3RebuildOk
+// acknowledges building a Game3 here (no warning) for callers with none to pass.
+function chainHealthAll(model, game2, game3, game3RebuildOk) {
   const cells = game2.cells, nbr = game2._nbr, dnbr = game2._dnbr, gid = game2._gid, ls = game2._ls;
   const { chains, byGid } = chainsOf(cells, nbr, gid);
   const n = chains.length, w = model.weights;
@@ -786,7 +793,17 @@ function chainHealthAll(model, game2, game3) {
   // skipped).  Off unless the model was trained with --ladder2.
   let ladderMap = null, g3gid = null;
   if (model.ladder2) {
-    const g3 = game3 || game3FromGame2(game2);
+    let g3 = game3;
+    if (!g3) {
+      if (!game3RebuildOk && !_warnedHealthGame3Rebuild) {
+        _warnedHealthGame3Rebuild = true;
+        console.error('health-lib.chainHealthAll: no game3 supplied for a ladder2 model — ' +
+          'building one (slow path; pass a synced game3 to reuse it, or game3RebuildOk to ' +
+          'acknowledge).  First occurrence:\n' +
+          (new Error().stack || '').split('\n').slice(2, 7).join('\n'));
+      }
+      g3 = game3FromGame2(game2);
+    }
     ladderMap = ladderStateByGid(g3);
     g3gid = g3._gid;
   }

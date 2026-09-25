@@ -389,7 +389,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
         // The health system takes the games and returns each chain with its
         // survival probability in .p (and its stone list, for the bucket
         // painting below); it builds a Game3 itself if a ladder2 model needs one.
-        survChains = chainHealthAll(prepSpecs.healthModel, game, game3);
+        survChains = chainHealthAll(prepSpecs.healthModel, game, game3, game3RebuildOk);
       }
       for (let k = 0; k < survChains.length; k++) {
         const r = survChains[k];
