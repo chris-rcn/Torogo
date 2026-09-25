@@ -966,15 +966,14 @@ function evaluate(game, model, game3) {
 // are health-coded or use the C survival attribute.
 function loadWeights(filePath, health) {
   const raw = require(require('path').resolve(filePath));
-  return modelFromRaw(raw, health, filePath);
+  return modelFromRaw(raw, health);
 }
 
 // Build a runtime model from an already-loaded raw object (the module export a
 // vpat file produces, or the `vpat` field embedded in a featurepol file), rather
 // than from a file path.  Same processing as loadWeights: a fresh makeWeights
-// table so callers don't share a Map, prepared specs, and the health-alphabet
-// check when the model is health-coded.
-function modelFromRaw(raw, health, srcName) {
+// table so callers don't share a Map, and prepared specs.
+function modelFromRaw(raw, health) {
   const specs = raw.specs;
   const weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
   for (const [k, v] of raw.weights) weights.set(k, v);
@@ -982,32 +981,7 @@ function modelFromRaw(raw, health, srcName) {
   // it was trained against, so loading needs no external HEALTH_DATA); fall back
   // to the caller-supplied one for older files that recorded only parameters.
   const preparedSpecs = prepareSpecs(specs, { health: raw.healthModel || health });
-  // Only sanity-check an EXTERNAL pairing (older files with a `health` params
-  // block): an embedded model is by definition the one training used.
-  if (!raw.healthModel && raw.health) checkHealthMatch(raw.health, srcName || '<embedded>', preparedSpecs.healthModel);
   return { specs, preparedSpecs, weights, komi: raw.komi, trunc: raw.trunc };
-}
-
-// A health-coded model's keys are bucket indices produced by whichever health
-// model was loaded when it trained, so pairing it with a different one
-// re-indexes every weight — no error, just wrong.  We do NOT match file names
-// (a model may legitimately be copied or renamed); we compare the parameters
-// the training run recorded against the health model now in use and warn loudly
-// on any difference — alphabet or bucket boundary — but do not block: the caller
-// may knowingly be pairing them.
-function checkHealthMatch(want, filePath, got) {
-  const diff = [];
-  for (const k of ['maxLibs', 'maxJoinLibs', 'friendHealthMaxBuckets',
-                   'foeHealthMinBuckets', 'stoneSalt',
-                   'minPhase', 'maxPhase', 'delta', 'iterations', 'initHealth', 'bias', 'nWeights']) {
-    if (want[k] !== undefined && got[k] !== undefined && want[k] !== got[k]) {
-      diff.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
-    }
-  }
-  if (diff.length) {
-    console.error(`vpatterns WARNING: ${filePath} was trained against a DIFFERENT health model ` +
-                  `(${diff.join('; ')}) — its weights may be mis-indexed against the one now loaded.`);
-  }
 }
 
 // The `{ specs, weights: new Map(...), komi, healthModel?, trunc? }` object literal
