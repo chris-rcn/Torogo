@@ -8,11 +8,11 @@
 /**
  * AMAF (All-Moves-As-First) Monte Carlo policy, with ppat playouts.
  *
- * For each candidate, run playouts starting with that move in complete
- * round-robin rounds.  Every move made during a playout is credited to the
- * corresponding cell with a linearly decaying weight (1.0 → 0), so a single
- * playout of candidate A also updates estimates for candidates B, C, … that
- * appear later, giving all candidates far more data than mc.js provides.
+ * Runs N flat playouts (PLAYOUTS, else a time budget); each opens with a
+ * randomly chosen candidate and then plays out.  Every move made during a
+ * playout is credited to the corresponding cell with a linearly decaying weight
+ * (1.0 → 0, clamped), so a single playout also updates estimates for the other
+ * moves it plays, giving all candidates far more data than mc.js provides.
  *
  * Playouts follow the ppat policy (uniform below PPAT_MIN_PHASE, ppat above) —
  * the same standard playout the mc-ppat / puct-ppat agents run — rather than
@@ -113,46 +113,43 @@ function create(cfg) {
     const plays = new Float32Array(cap + 1);
     const PASS_IDX = cap;
 
-    // Run complete rounds (one playout per candidate per round) so every
-    // candidate always has exactly the same number of direct playouts.
-    // Always complete at least one full round before checking the budget.
-    const deadline = performance.now() + timeBudgetMs;
-    let round = 0, playoutCount = 0;
-    while (true) {
-      if (round > 0 && (playoutLimit > 0 ? playoutCount >= playoutLimit : performance.now() >= deadline)) break;
+    // N flat playouts (no rounds): each opens with a randomly chosen candidate,
+    // then plays out.  The opening gets the direct credit and every playout move
+    // feeds the all-moves-as-first credit; over the run each candidate is opened
+    // ~playoutLimit / candidates.length times in expectation.  playoutLimit > 0
+    // fixes the count; otherwise run until the time budget.
+    const deadline    = performance.now() + timeBudgetMs;
+    const playerSign  = player === BLACK ? 1 : -1;
+    const nCandidates = candidates.length;
+    let playoutCount = 0;
+    while (playoutLimit > 0 ? playoutCount < playoutLimit : performance.now() < deadline) {
+      playoutCount++;
+      const move  = candidates[(rng.random() * nCandidates) | 0];
+      const clone = game2.clone();
+      clone.play(move);
 
-      for (let cidx = 0; cidx < candidates.length; cidx++) {
-        playoutCount++;
-        const move  = candidates[cidx];
-        const clone = game2.clone();
-        clone.play(move);
+      const { winner, played } = playTracked(clone, rng);
+      const won = winner === player ? 1 : 0;
 
-        const { winner, played } = playTracked(clone, rng);
-        const won = winner === player ? 1 : 0;
+      // Credit the opening move at full weight (it was played "first").
+      const firstIdx = move === PASS ? PASS_IDX : move;
+      plays[firstIdx] += 1.0;
+      wins[firstIdx]  += won;
 
-        // Credit the opening move at full weight (it was played "first").
-        const firstIdx = move === PASS ? PASS_IDX : move;
-        plays[firstIdx] += 1.0;
-        wins[firstIdx]  += won;
-
-        // Credit playout moves using signed weights from played[].
-        const playerSign = player === BLACK ? 1 : -1;
-        for (let k = 0; k < cap; k++) {
-          const w = played[k];
-          if (w === 0) continue;
-          if (w * playerSign > 0) {
-            const wt = Math.abs(w);
-            plays[k] += wt;
-            wins[k]  += won * wt;
-          } else if (AMAF_OPP_WEIGHT > 0) {
-            const wt = Math.abs(w) * AMAF_OPP_WEIGHT;
-            plays[k] += wt;
-            wins[k]  += (1 - won) * wt;
-          }
+      // Credit playout moves using signed weights from played[].
+      for (let k = 0; k < cap; k++) {
+        const w = played[k];
+        if (w === 0) continue;
+        if (w * playerSign > 0) {
+          const wt = Math.abs(w);
+          plays[k] += wt;
+          wins[k]  += won * wt;
+        } else if (AMAF_OPP_WEIGHT > 0) {
+          const wt = Math.abs(w) * AMAF_OPP_WEIGHT;
+          plays[k] += wt;
+          wins[k]  += (1 - won) * wt;
         }
-        if (playoutLimit > 0 && playoutCount >= playoutLimit) break;
       }
-      round++;
     }
 
     // Select the candidate with the highest AMAF win ratio; ties broken randomly.
