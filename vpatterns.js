@@ -13,6 +13,11 @@ const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
 
+// extractFeatures rebuilds a Game3 for the ladder pass when no synced one is
+// supplied (the slow path).  Warn once per process, with a stack, so those
+// call sites get noticed and can pass a game3 — without flooding hot loops.
+let _warnedLadderRebuild = false;
+
 // Chain health lives in health-lib.js — see the note at its head for why the
 // ninecell hash and its x-hash primitives went with it.
 const HL = _isNode ? require('./health-lib.js') : window.HealthLib;
@@ -356,6 +361,12 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3) {
       // game3 tactical pass over the current cells.
       if (game3 && game3.emptyCount !== game.emptyCount)
         throw new Error('vpatterns.extractFeatures: supplied game3 does not match game');
+      if (!game3 && !_warnedLadderRebuild) {
+        _warnedLadderRebuild = true;
+        console.error('vpatterns.extractFeatures: no game3 supplied — building one for the ladder pass ' +
+          '(slow path; pass a synced game3 to reuse it).  First occurrence:\n' +
+          (new Error().stack || '').split('\n').slice(2, 7).join('\n'));
+      }
       raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), null);
     } else if (isHealth) {
       // One survival probability per chain, bucketed to 1..hb and signed by
