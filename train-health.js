@@ -183,7 +183,7 @@ irreducible label entropy.
                   the sampled plies directly; set the deployed truncation
                   delta to train the descended endpoint class instead)
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
-                  at N (default 10; 0 = off)
+                  at N (default 0 = off)
   --stone-ninecells 0|1  emit a ninecell per STONE (default 0 — the winning
                   2026-09-12 recipe carries the band on liberty shapes alone)
   --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 1).  The two
@@ -288,7 +288,7 @@ const SIZE = parseInt(opts.size || '13', 10);
 const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 
 const LR = parseFloat(opts.lr || '0.01');
-const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '10', 10);
+const MAX_LIBS = parseInt(opts['max-libs'] !== undefined ? opts['max-libs'] : '0', 10);
 // Chain SIZE one-hot, the sibling of --max-libs.  One key per chain and no
 // hashing, so it is free next to the ninecells; default 0 (off).
 const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'] : '0', 10);
