@@ -24,7 +24,6 @@
 // Usage:
 //   node score-bias-tail.js --model <vpat.js> --file <bias.txt> [--file ...]
 //        [--thresholds 0.1,0.2,0.3] [--bin 0.1]
-//   (HEALTH_DATA env selects the health model, as everywhere.)
 
 const fs = require('fs');
 const { Game2, PASS } = require('./game2.js');
@@ -88,9 +87,8 @@ if (DELTA !== null && BIN_BY !== 'start') {
 }
 const files = Array.isArray(opts.file) ? opts.file : [opts.file];
 
-const model = VPat.loadWeights(opts.model, process.env.HEALTH_DATA || '');
-console.log(`model: ${opts.model}` +
-  (process.env.HEALTH_DATA ? `  health: ${process.env.HEALTH_DATA}` : ''));
+const model = VPat.loadWeights(opts.model);
+console.log(`model: ${opts.model}`);
 
 function replay(size, moves, limit) {
   const g = new Game2(size, true);

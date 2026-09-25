@@ -165,13 +165,10 @@ function create(cfg) {
   // Set per decision in runSearch: rootPhase < TRUNC_ROOT_PHASE.
   let _truncActive = false;
 
-  // Static evaluator weights (the model itself was loaded up top so its baked
-  // truncation defaults could feed the knobs above).
-  const _vpatWeights = VPat.makeWeights(Math.max(1024, (_vpatRaw.weights.size ?? _vpatRaw.weights.length) * 2));
-  for (const [k, v] of _vpatRaw.weights) _vpatWeights.set(k, v);
-  const _vpatModel = { specs: _vpatRaw.specs,
-                       preparedSpecs: VPat.prepareSpecs(_vpatRaw.specs, { health: cfg.str('HEALTH_DATA', '') }),
-                       weights: _vpatWeights };
+  // Static evaluator (the raw was loaded up top so its baked truncation defaults
+  // could feed the knobs above).  modelFromRaw builds a fresh weight table and
+  // prepares the specs, using the health model embedded in the vpat file.
+  const _vpatModel = VPat.modelFromRaw(_vpatRaw);
   // Name the evaluator file and the truncation knobs in the banner: two slots
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.

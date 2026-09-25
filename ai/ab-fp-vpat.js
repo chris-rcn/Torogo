@@ -74,7 +74,7 @@ function create(cfg) {
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
     path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
   const vpatModel = VPat.loadWeights(cfg.str('VPAT_DATA',
-    path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')), cfg.str('HEALTH_DATA', ''));
+    path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')));
 
   console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH}` +
               (AB_WIDTH_SHRINK > 0 ? ` shrink=${AB_WIDTH_SHRINK} (${[...Array(AB_DEPTH).keys()].map(widthAt).join('/')})` : '') +
