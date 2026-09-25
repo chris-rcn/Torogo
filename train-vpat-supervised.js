@@ -824,7 +824,9 @@ function statusPrint() {
   // Bake the deployment delta (--delta) into the checkpoint so consumers read
   // it as a default.
   saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META });
-  if (isBest) saveWeights(BEST_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META });
+  // The best checkpoint is byte-identical to the one just written, so copy the
+  // file instead of re-serializing the whole (possibly huge) weight table.
+  if (isBest) fs.copyFileSync(SAVE_PATH, BEST_PATH);
   nextPrintPos = Math.max(Math.ceil(nPos * 1.5), nPos + 1);
   nextPrintAt  = Date.now() + MAX_PRINT_GAP_MS;
 }
