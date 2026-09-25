@@ -88,13 +88,12 @@ function create(cfg) {
 
   // fp's top-K moves of g, best-first.  The shared fpState is overwritten on
   // every call, so the indices are copied out before any recursion.
-  function fpTopK(g, out, width) {
+  function fpTopK(g, out, width, game3) {
     const N = g.N;
     if (!fpState || fpState.moves.length < N * N) {
       fpState  = FeaturePol.createState(N, fpWeights.spec);
       fpScores = new Float64Array(N * N + 1);
     }
-    const game3 = fpWeights.spec.needsLadder ? game3FromGame2(g) : undefined;
     FeaturePol.extractFeatures(g, fpState, fpWeights, game3);
     const n = FeaturePol.scoreAll(fpState, fpWeights, fpScores);
     if (n === 0) return 0;
@@ -106,23 +105,28 @@ function create(cfg) {
     return k;
   }
 
-  function evaluate(g) {
+  function evaluate(g, game3) {
     if (g.gameOver) return g.estimateWinner() === BLACK ? 1 : 0;
-    return VPat.evaluate(g, vpatModel);
+    return VPat.evaluate(g, vpatModel, game3);
   }
 
-  // Alpha-beta over fp's top-K, BLACK maximises.
-  function ab(g, depth, alpha, beta) {
-    if (g.gameOver || depth === 0) return evaluate(g);
+  // Alpha-beta over fp's top-K, BLACK maximises.  `game3` is maintained in
+  // lockstep with `g` (play before recursing, undo after) so featurepol
+  // extraction and the leaf vpat eval reuse one Game3 instead of rebuilding per
+  // node.  Behaviour-identical to rebuilding.
+  function ab(g, depth, alpha, beta, game3) {
+    if (g.gameOver || depth === 0) return evaluate(g, game3);
     const cand = new Int32Array(AB_WIDTH);
-    const k = fpTopK(g, cand, widthAt(AB_DEPTH - depth));
-    if (k === 0) return evaluate(g);
+    const k = fpTopK(g, cand, widthAt(AB_DEPTH - depth), game3);
+    if (k === 0) return evaluate(g, game3);
     const maxing = g.current === BLACK;
     let best = maxing ? -Infinity : Infinity;
     for (let j = 0; j < k; j++) {
       const c = g.clone();
       c.play(cand[j]);
-      const v = ab(c, depth - 1, alpha, beta);
+      if (game3) game3.play(cand[j]);
+      const v = ab(c, depth - 1, alpha, beta, game3);
+      if (game3) game3.undo();
       if (maxing) { if (v > best) best = v; if (best > alpha) alpha = best; }
       else        { if (v < best) best = v; if (best < beta)  beta  = best; }
       if (beta <= alpha) break;
@@ -151,7 +155,12 @@ function create(cfg) {
       return { move: m, info: 'fp-softmax (ratio)' };
     }
     const cand = new Int32Array(AB_WIDTH);
-    let k = fpTopK(game, cand, AB_WIDTH);
+    // One Game3 for the whole search, advanced in lockstep with the recursion
+    // and reused for featurepol extraction + the leaf vpat eval instead of a
+    // rebuild per node.  Reused-vs-rebuilt gives identical features (speed only).
+    const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
+    const g3 = needG3 ? game3FromGame2(game) : undefined;
+    let k = fpTopK(game, cand, AB_WIDTH, g3);
     if (k === 0) return { move: PASS };
     // Root symmetry pruning: a symmetric root has orbits of equal-value moves,
     // so search one representative per orbit and skip the duplicates.
@@ -166,7 +175,9 @@ function create(cfg) {
     for (let j = 0; j < k; j++) {
       const c = game.clone();
       c.play(roots[j]);
-      const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity);
+      if (g3) g3.play(roots[j]);
+      const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity, g3);
+      if (g3) g3.undo();
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? r.random() * dither : 0);
       vals[j] = mv;
       if (mv > bestV) { bestV = mv; best = roots[j]; }
