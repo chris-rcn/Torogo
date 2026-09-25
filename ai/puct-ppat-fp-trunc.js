@@ -128,7 +128,7 @@ function create(cfg) {
   // and TRUNC_OVERHEAD (the EXTRA fixed cost of a truncated playout — one vpat
   // leaf eval in place of scoring) are all auto-calibrated at construction for
   // the loaded models unless the env pins them.  EXPAND_WORK is the tuning dial.
-  const EXPAND_WORK      = cfg.float('EXPAND_WORK', 250);
+  const EXPAND_WORK      = cfg.float('EXPAND_WORK', 200);
   const _autoPlayoutOvh  = !cfg.has('PLAYOUT_OVERHEAD');
   let PLAYOUT_OVERHEAD   = cfg.float('PLAYOUT_OVERHEAD', 7);
   const _autoUniformWt   = !cfg.has('UNIFORM_WEIGHT');
