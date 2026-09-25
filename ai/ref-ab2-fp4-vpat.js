@@ -45,13 +45,12 @@ console.error(`ref-ab2-fp4-vpat: depth=${AB_DEPTH} top-K=${AB_TOP_K} temp=${AB_T
 const rng = makeRng();
 let fpState = null, fpScores = null;
 
-function fpTopK(g, out) {
+function fpTopK(g, out, game3) {
   const N = g.N;
   if (!fpState || fpState.moves.length < N * N) {
     fpState  = FeaturePol.createState(N, fpWeights.spec);
     fpScores = new Float64Array(N * N + 1);
   }
-  const game3 = fpWeights.spec.needsLadder ? game3FromGame2(g) : undefined;
   FeaturePol.extractFeatures(g, fpState, fpWeights, game3);
   const n = FeaturePol.scoreAll(fpState, fpWeights, fpScores);
   if (n === 0) return 0;
@@ -63,22 +62,27 @@ function fpTopK(g, out) {
   return k;
 }
 
-function evaluate(g) {
+function evaluate(g, game3) {
   if (g.gameOver) return g.estimateWinner() === BLACK ? 1 : 0;
-  return VPat.evaluate(g, vpatModel);
+  return VPat.evaluate(g, vpatModel, game3);
 }
 
-function ab(g, depth, alpha, beta) {
-  if (g.gameOver || depth === 0) return evaluate(g);
+// `game3` is maintained in lockstep with `g` through the recursion (play before
+// recursing, undo after), so featurepol extraction and the leaf vpat eval reuse
+// one Game3 instead of rebuilding per node.  Behaviour-identical to rebuilding.
+function ab(g, depth, alpha, beta, game3) {
+  if (g.gameOver || depth === 0) return evaluate(g, game3);
   const cand = new Int32Array(AB_TOP_K);
-  const k = fpTopK(g, cand);
-  if (k === 0) return evaluate(g);
+  const k = fpTopK(g, cand, game3);
+  if (k === 0) return evaluate(g, game3);
   const maxing = g.current === BLACK;
   let best = maxing ? -Infinity : Infinity;
   for (let j = 0; j < k; j++) {
     const c = g.clone();
     c.play(cand[j]);
-    const v = ab(c, depth - 1, alpha, beta);
+    if (game3) game3.play(cand[j]);
+    const v = ab(c, depth - 1, alpha, beta, game3);
+    if (game3) game3.undo();
     if (maxing) { if (v > best) best = v; if (best > alpha) alpha = best; }
     else        { if (v < best) best = v; if (best < beta)  beta  = best; }
     if (beta <= alpha) break;
@@ -103,7 +107,12 @@ function getMove(game, _budgetMs, options = {}) {
     return { move: m, info: 'fp-softmax (ratio)' };
   }
   const cand = new Int32Array(AB_TOP_K);
-  const k = fpTopK(game, cand);
+  // One Game3 for the whole search, advanced in lockstep with the recursion and
+  // reused for featurepol extraction and the leaf vpat eval instead of a rebuild
+  // per node.  Reused-vs-rebuilt gives identical features, so play is unchanged.
+  const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
+  const g3 = needG3 ? game3FromGame2(game) : undefined;
+  const k = fpTopK(game, cand, g3);
   if (k === 0) return { move: PASS };
   const mover = game.current;
   const vals = new Float64Array(k);
@@ -111,7 +120,9 @@ function getMove(game, _budgetMs, options = {}) {
   for (let j = 0; j < k; j++) {
     const c = game.clone();
     c.play(cand[j]);
-    const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity);
+    if (g3) g3.play(cand[j]);
+    const v = ab(c, AB_DEPTH - 1, -Infinity, Infinity, g3);
+    if (g3) g3.undo();
     const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? r.random() * dither : 0);
     vals[j] = mv;
     if (mv > bestV) { bestV = mv; best = cand[j]; }
