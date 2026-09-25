@@ -34,7 +34,7 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag, specString } = require('./vpatterns.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag, specString, needsGame3 } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const FeaturePol = require('./featurepol-lib.js');
 const { game3FromGame2 } = require('./game3.js');
@@ -315,12 +315,17 @@ function trainGame(N) {
   // before training begins.  The prefix is untrained (no features recorded).
   while (game.phase() < START_PHASE && !game.gameOver) game.play(game.randomLegalMove());
 
+  // One Game3, advanced in lockstep with `game`, reused for ladder-coded
+  // extraction each ply instead of rebuilding one from scratch.
+  const useG3 = needsGame3(prepSpecs);
+  const g3 = useG3 ? game3FromGame2(game) : undefined;
+
   let moves = 0;
   const featsArr = [];
   const vals = [];
 
   while (!game.gameOver && moves < maxMoves) {
-    const features = extractFeatures(game, prepSpecs);
+    const features = extractFeatures(game, prepSpecs, undefined, undefined, undefined, g3);
     evaluateFeatures(features, weights);
     featsArr.push(features);
     vals.push(features.val);
@@ -337,6 +342,7 @@ function trainGame(N) {
       move = search1ply(game);
     }
     game.play(move);
+    if (useG3) g3.play(move);
     moves++;
   }
 
@@ -379,10 +385,14 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     const maxMoves = N * N * 4;
     let   moves    = 0;
 
+    // One Game3 per game, advanced in lockstep, reused for ladder extraction.
+    const useG3 = needsGame3(prepSpecs);
+    const g3 = useG3 ? game3FromGame2(game) : undefined;
+
     const evalW = saveSource();
     const gameVals = [];
     while (!game.gameOver && moves++ < maxMoves) {
-      const f = extractFeatures(game, prepSpecs);
+      const f = extractFeatures(game, prepSpecs, undefined, undefined, undefined, g3);
       evaluateFeatures(f, evalW);
       gameVals.push(f.val);
       let idx;
@@ -396,6 +406,8 @@ function evalVsReference(N, refGetMove, nGames, budget) {
       }
       if (!game.play(idx)) {
         console.log("Illegal move!");
+      } else if (useG3) {
+        g3.play(idx);
       }
     }
 
