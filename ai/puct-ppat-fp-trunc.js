@@ -264,9 +264,11 @@ function create(cfg) {
     path: _isBrowser ? undefined
                      : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) });
   const fpWeights   = fpModel.weights;
-  // Rank the vpat<n> feature over the best 3 candidates when the fp spec ranks
-  // (matching featurepol's / the trainer's default); no-op for specs without it.
-  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = 3;
+  // Rank the vpat<n> feature over the best FPOL_RANK_TOPN candidates when the fp
+  // spec ranks (default 3, matching featurepol's / the trainer's default; 0 =
+  // off, N < 0 = every candidate).  No-op for specs without vpat<n>.
+  const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 3);
+  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
   console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
   let _ppatState = null;
