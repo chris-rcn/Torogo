@@ -930,10 +930,35 @@ function propagateHealth(model, weights, baseZ, live, n, chains, outKeys) {
   }
 }
 
+// Serialize a runtime health model back to an object literal carrying exactly
+// the fields _survIntern reads, so it can be EMBEDDED in another model file (a
+// vpat model trained against it) and reconstructed with resolveHealthModel — no
+// external HEALTH_DATA at load.  Zero-quantizing weights are skipped (they read
+// back as 0), matching the vpat / featurepol serializers.
+function modelLiteral(h) {
+  const pairs = [];
+  h.weights.forEach((k, v) => { const q = +v.toFixed(6); if (q !== 0) pairs.push(`[${k},${q}]`); });
+  const scalars = [
+    ['bias', h.bias], ['maxLibs', h.maxLibs], ['ladder2', !!h.ladder2],
+    ['maxJoinLibs', h.maxJoinLibs], ['friendHealthMaxBuckets', h.friendHealthMaxBuckets],
+    ['foeHealthMinBuckets', h.foeHealthMinBuckets], ['iterations', h.iterations],
+    ['initHealth', h.initHealth], ['stoneNinecells', h.stoneNinecells],
+    ['libertyNinecells', h.libertyNinecells], ['maxStones', h.maxStones],
+    ['maxLibNinecells', h.maxLibNinecells], ['maxStoneNinecells', h.maxStoneNinecells],
+    ['joinLibGate', h.joinLibGate], ['friendLibGate', h.friendLibGate],
+    ['foeLibGate', h.foeLibGate], ['libStoneLibs', h.libStoneLibs],
+    ['libStoneStones', h.libStoneStones], ['stoneSalt', h.stoneSalt],
+    ['minPhase', h.minPhase], ['maxPhase', h.maxPhase], ['delta', h.delta],
+  ];
+  const fields = scalars.map(([k, v]) => `${k}: ${v}`).join(', ');
+  return `{ ${fields}, weights: new Map([${pairs.join(',')}]) }`;
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 const HealthLib = {
   makeWeights,
+  modelLiteral,
   uh,
   xh4,
   ninecellId,

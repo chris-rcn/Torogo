@@ -978,8 +978,13 @@ function modelFromRaw(raw, health, srcName) {
   const specs = raw.specs;
   const weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
   for (const [k, v] of raw.weights) weights.set(k, v);
-  const preparedSpecs = prepareSpecs(specs, { health });
-  if (raw.health) checkHealthMatch(raw.health, srcName || '<embedded>', preparedSpecs.healthModel);
+  // Prefer the health model embedded in the file (it travels with the vpat model
+  // it was trained against, so loading needs no external HEALTH_DATA); fall back
+  // to the caller-supplied one for older files that recorded only parameters.
+  const preparedSpecs = prepareSpecs(specs, { health: raw.healthModel || health });
+  // Only sanity-check an EXTERNAL pairing (older files with a `health` params
+  // block): an embedded model is by definition the one training used.
+  if (!raw.healthModel && raw.health) checkHealthMatch(raw.health, srcName || '<embedded>', preparedSpecs.healthModel);
   return { specs, preparedSpecs, weights, komi: raw.komi, trunc: raw.trunc };
 }
 
@@ -1005,24 +1010,19 @@ function checkHealthMatch(want, filePath, got) {
   }
 }
 
-// The `{ specs, weights: new Map(...), komi, health?, trunc? }` object literal
+// The `{ specs, weights: new Map(...), komi, healthModel?, trunc? }` object literal
 // for a model — the payload of a vpat file, and also what a featurepol file
 // embeds under its `vpat` field so the rank model travels with the policy it was
 // trained against.
 function modelLiteral(model) {
   const specStr = JSON.stringify(model.specs);
-  // Health-coded models record the health model's PARAMETERS (never its path)
-  // so a later pairing can be sanity-checked — see checkHealthMatch.
+  // Health-coded models EMBED the full health model they were trained against,
+  // so the vpat weights' key space travels with it: loading needs no external
+  // HEALTH_DATA and cannot be paired with a mismatched health model (see
+  // modelFromRaw).  Reconstructed on load via resolveHealthModel.
   let healthStr = '';
   if (model.specs.some(sp => sp.maxLibs < 0)) {
-    const h = model.preparedSpecs.healthModel;
-    healthStr = `, health: { minPhase: ${h.minPhase}, maxPhase: ${h.maxPhase}, delta: ${h.delta}, ` +
-                `maxLibs: ${h.maxLibs}, maxJoinLibs: ${h.maxJoinLibs}, ` +
-                `friendHealthMaxBuckets: ${h.friendHealthMaxBuckets}, ` +
-                `foeHealthMinBuckets: ${h.foeHealthMinBuckets}, iterations: ${h.iterations}, ` +
-                `initHealth: ${h.initHealth}, ` +
-                `stoneSalt: ${h.stoneSalt}, ` +
-                `bias: ${h.bias}, nWeights: ${h.weights.size} }`;
+    healthStr = `, healthModel: ${HL.modelLiteral(model.preparedSpecs.healthModel)}`;
   }
   // Truncation default for consumers (puct-ppat-fp-trunc, mc-ppat): the delta
   // the model was fitted for, so a model carries its own inference config
