@@ -28,6 +28,8 @@
  *   AMAF_OPP_WEIGHT weight multiplier for opponent moves (default 0.3)
  *   AMAF_DECAY      per-move weight-decay multiplier on 1/area (default 0.5;
  *                   higher = faster decay, 0 = no decay)
+ *   AMAF_PRIOR_WEIGHT  prior weight on each cell's ratio denominator (default 0.1;
+ *                   shrinks thin cells toward 0 and breaks ties, 0 = off)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -51,6 +53,12 @@ function create(cfg) {
   // fixed 1/area), higher = faster decay / more first-move emphasis, 0 = no
   // decay (every played move keeps weight 1.0).
   const AMAF_DECAY      = cfg.float('AMAF_DECAY', 0.5);
+  // Prior WEIGHT added to each cell's win-ratio DENOMINATOR (wins prior 0), so
+  // ratio = wins / (AMAF_PRIOR_WEIGHT + plays).  plays is accumulated decayed
+  // weight, not a count, so the prior is weight too.  Shrinks thinly-sampled
+  // cells toward 0 and breaks ties among equal ratios toward the cell with more
+  // accumulated weight (played earlier / more often) rather than at random.  0 = off.
+  const AMAF_PRIOR_WEIGHT = cfg.float('AMAF_PRIOR_WEIGHT', 0.1);
 
   // ppat playout policy.  A hard failure, not a fallback: this agent now runs
   // ppat playouts, so silently reverting to uniform would misrepresent it.
@@ -122,6 +130,10 @@ function create(cfg) {
     const wins  = new Float32Array(cap + 1);
     const plays = new Float32Array(cap + 1);
     const PASS_IDX = cap;
+    // Seed the denominator with AMAF_PRIOR_WEIGHT of prior weight on the board
+    // cells (not pass, whose selection stays gated on real credit): shrinks each
+    // ratio toward 0 and breaks equal-ratio ties toward the higher-weight cell.
+    if (AMAF_PRIOR_WEIGHT > 0) plays.fill(AMAF_PRIOR_WEIGHT, 0, cap);
 
     // N flat playouts (no rounds): each opens with a randomly chosen candidate,
     // then plays out.  The opening gets the direct credit and every playout move
