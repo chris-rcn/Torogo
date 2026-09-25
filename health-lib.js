@@ -23,6 +23,29 @@ const _isNode = typeof process !== 'undefined' && process.versions && process.ve
 
 const { isTrueEye } = _isNode ? require('./game2.js') : window.Game2;
 const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
+const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
+
+// Per-group chain ladder state for the optional --ladder2 feature: a Map from a
+// GAME3 group id to {1 alive, 2 dead, 3 unsettled}, from one getAllLadderStatuses
+// pass.  Groups the read skips (>3 liberties) are absent and default to alive at
+// the lookup.  The state derivation matches ladder2's own alive/dead/unsettled
+// convention (unsettled when either side can flip it, else relative to whose
+// move it is).  Keyed by group id, looked up per chain via its stone0 cell.
+function ladderStateByGid(game3) {
+  const cur = game3.current, m = new Map();
+  const infos = getAllLadderStatuses(game3);
+  for (const info of infos) {
+    const st = info.status;
+    if (!st) continue;
+    let s;
+    if (st.urgentLibs.length > 0 || st.moverSucceeds === null) s = 3;   // unsettled
+    else if (st.moverSucceeds) s = info.color === cur ? 1 : 2;          // alive : dead
+    else                       s = info.color === cur ? 2 : 1;
+    m.set(info.gid, s);
+  }
+  return m;
+}
 
 // Weight tables are open-addressing int32→float64 maps (int-map.js): far
 // cheaper get/set than a V8 Map at large sizes, same get/set/size surface,
@@ -242,6 +265,14 @@ function chainLibCountKey(nLibs, cap) {
   return k === 0 ? 1 : k;
 }
 
+const CHAIN_LADDER_SALT = 0x6b3f27d1 | 0;
+// Chain ladder-status one-hot (the --ladder2 feature): state 1 alive / 2 dead /
+// 3 unsettled.  Its own salt keeps it clear of the other one-hots.
+function chainLadderKey(state) {
+  const k = (Math.imul(state + 1, 0x2545F491) ^ CHAIN_LADDER_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+
 // Health of the healthiest FRIENDLY chain the subject could join with (the
 // friend relation runs through a SHARED LIBERTY — two friendly chains in
 // contact would be one chain), bucketed into `buckets` uniform bins in p.
@@ -308,7 +339,8 @@ function chainFoeMinHealthKey(p, buckets) {
 function chainCountKeys(cells, nbr, gid, owner, chainGid, libs, nStones,
                         out, subjectMaxLibs, joinCap, chainsByGid,
                         subjectMaxStones, libStoneLibCap, libStoneStoneCap,
-                        joinLibGate) {
+                        joinLibGate, ladderState) {
+  if (ladderState > 0) out.push(chainLadderKey(ladderState));
   const nl = libs.length;
   if (subjectMaxStones > 0) {
     out.push(chainStoneCountKey(nStones, subjectMaxStones));
@@ -737,10 +769,26 @@ function _markLiveFromEyes(byGid) {
 // trained with different settings still scores correctly.
 const _survScratch = [];
 let _baseZ = new Float64Array(0), _live = new Uint8Array(0), _keys = new Int32Array(0);
-function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
+// The health system's entry point: given a Game2 (and optionally a synced Game3,
+// which it builds itself when a ladder2 model needs one and none is supplied),
+// return every chain with its survival probability in `.p`.  All the position
+// machinery it needs — the chain list, the ninecell/one-hot features, and the
+// ladder read — is derived here; callers pass games, not arrays.
+function chainHealthAll(model, game2, game3) {
+  const cells = game2.cells, nbr = game2._nbr, dnbr = game2._dnbr, gid = game2._gid, ls = game2._ls;
+  const { chains, byGid } = chainsOf(cells, nbr, gid);
   const n = chains.length, w = model.weights;
   if (_baseZ.length < n) {
     _baseZ = new Float64Array(n * 2);
+  }
+  // Ladder-status feature: one getAllLadderStatuses pass on a Game3, looked up
+  // per chain via its stone0 cell's group (default alive for chains the read
+  // skipped).  Off unless the model was trained with --ladder2.
+  let ladderMap = null, g3gid = null;
+  if (model.ladder2) {
+    const g3 = game3 || game3FromGame2(game2);
+    ladderMap = ladderStateByGid(g3);
+    g3gid = g3._gid;
   }
   // The ninecell half of every chain's logit, plus the friend and foe relations
   // and the life proof, in one pass over the board.  The scorer takes the sum
@@ -748,11 +796,12 @@ function chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid) {
   scanBoard(model, cells, nbr, dnbr, gid, chains, byGid, w, false, _baseZ);
   for (let i = 0; i < n; i++) {
     const r = chains[i];
+    const ladderState = ladderMap ? (ladderMap.get(g3gid[r.stone0]) || 1) : 0;
     _survScratch.length = 0;
     chainCountKeys(cells, nbr, gid, r.c, r.gid, r.libs, r.nStones,
                    _survScratch, model.maxLibs, model.maxJoinLibs, byGid,
                    model.maxStones, model.libStoneLibs, model.libStoneStones,
-                   model.joinLibGate);
+                   model.joinLibGate, ladderState);
     let z = model.bias + _baseZ[i];
     for (let j = 0; j < _survScratch.length; j++) z += w.get(_survScratch[j]) || 0;
     _baseZ[i] = z;
@@ -784,7 +833,7 @@ function _survIntern(raw) {
   if (!(raw.weights instanceof Map)) return raw;
   const w = makeWeights(raw.weights.size * 2);
   raw.weights.forEach((v, k) => w.set(k, v));
-  return { bias: raw.bias, maxLibs: raw.maxLibs || 0,
+  return { bias: raw.bias, maxLibs: raw.maxLibs || 0, ladder2: !!raw.ladder2,
            maxJoinLibs: raw.maxJoinLibs || 0, friendHealthMaxBuckets: raw.friendHealthMaxBuckets || 0,
            foeHealthMinBuckets: raw.foeHealthMinBuckets || 0, iterations: raw.iterations || 1,
            initHealth: raw.initHealth !== undefined ? raw.initHealth : 0.5,
@@ -880,6 +929,8 @@ const HealthLib = {
   chainFriendHealthKey,
   chainFoeMinHealthKey,
   chainCountKeys,
+  chainLadderKey,
+  ladderStateByGid,
   scanBoard,
   chainsOf,
   neighbourHealthKeys,

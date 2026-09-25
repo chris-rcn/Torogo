@@ -386,13 +386,10 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
       // family cannot run under doSetNext.
       raw = new Int8Array(cap);
       if (survChains === null) {
-        const gidH = game._gid, lsH = game._ls, nbrH = game._nbr, dnbrH = game._dnbr;
-        // Always collect stone lists: the H family paints its bucket onto
-        // r.stones below, regardless of whether the HEALTH MODEL's own
-        // features read them.
-        const cs = chainsOf(cells, nbrH, gidH);
-        survChains = cs.chains;
-        chainHealthAll(prepSpecs.healthModel, cells, nbrH, dnbrH, gidH, lsH, cs.chains, cs.byGid);
+        // The health system takes the games and returns each chain with its
+        // survival probability in .p (and its stone list, for the bucket
+        // painting below); it builds a Game3 itself if a ladder2 model needs one.
+        survChains = chainHealthAll(prepSpecs.healthModel, game, game3);
       }
       for (let k = 0; k < survChains.length; k++) {
         const r = survChains[k];

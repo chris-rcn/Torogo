@@ -151,11 +151,8 @@ for (let gi = 0; gi < GAMES; gi++) {
   const pos = sampleEndpoint(corpus[gi]);
   if (!pos) continue;
   nPos++;
-  const cells = pos.cells, gid = pos._gid, ls = pos._ls, nbr = pos._nbr, dnbr = pos._dnbr;
-
   // chains of this position, each with the model's prediction
-  const { chains, byGid } = HL.chainsOf(cells, nbr, gid);
-  HL.chainHealthAll(health, cells, nbr, dnbr, gid, ls, chains, byGid);
+  const chains = HL.chainHealthAll(health, pos);
   const pred = new Float64Array(chains.length);
   for (let i = 0; i < chains.length; i++) pred[i] = chains[i].p;
 

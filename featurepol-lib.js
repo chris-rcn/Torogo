@@ -666,12 +666,10 @@ function _healthLoad() {
 let _hpP = new Uint8Array(0);
 function _healthPrepare(ctx) {
   const game = ctx.game, cap = game.N * game.N;
-  const cells = game.cells, gid = game._gid, ls = game._ls, nbr = game._nbr, dnbr = game._dnbr;
   const model = _healthLoad();
   if (_hpP.length < cap) _hpP = new Uint8Array(cap);
   _hpP.fill(0, 0, cap);
-  const { chains, byGid } = HealthLib.chainsOf(cells, nbr, gid);
-  HealthLib.chainHealthAll(model, cells, nbr, dnbr, gid, ls, chains, byGid);
+  const chains = HealthLib.chainHealthAll(model, game, ctx.game3);
   for (let i = 0; i < chains.length; i++) {
     const r = chains[i];
     let v = (r.p * 255) | 0;

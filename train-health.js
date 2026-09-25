@@ -145,12 +145,13 @@
 const fs = require('fs');
 const path = require('path');
 const { Game2, parseMove } = require('./game2.js');
+const { game3FromGame2 } = require('./game3.js');
 const Util = require('./util.js');
 const HL = require('./health-lib.js');
 const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'],
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'ladder2'],
   ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-lib-stone', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
    'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
@@ -208,6 +209,9 @@ irreducible label entropy.
                   so this is also where the per-position cost goes
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 0 = off)
+  --ladder2       add a chain ladder-status one-hot (alive / dead / unsettled)
+                  from a getAllLadderStatuses pass; chains the read skips (>3
+                  liberties) count as alive.  Off by default
   --join-lib-gate N / --friend-lib-gate N / --foe-lib-gate N  one gate per
                   cross-chain feature: emit --max-join-libs,
                   --friend-health-max-buckets or --foe-health-min-buckets only
@@ -302,6 +306,9 @@ if (opts['max-lib-stone'] !== undefined && opts['max-lib-stone'] !== '0' &&
   process.exit(1);
 }
 const MAX_JOIN_LIBS = parseInt(opts['max-join-libs'] !== undefined ? opts['max-join-libs'] : '0', 10);
+// Optional chain ladder-status one-hot (alive / dead / unsettled) per chain,
+// from a getAllLadderStatuses pass.  Bare on/off.
+const LADDER2 = !!opts.ladder2;
 const FHM_BUCKETS = parseInt(opts['friend-health-max-buckets'] !== undefined
   ? opts['friend-health-max-buckets'] : '0', 10);
 const FOE_MIN_BUCKETS = parseInt(opts['foe-health-min-buckets'] !== undefined
@@ -382,7 +389,7 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${LADDER2 ? '  ladder2' : ''}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
@@ -451,6 +458,10 @@ function collectObs(game, phase, buf) {
   // chainsOf's chain order IS the example order, so a record's .idx indexes
   // the example arrays directly.
   const { chains, byGid } = HL.chainsOf(cells, nbr, gid, COLLECT_STONES);
+  // Ladder-status one-hot: one getAllLadderStatuses pass on a Game3, looked up
+  // per chain via stone0's group (default alive for chains the read skipped).
+  let ladderMap = null, g3gid = null;
+  if (LADDER2) { const g3 = game3FromGame2(game); ladderMap = HL.ladderStateByGid(g3); g3gid = g3._gid; }
   // Chains PROVEN uncapturable are pinned to health 1 rather than predicted,
   // exactly as health-lib.chainHealthAll does at scoring time.  Their gradient
   // is then zero on its own (y = p = 1), so they stop dragging the liberty
@@ -465,9 +476,10 @@ function collectObs(game, phase, buf) {
     const start = exShapes.length;
     const keys = c.keys;
     for (let a = 0; a < keys.length; a++) exShapes.push(keys[a]);
+    const ladderState = ladderMap ? (ladderMap.get(g3gid[c.stone0]) || 1) : 0;
     HL.chainCountKeys(cells, nbr, gid, owner, g0, libs, c.nStones,
                       exShapes, MAX_LIBS, MAX_JOIN_LIBS, byGid,
-                      MAX_STONES, LIB_STONE_LIBS, LIB_STONE_STONES, JOIN_LIB_GATE);
+                      MAX_STONES, LIB_STONE_LIBS, LIB_STONE_STONES, JOIN_LIB_GATE, ladderState);
     if (VERBOSE) {
       // Labels are computed from the chain, not by walking exShapes by offset:
       // the scan emits in BOARD order, and an offset walk was a standing source
@@ -495,6 +507,10 @@ function collectObs(game, phase, buf) {
       if (MAX_JOIN_LIBS > 0 && (JOIN_LIB_GATE <= 0 || libs.length <= JOIN_LIB_GATE)) {
         const k = exShapes[exShapes.length - 1];
         if (!examples.has(k)) examples.set(k, 'joinLibs');
+      }
+      if (ladderState > 0) {
+        const k = HL.chainLadderKey(ladderState);
+        if (!examples.has(k)) examples.set(k, 'ladder=' + ['', 'alive', 'dead', 'unsettled'][ladderState]);
       }
     }
     for (let k = 0; k < NB_SLOTS; k++) exNb.push(0);
@@ -779,7 +795,7 @@ const src = [
   `  // that sees every phase (ab-search, rank features) needs a full-range fit.`,
   `  minPhase: ${+MIN_PH.toFixed(3)}, maxPhase: ${+MAX_PH.toFixed(3)}, evalMinPhase: ${EVAL_MIN}, evalMaxPhase: ${EVAL_MAX}, delta: ${DELTA}, floor: ${+FLOOR.toFixed(5)},`,
   `  examples: ${nEx}, stoneSalt: ${STONE_SALT},`,
-  `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS},`,
+  `  maxLibs: ${MAX_LIBS}, maxJoinLibs: ${MAX_JOIN_LIBS}, ladder2: ${LADDER2},`,
   `  joinLibGate: ${JOIN_LIB_GATE}, friendLibGate: ${FRIEND_LIB_GATE}, foeLibGate: ${FOE_LIB_GATE},`,
   `  // Neighbour-health features: friendHealthMax over the healthiest joinable`,
   `  // friend, foeHealthMin over the weakest enemy chain in contact, both`,
