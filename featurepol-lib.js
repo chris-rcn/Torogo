@@ -724,12 +724,16 @@ function _vpatPrepare(ctx) {
     } else {
       // Ladder-coded model: full extraction on a clone.  Absolute logits —
       // the position's own zBase is a shared constant, so it cancels in the
-      // ranking and never needs computing.
+      // ranking and never needs computing.  Reuse ctx.game3 (synced to `game`),
+      // advancing it per candidate with play/undo instead of rebuilding one.
+      const g3 = ctx.game3;
       const g = game.clone();
       g.play(idx);
-      const ff = VPatterns.extractFeatures(g, prep);
+      g3.play(idx);
+      const ff = VPatterns.extractFeatures(g, prep, false, undefined, false, g3);
       VPatterns.evaluateFeatures(ff, model.weights);
       z = ff.z;
+      g3.undo();
     }
     _rankScore[idx] = black ? z : -z;             // mover-relative: higher = better
     _rankOrder[n++] = idx;
@@ -1451,10 +1455,13 @@ function extractFeatures(game, state, weights, game3) {
   const spec = weights.spec;
   const spaces = spec.spaces, nSpaces = spaces.length;
   const memo = state.memo;
-  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, memo, vpatModel: weights.vpatModel || null };
-  if (spec.needsLadder) {
-    const g3 = game3 || game3FromGame2(game);
-    ctx.ladderSizes = _buildLadderSizes(game, g3, state.ladderSizes);
+  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, memo, vpatModel: weights.vpatModel || null, game3: null };
+  // Build one Game3 (synced to `game`) if either featurepol's own ladder terms
+  // or the embedded vpat<n> ladder model needs one, and stash it on ctx so the
+  // vpat rank prepare can reuse it per candidate instead of rebuilding.
+  if (spec.needsLadder || (ctx.vpatModel && VPatterns.needsGame3(ctx.vpatModel.preparedSpecs))) {
+    ctx.game3 = game3 || game3FromGame2(game);
+    if (spec.needsLadder) ctx.ladderSizes = _buildLadderSizes(game, ctx.game3, state.ladderSizes);
   }
   // Is the rank feature live for this position at all?
   const useRank = _rankPosRatio >= 1 || Math.random() < _rankPosRatio;
