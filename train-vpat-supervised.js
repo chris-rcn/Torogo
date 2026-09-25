@@ -77,7 +77,7 @@ print, and each new best teMSE also writes the -best checkpoint.
                     supplies the specs from a checkpoint
   --lr F            step size for the update (default 0.2)
   --lr-decay F      multiply LR by this factor at the end of each epoch
-                    (default 0.9; 1 = no decay)
+                    (default 1 = no decay)
   --smooth-weights A  Polyak EMA decay, applied every 1000 positions; 0 = off
                     (default 0.9).  The EMA weights are what gets saved, and
                     what teMSE / ladder / md / eval games measure
@@ -111,7 +111,7 @@ const EVAL_AGENT = opts.eval || '';
 const LADDER_FILE = opts['ladder-file'] || null;
 const MD_FILE     = opts['md-file'] || null;
 let LR           = parseFloat(opts.lr       || '0.2');
-const LR_DECAY   = parseFloat(opts['lr-decay'] || '0.9');
+const LR_DECAY   = parseFloat(opts['lr-decay'] || '1');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
 const MAX_WEIGHTS = opts['max-weights'] !== undefined ? parseInt(opts['max-weights'], 10) : 0;
