@@ -73,8 +73,8 @@ print, and each new best teMSE also writes the -best checkpoint.
                     maxLibs 1 = presence only, or L = ladder-coded cells
                     (vlibpat 7-state tactical alphabet; game3 pass per
                     position, not incremental); trailing 'f' freezes that
-                    spec's loaded weights).  Default
-                    1:H15p3,2:H6p3,23:H3p3,3:1p3,tp9 (needs HEALTH_DATA)
+                    spec's loaded weights).  Required, unless --load
+                    supplies the specs from a checkpoint
   --lr F            step size for the update (default 0.2)
   --lr-decay F      multiply LR by this factor at the end of each epoch
                     (default 0.9; 1 = no decay)
@@ -216,16 +216,12 @@ if (opts.spec) {
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
     return patBins > 1 ? { size, maxLibs, phaseBins: patBins } : { size, maxLibs };
   });
-} else {
-  // '1:H15p3,2:H6p3,23:H3p3,3:1p3,tp9' — needs HEALTH_DATA.  Measured against
-  // the same stack without the turn term (2026-09-09, 1.6M positions): teMSE
-  // 0.0022 vs 0.0029 and varB 0.00036 vs 0.00071, the turn feature converting
-  // variable truncation bias into constant lean for five extra weights.
-  specs = [{ size: 1, maxLibs: -15, phaseBins: 3 }, { size: 2, maxLibs: -6, phaseBins: 3 },
-           { size: 23, maxLibs: -3, phaseBins: 3 }, { size: 3, maxLibs: 1, phaseBins: 3 },
-           { turn: true, phaseBins: 9 }];
+} else if (!LOAD_PATH) {
+  console.error('error: --spec is required (no default); or resume the specs from a checkpoint with --load');
+  process.exit(1);
 }
-let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
+// else: no --spec but --load given — the specs come from the checkpoint below.
+let prepSpecs = specs ? prepareSpecs(specs, { health: HEALTH_PATH }) : null;
 const specKey = sp => sp.map(x => x.turn ? 't' : `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -505,6 +501,10 @@ if (LOAD_PATH) {
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
   }
+}
+if (!specs) {
+  console.error('error: no spec resolved — pass --spec, or --load a checkpoint that supplies one');
+  process.exit(1);
 }
 if (NO_ADD && weights.size === 0) {
   console.error('error: --no-add needs a loaded model to fine-tune (pass --load with a non-empty checkpoint)');
