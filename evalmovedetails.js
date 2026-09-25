@@ -331,6 +331,13 @@ const agent = (typeof _agentMod.create === 'function'
       ].join('  '));
     }
   }
+
+  // Single greppable summary line (grep for "SUMMARY").
+  const elapsedMs = performance.now() - startTime;
+  console.log(`SUMMARY agent=${agentName} file=${path.basename(opts.file)} ` +
+    `pos=${positions.length} evals=${evals} mae=${(gapSum / evals).toFixed(4)} ` +
+    `budget=${budgetMs}ms tMv=${Util.fmtMs(elapsedMs / evals).trim()} elapsed=${Util.fmtMs(elapsedMs).trim()}` +
+    (bandActive ? ` band=${minPhase}-${maxPhase}` : ''));
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };
