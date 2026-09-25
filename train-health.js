@@ -196,7 +196,7 @@ irreducible label entropy.
                   (default off).  The model is additive over its one-hots, so
                   --max-libs and --max-stones cannot express the interaction —
                   and two liberties on a 2-stone chain is a different situation
-                  from two liberties on a 20-stone chain.  Default 9,9; "0" = off
+                  from two liberties on a 20-stone chain.  Default 0,0 = off; "0" also off
   --max-lib-ninecells N  emit ninecells only for chains with at most N
                   liberties (default 7; 0 = no cap) — BOTH halves, stones included.
                   A chain with that many liberties is not in question, so
@@ -297,7 +297,7 @@ const MAX_STONES = parseInt(opts['max-stones'] !== undefined ? opts['max-stones'
 // the interaction, and the interaction is the whole signal: two liberties on a
 // 2-stone chain and two liberties on a 20-stone chain are different situations.
 // Costs one key per chain and no hashing, and (L+1)*(S+1) weights.
-const LIB_STONE = (opts['max-lib-stone'] !== undefined ? opts['max-lib-stone'] : '9,9').split(',').map(x => parseInt(x, 10));
+const LIB_STONE = (opts['max-lib-stone'] !== undefined ? opts['max-lib-stone'] : '0,0').split(',').map(x => parseInt(x, 10));
 const LIB_STONE_LIBS   = LIB_STONE.length === 2 && LIB_STONE[0] > 0 ? LIB_STONE[0] : 0;
 const LIB_STONE_STONES = LIB_STONE.length === 2 && LIB_STONE[1] > 0 ? LIB_STONE[1] : 0;
 if (opts['max-lib-stone'] !== undefined && opts['max-lib-stone'] !== '0' &&
