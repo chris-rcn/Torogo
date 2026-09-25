@@ -222,6 +222,11 @@ if (opts.spec) {
 }
 // else: no --spec but --load given — the specs come from the checkpoint below.
 let prepSpecs = specs ? prepareSpecs(specs, { health: HEALTH_PATH }) : null;
+// Every trainer extraction replays a Game2 only (replayRecord), so a ladder
+// spec must rebuild the Game3 for its tactical pass — expected here.  Acknowledge
+// it (game3RebuildOk=true) so extractFeatures' rebuild warning stays reserved
+// for genuine surprises (an agent path that should have passed a synced Game3).
+const extractRebuildOk = (game) => extractFeatures(game, prepSpecs, undefined, undefined, undefined, undefined, true);
 const specKey = sp => sp.map(x => x.turn ? 't' : `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -427,7 +432,7 @@ function loadBiasPairs() {
     const g2 = replayCut(size, p[4], cut);
     const rec = { ph, pa: parseFloat(p[5]), pb: parseFloat(p[6]) };
     for (const [key, g] of [['f1', g1], ['f2', g2]]) {
-      const f = extractFeatures(g, prepSpecs);
+      const f = extractRebuildOk(g);
       rec[key] = { keys: f.keys.slice(0, f.count), pols: f.pols.slice(0, f.count), count: f.count };
     }
     biasPairs.push(rec);
@@ -471,7 +476,7 @@ function testMSE() {
     }
   } else {
     for (const rec of testRecs) {
-      const v = evaluateFeatures(extractFeatures(replayRecord(rec), prepSpecs), evalW);
+      const v = evaluateFeatures(extractRebuildOk(replayRecord(rec)), evalW);
       se += (rec.targetB - v) * (rec.targetB - v);
     }
   }
@@ -557,7 +562,7 @@ function evalSplit(keysArr, start, nPos, cnt, w) {
 // are known exactly, so a single flat buffer plus off[n+1] and nPos[n].
 let teKeys = null, teOff = null, teNPos = null;
 if (CACHE_FEATURES && testRecs.length > 0) {
-  const fs = testRecs.map(rec => extractFeatures(replayRecord(rec), prepSpecs));
+  const fs = testRecs.map(rec => extractRebuildOk(replayRecord(rec)));
   let total = 0;
   for (const f of fs) total += f.count;
   teKeys = new Int32Array(total);
@@ -584,7 +589,7 @@ const trCnt  = CACHE_FEATURES ? new Int32Array(trainRecs.length) : null;
 if (CACHE_FEATURES) {
   const K = Math.min(500, trainRecs.length);
   let sum = 0;
-  for (let i = 0; i < K; i++) sum += extractFeatures(replayRecord(trainRecs[i]), prepSpecs).count;
+  for (let i = 0; i < K; i++) sum += extractRebuildOk(replayRecord(trainRecs[i])).count;
   const avg = K > 0 ? sum / K : 64;
   trKeys = new Int32Array(Math.max(1, Math.ceil(trainRecs.length * avg * 1.2)));
 }
@@ -848,7 +853,7 @@ while (!done) {
       tdUpdateCached(oi, rec.targetB, V, LR);
     } else {
       const game = replayRecord(rec);
-      const f = extractFeatures(game, prepSpecs);
+      const f = extractRebuildOk(game);
       if (trOff) cacheTrain(oi, f);   // lazy fill on first touch (epoch 1)
       evaluateFeatures(f, weights);
       V = f.val;

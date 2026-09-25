@@ -268,7 +268,11 @@ function prepareSpecs(specs, opts) {
 // for the ladder-code pass instead of rebuilding one with game3FromGame2.  The
 // ladder read borrows it non-destructively (play/undo balanced), so it comes
 // back unchanged.  Must match `game`.
-function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3) {
+// `game3RebuildOk` (optional): set by callers that legitimately have no Game3
+// to supply (e.g. trainers replaying a Game2), acknowledging the ladder-pass
+// rebuild so it stays silent.  The warning is then reserved for UNacknowledged
+// rebuilds — a caller that should have passed a synced Game3.
+function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, game3RebuildOk) {
   const cells = game.cells;
   const cap   = game.N * game.N;
   const N     = game.N;
@@ -361,7 +365,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3) {
       // game3 tactical pass over the current cells.
       if (game3 && game3.emptyCount !== game.emptyCount)
         throw new Error('vpatterns.extractFeatures: supplied game3 does not match game');
-      if (!game3 && !_warnedLadderRebuild) {
+      if (!game3 && !game3RebuildOk && !_warnedLadderRebuild) {
         _warnedLadderRebuild = true;
         console.error('vpatterns.extractFeatures: no game3 supplied — building one for the ladder pass ' +
           '(slow path; pass a synced game3 to reuse it).  First occurrence:\n' +
