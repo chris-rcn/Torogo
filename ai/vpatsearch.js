@@ -19,10 +19,11 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { extractFeatures, evaluateFeatures, deltaZ, loadWeights, prepareSpecs, makeWeights } = _isNode ? require('../vpatterns.js') : window.VPatterns;
+const { extractFeatures, evaluateFeatures, deltaZ, loadWeights, prepareSpecs, makeWeights, needsGame3 } = _isNode ? require('../vpatterns.js') : window.VPatterns;
 const { search: abSearch } = _isNode ? require('../ab-search.js') : window.ABSearch;
 const Util = _isNode ? require('../util.js') : window.Util;
 const { BLACK, PASS } = _isNode ? require('../game2.js') : window.game;
+const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
 
 const MIN_LIBS = Util.envInt  ('MIN_LIBS',     1);
 const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
@@ -62,7 +63,12 @@ function search(game, m, depth = 1, dither = 0) {
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
   const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
-  const f = extractFeatures(game, prep, false, undefined, true);
+  // Ladder specs need a Game3.  Build ONE synced to the base and reuse it for
+  // the base extraction and every fallback candidate (advanced with play/undo),
+  // instead of rebuilding a Game3 per extraction.  undefined for non-ladder.
+  const useG3 = needsGame3(prep);
+  const g3 = useG3 ? game3FromGame2(game) : undefined;
+  const f = extractFeatures(game, prep, false, undefined, true, g3);
   evaluateFeatures(f, m.weights);
   const zBase = f.z;
   const cap = game.N * game.N;
@@ -81,7 +87,9 @@ function search1(game, m, dither) {
         { health: m.preparedSpecs && m.preparedSpecs.healthModel }));
       const g = game.clone();
       g.play(i);
-      s = evaluateFeatures(extractFeatures(g, fb, false, undefined, true), m.weights) + (dither > 0 ? Math.random() * dither : 0);
+      if (useG3) g3.play(i);
+      s = evaluateFeatures(extractFeatures(g, fb, false, undefined, true, g3), m.weights) + (dither > 0 ? Math.random() * dither : 0);
+      if (useG3) g3.undo();
     }
     if (isBlack ? s > v : s < v) { v = s; best = i; }
   }

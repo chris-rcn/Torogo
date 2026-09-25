@@ -272,6 +272,12 @@ function prepareSpecs(specs, opts) {
 // to supply (e.g. trainers replaying a Game2), acknowledging the ladder-pass
 // rebuild so it stays silent.  The warning is then reserved for UNacknowledged
 // rebuilds — a caller that should have passed a synced Game3.
+// Whether extractFeatures on these prepared specs must build a Game3: only the
+// ladder-coded family (size:L) needs one — liberty/health/turn specs read the
+// Game2 directly.  A caller doing per-candidate evaluation can build ONE Game3
+// and pass it as `game3` (advancing it with play/undo) instead of rebuilding.
+function needsGame3(prepSpecs) { return !!(prepSpecs && prepSpecs.hasLadder); }
+
 function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, game3RebuildOk) {
   const cells = game.cells;
   const cap   = game.N * game.N;
@@ -1062,6 +1068,7 @@ const Patterns = {
   specTag,
   prepareSpecs,
   extractFeatures,
+  needsGame3,
   evaluateFeatures,
   evaluate,
   deltaZ,
