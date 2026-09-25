@@ -987,29 +987,21 @@ function modelFromRaw(raw, health, srcName) {
 // model was loaded when it trained, so pairing it with a different one
 // re-indexes every weight — no error, just wrong.  We do NOT match file names
 // (a model may legitimately be copied or renamed); we compare the parameters
-// the training run recorded against the health model now in use.  Alphabet
-// differences change the key space outright and are fatal; the rest change
-// the bucket boundaries and are reported loudly.
+// the training run recorded against the health model now in use and warn loudly
+// on any difference — alphabet or bucket boundary — but do not block: the caller
+// may knowingly be pairing them.
 function checkHealthMatch(want, filePath, got) {
-  const fatal = [];
+  const diff = [];
   for (const k of ['maxLibs', 'maxJoinLibs', 'friendHealthMaxBuckets',
-                   'foeHealthMinBuckets', 'stoneSalt']) {
-    if (want[k] !== undefined && want[k] !== got[k]) fatal.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
-  }
-  if (fatal.length) {
-    throw new Error(`vpatterns: ${filePath} was trained against a health model with a different ALPHABET ` +
-                    `— its weights index a different key space (${fatal.join('; ')})`);
-  }
-  const soft = [];
-  for (const k of ['minPhase', 'maxPhase', 'delta', 'iterations', 'initHealth', 'bias', 'nWeights']) {
+                   'foeHealthMinBuckets', 'stoneSalt',
+                   'minPhase', 'maxPhase', 'delta', 'iterations', 'initHealth', 'bias', 'nWeights']) {
     if (want[k] !== undefined && got[k] !== undefined && want[k] !== got[k]) {
-      soft.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
+      diff.push(`${k}: trained ${want[k]}, loaded ${got[k]}`);
     }
   }
-  if (soft.length) {
+  if (diff.length) {
     console.error(`vpatterns WARNING: ${filePath} was trained against a DIFFERENT health model ` +
-                  `(${soft.join('; ')}) — same alphabet, but the survival probabilities and hence the ` +
-                  `bucket assignments differ, so its weights are mis-indexed.`);
+                  `(${diff.join('; ')}) — its weights may be mis-indexed against the one now loaded.`);
   }
 }
 
