@@ -45,13 +45,14 @@ Fold positions come from a self-play agent (--position-agent), so no game corpus
 is needed.  The z_flat-vs-z_composite measurement uses a held-out set from the
 same agent.
 
-  --model PATH       composite vpat model (exactly two terms: the source and dest)
+  --model PATH       vpat model containing the source and dest terms; any other
+                     terms (e.g. a phased turn conditioner) are carried through
   --position-agent X ai/<X>.js self-play generates the fold positions.  Required.
   --games N          self-play games to generate (default: unlimited)
   --budget MS        per-move budget for the position agent (default 100)
   --source S:M       term to fold away (required)
   --dest   S:M       term to fold into  (required)
-  --save PATH        output flat single-term model (default out/vpat-fold-<rand>.js)
+  --save PATH        output model (input minus the source term; default out/vpat-fold-<rand>.js)
   --eval-games N     held-out games for the z_flat-vs-z_composite measurement (default 300)
   --ply-stride K     sample every K-th position within a game (default 5)
   --size N           board size (default 13)
@@ -72,10 +73,6 @@ const SIZE       = parseInt(opts.size || '13', 10);
 
 // ── Load, resolve the source/dest terms, validate foldability ────────────────
 const comp = VPatterns.loadWeights(MODEL_PATH);
-if (comp.preparedSpecs.hasPhasedPatterns) {
-  console.error('Error: phase-binned specs are not supported by the fold (per-tag phase salts).');
-  process.exit(1);
-}
 const specs = comp.specs;
 const tok = sp => VPatterns.specToken(sp);
 function fail(msg) { console.error('Error: ' + msg); process.exit(1); }
@@ -84,21 +81,25 @@ const SRC = specs.find(sp => tok(sp) === opts.source);
 const DST = specs.find(sp => tok(sp) === opts.dest);
 if (!SRC) fail(`--source '${opts.source}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
 if (!DST) fail(`--dest '${opts.dest}' is not a term of the model (has '${VPatterns.specString(specs)}').`);
-if (specs.length !== 2) fail(`the composite must have exactly the two terms {source, dest}; got '${VPatterns.specString(specs)}'.`);
 if (tok(SRC) === tok(DST)) fail('source and dest are the same term.');
+if ((SRC.phaseBins || 1) > 1 || (DST.phaseBins || 1) > 1)
+  fail(`source/dest are phase-binned; the fold cannot reconstruct their per-bin salts. ` +
+       `(Other, non-fold terms may be phased — they are carried through unchanged.)`);
 if (!(SRC.size === 2 || SRC.size === 3) || !(DST.size === 2 || DST.size === 3)) fail('only size 2 and 3 terms are supported.');
 if (!(SRC.maxLibs > 0 && DST.maxLibs > 0)) fail('only positive-maxLibs terms are supported (not L / H<n>).');
 if (SRC.size > DST.size || SRC.maxLibs > DST.maxLibs)
   fail(`source ${tok(SRC)} is not derivable from dest ${tok(DST)} — need source.size <= dest.size and source.maxLibs <= dest.maxLibs.`);
 
-const PS = 0;   // no phase bins asserted above
+const PS = 0;   // src/dest are unphased (asserted above), so their keys carry no salt
 const SRC_TAG = (VPatterns.tagBaseOf(SRC.maxLibs) << 3) | VPatterns.sizeCode(SRC.size);
 const DST_TAG = (VPatterns.tagBaseOf(DST.maxLibs) << 3) | VPatterns.sizeCode(DST.size);
 const SHN = SRC.size === 2 ? 'h2N' : 'h3N', SHI = SRC.size === 2 ? 'h2I' : 'h3I';
 const DHN = DST.size === 2 ? 'h2N' : 'h3N', DHI = DST.size === 2 ? 'h2I' : 'h3I';
 function keyFor(hN, hI, tag) { return (VPatterns.mixTag(hN < hI ? hN : hI, tag) ^ PS) | 0; }
 
-const flatSpecs = [{ size: DST.size, maxLibs: DST.maxLibs }];
+// Output = the input minus the folded-away source term (dest absorbs it); every
+// other term (e.g. a phased turn conditioner) is carried through unchanged.
+const flatSpecs = specs.filter(sp => tok(sp) !== tok(SRC));
 const flatPrep = VPatterns.prepareSpecs(flatSpecs);
 
 console.log(`composite: ${path.basename(MODEL_PATH)}  specs='${VPatterns.specString(specs)}'  weights=${comp.weights.size}`);
@@ -166,8 +167,8 @@ for (const gamePositions of evalGames()) {
   for (const g of gamePositions) {
     const fc = VPatterns.extractFeatures(g, comp.preparedSpecs);
     VPatterns.evaluateFeatures(fc, comp.weights);
-    const ff = VPatterns.extractFeatures(g, flatPrep);   // flat dest-term keys (weights irrelevant)
-    evalSet.push({ zcomp: fc.z, keys: ff.keys.slice(0, ff.count), pols: ff.pols.slice(0, ff.count) });
+    const ff = VPatterns.extractFeatures(g, flatPrep);   // flat model's keys (carried terms + folded dest)
+    evalSet.push({ zcomp: fc.z, keys: ff.keys.slice(0, ff.count), pols: ff.pols.slice(0, ff.count), tags: ff.tags.slice(0, ff.count) });
   }
 }
 console.log(`eval positions: ${evalSet.length}`);
@@ -175,10 +176,20 @@ console.log(`eval positions: ${evalSet.length}`);
 // ── Fold state ───────────────────────────────────────────────────────────────
 // acc: destKey -> { wd, sum, cnt } ; flatVal(a) = wd + sum/cnt
 const acc = new Map();
+// Type-3 weights (neither source nor dest): carried through verbatim.  Keys are
+// identified by their extraction tag, since a raw key doesn't expose its tag.
+const carry = new Map();
 let cells = 0, lost = 0;
 
 function foldPosition(g) {
-  VPatterns.extractFeatures(g, comp.preparedSpecs);
+  const f = VPatterns.extractFeatures(g, comp.preparedSpecs);
+  for (let j = 0; j < f.count; j++) {
+    const t = f.tags[j];
+    if (t !== SRC_TAG && t !== DST_TAG) {
+      const k = f.keys[j] | 0;
+      if (!carry.has(k)) { const w = comp.weights.get(k); if (w !== undefined) carry.set(k, w); }
+    }
+  }
   const sp = comp.preparedSpecs._planes.get(SRC.maxLibs), dp = comp.preparedSpecs._planes.get(DST.maxLibs);
   const sHN = sp[SHN], sHI = sp[SHI], dHN = dp[DHN], dHI = dp[DHI];
   const cap = g.N * g.N;
@@ -204,7 +215,8 @@ console.log([
 ].join('  '));
 
 function row(games, positionsFolded) {
-  const fw = VPatterns.makeWeights(Math.max(1024, acc.size * 2));
+  const fw = VPatterns.makeWeights(Math.max(1024, (acc.size + carry.size) * 2));
+  for (const [k, w] of carry) fw.set(k | 0, w);                 // type-3 terms, verbatim
   for (const [dk, a] of acc) { const w = a.wd + a.sum / a.cnt; if (+w.toFixed(6) !== 0) fw.set(dk | 0, w); }
   VPatterns.saveWeights(SAVE_PATH, { specs: flatSpecs, preparedSpecs: flatPrep, weights: fw, komi: comp.komi });
 
@@ -212,8 +224,9 @@ function row(games, positionsFolded) {
   for (const e of evalSet) {
     let z = 0;
     for (let j = 0; j < e.keys.length; j++) {
-      const a = acc.get(e.keys[j]); total++;
-      if (a) { covered++; z += e.pols[j] * (a.wd + a.sum / a.cnt); }
+      const k = e.keys[j], w = fw.get(k);
+      if (w !== undefined) z += e.pols[j] * w;
+      if (e.tags[j] === DST_TAG) { total++; if (acc.has(k)) covered++; }   // coverage over dest keys only
     }
     const d = z - e.zcomp; se += d * d;
     const vc = 1 / (1 + Math.exp(-e.zcomp)), vf = 1 / (1 + Math.exp(-z)); vse += (vf - vc) * (vf - vc);
