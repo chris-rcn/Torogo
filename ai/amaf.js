@@ -78,7 +78,9 @@ function create(cfg) {
       if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
       game2.play(idx);
       moves++;
-      weight -= weightStep;
+      // Clamp at 0: moves played past the linear ramp get zero credit rather
+      // than a negative weight (which would flip the credited colour).
+      weight = Math.max(0, weight - weightStep);
     }
 
     return { winner: game2.estimateWinner(), played };
