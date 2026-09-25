@@ -953,8 +953,12 @@ function evaluateFeatures(features, weights) {
 
 // Convenience: extract features and evaluate in one call.
 // model must have a preparedSpecs property (see prepareSpecs).
-function evaluate(game, model) {
-  return evaluateFeatures(extractFeatures(game, model.preparedSpecs, false, undefined, true), model.weights);
+// A caller with a Game3 already synced to `game` (e.g. a search maintaining one)
+// may pass it to avoid a ladder-spec rebuild.  Without one, the rebuild here is
+// the expected cost of the one-call convenience, so it is acknowledged rather
+// than warned (callers wanting reuse use extractFeatures with a game3 directly).
+function evaluate(game, model, game3) {
+  return evaluateFeatures(extractFeatures(game, model.preparedSpecs, false, undefined, true, game3, !game3), model.weights);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
