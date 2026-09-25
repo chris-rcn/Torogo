@@ -22,9 +22,10 @@ function create(cfg) {
   const FPOL_DATA = cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js'));
   // Rank-feature shortlist (the deployment analogue of the trainer's
   // --eval-rank-topn, and sharing its default of 3): rank the vpat<n> feature
-  // over only the best N moves by the other feature spaces.  0 = rank every
-  // candidate.  No-op for specs without vpat<n>.  Set per-slot on the loaded
-  // weights, so two slots hold their own widths.
+  // over only the best N moves by the other feature spaces.  0 = off (no
+  // ranking pass); N < 0 = rank every candidate (whole board).  No-op for specs
+  // without vpat<n>.  Set per-slot on the loaded weights, so two slots hold
+  // their own widths.
   const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 3);
 
   const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
