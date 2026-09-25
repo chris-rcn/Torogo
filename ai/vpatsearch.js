@@ -100,10 +100,12 @@ function getMove(game) {
 }
 
 // Position value oracle: the static evaluation itself — V(s) = P(BLACK wins).
+// Each call is an independent position with no Game3 in hand, so a ladder spec
+// must rebuild one — inherent here (game3RebuildOk), not a missed reuse.
 function valueB(game) {
   const g = game.cells ? game : game.toGame2();
   if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
-  return evaluateFeatures(extractFeatures(g, model.preparedSpecs, false, undefined, true), model.weights);
+  return evaluateFeatures(extractFeatures(g, model.preparedSpecs, false, undefined, true, undefined, true), model.weights);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
