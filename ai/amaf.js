@@ -23,6 +23,8 @@
  *   PPAT_MIN_PHASE  uniform playout moves below this board fullness (default 0.6)
  *   PLAYOUTS        fixed total playouts per decision (0 = use the time budget)
  *   AMAF_OPP_WEIGHT weight multiplier for opponent moves (default 0)
+ *   AMAF_DECAY      per-move weight-decay multiplier on 1/area (default 1;
+ *                   higher = faster decay, 0 = no decay)
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -41,6 +43,11 @@ function create(cfg) {
   const PLAYOUTS        = cfg.int('PLAYOUTS', 0);
   // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
   const AMAF_OPP_WEIGHT = cfg.float('AMAF_OPP_WEIGHT', 0);
+  // Decay multiplier on the per-move weight step (weight loses AMAF_DECAY/area
+  // per move): 1 = weight reaches 0 after one full board of moves (the old
+  // fixed 1/area), higher = faster decay / more first-move emphasis, 0 = no
+  // decay (every played move keeps weight 1.0).
+  const AMAF_DECAY      = cfg.float('AMAF_DECAY', 1.0);
 
   // ppat playout policy.  A hard failure, not a fallback: this agent now runs
   // ppat playouts, so silently reverting to uniform would misrepresent it.
@@ -65,7 +72,7 @@ function create(cfg) {
     const cap        = game2.N * game2.N;
     const played     = new Float32Array(cap);
     const moveLimit  = cap + 20;
-    const weightStep = 1 / cap;
+    const weightStep = AMAF_DECAY / cap;
     let moves = 0, weight = 1.0;
 
     let state = stateByN.get(game2.N);
