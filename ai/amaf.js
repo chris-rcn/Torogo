@@ -14,16 +14,19 @@
  * (1.0 → 0, clamped), so a single playout also updates estimates for the other
  * moves it plays, giving all candidates far more data than mc.js provides.
  *
- * Playouts follow the ppat policy (uniform below PPAT_MIN_PHASE, ppat above) —
- * the same standard playout the mc-ppat / puct-ppat agents run — rather than
- * pure uniform random.
+ * Playouts are uniform below PPAT_MIN_PHASE and follow the ppat policy above it
+ * (the same standard playout the mc-ppat / puct-ppat agents run).  The default
+ * PPAT_MIN_PHASE is 1, i.e. fully uniform — ppat wins per-playout but not per
+ * unit time here, so uniform is the fielded default; lower the knob to enable
+ * ppat above a given phase.
  *
  * create(cfg) → { getMove }.  Env (per-slot P<n>_ under selfplay):
  *   PPAT_DATA       ppat weight file (default out/ppat-data-233162-best-ref-candidate.js)
- *   PPAT_MIN_PHASE  uniform playout moves below this board fullness (default 0.6)
+ *   PPAT_MIN_PHASE  uniform playout moves below this board fullness (default 1,
+ *                   i.e. fully uniform; lower to enable ppat above that phase)
  *   PLAYOUTS        fixed total playouts per decision (0 = use the time budget)
- *   AMAF_OPP_WEIGHT weight multiplier for opponent moves (default 0)
- *   AMAF_DECAY      per-move weight-decay multiplier on 1/area (default 1;
+ *   AMAF_OPP_WEIGHT weight multiplier for opponent moves (default 0.3)
+ *   AMAF_DECAY      per-move weight-decay multiplier on 1/area (default 0.5;
  *                   higher = faster decay, 0 = no decay)
  */
 
@@ -42,12 +45,12 @@ function create(cfg) {
 
   const PLAYOUTS        = cfg.int('PLAYOUTS', 0);
   // Weight multiplier for opponent moves.  Override with AMAF_OPP_WEIGHT=<n>.
-  const AMAF_OPP_WEIGHT = cfg.float('AMAF_OPP_WEIGHT', 0);
+  const AMAF_OPP_WEIGHT = cfg.float('AMAF_OPP_WEIGHT', 0.3);
   // Decay multiplier on the per-move weight step (weight loses AMAF_DECAY/area
   // per move): 1 = weight reaches 0 after one full board of moves (the old
   // fixed 1/area), higher = faster decay / more first-move emphasis, 0 = no
   // decay (every played move keeps weight 1.0).
-  const AMAF_DECAY      = cfg.float('AMAF_DECAY', 1.0);
+  const AMAF_DECAY      = cfg.float('AMAF_DECAY', 0.5);
 
   // ppat playout policy.  A hard failure, not a fallback: this agent now runs
   // ppat playouts, so silently reverting to uniform would misrepresent it.
@@ -58,7 +61,7 @@ function create(cfg) {
     ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
   if (!model) throw new Error(`amaf: cannot load ppat weights from ${_isNode ? _ppatPath : 'window.PPATWeights'}`);
-  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 1);
   const stateByN = new Map();
 
   console.log(`amaf[${cfg.slot != null ? cfg.slot : '-'}]: ppat playouts from ` +
