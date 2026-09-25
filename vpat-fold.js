@@ -86,7 +86,14 @@ if ((SRC.phaseBins || 1) > 1 || (DST.phaseBins || 1) > 1)
   fail(`source/dest are phase-binned; the fold cannot reconstruct their per-bin salts. ` +
        `(Other, non-fold terms may be phased — they are carried through unchanged.)`);
 if (!(SRC.size === 2 || SRC.size === 3) || !(DST.size === 2 || DST.size === 3)) fail('only size 2 and 3 terms are supported.');
-if (!(SRC.maxLibs > 0 && DST.maxLibs > 0)) fail('only positive-maxLibs terms are supported (not L / H<n>).');
+// Same encoding family only: maxLibs>0 = liberty counts, 0 = ladder codes (L).
+// The fold maps the source sub-window onto the co-anchored dest window within
+// ONE alphabet, so cross-family folds (e.g. an L window into a liberty term)
+// are meaningless.  Health (H<n>, maxLibs<0) stays unsupported: its bucketed
+// alphabet isn't a clean coarsening, so co-anchoring derivability is unverified.
+const fam = ml => ml > 0 ? 'lib' : ml === 0 ? 'ladder' : 'health';
+if (fam(SRC.maxLibs) === 'health' || fam(DST.maxLibs) === 'health') fail('health (H<n>) terms are not supported by the fold.');
+if (fam(SRC.maxLibs) !== fam(DST.maxLibs)) fail(`source ${tok(SRC)} and dest ${tok(DST)} use different encoding families (${fam(SRC.maxLibs)} vs ${fam(DST.maxLibs)}); cannot fold across them.`);
 if (SRC.size > DST.size || SRC.maxLibs > DST.maxLibs)
   fail(`source ${tok(SRC)} is not derivable from dest ${tok(DST)} — need source.size <= dest.size and source.maxLibs <= dest.maxLibs.`);
 
