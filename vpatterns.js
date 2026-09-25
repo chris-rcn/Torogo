@@ -259,7 +259,11 @@ function prepareSpecs(specs, opts) {
 //   - Raw cell states are precomputed once per unique maxLibs value.
 //   - size:2 and size:3 hash via whole-board X-hash planes (see above).
 //   - pattern1 is inlined (raw[idx] already holds the capped liberty count).
-function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse) {
+// `game3` (optional): a caller-supplied Game3 already synced to `game`, reused
+// for the ladder-code pass instead of rebuilding one with game3FromGame2.  The
+// ladder read borrows it non-destructively (play/undo balanced), so it comes
+// back unchanged.  Must match `game`.
+function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3) {
   const cells = game.cells;
   const cap   = game.N * game.N;
   const N     = game.N;
@@ -350,7 +354,9 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse) {
     if (isLadder) {
       // vlibpat's turn-independent 7-state tactical alphabet, from a fresh
       // game3 tactical pass over the current cells.
-      raw = VLibPat.computeLadderCodes(game3FromGame2(game), null);
+      if (game3 && game3.emptyCount !== game.emptyCount)
+        throw new Error('vpatterns.extractFeatures: supplied game3 does not match game');
+      raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), null);
     } else if (isHealth) {
       // One survival probability per chain, bucketed to 1..hb and signed by
       // colour — the same alphabet shape as liberty counts, but the levels

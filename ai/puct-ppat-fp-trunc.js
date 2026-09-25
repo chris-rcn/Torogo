@@ -214,9 +214,10 @@ function create(cfg) {
       `visit-thresh ${AUGVAL_VISIT_THRESH}, weight ${AUGVAL_WEIGHT}`);
   }
   const AUGVAL_ON = _augModel !== null;
-  // P(BLACK wins) from the augmentation model.
-  function augValueB(game2) {
-    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _augModel.preparedSpecs, false, undefined, true), _augModel.weights);
+  // P(BLACK wins) from the augmentation model.  `game3` (synced to game2) is
+  // reused for any ladder-coded spec instead of rebuilding one.
+  function augValueB(game2, game3) {
+    return VPat.evaluateFeatures(VPat.extractFeatures(game2, _augModel.preparedSpecs, false, undefined, true, game3), _augModel.weights);
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-233162-best-ref-candidate.js
@@ -509,7 +510,7 @@ function create(cfg) {
       // The +AUGVAL_WEIGHT jump lifts the count clear of the window, so it fires
       // exactly once per edge.
       if (AUGVAL_ON && node.visits[best] >= AUGVAL_VISIT_THRESH - 1 && node.visits[best] < AUGVAL_VISIT_THRESH) {
-        const vb  = augValueB(game2);
+        const vb  = augValueB(game2, game3);
         const won = (-node.mover === BLACK) ? vb : 1 - vb;
         node.wins[best]   += won * AUGVAL_WEIGHT;
         node.visits[best] += AUGVAL_WEIGHT;
