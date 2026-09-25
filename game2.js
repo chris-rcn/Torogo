@@ -1194,6 +1194,17 @@ class Game2 {
     return score.black > score.white ? BLACK : WHITE;
   }
 
+  // A 32-bit hash of the position -- board contents plus the side to move.  Not
+  // a Zobrist key (no incremental update); a straight FNV-1a scan of the cells,
+  // for callers that need a deterministic per-position seed or key.
+  hash() {
+    const cells = this.cells, cap = this.N * this.N;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < cap; i++) h = Math.imul(h ^ cells[i], 0x01000193);
+    h = Math.imul(h ^ (this.current + 1), 0x01000193);
+    return h >>> 0;
+  }
+
 }
 
 // Flat index → coordinate string, e.g. 10 on a 9×9 board → "b2".  PASS → 'pass'.

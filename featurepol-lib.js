@@ -109,6 +109,13 @@
 //               incrementally (deltaZ); ladder-coded models (size:L) are
 //               supported but rank NON-incrementally — a full extraction on a
 //               clone per candidate, several times slower per position.
+//   amaf<n>:<P>  rank of the move by an aggregate all-moves-as-first win ratio
+//               over P uniform first-play-wins playouts from the position (own
+//               moves full weight, opponent's at 0.3, first-play weight decaying
+//               0.5/area per move), mover-relative and CUMULATIVE in rank quality
+//               exactly like vpat<n>.  One cheap batch ranks the WHOLE board — no
+//               external model, no top-N gate.  The batch rng is seeded from the
+//               position (game.hash), so the feature is deterministic.
 //
 // BROWSER-COMPATIBLE: no Node-only APIs at top level.
 
@@ -121,6 +128,7 @@ const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
 const VPatterns                = Util.load('./vpatterns.js', 'VPatterns');
 const HealthLib                = Util.load('./health-lib.js', 'HealthLib');
 const { makeIntMap }           = Util.load('./int-map.js', 'IntMap');
+const { makeRng }              = Util.load('./xorshift.js', 'XorShift');
 
 // ── 32-bit hashing ────────────────────────────────────────────────────────────
 
@@ -745,12 +753,109 @@ function _vpatPrepare(ctx) {
 // top-N split, the pos-ratio gate) keys on this, not on function identity.
 _vpatPrepare._isRank = true;
 
+// ── amaf: rank the whole board by an aggregate all-moves-as-first win ratio ──
+//
+// One batch of P uniform, first-play-wins playouts from the position scores
+// EVERY cell at once (the all-moves-as-first trick): each cell's aggregate win
+// ratio folds its own moves at full weight and the opponent's at
+// _AMAF_OPP_WEIGHT, the first-play weight decaying _AMAF_DECAY/area per move.
+// Candidates are ranked by that ratio and then encoded exactly like vpat<n>
+// (cumulative rank thermometer) -- but with NO top-N gate: one cheap batch
+// ranks the whole board, so amaf spaces are plain (non-_isRank) and always run.
+//
+// Determinism without plumbing: the batch rng is seeded from a hash of the
+// board (cells + side to move + P), so the feature is a pure function of the
+// position -- identical in training, inference and inspection -- and never
+// touches or perturbs the caller's rng.  The rollout constants are the amaf
+// agent's fielded defaults.
+const _AMAF_DECAY = 0.5, _AMAF_OPP_WEIGHT = 0.3;
+const _amafByP = new Map();     // P -> { prepare, rank, order, ratio, wins, plays, played }
+
+function _amafSeed(game, P) {
+  // game.hash() already folds in cells + side to move; combine with P so two
+  // playout budgets on the same position draw independent batches.
+  return (_hashCombine(game.hash(), P >>> 0) >>> 0) || 1;
+}
+
+function _amafEntry(P) {
+  let e = _amafByP.get(P);
+  if (e) return e;
+  e = { prepare: null, rank: null, order: null, ratio: null, wins: null, plays: null, played: null };
+  e.prepare = (ctx) => _amafRun(ctx, P, e);
+  _amafByP.set(P, e);
+  return e;
+}
+
+// Fill e.rank[boardIdx] (1-based rank over legal non-true-eye moves, 0 = not a
+// candidate) from a P-playout AMAF batch.  Runs once per position; each amaf<n>
+// evalFn then just reads and cumulatively encodes the rank.
+function _amafRun(ctx, P, e) {
+  const game = ctx.game, cap = game.N * game.N;
+  if (!e.rank || e.rank.length < cap) {
+    e.rank   = new Int32Array(cap);
+    e.order  = new Int32Array(cap);
+    e.ratio  = new Float64Array(cap);
+    e.wins   = new Float64Array(cap);
+    e.plays  = new Float64Array(cap);
+    e.played = new Float32Array(cap);
+  }
+  const rank = e.rank, order = e.order, ratio = e.ratio;
+  const wins = e.wins, plays = e.plays, played = e.played;
+  rank.fill(0, 0, cap); wins.fill(0, 0, cap); plays.fill(0, 0, cap);
+
+  const player = ctx.cur, playerSign = player === BLACK ? 1 : -1;
+  const weightStep = _AMAF_DECAY / cap, moveLimit = cap + 20;
+  const rng = makeRng(_amafSeed(game, P));
+
+  for (let p = 0; p < P; p++) {
+    const clone = game.clone();
+    played.fill(0, 0, cap);
+    let moves = 0, weight = 1.0;
+    while (!clone.gameOver && moves < moveLimit) {
+      const current = clone.current;
+      const idx = clone.randomLegalMove(rng);
+      if (idx === PASS) { clone.play(PASS); moves++; continue; }
+      if (played[idx] === 0) played[idx] = current === BLACK ? weight : -weight;
+      clone.play(idx);
+      moves++;
+      weight -= weightStep; if (weight < 0) weight = 0;
+    }
+    const won = clone.estimateWinner() === player ? 1 : 0;
+    for (let k = 0; k < cap; k++) {
+      const w = played[k];
+      if (w === 0) continue;
+      const aw = w < 0 ? -w : w;                       // magnitude (decayed first-play weight)
+      if (w * playerSign > 0) { plays[k] += aw;                     wins[k] += won * aw; }
+      else                    { const wt = aw * _AMAF_OPP_WEIGHT;   plays[k] += wt; wins[k] += (1 - won) * wt; }
+    }
+  }
+
+  // Rank every legal non-true-eye move by its aggregate win ratio (best first).
+  const emC = game._emptyCells, ec = game.emptyCount;
+  let n = 0;
+  for (let ei = 0; ei < ec; ei++) {
+    const idx = emC[ei];
+    if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
+    ratio[idx] = plays[idx] > 0 ? wins[idx] / plays[idx] : -1;   // unplayed candidate sorts last
+    order[n++] = idx;
+  }
+  const ord = order.subarray(0, n);
+  ord.sort((a, b) => ratio[b] - ratio[a]);
+  for (let r = 0; r < n; r++) rank[ord[r]] = r + 1;
+}
+
 // Build one feature term { str, kind, param, salt, evalFn, needsLadder } from a
 // token like "capture6" / "stones4" / "ladderStatus".
 function _makeTerm(str) {
+  // A term may carry a ':'-suffixed SECOND parameter (currently only amaf<n>:<P>
+  // -- rank levels : playout count).  Split it off before the name+digits parse;
+  // the full str still salts the key, so the second parameter stays in it.
+  let colonParam = null, core = str;
+  const ci = str.indexOf(':');
+  if (ci >= 0) { core = str.slice(0, ci); colonParam = parseInt(str.slice(ci + 1), 10); }
   // kind = leading word (may contain interior digits, e.g. stone8AdjLib); param =
   // the OPTIONAL trailing run of digits.  Lazy kind + greedy trailing \d* split them.
-  const m = /^([a-zA-Z][a-zA-Z0-9]*?)(\d*)$/.exec(str);
+  const m = /^([a-zA-Z][a-zA-Z0-9]*?)(\d*)$/.exec(core);
   if (!m) throw new Error(`featurepol: bad feature term "${str}"`);
   // stones24 is a fixed-shape NAME (the stones12b recursion), not stones<n>;
   // the trailing-digit split cannot tell, so match the exact token.
@@ -776,6 +881,19 @@ function _makeTerm(str) {
       prepare = _vpatPrepare;
       cumulative = true;
       sizeFn = (ctx, idx) => { const r = _rank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
+      break;
+    }
+    case 'amaf': {
+      // Rank the whole board by the aggregate AMAF win ratio over P playouts,
+      // then encode the mover-relative rank as a cumulative size exactly like
+      // vpat<n> (rank r -> n+1-r).  No external model and no top-N gate: one
+      // batch ranks everyone, so this is a plain (always-run) prepare.
+      if (param === null || param < 1) throw new Error(`featurepol: amaf<n>:<P> needs rank levels n >= 1, got "${str}"`);
+      if (!(colonParam >= 1)) throw new Error(`featurepol: amaf<n>:<P> needs a playout count P >= 1, got "${str}"`);
+      const n = param, e = _amafEntry(colonParam);
+      prepare = e.prepare;
+      cumulative = true;
+      sizeFn = (ctx, idx) => { const r = e.rank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
       break;
     }
     case 'stones': {

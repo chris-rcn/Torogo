@@ -32,6 +32,9 @@ if (opts.help || (!opts.spec && !opts.load)) {
                                 vpat<n>: rank of the move under an external vpatterns value model
                                 (from FP_VPAT_DATA, or inherited from --load; never trained here;
                                  embedded into every save so inference needs no FP_VPAT_DATA)
+                                amaf<n>:<P>: rank of the move by an aggregate all-moves-as-first
+                                win ratio over P uniform playouts (one batch ranks the whole board;
+                                deterministic, seeded from the position; no external model)
   --train-size N | --size N   self-play board size (default 13)
   --eval-size N     evaluation board size (default 13)
   --lr F            learning rate (default 0.02)
