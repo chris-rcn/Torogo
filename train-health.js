@@ -186,7 +186,7 @@ irreducible label entropy.
                   at N (default 0 = off)
   --stone-ninecells 0|1  emit a ninecell per STONE (default 0 — the winning
                   2026-09-12 recipe carries the band on liberty shapes alone)
-  --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 1).  The two
+  --liberty-ninecells 0|1  emit a ninecell per LIBERTY (default 0).  The two
                   halves are the bulk of this model's cost and are partly
                   redundant; turning both off leaves the one-hots, which is the
                   bottom of the ablation ladder rather than an error
@@ -333,7 +333,7 @@ const STONE_NINECELLS = (opts['stone-ninecells'] !== undefined
 // liberties — not that liberties carry the signal.  This is the knob that tells
 // the two apart.
 const LIBERTY_NINECELLS = (opts['liberty-ninecells'] !== undefined
-  ? parseInt(opts['liberty-ninecells'], 10) : 1) !== 0;
+  ? parseInt(opts['liberty-ninecells'], 10) : 0) !== 0;
 // Cap on the chain's LIBERTY COUNT for the singleton liberty ninecells: above
 // it the chain emits none.  0 = no cap.  (0-as-off is --liberty-ninecells 0.)
 const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
