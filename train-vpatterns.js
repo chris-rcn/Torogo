@@ -597,10 +597,17 @@ console.log();
 // before the normal loop.  Skipped when resuming (--load already has weights).
 // Produces no table output and its updates are discarded from the interval stats.
 if (BOOTSTRAP > 0 && !LOAD_PATH) {
-  process.stdout.write('Bootstrapping...');
-  for (let i = 0; i < BOOTSTRAP; i++) trainGame(TRAIN_SIZE, 1);
+  process.stdout.write('Bootstrapping... ');
+  let nextPct = 5;   // report progress every 5% (integer compare avoids float drift)
+  for (let i = 0; i < BOOTSTRAP; i++) {
+    trainGame(TRAIN_SIZE, 1);
+    while (nextPct <= 100 && (i + 1) * 100 >= nextPct * BOOTSTRAP) {
+      process.stdout.write(` ${nextPct}%`);
+      nextPct += 5;
+    }
+  }
   wAbsSum = 0; wUpdateCount = 0;   // discard bootstrap updates from the first avgW
-  console.log(' done');
+  console.log();
 }
 
 // Print header.
