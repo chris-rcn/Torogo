@@ -192,8 +192,8 @@ if (opts.spec) {
     const hm = /^H(\d+)$/.exec(body);
     if (hm) {
       const hb = parseInt(hm[1], 10);
-      if (!((size >= 1 && size <= 4) || size === 34 || size === 23) || !(hb >= 2 && hb <= 15)) {
-        console.error(`--spec: bad token '${tok}' (expected size:H<N>, size 1-4, 23 or 34, N 2-15)`);
+      if (!((size >= 1 && size <= 4) || size === 8 || size === 34 || size === 23) || !(hb >= 2 && hb <= 15)) {
+        console.error(`--spec: bad token '${tok}' (expected size:H<N>, size 1-4, 8, 23 or 34, N 2-15)`);
         process.exit(1);
       }
       if (frozen) FROZEN.add(specTag({ size, maxLibs: -hb }));
@@ -209,8 +209,8 @@ if (opts.spec) {
       process.exit(1);
     }
     const maxLibs = body === 'L' ? 0 : parseInt(body, 10);
-    if (!((size >= 1 && size <= 4) || size === 34 || size === 23) || !(maxLibs >= 1 || body === 'L')) {
-      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4, 23 or 34, maxLibs >= 1)`);
+    if (!((size >= 1 && size <= 4) || size === 8 || size === 34 || size === 23) || !(maxLibs >= 1 || body === 'L')) {
+      console.error(`--spec: bad token '${tok}' (expected size:maxLibs[f] or size:L[f], size 1-4, 8, 23 or 34, maxLibs >= 1)`);
       process.exit(1);
     }
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));

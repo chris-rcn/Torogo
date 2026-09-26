@@ -58,7 +58,7 @@ function search(game, m, depth = 1, dither = 0) {
 // the same conditions, terminal PASS scored exactly.
 function search1(game, m, dither) {
   const prep = m.preparedSpecs;
-  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
+  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn || prep.hasOct);
   // Ladder specs need a Game3.  Build ONE synced to the base and reuse it for
   // the base extraction and every fallback candidate (advanced with play/undo),
   // instead of rebuilding a Game3 per extraction.  undefined for non-ladder.

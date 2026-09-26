@@ -60,7 +60,7 @@ function specToken(sp) {
 }
 function specString(specs) { return specs.map(specToken).join(','); }
 
-function sizeCode(size) { return size === 34 ? 5 : size === 23 ? 7 : size; }
+function sizeCode(size) { return size === 34 ? 5 : size === 23 ? 7 : size === 8 ? 6 : size; }
 // The turn family (spec {turn:true}, token 't') has no alphabet and no window, so it
 // cannot share a tag base with a pattern spec.  tagBaseOf never returns 16 —
 // non-negative maxLibs give 0-15 and health families give 17+ — so tag base 16
@@ -93,6 +93,10 @@ const _leafTab = _PRIMES.map(p => p - 1);   // leaf = prime - 1, so 1+leaf is pr
 // plane, so 4×4 / 3×4 inherit it.  Odd base keeps the multiply near-bijective
 // (only centre leaf 1 makes the factor even).
 const _NC3_CTR_MIX = 2649461;
+// Ordered-fold constant for the octagon (size 8): the distinguished centre 2×2
+// hash is folded into the D4-symmetric arm combine as an odd multiplier, the
+// same trick the 3×3 uses for its centre cell.  ( | 1 forces the factor odd.)
+const _OCT_CTR_MIX = 0x51ed270b | 0;
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
@@ -248,13 +252,17 @@ function prepareSpecs(specs, opts) {
   // liberty count.  Needs the game's _gid/_ls, so like the ladder family it is
   // not incremental and refuses speculative extraction.
   const hasHealth = sortedMaxLibs.some(m => m < 0);
+  // The octagon family (size 8): built from the 2×2 planes like 3×3/4×4, but its
+  // affected-anchor recompute is not wired into deltaZ, so it is not incremental
+  // (deltaZ refuses it; a 1-ply ranker falls back to full extraction).
+  const hasOct = sortedMaxLibs.some(m => byMaxLibs.get(m).includes(8));
 
   // Health model, resolved once per prepared-specs object: needed by the
   // 'size:H<N>' families.
   const healthModel = hasHealth ? resolveHealthModel(opts && opts.health) : null;
   return { byMaxLibs, sortedMaxLibs, healthModel,
            totalSizes: totalSizes + (hasTurn ? 1 : 0),
-           hasLadder, hasHealth, patPhaseBins, hasPhasedPatterns,
+           hasLadder, hasHealth, hasOct, patPhaseBins, hasPhasedPatterns,
            hasTurn };
 }
 
@@ -433,6 +441,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
     const do4   = sizes.includes(4);
     const do34  = sizes.includes(34);   // 3×4 ∪ 4×3 rectangle pair
     const do23  = sizes.includes(23);   // 2×3 ∪ 3×2 rectangle pair
+    const do8   = sizes.includes(8);    // octagon: 4×4 minus the four corners
 
     if (do1) {
       const k1base = 131 * (isLadder ? 16 : tagBase);
@@ -448,7 +457,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
       }
     }
 
-    if (do2 || do3 || do4 || do34 || do23) {
+    if (do2 || do3 || do4 || do34 || do23 || do8) {
       let pl = planes.get(maxLibs);
       if (!pl || pl.lN.length < cap) {
         pl = { lN: new Int32Array(cap), lI: new Int32Array(cap),
@@ -512,6 +521,39 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
               outTags[count] = tag23;
               count++;
             }
+          }
+        }
+      }
+      if (do8) {
+        // Octagon (size 8): the 4×4 window minus its four corners = ordered fold
+        // of the centre 2×2 with the D4-symmetric (uh) combine of the four edge
+        // 2×2 arms.  Anchored at (y,x) = top-left of the 4×4; the five blocks are
+        // h2 hashes at the centre and arm anchors:
+        //     . U U .    centre = h2[(y+1,x+1)]
+        //     L C C R    up = h2[(y,x+1)]   down = h2[(y+2,x+1)]
+        //     L C C R    left = h2[(y+1,x)] right = h2[(y+1,x+2)]
+        //     . D D .
+        // uh(uh(up,down),uh(left,right)) is exactly D4-invariant over the arm
+        // positions (90° swaps the two pairs, uh unordered); the ordered centre
+        // fold distinguishes the anchor.  Not incremental (deltaZ refuses it).
+        const tag8 = (tagBase << 3) | 6;
+        const pS8  = phSalt[tag8];
+        for (let y = 0; y < N; y++) {
+          const y1 = y + 1 < N ? y + 1 : y + 1 - N;
+          const y2 = y + 2 < N ? y + 2 : y + 2 - N;
+          const R0 = y * N, R1 = y1 * N, R2 = y2 * N;
+          for (let x = 0; x < N; x++) {
+            const x1 = x + 1 < N ? x + 1 : x + 1 - N;
+            const x2 = x + 2 < N ? x + 2 : x + 2 - N;
+            const armsN = uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2]));
+            const armsI = uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2]));
+            const kN = Math.imul(armsN, (_OCT_CTR_MIX + h2N[R1 + x1]) | 1);
+            const kI = Math.imul(armsI, (_OCT_CTR_MIX + h2I[R1 + x1]) | 1);
+            if (kN === kI) continue;   // colour-twin / all-empty: zero value
+            outKeys[count] = mixTag(kN < kI ? kN : kI, tag8) ^ pS8;
+            outPols[count] = kN < kI ? 1 : -1;
+            outTags[count] = tag8;
+            count++;
           }
         }
       }
@@ -645,6 +687,9 @@ function deltaZ(game, prepSpecs, weights, move) {
   }
   if (prepSpecs.hasTurn) {
     throw new Error('vpatterns deltaZ: the turn spec (t) is not incremental — the move flips it');
+  }
+  if (prepSpecs.hasOct) {
+    throw new Error('vpatterns deltaZ: octagon specs (size 8) are not incremental');
   }
   if (move === PASS) return 0;
   if (game.captureList(move).length > 0) return NaN;
