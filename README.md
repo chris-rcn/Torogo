@@ -55,12 +55,53 @@ is empty.
 ### Agents
 
 Agents live in `ai/` and expose `getMove(game, budgetMs, options)` (factory
-agents export `create(cfg)`). The fielded agent is **`ai/prod.js`** — a
-self-contained copy of `puct-ppat-fp`: PUCT MCTS with featurepol priors + top-K
-pruning, RAVE, and ppat full-playout leaf evaluation. Other notable families:
-the `puct-*` search agents, `mc-ppat` (a minimal playout-policy probe),
-`rave-*`, and the frozen `ref-*` reference agents used for rating. `ref-*` agents
-are immutable once fielded — any strength-affecting change gets a new name.
+agents export `create(cfg)`). The currently *fielded* agent is **`ai/prod.js`**
+(a self-contained copy of `puct-ppat-fp`), but the **strongest** agent is
+`puct-ppat-fp-trunc` — described below. Other notable families: the `puct-*`
+search agents, `mc-ppat` (a minimal playout-policy probe), `rave-*`, and the
+frozen `ref-*` reference agents used for rating. `ref-*` agents are immutable
+once fielded — any strength-affecting change gets a new name.
+
+### puct-ppat-fp-trunc (strongest)
+
+`ai/puct-ppat-fp-trunc.js` is where the whole model stack comes together in one
+search. It is a PUCT Monte-Carlo tree search whose every component is driven by a
+learned model:
+
+- **featurepol → priors and pruning.** At each node the featurepol policy
+  supplies the prior `P(s,a)` in the PUCT term and prunes the candidate moves to
+  its top-K. The width is phase-conditioned — narrow in the opening, wider late
+  (default ramp ~10 → 40 by board fullness) — since the best pruning width rises
+  with phase.
+- **PUCT selection.** A child is chosen by
+  `score = Q + C_PUCT · P(s,a) · √N_total / (1 + N_a)`, balancing the exploited
+  mean value `Q` against the policy-weighted exploration term.
+- **RAVE.** `Q` is RAVE/AMAF-blended (all-moves-as-first), so early estimates
+  borrow strength from move outcomes seen elsewhere in the subtree; playout
+  prefix moves fill the RAVE trace.
+- **ppat → leaf playouts.** A newly expanded leaf is evaluated by a **ppat**
+  policy playout (uniform below a phase threshold, ppat-policy above it).
+- **vpat → truncation (the "-trunc" part, and the source of its strength).**
+  This is what distinguishes it from `puct-ppat-fp`. Truncation is decided once
+  per move at the root: when the root's phase is below a threshold, every playout
+  runs only a short **prefix** (a fullness advance, `TRUNC_PHASE_DELTA`) and then
+  takes its leaf value from a static **vpat** value evaluation
+  (`train-vpat-supervised` checkpoint, `V(s) = P(BLACK wins)`) instead of playing
+  to the end; above the threshold, playouts run full. The cut point is measured
+  by net board-filling progress (an integer empty-count drop), so captures during
+  the prefix delay it correctly. Truncating trades a little per-playout accuracy
+  for many more playouts in the phase where the value model is reliable.
+- **Root symmetry reduction.** In symmetric opening positions, moves in the same
+  symmetry orbit are equal in value, so only one representative is searched —
+  exact, and self-limiting once the board becomes asymmetric.
+
+Values backpropagate fractionally (each chooser credited `value` for Black,
+`1 − value` for White); terminal positions are scored exactly; the move played is
+the most-visited root child. So the pieces fit as a pipeline: **featurepol**
+shapes *where* the search looks (priors + pruning), PUCT+RAVE decide *how the
+budget is spent*, and **ppat** playouts truncated by the **vpat** value model
+supply the *leaf evaluations* — the playout policy, value model, and priors all
+pulling together in one tree.
 
 ## Training
 
