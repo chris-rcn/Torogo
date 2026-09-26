@@ -1799,13 +1799,14 @@ static void run_monitor(void) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
-    if (n_md > 0) printf("  %6s", "mae");
+    if (n_md > 0) printf("  %7s", "mae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
     fflush(stdout);
     wall_start = wall_now();
     float mon_best_te_c = 1e30f; /* lowest teMSE_c seen, for the '*' new-low marker */
+    float mon_best_mae = 1e30f;  /* lowest mae seen, for the mae '*' new-low marker */
     double mon_cumulative_test_s = 0; /* testM column: running total of eval+match cost in seconds (printed /60), like solo */
 
     /* Baseline row.  Fresh run: the uniform no-skill reference.  --load: the
@@ -1816,6 +1817,7 @@ static void run_monitor(void) {
         double bl_t0 = wall_now();
         TestResult tr = measure_test(loaded ? 0 : 1, n_test);
         char tecbuf[16];
+        char maebuf[16];
         char dwbuf[16];
         match_cols(dwbuf, sizeof dwbuf);
         mon_cumulative_test_s += wall_now() - bl_t0;   /* baseline testM: eval + match cost */
@@ -1828,7 +1830,7 @@ static void run_monitor(void) {
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
-            if (n_md > 0) printf("  %6.4f", tr.mae);
+            if (n_md > 0) printf("  %7s", temse_col(tr.mae, &mon_best_mae, maebuf, sizeof maebuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s", eb, "-");
             printf("\n");
@@ -1837,7 +1839,7 @@ static void run_monitor(void) {
             printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
-            if (n_md > 0) printf("  %6.4f", tr.mae);
+            if (n_md > 0) printf("  %7s", temse_col(tr.mae, &mon_best_mae, maebuf, sizeof maebuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s\n", eb, "-");
         }
@@ -1924,7 +1926,7 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
-        double dsum, psum, fsum; long dcnt, pcnt; char trbuf[24], trcbuf[24], tecbuf[16];
+        double dsum, psum, fsum; long dcnt, pcnt; char trbuf[24], trcbuf[24], tecbuf[16], maebuf[16];
         if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt, &fsum) == 0) {
             trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
             /* trMSE_c: floor-corrected, same completed-epoch blend as trMSE. */
@@ -1937,7 +1939,7 @@ static void run_monitor(void) {
                MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
         if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
-        if (n_md > 0) printf("  %6.4f", tr.mae);
+        if (n_md > 0) printf("  %7s", temse_col(tr.mae, &mon_best_mae, maebuf, sizeof maebuf));
         if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);   /* testM: cumulative teMSE-eval + match cost (minutes) */
         printf("  %8s  %7.1f", eb, posps);
         printf("\n");
@@ -2010,7 +2012,8 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     static double last_full = -1;
     static double last_full_c = -1;
     static float best_te_c = 1e30f;
-    char trbuf[24], trcbuf[24], tecbuf[16];
+    static float best_mae = 1e30f;
+    char trbuf[24], trcbuf[24], tecbuf[16], maebuf[16];
     /* A test set decides -best by teMSE_c (floor-corrected, a held-out
      * yardstick); without one, fall back to the directWR peak.  With neither,
      * write no -best at all. */
@@ -2025,7 +2028,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
            avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
-    if (n_md > 0) { if (run_tests) printf("  %6.4f", tr.mae); else printf("  %6s", "-"); }
+    if (n_md > 0) printf("  %7s", run_tests ? temse_col(tr.mae, &best_mae, maebuf, sizeof maebuf) : "-");
     if (n_test > 0) printf("  %6.1f", cumulative_test_s / 60.0);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
@@ -2423,7 +2426,7 @@ int main(int argc, char **argv) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
-    if (n_md > 0) printf("  %6s", "mae");
+    if (n_md > 0) printf("  %7s", "mae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
