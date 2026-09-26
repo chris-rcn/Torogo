@@ -13,3 +13,7 @@ __pycache__/
 
 # extension-less C binary (train-ppat-parallel is the tracked script)
 c/train-ppat
+
+# ai/ alias symlinks — personal shorthands to ref agents (rfs.js is tracked)
+ai/rfh.js
+ai/rfs2.js
