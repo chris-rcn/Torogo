@@ -13,6 +13,7 @@
 const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
 const Util = require('./util.js');
+const MD = require('./movedetails-format.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['file', 'N', 'position-limit']);
 if (opts.help || !opts.file) {
@@ -39,9 +40,9 @@ function rollout(game, player) {
 const deltas = [];
 
 for (const line of lines) {
-  const { boardSize, history, candidates } = JSON.parse(line);
+  const { boardSize, history, candidates } = MD.parseRow(line);
 
-  const game = new Game2(boardSize, true);
+  const game = new Game2(boardSize, false);   // history includes the centre stone
   let ok = true;
   for (const c of history) {
     if (!game.play(parseMove(c, boardSize))) { ok = false; break; }
