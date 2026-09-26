@@ -1928,7 +1928,17 @@ function loadModel({ name = 'featurepol', path: pathOverride } = {}) {
   // the ranking reads it through ctx without any process-global or env var.  A
   // spec with vpat<n> but no embedded model errors at first ranking (in
   // _vpatPrepare), not silently.
-  if (raw.vpat) weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined);
+  if (raw.vpat) {
+    weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined);
+    // A ladder-coded vpat model ranks non-incrementally (a full extraction per
+    // candidate).  Note it HERE at load — in the startup block, beside the model
+    // banner — rather than lazily on the first ranking, where it would split a
+    // trainer's header from its first data row; suppress the lazy notice.
+    if (weights.vpatModel.preparedSpecs.hasLadder) {
+      weights.vpatModel._ladderNoticed = true;
+      console.error(`${modelName}: ladder-coded vpat<n> model — ranking non-incrementally (full extraction per candidate)`);
+    }
+  }
   return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0,
            komi: raw.komi === undefined ? null : raw.komi };
 }
