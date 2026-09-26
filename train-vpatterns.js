@@ -446,9 +446,16 @@ function evalVsReference(N, refGetMove, nGames, budget) {
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
-// Load eval agent from ai/ folder (only when --eval was supplied).
+// Load eval agent from ai/ folder (only when --eval was supplied).  Factory
+// agents (exporting create) are instantiated eagerly here — before the header
+// prints — so their create-time load banner lands in the startup block rather
+// than splitting the header from the first data row (a lazy .getMove would defer
+// create() to the first eval move).  Non-factory agents load at require.
 const evalGetMove = EVAL_AGENT
-  ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
+  ? (() => {
+      const m = require(path.join(__dirname, 'ai', EVAL_AGENT + '.js'));
+      return (typeof m.create === 'function' ? m.create(Util.makeCfg()) : m).getMove;
+    })()
   : null;
 
 // Load off-policy move-source agent (only when --ext was supplied).  Factory
