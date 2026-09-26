@@ -122,11 +122,12 @@ function oh(x, y) { return Math.imul(y, (_OCT_CTR_MIX + x) | 1) | 0; }
 
 // One octagon key (one colouring) from a leaf plane `l` and 2×2 plane `h2`, at the
 // 4×4 anchored by rows R0..R3 and cols x,x1,x2,x3.  Kept a small standalone
-// function on purpose: inside the ~300-line extractFeatures V8 will not inline the
-// cross-module uh/oh, and the octagon issues ~3× the uh calls of the other sizes,
-// so pulling the key math into a body small enough to inline them is a large win
-// (profiled: uh call overhead dominated size-8 extraction).  base = arm combine;
-// the corner term folds each corner's centre cell over its cross-corner ring pair.
+// function on purpose: the ~300-line extractFeatures exceeds V8's inline budget so
+// uh/oh are NOT inlined into it (the module boundary is irrelevant — measured
+// identical for a local copy), and the octagon issues ~3× the uh calls of the
+// other sizes, so pulling the key math into a body small enough to inline them is a
+// large win (profiled: uh call overhead dominated size-8 extraction).  base = arm
+// combine; the corner term folds each corner's centre cell over its ring pair.
 function octKey8(l, h2, R0, R1, R2, R3, x, x1, x2, x3) {
   const arms = uh(uh(h2[R0 + x1], h2[R2 + x1]), uh(h2[R1 + x], h2[R1 + x2]));
   const ring = uh(uh(oh(l[R1 + x2], uh(l[R0 + x2], l[R1 + x3])), oh(l[R2 + x1], uh(l[R3 + x1], l[R2 + x]))),
