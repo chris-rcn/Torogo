@@ -151,13 +151,13 @@ const HL = require('./health-lib.js');
 const PPat = require('./ppat-lib.js');
 const { makeRng } = require('./xorshift.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'ladder2'],
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'ladder2', 'use-corpus-fate'],
   ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-lib-stone', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
    'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
    'join-lib-gate', 'friend-lib-gate', 'foe-lib-gate',
    'iterations', 'eval-phase',
-   'delta', 'floor', 'save', 'seed']);
+   'delta', 'floor', 'save', 'seed', 'playout-count']);
 if (opts.help || !opts.corpus) {
   console.error(`Usage: node train-health.js --corpus <games.txt> [options]
 
@@ -182,6 +182,11 @@ irreducible label entropy.
   --delta F       playout descent to the graded endpoint (default 0 — train
                   the sampled plies directly; set the deployed truncation
                   delta to train the descended endpoint class instead)
+  --playout-count B  standard playouts to resolve each chain's fate, averaged
+                  into a fractional survival label (default 1)
+  --use-corpus-fate  label chain fates from the real corpus game played to its
+                  end instead of a playout — a stronger resolver, for a stronger
+                  context; forbids --delta and --playout-count
   --max-libs N    liberty-count one-hot for the chain being predicted, capped
                   at N (default 0 = off)
   --stone-ninecells 0|1  emit a ninecell per STONE (default 0 — the winning
@@ -249,6 +254,23 @@ const CORPUS = opts.corpus;
 // Leaf band and descent fix the ENDPOINT distribution, and the floor belongs
 // to that distribution, so it is measured per run rather than hardcoded.
 const DELTA = parseFloat(opts.delta !== undefined ? opts.delta : '0');
+// Fate resolution.  Default: one standard playout continued from the endpoint.
+// --playout-count B averages B such playouts into a FRACTIONAL survival label
+// (amortises the sampling + descent overhead and lowers label variance around
+// the same ppat-survival target).  --use-corpus-fate instead reads each chain's
+// fate from the REAL corpus game played to its end -- a stronger resolver than a
+// ppat rollout, but valid only at the leaf itself, so it forbids a playout
+// descent (--delta) and does no playouts (--playout-count).
+const PLAYOUT_COUNT   = Math.max(1, parseInt(opts['playout-count'] || '1', 10));
+const USE_CORPUS_FATE = !!opts['use-corpus-fate'];
+if (USE_CORPUS_FATE && DELTA > 0) {
+  console.error('train-health: --use-corpus-fate is incompatible with --delta (corpus fates come from the real game, which does not follow a playout descent)');
+  process.exit(1);
+}
+if (USE_CORPUS_FATE && PLAYOUT_COUNT > 1) {
+  console.error('train-health: --use-corpus-fate is incompatible with --playout-count (the corpus game gives one real fate per chain)');
+  process.exit(1);
+}
 // --eval-phase names the band of ENDPOINT positions — the positions actually
 // trained — and the leaf sampling band is derived from it ([A - delta,
 // B - delta]).  The old --min-phase/--max-phase named the LEAF band, which
@@ -389,7 +411,7 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
 ppatModel.uniformBelowPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
-console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${LADDER2 ? '  ladder2' : ''}` +
+console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}${USE_CORPUS_FATE ? '  corpus-fate' : (PLAYOUT_COUNT > 1 ? `  playout-count ${PLAYOUT_COUNT}` : '')}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${LADDER2 ? '  ladder2' : ''}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
@@ -606,7 +628,12 @@ function measureFloor() {
   return sumH / nCh + 1 / (2 * FLOOR_COMPLETIONS);
 }
 
-if (FLOOR === null) {
+if (FLOOR === null && USE_CORPUS_FATE) {
+  // The measured floor is the entropy of a ppat-playout label; corpus fates are
+  // a different (deterministic-per-game) label source, so that floor does not
+  // apply.  Report raw log-loss (exc = log-loss) unless --floor is given.
+  FLOOR = 0;
+} else if (FLOOR === null) {
   const tF = Date.now();
   FLOOR = measureFloor();
   console.log(`floor: ${FLOOR.toFixed(4)}  (${FLOOR_POSITIONS} positions x ${FLOOR_COMPLETIONS} completions, ` +
@@ -675,6 +702,14 @@ for (let gi = 0; gi < GAMES; gi++) {
     walk.play(parseMove(toks[i], SIZE));
   }
   if (!game) { nSkip++; continue; }
+  // --use-corpus-fate: replay the real game to its end; each chain's fate is
+  // read from that final position instead of from a playout.
+  let corpusFinalCells = null;
+  if (USE_CORPUS_FATE) {
+    const full = new Game2(SIZE, true);
+    for (let i = 0; i < toks.length && !full.gameOver; i++) full.play(parseMove(toks[i], SIZE));
+    corpusFinalCells = full.cells;
+  }
   // descend PREFIX_LEN moves with the standard playout; the endpoint is the
   // graded position (as deployed)
   let n = 0;
@@ -687,15 +722,27 @@ for (let gi = 0; gi < GAMES; gi++) {
   const tInf0 = performance.now();
   collectObs(game, 1 - game.emptyCount / area, buf);
   infMs += performance.now() - tInf0;
-  // continue the playout to the end: chain survival is the label
-  let n2 = 0;
-  const lim2 = 3 * game.emptyCount + 20;
-  while (!game.gameOver && n2 < lim2) { game.play(PPat.ppatMove(game, ppatState, ppatModel, rng)); n2++; }
-  // score-then-update: all of this position's chains share the game's future,
-  // so every example is scored with pre-position weights before any update
-  const cells = game.cells;
   const { exShapes, exStart, exLen, exOwner, exStone, exBin, exNb, exLive } = buf;
   const nCh = exStart.length;
+  // Resolve each chain's fate into a survival label survY[i] in [0,1]: the real
+  // game's outcome (--use-corpus-fate), or the survival fraction over
+  // PLAYOUT_COUNT standard playouts continued from the endpoint.  All of a
+  // position's chains share each playout's future, and every example is scored
+  // with pre-position weights (below) before any update.
+  const survY = new Float64Array(nCh);
+  if (USE_CORPUS_FATE) {
+    for (let i = 0; i < nCh; i++) survY[i] = corpusFinalCells[exStone[i]] === exOwner[i] ? 1 : 0;
+  } else {
+    const lim2 = 3 * game.emptyCount + 20;
+    for (let b = 0; b < PLAYOUT_COUNT; b++) {
+      const g = game.clone();
+      let n2 = 0;
+      while (!g.gameOver && n2 < lim2) { g.play(PPat.ppatMove(g, ppatState, ppatModel, rng)); n2++; }
+      const gc = g.cells;
+      for (let i = 0; i < nCh; i++) if (gc[exStone[i]] === exOwner[i]) survY[i] += 1;
+    }
+    for (let i = 0; i < nCh; i++) survY[i] /= PLAYOUT_COUNT;
+  }
   const tInf1 = performance.now();
   const preP = new Float64Array(nCh);
   for (let i = 0; i < nCh; i++) {
@@ -709,7 +756,7 @@ for (let gi = 0; gi < GAMES; gi++) {
   infMs += performance.now() - tInf1;
   infPos++;
   for (let i = 0; i < nCh; i++) {
-    const y = cells[exStone[i]] === exOwner[i] ? 1 : 0;
+    const y = survY[i];
     const p = preP[i];
     const lo = exStart[i], hi = lo + exLen[i];
     const b = i * NB_SLOTS;
@@ -730,7 +777,7 @@ for (let gi = 0; gi < GAMES; gi++) {
         if (key !== 0) counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
-    ivSum += -(y ? Math.log(p + 1e-12) : Math.log(1 - p + 1e-12));
+    ivSum += -(y * Math.log(p + 1e-12) + (1 - y) * Math.log(1 - p + 1e-12));
     ivN++;
     binN[exBin[i]]++; binS[exBin[i]] += y;
     let dec = Math.floor(p * 10); if (dec > 9) dec = 9;
@@ -782,7 +829,7 @@ const entries = [...weights.entries()].map(([h, w]) => `[${h},${+w.toFixed(5)}]`
 const src = [
   "'use strict';",
   '// Auto-generated by train-health.js — do not edit by hand.',
-  `// corpus ${CORPUS}  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}  size ${SIZE}  lr ${LR}`,
+  `// corpus ${CORPUS}  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}${USE_CORPUS_FATE ? '  corpus-fate' : (PLAYOUT_COUNT > 1 ? `  playout-count ${PLAYOUT_COUNT}` : '')}  size ${SIZE}  lr ${LR}`,
   `// P(chain survives) = sigmoid(bias + sum of weights[ninecellId(lib)] over the`,
   `// chain's liberties` + (STONE_NINECELLS
      ? ` + sum of weights[ninecellId(stone) ^ 0x${(STONE_SALT >>> 0).toString(16)}] over its stones`
