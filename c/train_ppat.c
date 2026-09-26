@@ -1799,7 +1799,7 @@ static void run_monitor(void) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
-    if (n_md > 0) printf("  %7s", "mae");
+    if (n_md > 0) printf("  %7s", "mdMae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
@@ -2109,7 +2109,7 @@ static void print_help(FILE *out, const char *prog) {
 "  --train-pos N              cap training positions (default 0 = all)\n"
 "  --overfit                  use the same data for train and test\n"
 "\n"
-"mae (mc-ppat move-selection regret vs a labelled movedetails file, on test rows)\n"
+"mdMae (mc-ppat move-selection regret vs a labelled movedetails file, on test rows)\n"
 "  --md-file PATH             movedetails .md file (default movedetails_5059.md; '' disables)\n"
 "  --mae-band LO,HI           keep only positions with phase in [LO,HI] (default 0.6,1.0)\n"
 "  --mae-cand-playouts N      playouts per candidate move (default 10)\n"
@@ -2426,7 +2426,7 @@ int main(int argc, char **argv) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
-    if (n_md > 0) printf("  %7s", "mae");
+    if (n_md > 0) printf("  %7s", "mdMae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
