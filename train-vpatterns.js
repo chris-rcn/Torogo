@@ -476,7 +476,7 @@ function fpTopK(game, K) {
 let _fbPrep = null;
 function bestFiltered(game, cand, w) {
   const prep = prepSpecs;
-  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn || prep.hasOct);
+  const incremental = !(prep.hasLadder || prep.hasPhasedPatterns || prep.hasHealth || prep.hasTurn);
   const black = game.current === BLACK;
   let zBase = 0;
   if (incremental) {

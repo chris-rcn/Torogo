@@ -252,17 +252,13 @@ function prepareSpecs(specs, opts) {
   // liberty count.  Needs the game's _gid/_ls, so like the ladder family it is
   // not incremental and refuses speculative extraction.
   const hasHealth = sortedMaxLibs.some(m => m < 0);
-  // The octagon family (size 8): built from the 2×2 planes like 3×3/4×4, but its
-  // affected-anchor recompute is not wired into deltaZ, so it is not incremental
-  // (deltaZ refuses it; a 1-ply ranker falls back to full extraction).
-  const hasOct = sortedMaxLibs.some(m => byMaxLibs.get(m).includes(8));
 
   // Health model, resolved once per prepared-specs object: needed by the
   // 'size:H<N>' families.
   const healthModel = hasHealth ? resolveHealthModel(opts && opts.health) : null;
   return { byMaxLibs, sortedMaxLibs, healthModel,
            totalSizes: totalSizes + (hasTurn ? 1 : 0),
-           hasLadder, hasHealth, hasOct, patPhaseBins, hasPhasedPatterns,
+           hasLadder, hasHealth, patPhaseBins, hasPhasedPatterns,
            hasTurn };
 }
 
@@ -535,7 +531,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
         //     . D D .
         // uh(uh(up,down),uh(left,right)) is exactly D4-invariant over the arm
         // positions (90° swaps the two pairs, uh unordered); the ordered centre
-        // fold distinguishes the anchor.  Not incremental (deltaZ refuses it).
+        // fold distinguishes the anchor.  Incremental (deltaZ has a do8 pass).
         const tag8 = (tagBase << 3) | 6;
         const pS8  = phSalt[tag8];
         for (let y = 0; y < N; y++) {
@@ -688,9 +684,6 @@ function deltaZ(game, prepSpecs, weights, move) {
   if (prepSpecs.hasTurn) {
     throw new Error('vpatterns deltaZ: the turn spec (t) is not incremental — the move flips it');
   }
-  if (prepSpecs.hasOct) {
-    throw new Error('vpatterns deltaZ: octagon specs (size 8) are not incremental');
-  }
   if (move === PASS) return 0;
   if (game.captureList(move).length > 0) return NaN;
   const N = game.N, cap = N * N, cells = game.cells, cur = game.current;
@@ -749,7 +742,8 @@ function deltaZ(game, prepSpecs, weights, move) {
   for (const maxLibs of sortedMaxLibs) {
     const sizes = byMaxLibs.get(maxLibs);
     const do1 = sizes.includes(1), do2 = sizes.includes(2), do3 = sizes.includes(3),
-          do4 = sizes.includes(4), do34 = sizes.includes(34), do23 = sizes.includes(23);
+          do4 = sizes.includes(4), do34 = sizes.includes(34), do23 = sizes.includes(23),
+          do8 = sizes.includes(8);
     const off = maxLibs;
 
     // ── Dirty cells for this maxLibs: the placed stone, plus every stone of a
@@ -808,7 +802,7 @@ function deltaZ(game, prepSpecs, weights, move) {
       }
     }
 
-    if (!(do2 || do3 || do4 || do34 || do23)) continue;
+    if (!(do2 || do3 || do4 || do34 || do23 || do8)) continue;
     const pl = planes.get(maxLibs);
     const lN = pl.lN, lI = pl.lI, h2N = pl.h2N, h2I = pl.h2I;
     const leafN = (i) => _dzMarkC[i] === cellStamp ? _dzLeafN[i] : lN[i];
@@ -873,6 +867,44 @@ function deltaZ(game, prepSpecs, weights, move) {
             if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag23)) ?? 0);
             if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag23)) ?? 0);
           }
+        }
+      }
+    }
+
+    if (do8) {
+      // ── Affected octagon (size 8) anchors: a size-8 anchor reads five h2
+      // blocks (centre + 4 edge arms over its 4×4 footprint), so an affected 2×2
+      // anchor a=(r,c) touches the five size-8 anchors that hold a as a block:
+      //   centre→(r-1,c-1)  up→(r,c-1)  down→(r-2,c-1)  left→(r-1,c)  right→(r-1,c-2)
+      // Recompute each from override-aware h2 (new) vs the stored planes (old).
+      const gN = (i) => _dzMark2[i] === a2Stamp ? _dzOvN[i] : h2N[i];
+      const gI = (i) => _dzMark2[i] === a2Stamp ? _dzOvI[i] : h2I[i];
+      const tag8 = (maxLibs << 3) | 6;
+      const octStamp = ++_dzStamp;
+      for (let k = 0; k < nA2; k++) {
+        const a = a2[k];
+        const ar = (a / N) | 0, ac = a % N;
+        const rM1 = ar === 0 ? N - 1 : ar - 1;
+        const rM2 = ar <= 1 ? ar + N - 2 : ar - 2;
+        const cM1 = ac === 0 ? N - 1 : ac - 1;
+        const cM2 = ac <= 1 ? ac + N - 2 : ac - 2;
+        const anchors5 = [rM1 * N + cM1, ar * N + cM1, rM2 * N + cM1, rM1 * N + ac, rM1 * N + cM2];
+        for (let m = 0; m < 5; m++) {
+          const oc = anchors5[m];
+          if (_dzMark4[oc] === octStamp) continue;
+          _dzMark4[oc] = octStamp;
+          const y = (oc / N) | 0, x = oc % N;
+          const y1 = y + 1 < N ? y + 1 : y + 1 - N;
+          const y2 = y + 2 < N ? y + 2 : y + 2 - N;
+          const R0 = y * N, R1 = y1 * N, R2 = y2 * N;
+          const x1 = x + 1 < N ? x + 1 : x + 1 - N;
+          const x2 = x + 2 < N ? x + 2 : x + 2 - N;
+          const oN = Math.imul(uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2])), (_OCT_CTR_MIX + h2N[R1 + x1]) | 1);
+          const oI = Math.imul(uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2])), (_OCT_CTR_MIX + h2I[R1 + x1]) | 1);
+          const kN = Math.imul(uh(uh(gN(R0 + x1), gN(R2 + x1)), uh(gN(R1 + x), gN(R1 + x2))), (_OCT_CTR_MIX + gN(R1 + x1)) | 1);
+          const kI = Math.imul(uh(uh(gI(R0 + x1), gI(R2 + x1)), uh(gI(R1 + x), gI(R1 + x2))), (_OCT_CTR_MIX + gI(R1 + x1)) | 1);
+          if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag8)) ?? 0);
+          if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag8)) ?? 0);
         }
       }
     }
