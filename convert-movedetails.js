@@ -31,7 +31,9 @@ for (const line of lines) {
   for (const h of p.history) g.play(parseMove(h, N));
   const phase = 1 - g.emptyCount / (N * N);
   const history = [MD.centerMove(N), ...p.history];    // include the centre stone
-  out.push(MD.formatRow({ boardSize: N, phase, history, candidates: p.candidates }));
+  // old JSON stores kwr (x1000); in memory it is a winRatio.
+  const candidates = p.candidates.map(c => ({ m: c.m, winRatio: c.kwr == null ? null : c.kwr / 1000 }));
+  out.push(MD.formatRow({ boardSize: N, phase, history, candidates }));
   n++;
 }
 fs.writeFileSync(outPath, out.join('\n') + '\n');

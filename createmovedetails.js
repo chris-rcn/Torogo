@@ -132,7 +132,7 @@ while (true) {
     clone.play(move);
 
     if (clone.gameOver) {
-      moveInfos.push({ m: coordStr(move, N), kwr: null });
+      moveInfos.push({ m: coordStr(move, N), winRatio: null });
       continue;
     }
 
@@ -142,10 +142,10 @@ while (true) {
       process.exit(1);
     }
     const wr = 1 - oppResponseMove.rootWinRatio;
-    moveInfos.push({ m: coordStr(move, N), kwr: Math.round(1000 * wr) });
+    moveInfos.push({ m: coordStr(move, N), winRatio: wr });
   }
 
-  moveInfos.sort((a, b) => (b.kwr ?? -Infinity) - (a.kwr ?? -Infinity));
+  moveInfos.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
 
   // The new format holds EVERY stone: prepend the free centre stone so the
   // position replays from an empty board.  Phase is stored (board fullness).

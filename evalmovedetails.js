@@ -74,9 +74,9 @@ function evalPosition(agent, position, budgetMs) {
 
   const topCand   = candidates[0];
   const found     = candidates.find(c => c.m === agentStr);
-  const agentCand = (found?.kwr != null) ? found : candidates.findLast(c => c.kwr != null);
+  const agentCand = (found?.winRatio != null) ? found : candidates.findLast(c => c.winRatio != null);
 
-  return { agentMove, agentStr, topCand, agentCand, phase, gap: (topCand.kwr - agentCand.kwr) / 1000 };
+  return { agentMove, agentStr, topCand, agentCand, phase, gap: topCand.winRatio - agentCand.winRatio };
 }
 
 // Evaluate agent on positions; returns { maeErr, rmsErr, count }.  maeErr (mean

@@ -49,9 +49,9 @@ for (const line of lines) {
   }
   if (!ok || game.gameOver) continue;
 
-  const best = candidates.find(c => c.kwr !== null);
+  const best = candidates.find(c => c.winRatio !== null);
   if (!best) continue;
-  const vStar = 2 * (best.kwr / 1000) - 1;
+  const vStar = 2 * best.winRatio - 1;
 
   const player = game.current;
   let V = 0;

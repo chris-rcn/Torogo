@@ -11,9 +11,10 @@
 // - moveHistoryCsv: EVERY stone in play order, comma-separated coords, STARTING
 //   with the centre stone — so a position replays from an EMPTY board
 //   (Game2(N, false)), with no implicit free stone to remember.  '-' if empty.
-// - candidatesCsv: comma-separated move:kwr, best-first (kwr = win ratio x1000,
-//   integer; a terminal move carrying no rating is 'move:' with an empty value).
-//   '-' if none.
+// - candidatesCsv: comma-separated move:kwr, best-first.  kwr (win ratio x1000,
+//   integer) is the ON-DISK encoding ONLY; parseRow returns a float winRatio and
+//   nothing downstream sees kwr.  A terminal move carrying no rating is 'move:'
+//   with an empty value (winRatio null).  '-' if none.
 // Lines starting with '#' are comments; blank lines are ignored.
 
 const { Game2, parseMove, coordStr } = require('./game2.js');
@@ -26,7 +27,7 @@ function centerMove(N) { return coordStr((N >> 1) * N + (N >> 1), N); }
 function formatRow(pos) {
   const hist = pos.history.length ? pos.history.join(',') : '-';
   const cands = pos.candidates.length
-    ? pos.candidates.map(c => `${c.m}:${c.kwr == null ? '' : c.kwr}`).join(',')
+    ? pos.candidates.map(c => `${c.m}:${c.winRatio == null ? '' : Math.round(c.winRatio * 1000)}`).join(',')
     : '-';
   const phase = typeof pos.phase === 'number' ? pos.phase.toFixed(4) : pos.phase;
   return `${ROW_ID} ${pos.boardSize} ${phase} ${hist} ${cands}`;
@@ -46,7 +47,7 @@ function parseRow(line) {
   const candidates = candsS === '-' ? [] : candsS.split(',').map(t => {
     const j = t.indexOf(':');
     const k = t.slice(j + 1);
-    return { m: t.slice(0, j), kwr: k === '' ? null : parseInt(k, 10) };
+    return { m: t.slice(0, j), winRatio: k === '' ? null : parseInt(k, 10) / 1000 };
   });
   return { boardSize: parseInt(sizeS, 10), phase: parseFloat(phaseS), history, candidates };
 }
