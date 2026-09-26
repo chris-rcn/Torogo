@@ -32,6 +32,7 @@ const { performance } = require('perf_hooks');
 const { Game2, coordStr, parseMove } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
+const MD = require('./movedetails-format.js');
 
 // Fixed default seeds so the exported helpers (evalPositions/…, used by
 // train-vpatterns) are reproducible.  The CLI overrides agentSeed with a random
@@ -45,18 +46,18 @@ const rng = makeRng(1);   // position sampling (library default; CLI does not us
 let agentSeed = 1;        // per-invocation agent rng (CLI reseeds from a random base)
 
 function loadPositions(filePath) {
-  return fs.readFileSync(filePath, 'utf8').split('\n')
-    .filter(l => l.trim() && !l.startsWith('#'))   // '#' lines hold generation parameters
-    .map(l => JSON.parse(l));
+  const out = [];
+  for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+    const p = MD.parseRow(line);   // null for a comment/blank line
+    if (p) out.push(p);
+  }
+  return out;
 }
 
 // Board fullness (1 − empty/area) of a position, from replaying its history —
 // the same phase evalPosition reports, computed up front for band filtering.
 function positionPhase(position) {
-  const { boardSize, history } = position;
-  const game = new Game2(boardSize, true);
-  for (const h of history) game.play(parseMove(h, boardSize));
-  return 1 - game.emptyCount / (boardSize * boardSize);
+  return position.phase;   // stored in the file (board fullness 1 - empty/area)
 }
 
 // Evaluate the agent on a single position.  Returns the agent's move (string
@@ -64,14 +65,9 @@ function positionPhase(position) {
 // move.  Terminal candidates carry a null rating; when the agent's move has
 // no usable rating the worst rated candidate is charged instead.
 function evalPosition(agent, position, budgetMs) {
-  const { boardSize, history, candidates } = position;
-  const game = new Game2(boardSize, true);
-  for (const h of history) game.play(parseMove(h, boardSize));
-
-  // Game phase ∈ [0,1]: board fullness = 1 − emptyCount/area (the codebase's
-  // canonical phase, e.g. puct-hybrid / compare-moves).  Not move count —
-  // captures make the two diverge.
-  const phase = 1 - game.emptyCount / (boardSize * boardSize);
+  const { boardSize, candidates } = position;
+  const game = MD.buildGame(position);   // empty board + full history (incl. the centre stone)
+  const phase = position.phase;          // board fullness, stored in the file
 
   const agentMove = agent(game, budgetMs, { rng: makeRng(agentSeed++) });
   const agentStr  = coordStr(agentMove.move, boardSize);

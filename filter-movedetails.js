@@ -21,8 +21,8 @@
 //   --max-phase  keep samples with phase <= F   (default 1)
 
 const fs = require('fs');
-const { Game2, parseMove } = require('./game2.js');
 const Util = require('./util.js');
+const MD = require('./movedetails-format.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'max-phase', 'min-phase']);
 if (opts.help || !opts.in) {
@@ -46,14 +46,6 @@ const maxPhase = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase'])
 if (isNaN(minPhase) || isNaN(maxPhase)) { console.error('--min-phase/--max-phase must be numbers'); process.exit(1); }
 if (minPhase > maxPhase)                { console.error('--min-phase must be <= --max-phase'); process.exit(1); }
 
-// Phase of a sample: replay its history, then board fullness = 1 − empty/area.
-function phaseOf(sample) {
-  const { boardSize, history } = sample;
-  const game = new Game2(boardSize, true);
-  for (const h of history) game.play(parseMove(h, boardSize));
-  return 1 - game.emptyCount / (boardSize * boardSize);
-}
-
 const lines = fs.readFileSync(opts.in, 'utf8').split('\n');
 const out = [];
 let total = 0, kept = 0;
@@ -62,7 +54,7 @@ for (const line of lines) {
   if (!line.trim())        continue;                 // drop blank lines
   if (line.startsWith('#')) { out.push(line); continue; }   // pass through headers
   total++;
-  const phase = phaseOf(JSON.parse(line));
+  const { phase } = MD.parseRow(line);   // stored in the file, no replay
   if (phase < minPhase || phase > maxPhase) continue;
   kept++;
   out.push(line);          // emit the original line text unchanged

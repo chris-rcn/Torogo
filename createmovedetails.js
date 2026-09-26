@@ -29,6 +29,7 @@ const path = require('path');
 const { performance } = require('perf_hooks');
 const { Game2, PASS, coordStr } = require('./game2.js');
 const Util = require('./util.js');
+const MD = require('./movedetails-format.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'save', 'size']);
 
@@ -40,7 +41,7 @@ if (opts.help) {
 const agentName = opts.agent || 'prod';
 const budget    = parseInt(opts.budget || '1', 10);
 const boardSize = parseInt(opts.size   || '13',   10);
-const SAVE_PATH = opts.save || `out/movedetails-${Math.random().toString(36).slice(2, 10)}.ndjson`;
+const SAVE_PATH = opts.save || `out/movedetails-${Math.random().toString(36).slice(2, 10)}.md`;
 const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, if set (overrides budget)
 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
@@ -146,11 +147,11 @@ while (true) {
 
   moveInfos.sort((a, b) => (b.kwr ?? -Infinity) - (a.kwr ?? -Infinity));
 
-  fs.appendFileSync(SAVE_PATH, JSON.stringify({
-    boardSize,
-    history,
-    candidates: moveInfos,
-  }) + '\n');
+  // The new format holds EVERY stone: prepend the free centre stone so the
+  // position replays from an empty board.  Phase is stored (board fullness).
+  const phase = 1 - position.emptyCount / (N * N);
+  fs.appendFileSync(SAVE_PATH,
+    MD.formatRow({ boardSize, phase, history: [MD.centerMove(N), ...history], candidates: moveInfos }) + '\n');
   posCount++;
 
   const now = performance.now();
