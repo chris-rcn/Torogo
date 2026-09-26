@@ -38,7 +38,6 @@ fallback agent, …).
 The playing strength comes from a small stack of learned models, each a hashed
 pattern family over the toroidal neighbourhood:
 
-- **npat** — RAVE/AMAF move priors.
 - **featurepol** — a spec-driven, hash-keyed softmax policy used for move priors
   and top-K candidate pruning (`featurepol-lib.js`; the fielded weights are
   `featurepol-cbk7wa32.js`).
@@ -76,8 +75,8 @@ Each model has its own trainer; all print a live progress table.
   `--bootstrap <N>` runs N random games first to seed the value table and
   greatly speeds convergence; `--start-phase <f|uniform>` trains a phase band.
 - **health** — `node train-health.js [args]`.
-- **npat / featurepol / others** — `train-npat.js`, `train-npats.js`,
-  `train-featurepol-reinforce.js`, `train-vlibpat.js`, `train-hpatterns.js`.
+- **featurepol / others** — `train-featurepol-reinforce.js`, `train-vlibpat.js`,
+  `train-hpatterns.js`.
 
 Board fullness (**phase** = 1 − empty/area) is the pervasive conditioning
 variable — many models and training runs are restricted to a phase band.
