@@ -87,7 +87,8 @@ checkpoint is written at every print.
                     full-width, for coverage of off-filter states
   --fp-data PATH    featurepol weights for --fp-width (default ref/ref-fp2-data.js)
   --start-phase F   fill the board with random stones to this phase before
-                    normal training moves begin (backward curriculum)
+                    normal training moves begin (backward curriculum).
+                    'uniform' draws a fresh random phase per game
 
   --load PATH       resume from a checkpoint
   --no-add          fine-tune ONLY the keys already in the loaded model; never
@@ -119,7 +120,14 @@ const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
 const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'ref', 'ref-fp2-data.js');
-const START_PHASE = parseFloat(opts['start-phase'] || '0');  // random stones until this board phase, then normal training
+// random stones until this board phase, then normal training.  'uniform' draws a
+// fresh random target phase per game (see trainGame).
+const START_PHASE_UNIFORM = (opts['start-phase'] || '0') === 'uniform';
+const START_PHASE = START_PHASE_UNIFORM ? 0 : parseFloat(opts['start-phase'] || '0');
+if (!START_PHASE_UNIFORM && !(START_PHASE >= 0 && START_PHASE <= 1)) {
+  console.error(`--start-phase must be a phase in [0,1] or 'uniform' (got '${opts['start-phase']}')`);
+  process.exit(1);
+}
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
@@ -314,7 +322,10 @@ function trainGame(N) {
 
   // --start-phase: fill the board with random stones up to the target phase
   // before training begins.  The prefix is untrained (no features recorded).
-  while (game.phase() < START_PHASE && !game.gameOver) game.play(game.randomLegalMove());
+  // 'uniform' draws a fresh target in [0,1) each game, spreading coverage across
+  // all phases instead of one fixed curriculum stage.
+  const startPhase = START_PHASE_UNIFORM ? Math.random() : START_PHASE;
+  while (game.phase() < startPhase && !game.gameOver) game.play(game.randomLegalMove());
 
   // One Game3, advanced in lockstep with `game`, reused for ladder-coded
   // extraction each ply instead of rebuilding one from scratch.
@@ -566,7 +577,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}`);
 console.log();
