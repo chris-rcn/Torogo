@@ -120,6 +120,20 @@ const _OCT_RING_MIX = 0x9e3779b1 | 0;
 // near-bijective multiply of y by an odd factor keyed on x.
 function oh(x, y) { return Math.imul(y, (_OCT_CTR_MIX + x) | 1) | 0; }
 
+// One octagon key (one colouring) from a leaf plane `l` and 2×2 plane `h2`, at the
+// 4×4 anchored by rows R0..R3 and cols x,x1,x2,x3.  Kept a small standalone
+// function on purpose: inside the ~300-line extractFeatures V8 will not inline the
+// cross-module uh/oh, and the octagon issues ~3× the uh calls of the other sizes,
+// so pulling the key math into a body small enough to inline them is a large win
+// (profiled: uh call overhead dominated size-8 extraction).  base = arm combine;
+// the corner term folds each corner's centre cell over its cross-corner ring pair.
+function octKey8(l, h2, R0, R1, R2, R3, x, x1, x2, x3) {
+  const arms = uh(uh(h2[R0 + x1], h2[R2 + x1]), uh(h2[R1 + x], h2[R1 + x2]));
+  const ring = uh(uh(oh(l[R1 + x2], uh(l[R0 + x2], l[R1 + x3])), oh(l[R2 + x1], uh(l[R3 + x1], l[R2 + x]))),
+                  uh(oh(l[R2 + x2], uh(l[R2 + x3], l[R3 + x2])), oh(l[R1 + x1], uh(l[R1 + x], l[R0 + x1]))));
+  return (arms + Math.imul(ring, _OCT_RING_MIX)) | 0;
+}
+
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
 // Returns the raw state of the cell at idx: 0 for empty, 1-maxLibs for BLACK
@@ -568,17 +582,11 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
             const x1 = x + 1 < N ? x + 1 : x + 1 - N;
             const x2 = x + 2 < N ? x + 2 : x + 2 - N;
             const x3 = x + 3 < N ? x + 3 : x + 3 - N;
-            const armsN = uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2]));
-            const armsI = uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2]));
-            // Per-corner terms oh(centreCell, uh(ringPair)), combined by opposite-
-            // corner nesting uh(uh(TR,BL),uh(BR,TL)) and folded in.  Centre cells
-            // I,J,L,K = (R1+x1,R1+x2,R2+x1,R2+x2); ring pairs straddle the corners.
-            const ringN = uh(uh(oh(lN[R1 + x2], uh(lN[R0 + x2], lN[R1 + x3])), oh(lN[R2 + x1], uh(lN[R3 + x1], lN[R2 + x]))),
-                             uh(oh(lN[R2 + x2], uh(lN[R2 + x3], lN[R3 + x2])), oh(lN[R1 + x1], uh(lN[R1 + x], lN[R0 + x1])))) | 0;
-            const ringI = uh(uh(oh(lI[R1 + x2], uh(lI[R0 + x2], lI[R1 + x3])), oh(lI[R2 + x1], uh(lI[R3 + x1], lI[R2 + x]))),
-                             uh(oh(lI[R2 + x2], uh(lI[R2 + x3], lI[R3 + x2])), oh(lI[R1 + x1], uh(lI[R1 + x], lI[R0 + x1])))) | 0;
-            const kN = (armsN + Math.imul(ringN, _OCT_RING_MIX)) | 0;
-            const kI = (armsI + Math.imul(ringI, _OCT_RING_MIX)) | 0;
+            // Per-corner terms oh(centreCell, uh(ringPair)) over the four removed
+            // corners, combined by opposite-corner nesting and added to the arm
+            // combine — computed in octKey8 so uh/oh inline (see its comment).
+            const kN = octKey8(lN, h2N, R0, R1, R2, R3, x, x1, x2, x3);
+            const kI = octKey8(lI, h2I, R0, R1, R2, R3, x, x1, x2, x3);
             if (kN === kI) continue;   // colour-twin / all-empty: zero value
             outKeys[count] = mixTag(kN < kI ? kN : kI, tag8) ^ pS8;
             outPols[count] = kN < kI ? 1 : -1;
@@ -935,18 +943,16 @@ function deltaZ(game, prepSpecs, weights, move) {
           const x1 = x + 1 < N ? x + 1 : x + 1 - N;
           const x2 = x + 2 < N ? x + 2 : x + 2 - N;
           const x3 = x + 3 < N ? x + 3 : x + 3 - N;
-          // Cross-corner ring term (see _OCT_RING_MIX): old from stored leaves,
-          // new from override-aware leafN/leafI — mirroring the arm h2 old/new.
-          const orN = uh(uh(oh(lN[R1 + x2], uh(lN[R0 + x2], lN[R1 + x3])), oh(lN[R2 + x1], uh(lN[R3 + x1], lN[R2 + x]))),
-                         uh(oh(lN[R2 + x2], uh(lN[R2 + x3], lN[R3 + x2])), oh(lN[R1 + x1], uh(lN[R1 + x], lN[R0 + x1])))) | 0;
-          const orI = uh(uh(oh(lI[R1 + x2], uh(lI[R0 + x2], lI[R1 + x3])), oh(lI[R2 + x1], uh(lI[R3 + x1], lI[R2 + x]))),
-                         uh(oh(lI[R2 + x2], uh(lI[R2 + x3], lI[R3 + x2])), oh(lI[R1 + x1], uh(lI[R1 + x], lI[R0 + x1])))) | 0;
+          // New-key corner ring term from the override-aware leaf accessors (the
+          // old key uses the stored planes via octKey8 below).
           const krN = uh(uh(oh(leafN(R1 + x2), uh(leafN(R0 + x2), leafN(R1 + x3))), oh(leafN(R2 + x1), uh(leafN(R3 + x1), leafN(R2 + x)))),
                          uh(oh(leafN(R2 + x2), uh(leafN(R2 + x3), leafN(R3 + x2))), oh(leafN(R1 + x1), uh(leafN(R1 + x), leafN(R0 + x1))))) | 0;
           const krI = uh(uh(oh(leafI(R1 + x2), uh(leafI(R0 + x2), leafI(R1 + x3))), oh(leafI(R2 + x1), uh(leafI(R3 + x1), leafI(R2 + x)))),
                          uh(oh(leafI(R2 + x2), uh(leafI(R2 + x3), leafI(R3 + x2))), oh(leafI(R1 + x1), uh(leafI(R1 + x), leafI(R0 + x1))))) | 0;
-          const oN = (uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2])) + Math.imul(orN, _OCT_RING_MIX)) | 0;
-          const oI = (uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2])) + Math.imul(orI, _OCT_RING_MIX)) | 0;
+          // Old keys read the stored planes → octKey8 directly.  New keys read the
+          // override-aware accessors (gN/gI, leafN/leafI), so they stay inline.
+          const oN = octKey8(lN, h2N, R0, R1, R2, R3, x, x1, x2, x3);
+          const oI = octKey8(lI, h2I, R0, R1, R2, R3, x, x1, x2, x3);
           const kN = (uh(uh(gN(R0 + x1), gN(R2 + x1)), uh(gN(R1 + x), gN(R1 + x2))) + Math.imul(krN, _OCT_RING_MIX)) | 0;
           const kI = (uh(uh(gI(R0 + x1), gI(R2 + x1)), uh(gI(R1 + x), gI(R1 + x2))) + Math.imul(krI, _OCT_RING_MIX)) | 0;
           if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag8)) ?? 0);
