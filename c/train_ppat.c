@@ -314,6 +314,13 @@ static const char *cfg_sync_dir;
 static const char *cfg_file;
 static const char *cfg_test_file;      /* NULL = carve the test set from cfg_file's head */
 static int    cfg_test_pos_given;      /* was --test-pos passed explicitly? */
+/* movedetails MAE column: mc-ppat move-selection regret vs a labelled *.md set,
+ * computed on the (slow) test rows.  Default file so the column is on by default. */
+static const char *cfg_md_file = "movedetails_5059.md";
+static int    cfg_mae_cand_playouts = 10;   /* rollouts per candidate */
+static float  cfg_mae_band_lo = 0.6f;       /* phase band (--mae-band A,B) */
+static float  cfg_mae_band_hi = 1.0f;
+static int    cfg_mae_pos = 0;              /* in-band positions to score (0 = all); --mae-pos caps the cost */
 static const char *cfg_load;           /* path to weights file to load */
 static bool ref_early_pass;            /* the REFERENCE model's own earlyPass, from its file */
 static float ref_pass_weight = 0;      /* and its own learned pass logit.  Used in the
@@ -899,9 +906,6 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
         g2_play(&sim, mv);
     }
 
-    /* Finish game with uniform random play. */
-    while (!sim.game_over) g2_play(&sim, g2_random_legal_move(&sim, &g_rng));
-
     /* Pass-weight control loop.  Only rollouts the policy played to the end and
      * actually chose to stop are evidence. */
     if (RUN_EARLY_PASS && passed_yet && !rejected_pass) {
@@ -1174,9 +1178,131 @@ static int uniform_rollout(const Game2 *game, int8_t player) {
 /* Returns the softmax probability the current policy assigns to `move`. */
 /* ── Measure test ──────────────────────────────────────────────────────────── */
 
-typedef struct { float mean_abs; float mse; float mse_c; } TestResult;
+typedef struct { float mean_abs; float mse; float mse_c; float mae; } TestResult;
 
 #define TEST_RNG_SEED 0x7e57c0deL   /* fixed seed → reproducible test rollouts */
+
+/* ── movedetails MAE: mc-ppat move-selection regret vs a labelled *.md set ───── */
+typedef struct { int move; float wr; } MdCand;   /* wr = winRatio in [0,1]; <0 = terminal/unrated */
+typedef struct { int size; float phase; int32_t *hist; int n_hist; MdCand *cand; int n_cand; } MdPos;
+static MdPos *md_pos = NULL;
+static int    n_md = 0;
+static int    md_size = 0;
+
+/* coord "g7" -> board index (matches game2.js parseMove); "pass" -> PASS. */
+static int md_parse_coord(const char *s, int N) {
+    if (s[0] == 'p') return PASS;
+    return (atoi(s + 1) - 1) * N + (s[0] - 'a');
+}
+
+/* Load the *.md file (movedetails-format.js).  Returns positions loaded (0 on
+ * failure — the mae column is then simply absent). */
+static int load_md_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "WARNING: --md-file %s not found; mae column disabled\n", path); return 0; }
+    size_t cap = 1024; md_pos = malloc(cap * sizeof *md_pos);
+    static char line[1 << 16];
+    int n = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0') continue;
+        char *save;
+        char *id     = strtok_r(line, " ",   &save);
+        char *sizeS  = strtok_r(NULL, " ",   &save);
+        char *phaseS = strtok_r(NULL, " ",   &save);
+        char *histS  = strtok_r(NULL, " ",   &save);
+        char *candS  = strtok_r(NULL, " \n", &save);
+        if (!id || strcmp(id, "f1") != 0 || !sizeS || !phaseS || !histS || !candS) continue;
+        const int N = atoi(sizeS);
+        if (n == (int)cap) { cap *= 2; md_pos = realloc(md_pos, cap * sizeof *md_pos); }
+        MdPos *p = &md_pos[n];
+        p->size = N; p->phase = (float)atof(phaseS);
+        p->hist = NULL; p->n_hist = 0; p->cand = NULL; p->n_cand = 0;
+        if (strcmp(histS, "-") != 0) {
+            int hc = 1; for (char *c = histS; *c; c++) if (*c == ',') hc++;
+            p->hist = malloc(hc * sizeof(int32_t));
+            char *hs; for (char *t = strtok_r(histS, ",", &hs); t; t = strtok_r(NULL, ",", &hs))
+                p->hist[p->n_hist++] = md_parse_coord(t, N);
+        }
+        if (strcmp(candS, "-") != 0) {
+            int cc = 1; for (char *c = candS; *c; c++) if (*c == ',') cc++;
+            p->cand = malloc(cc * sizeof(MdCand));
+            char *cs; for (char *t = strtok_r(candS, ",", &cs); t; t = strtok_r(NULL, ",", &cs)) {
+                char *colon = strchr(t, ':');
+                MdCand mc;
+                if (colon) { *colon = '\0'; mc.move = md_parse_coord(t, N); mc.wr = colon[1] == '\0' ? -1.0f : atoi(colon + 1) / 1000.0f; }
+                else       { mc.move = md_parse_coord(t, N); mc.wr = -1.0f; }
+                p->cand[p->n_cand++] = mc;
+            }
+        }
+        n++;
+    }
+    fclose(f);
+    md_size = n ? md_pos[0].size : 0;
+    return n;
+}
+
+/* One mc-ppat-style playout from `start` (the candidate move already played),
+ * returning +1 if `mover` wins else -1.  Mirrors ai/mc-ppat.js's playout(): the
+ * deployment policy ppat_policy_move (NOT the training rollout), no early-pass
+ * rejection, capped at 3*empty+20 moves, then estimateWinner.  The
+ * ppat_uniform_below_phase gate (--uniform-below-phase) applies inside it. */
+static float md_playout(const Game2 *start, int8_t mover, PpatState *st, Rng *rng) {
+    Game2 g; g2_clone(&g, start);
+    const int move_limit = 3 * g.empty_count + 20;
+    int moves = 0;
+    while (!g.game_over && moves < move_limit) {
+        g2_play(&g, ppat_policy_move(&g, st, theta, false, run_pass_weight, rng));
+        moves++;
+    }
+    return g2_estimate_winner(&g) == mover ? 1.0f : -1.0f;
+}
+
+/* Mean win-ratio gap between the file's best move and the mc-ppat-selected move,
+ * over the band-filtered md positions, using the CURRENT model.  A fixed RNG so
+ * the column is reproducible run-to-run. */
+static float md_mae(void) {
+    if (n_md == 0) return 0.0f;
+    static PpatState st;
+    Rng saved = g_rng; rng_seed(&g_rng, TEST_RNG_SEED ^ 0x5a5aL);
+    const int swap = md_size != topo_size; if (swap) g2_init_topology(md_size);
+    double gap_sum = 0; int count = 0;
+    for (int pi = 0; pi < n_md; pi++) {
+        if (cfg_mae_pos > 0 && count >= cfg_mae_pos) break;
+        MdPos *mp = &md_pos[pi];
+        if (mp->phase < cfg_mae_band_lo || mp->phase > cfg_mae_band_hi) continue;
+        Game2 g; g2_new_empty(&g, mp->size);
+        int ok = 1;
+        for (int i = 0; i < mp->n_hist; i++) if (!g2_play(&g, mp->hist[i])) { ok = 0; break; }
+        if (!ok || g.game_over) continue;
+        const int8_t mover = g.current;
+        float best_wr = -1e30f, worst_wr = 1e30f;
+        for (int c = 0; c < mp->n_cand; c++) { float w = mp->cand[c].wr;
+            if (w >= 0.0f) { if (w > best_wr) best_wr = w; if (w < worst_wr) worst_wr = w; } }
+        if (best_wr < -1e29f) continue;   /* no rated candidate */
+        double best_val = -1e30; int picked = -1;
+        for (int c = 0; c < mp->n_cand; c++) {
+            const int mv = mp->cand[c].move;
+            if (mv == PASS || g2_is_true_eye_at(&g, mv)) continue;   /* legal non-eye, no pass — as mc-ppat */
+            Game2 clone; g2_clone(&clone, &g);
+            if (!g2_play(&clone, mv)) continue;
+            double val;
+            if (clone.game_over) val = g2_estimate_winner(&clone) == mover ? 1.0 : -1.0;
+            else { float s = 0; for (int k = 0; k < cfg_mae_cand_playouts; k++) s += md_playout(&clone, mover, &st, &g_rng);
+                   val = (double)s / cfg_mae_cand_playouts; }
+            /* Dither in DOUBLE: a float32 val loses a 1e-9 nudge to rounding near
+             * ±1, and a strict > would then break ties by file order (best label
+             * first), leaking the label into the pick. */
+            val += rng_float(&g_rng) * 1e-9;
+            if (val > best_val) { best_val = val; picked = c; }
+        }
+        if (picked < 0) continue;
+        float pw = mp->cand[picked].wr; if (pw < 0.0f) pw = worst_wr;   /* terminal pick → charged worst */
+        gap_sum += best_wr - pw; count++;
+    }
+    if (swap) g2_init_topology(topo_size);
+    g_rng = saved;
+    return count ? (float)(gap_sum / count) : 0.0f;
+}
 
 /* Test the first `n` of the test positions; n is clamped to [1, n_test]. */
 static TestResult measure_test(int use_uniform, int n) {
@@ -1224,8 +1350,9 @@ static TestResult measure_test(int use_uniform, int n) {
     }
     g_rng = saved_rng;   /* restore training's RNG stream */
     if (swap_topo) g2_init_topology(topo_size);
-    if (count == 0) return (TestResult){0, 0, 0};
-    return (TestResult){ abs_sum / count, sq_sum / count, cq_sum / count };   /* mse = mean squared error */
+    const float mae = n_md ? md_mae() : 0.0f;
+    if (count == 0) return (TestResult){0, 0, 0, mae};
+    return (TestResult){ abs_sum / count, sq_sum / count, cq_sum / count, mae };   /* mse = mean squared error */
 }
 
 
@@ -1622,7 +1749,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     else
         printf("data      %s  (%d train, %d test)\n",
                cfg_file, n_train_total, n_test);
-    if (cfg_test_playouts_derived)
+    if (cfg_test_playouts_derived && n_test > 0)
         printf("          test-total-playouts %d over %d positions => %d per position\n",
                cfg_test_total_playouts, n_test, cfg_test_playouts);
     printf("model     adjLib %d%s%s%s\n",
@@ -1672,6 +1799,7 @@ static void run_monitor(void) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
+    if (n_md > 0) printf("  %6s", "mae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
     printf("\n");
@@ -1700,6 +1828,7 @@ static void run_monitor(void) {
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+            if (n_md > 0) printf("  %6.4f", tr.mae);
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s", eb, "-");
             printf("\n");
@@ -1708,6 +1837,7 @@ static void run_monitor(void) {
             printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+            if (n_md > 0) printf("  %6.4f", tr.mae);
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s\n", eb, "-");
         }
@@ -1807,6 +1937,7 @@ static void run_monitor(void) {
                MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
         if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
+        if (n_md > 0) printf("  %6.4f", tr.mae);
         if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);   /* testM: cumulative teMSE-eval + match cost (minutes) */
         printf("  %8s  %7.1f", eb, posps);
         printf("\n");
@@ -1851,7 +1982,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
      * print "-" rather than being omitted, so the layout is identical across the
      * whole run and the switch-on point is visible. */
     clock_t test_t0 = clock();
-    TestResult tr = (TestResult){0, 0, 0};
+    TestResult tr = (TestResult){0, 0, 0, 0};
     char dwbuf[16] = "-";
     if (run_tests) {
         tr = measure_test(use_uniform, test_n);
@@ -1894,6 +2025,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
            avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
+    if (n_md > 0) { if (run_tests) printf("  %6.4f", tr.mae); else printf("  %6s", "-"); }
     if (n_test > 0) printf("  %6.1f", cumulative_test_s / 60.0);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
            cumulative_sync_s, elapsed_buf, pos_ms, pos_per_s);
@@ -1974,6 +2106,13 @@ static void print_help(FILE *out, const char *prog) {
 "  --train-pos N              cap training positions (default 0 = all)\n"
 "  --overfit                  use the same data for train and test\n"
 "\n"
+"mae (mc-ppat move-selection regret vs a labelled movedetails file, on test rows)\n"
+"  --md-file PATH             movedetails .md file (default movedetails_5059.md; '' disables)\n"
+"  --mae-band LO,HI           keep only positions with phase in [LO,HI] (default 0.6,1.0)\n"
+"  --mae-cand-playouts N      playouts per candidate move (default 10)\n"
+"  --mae-pos N                cap kept positions (default 0 = all)\n"
+"  --uniform-below-phase F    playouts play uniform-random below fullness F (default 0.6)\n"
+"\n"
 "directWR match (move-quality readout: current model vs a fixed reference)\n"
 "  --ref-weights PATH|none    reference model for the directWR/WR columns (default\n"
 "                             out/ppat-data-233162-best-ref-candidate.js; \"none\" off;\n"
@@ -2041,6 +2180,15 @@ int main(int argc, char **argv) {
     ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
     cfg_test_file = get_str_arg(argc, argv, "--test-file", NULL);
     cfg_test_pos_given = has_flag(argc, argv, "--test-pos");
+    cfg_md_file = get_str_arg(argc, argv, "--md-file", cfg_md_file);
+    cfg_mae_cand_playouts = get_int_arg(argc, argv, "--mae-cand-playouts", cfg_mae_cand_playouts);
+    { const char *mb = get_str_arg(argc, argv, "--mae-band", NULL);
+      if (mb) { float a, b; if (sscanf(mb, "%f,%f", &a, &b) == 2) { cfg_mae_band_lo = a; cfg_mae_band_hi = b; } } }
+    cfg_mae_pos = get_int_arg(argc, argv, "--mae-pos", cfg_mae_pos);
+    /* Deployment playout gate (mc-ppat's PPAT_MIN_PHASE): ppat_policy_move plays
+     * uniform-random below this board fullness.  Default 0.6, matching the fielded
+     * playout and the mc-ppat agent the mae column mirrors. */
+    ppat_uniform_below_phase = get_float_arg(argc, argv, "--uniform-below-phase", 0.6f);
     cfg_no_local       = has_flag(argc, argv, "--no-local");
     cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "out/ppat-data-233162-best-ref-candidate.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;
@@ -2188,6 +2336,7 @@ int main(int argc, char **argv) {
     ppat_init(cfg_adj_lib);
 
     load_positions();
+    if (cfg_md_file && cfg_md_file[0]) n_md = load_md_file(cfg_md_file);
     split_data();
 
     TOTAL = ppat_total_weights();
@@ -2274,6 +2423,7 @@ int main(int argc, char **argv) {
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
+    if (n_md > 0) printf("  %6s", "mae");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
     printf("\n");
