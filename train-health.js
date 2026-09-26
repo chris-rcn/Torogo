@@ -154,7 +154,7 @@ const { makeRng } = require('./xorshift.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'ladder2', 'use-corpus-fate'],
   ['corpus', 'games', 'size', 'lr', 'max-libs', 'max-stones', 'max-lib-stone', 'max-join-libs',
    'friend-health-max-buckets', 'foe-health-min-buckets', 'stone-ninecells',
-   'liberty-ninecells', 'max-lib-ninecells', 'max-stone-ninecells',
+   'liberty-ninecells', 'liberty-pairs-gate', 'max-lib-ninecells', 'max-stone-ninecells',
    'join-lib-gate', 'friend-lib-gate', 'foe-lib-gate',
    'iterations', 'eval-phase',
    'delta', 'floor', 'save', 'seed', 'playout-count']);
@@ -212,6 +212,12 @@ irreducible label entropy.
                   short of liberties still wants its liberty shapes, just not
                   one key per stone.  A big chain emits a ninecell per stone,
                   so this is also where the per-position cost goes
+  --liberty-pairs-gate N  one key per unordered pair of NON-ADJACENT liberties
+                  (their two ninecell shapes combined), for chains with at most N
+                  liberties (default 0 = off).  Two eye-like liberties that are
+                  not one eyespace light a key the sum of singles cannot express;
+                  gated low since the pairs are O(libs^2) and life is only in
+                  question on small chains
   --max-join-libs N  best-single-join liberty one-hot for the chain being
                   predicted, capped at N (default 0 = off)
   --ladder2       add a chain ladder-status one-hot (alive / dead / unsettled)
@@ -363,6 +369,10 @@ const MAX_LIB_NINECELLS = parseInt(opts['max-lib-ninecells'] !== undefined
 // The same cap on the chain's STONE COUNT for the singleton stone ninecells.
 const MAX_STONE_NINECELLS = parseInt(opts['max-stone-ninecells'] !== undefined
   ? opts['max-stone-ninecells'] : '0', 10);
+// Liberty-PAIR ninecells: one key per unordered pair of NON-ADJACENT liberties,
+// for chains with at most this many liberties (2..N).  0 = off.
+const LIBERTY_PAIRS = parseInt(opts['liberty-pairs-gate'] !== undefined
+  ? opts['liberty-pairs-gate'] : '0', 10);
 // One liberty-count gate per cross-chain feature.  They scan different things,
 // so their break-even gates have no reason to be the same number.  These count
 // the SUBJECT chain's liberties; MAX_JOIN_LIBS counts the merged chain's, which
@@ -416,6 +426,7 @@ console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES
             (LIBERTY_NINECELLS ? '' : '  liberty-ninecells 0') +
             (MAX_LIB_NINECELLS > 0 ? `  max-lib-ninecells ${MAX_LIB_NINECELLS}` : '') +
             (MAX_STONE_NINECELLS > 0 ? `  max-stone-ninecells ${MAX_STONE_NINECELLS}` : '') +
+            (LIBERTY_PAIRS > 0 ? `  liberty-pairs-gate ${LIBERTY_PAIRS}` : '') +
             (JOIN_LIB_GATE > 0 ? `  join-lib-gate ${JOIN_LIB_GATE}` : '') +
             (FRIEND_LIB_GATE > 0 ? `  friend-lib-gate ${FRIEND_LIB_GATE}` : '') +
             (FOE_LIB_GATE > 0 ? `  foe-lib-gate ${FOE_LIB_GATE}` : '') +
@@ -464,6 +475,7 @@ const NB_SLOTS = HL.NB_SLOTS;   // friendHealthMax, foeHealthMin
 const COLLECT_STONES = STONE_NINECELLS || FOE_MIN_BUCKETS > 0;
 const SCAN_CFG = { stoneNinecells: STONE_NINECELLS, libertyNinecells: LIBERTY_NINECELLS,
                    maxLibNinecells: MAX_LIB_NINECELLS, maxStoneNinecells: MAX_STONE_NINECELLS,
+                   libertyPairs: LIBERTY_PAIRS,
                    friendHealthMaxBuckets: FHM_BUCKETS, foeHealthMinBuckets: FOE_MIN_BUCKETS,
                    friendLibGate: FRIEND_LIB_GATE, foeLibGate: FOE_LIB_GATE,
                    stoneSalt: STONE_SALT };
@@ -851,7 +863,7 @@ const src = [
   `  // 'iterations' passes) the trainer ran — health-lib.chainHealthAll refuses`,
   `  // such a model rather than score it with the feature missing.`,
   `  stoneNinecells: ${STONE_NINECELLS}, libertyNinecells: ${LIBERTY_NINECELLS}, maxStones: ${MAX_STONES},`,
-  `  maxLibNinecells: ${MAX_LIB_NINECELLS}, maxStoneNinecells: ${MAX_STONE_NINECELLS},`,
+  `  maxLibNinecells: ${MAX_LIB_NINECELLS}, maxStoneNinecells: ${MAX_STONE_NINECELLS}, libertyPairs: ${LIBERTY_PAIRS},`,
   `  libStoneLibs: ${LIB_STONE_LIBS}, libStoneStones: ${LIB_STONE_STONES},`,
   // Ninecell encoding generation.  1 was the symmetric-combine hash used
   // 2026-09-09..11 (20.6% D4 fidelity at 6 states); 2 is the exact index +

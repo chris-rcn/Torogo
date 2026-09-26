@@ -235,6 +235,15 @@ function _ncKey(id) {
   return k === 0 ? 1 : k;
 }
 
+// Liberty-PAIR key: a symmetric hash of two liberties' ninecell ids, in its own
+// key space.  uh is commutative, so the key is order-invariant for the pair.
+const CHAIN_PAIR_SALT = 0x3e9a1773 | 0;
+function chainPairKey(ida, idb) {
+  const k = (Math.imul(uh(ida, idb) + 1, 2654435761) ^ CHAIN_PAIR_SALT) | 0;
+  return k === 0 ? 1 : k;
+}
+let _pairIds = new Int32Array(64);
+
 const CHAIN_STONE_SALT = 0x71c3a5d9 | 0;
 function chainStoneCountKey(nStones, cap) {
   const b = nStones > cap ? cap : nStones;
@@ -645,6 +654,32 @@ function scanBoard(model, cells, nbr, dnbr, gid, chains, byGid, weights, keysOn,
       _eyeCandidate(cells, dnbr, b4, eyeCol);
     }
   }
+  // Liberty-PAIR ninecells: for a chain with few enough liberties (life still in
+  // question), a key per unordered pair of NON-ADJACENT liberties, combining
+  // their two ninecell ids.  Orthogonally adjacent liberties are one eyespace,
+  // not two eyes, so they are excluded; every other pair lights one key, letting
+  // the model learn the two-eyes-suffice jump a sum of singles cannot.  Capped at
+  // libertyPairs liberties to bound the O(libs^2) pairs.
+  const pairGate = model.libertyPairs;
+  if (pairGate > 0) {
+    for (let i = 0; i < nChains; i++) {
+      const r = chains[i];
+      const libs = r.libs, nl = libs.length;
+      if (nl < 2 || nl > pairGate) continue;
+      if (_pairIds.length < nl) _pairIds = new Int32Array(nl * 2);
+      for (let a = 0; a < nl; a++) _pairIds[a] = ninecellId(cells, nbr, dnbr, libs[a], r.c);
+      for (let a = 0; a < nl; a++) {
+        const b4 = libs[a] * 4, n0 = nbr[b4], n1 = nbr[b4 + 1], n2 = nbr[b4 + 2], n3 = nbr[b4 + 3];
+        for (let b = a + 1; b < nl; b++) {
+          const lb = libs[b];
+          if (lb === n0 || lb === n1 || lb === n2 || lb === n3) continue;   // adjacent: one eyespace
+          const k = chainPairKey(_pairIds[a], _pairIds[b]);
+          if (keysOn) r.keys.push(k);
+          if (weights !== null) zOut[r.idx] += weights.get(k) || 0;
+        }
+      }
+    }
+  }
   _markLiveFromEyes(byGid);
   return chains;
 }
@@ -859,6 +894,7 @@ function _survIntern(raw) {
            maxStones: raw.maxStones || 0,
            maxLibNinecells: raw.maxLibNinecells || 0,
            maxStoneNinecells: raw.maxStoneNinecells || 0,
+           libertyPairs: raw.libertyPairs || 0,
            joinLibGate: raw.joinLibGate || 0,
            friendLibGate: raw.friendLibGate || 0,
            foeLibGate: raw.foeLibGate || 0,
@@ -945,6 +981,7 @@ function modelLiteral(h) {
     ['initHealth', h.initHealth], ['stoneNinecells', h.stoneNinecells],
     ['libertyNinecells', h.libertyNinecells], ['maxStones', h.maxStones],
     ['maxLibNinecells', h.maxLibNinecells], ['maxStoneNinecells', h.maxStoneNinecells],
+    ['libertyPairs', h.libertyPairs],
     ['joinLibGate', h.joinLibGate], ['friendLibGate', h.friendLibGate],
     ['foeLibGate', h.foeLibGate], ['libStoneLibs', h.libStoneLibs],
     ['libStoneStones', h.libStoneStones], ['stoneSalt', h.stoneSalt],
