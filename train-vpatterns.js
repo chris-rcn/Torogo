@@ -46,7 +46,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -89,6 +89,8 @@ checkpoint is written at every print.
   --start-phase F   fill the board with random stones to this phase before
                     normal training moves begin (backward curriculum).
                     'uniform' draws a fresh random phase per game
+  --bootstrap N     run N fully-random (epsilon=1) games to seed the value
+                    estimates before normal training; ignored with --load
 
   --load PATH       resume from a checkpoint
   --no-add          fine-tune ONLY the keys already in the loaded model; never
@@ -116,6 +118,13 @@ if (NO_ADD && !LOAD_PATH) { console.error('Error: --no-add needs a loaded model 
 const EVAL_AGENT = opts.eval  || '';     // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) fraction of moves come from this agent
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+// --bootstrap N: run N fully-random (epsilon=1) training games before the normal
+// loop, to seed the value estimates.  Ignored when resuming (--load).
+const BOOTSTRAP = opts.bootstrap !== undefined ? parseInt(opts.bootstrap, 10) : 0;
+if (opts.bootstrap !== undefined && !(BOOTSTRAP >= 0)) {
+  console.error(`--bootstrap must be a non-negative integer (got '${opts.bootstrap}')`);
+  process.exit(1);
+}
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
@@ -314,7 +323,7 @@ function search1ply(game) {
 // Both colours use the policy.  Per-position features and values are collected
 // during play; at episode end the λ-return target is computed by a single
 // backward pass and applied to each position.
-function trainGame(N) {
+function trainGame(N, epsilon = EPSILON) {
   const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
   const maxMoves = N * N * 4;
   const tStartMs = Date.now();
@@ -342,7 +351,7 @@ function trainGame(N) {
     vals.push(features.val);
 
     let move;
-    if (Math.random() < EPSILON) {
+    if (Math.random() < epsilon) {
       move = game.randomLegalMove();                 // full-width exploration (coverage off the filter)
     } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
@@ -583,6 +592,16 @@ console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weight
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}`);
 console.log();
+
+// --bootstrap N: seed the value estimates with N fully-random (epsilon=1) games
+// before the normal loop.  Skipped when resuming (--load already has weights).
+// Produces no table output and its updates are discarded from the interval stats.
+if (BOOTSTRAP > 0 && !LOAD_PATH) {
+  process.stdout.write('Bootstrapping...');
+  for (let i = 0; i < BOOTSTRAP; i++) trainGame(TRAIN_SIZE, 1);
+  wAbsSum = 0; wUpdateCount = 0;   // discard bootstrap updates from the first avgW
+  console.log(' done');
+}
 
 // Print header.
 console.log([
