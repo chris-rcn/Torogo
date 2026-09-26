@@ -97,24 +97,28 @@ const _NC3_CTR_MIX = 2649461;
 // hash is folded into the D4-symmetric arm combine as an odd multiplier, the
 // same trick the 3×3 uses for its centre cell.  ( | 1 forces the factor odd.)
 const _OCT_CTR_MIX = 0x51ed270b | 0;
-// Cross-corner ring term for the octagon.  The five-block combine hashes each 2×2
-// arm D4-invariantly, which discards how the arm's cells sit within it — so two
-// octagons differing only by an arm's internal orientation collide (measured 8:1
-// fidelity 54%).  Hash the four ADJACENT ring-cell pairs that straddle the removed
-// corners — (B,C)(D,E)(F,G)(H,A) with the ring labelled
-//   . A B .
-//   H . . C
-//   G . . D
+// Corner term for the octagon.  The five-block combine hashes each 2×2 block
+// D4-invariantly, discarding how a block's cells sit within it — so octagons
+// differing only by a block's internal orientation collide (measured 8:1 fidelity
+// 54%).  The fix builds a term per REMOVED CORNER out of that corner's two ring
+// cells and its nearest centre cell, labelling the 12 cells
+//   . A B .          centre: I J        ring corners:  TL=(H,A)+I  TR=(B,C)+J
+//   H I J C                  L K                        BL=(F,G)+L  BR=(D,E)+K
+//   G L K D
 //   . F E .
-// — which completes the ring's cyclic adjacency (the four within-edge pairs already
-// live in the arm blocks).  Combine the corner pairs by OPPOSITE-corner nesting
-//   uh( uh(BC,FG), uh(DE,HA) )
-// which is D4-invariant (a 90° turn swaps the two opposite-corner groups, uh
-// unordered) yet — unlike a plain sum of the four — does not over-symmetrise them,
-// so it preserves which corner held what.  Each leaf-pair uh is over two prime
-// leaves (exact).  Folded additively via this odd multiplier: measured reachable
-// fidelity 8:1 → 94%, 8:2 → 97% (sum-of-pairs only reached 82% / 89%).
+// Each corner = oh(centreCell, uh(ringPair)) — an ordered fold (oh) of the corner's
+// centre cell over its cross-corner ring pair, which ties the centre's orientation
+// to the ring's (a plain ring-only term left the centre↔ring relative orientation
+// unpinned).  The four corners combine by OPPOSITE-corner nesting
+//   uh( uh(TR,BL), uh(BR,TL) )
+// which is D4-invariant (every symmetry permutes the four corner terms among
+// themselves, opposite pairs staying paired) without over-symmetrising them.
+// Folded additively via this odd multiplier: measured reachable fidelity 8:1 → 97%,
+// 8:2 → 99% (ring-only nesting reached 94% / 97%; sum-of-pairs 82% / 89%).
 const _OCT_RING_MIX = 0x9e3779b1 | 0;
+// Ordered fold: distinguishes its two operands (unlike uh), the same shape as the
+// centre fold in the octagon base — a near-bijective multiply by an odd factor.
+function oh(x, y) { return Math.imul(y, (_OCT_CTR_MIX + x) | 1) | 0; }
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
@@ -567,12 +571,13 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
             const x3 = x + 3 < N ? x + 3 : x + 3 - N;
             const armsN = uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2]));
             const armsI = uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2]));
-            // Cross-corner ring pairs (B,C)(D,E)(F,G)(H,A), combined by opposite-
-            // corner nesting uh(uh(BC,FG),uh(DE,HA)) and folded in.
-            const ringN = uh(uh(uh(lN[R0 + x2], lN[R1 + x3]), uh(lN[R3 + x1], lN[R2 + x])),
-                             uh(uh(lN[R2 + x3], lN[R3 + x2]), uh(lN[R1 + x], lN[R0 + x1]))) | 0;
-            const ringI = uh(uh(uh(lI[R0 + x2], lI[R1 + x3]), uh(lI[R3 + x1], lI[R2 + x])),
-                             uh(uh(lI[R2 + x3], lI[R3 + x2]), uh(lI[R1 + x], lI[R0 + x1]))) | 0;
+            // Per-corner terms oh(centreCell, uh(ringPair)), combined by opposite-
+            // corner nesting uh(uh(TR,BL),uh(BR,TL)) and folded in.  Centre cells
+            // I,J,L,K = (R1+x1,R1+x2,R2+x1,R2+x2); ring pairs straddle the corners.
+            const ringN = uh(uh(oh(lN[R1 + x2], uh(lN[R0 + x2], lN[R1 + x3])), oh(lN[R2 + x1], uh(lN[R3 + x1], lN[R2 + x]))),
+                             uh(oh(lN[R2 + x2], uh(lN[R2 + x3], lN[R3 + x2])), oh(lN[R1 + x1], uh(lN[R1 + x], lN[R0 + x1])))) | 0;
+            const ringI = uh(uh(oh(lI[R1 + x2], uh(lI[R0 + x2], lI[R1 + x3])), oh(lI[R2 + x1], uh(lI[R3 + x1], lI[R2 + x]))),
+                             uh(oh(lI[R2 + x2], uh(lI[R2 + x3], lI[R3 + x2])), oh(lI[R1 + x1], uh(lI[R1 + x], lI[R0 + x1])))) | 0;
             const kN = (Math.imul(armsN, (_OCT_CTR_MIX + h2N[R1 + x1]) | 1) + Math.imul(ringN, _OCT_RING_MIX)) | 0;
             const kI = (Math.imul(armsI, (_OCT_CTR_MIX + h2I[R1 + x1]) | 1) + Math.imul(ringI, _OCT_RING_MIX)) | 0;
             if (kN === kI) continue;   // colour-twin / all-empty: zero value
@@ -933,14 +938,14 @@ function deltaZ(game, prepSpecs, weights, move) {
           const x3 = x + 3 < N ? x + 3 : x + 3 - N;
           // Cross-corner ring term (see _OCT_RING_MIX): old from stored leaves,
           // new from override-aware leafN/leafI — mirroring the arm h2 old/new.
-          const orN = uh(uh(uh(lN[R0 + x2], lN[R1 + x3]), uh(lN[R3 + x1], lN[R2 + x])),
-                         uh(uh(lN[R2 + x3], lN[R3 + x2]), uh(lN[R1 + x], lN[R0 + x1]))) | 0;
-          const orI = uh(uh(uh(lI[R0 + x2], lI[R1 + x3]), uh(lI[R3 + x1], lI[R2 + x])),
-                         uh(uh(lI[R2 + x3], lI[R3 + x2]), uh(lI[R1 + x], lI[R0 + x1]))) | 0;
-          const krN = uh(uh(uh(leafN(R0 + x2), leafN(R1 + x3)), uh(leafN(R3 + x1), leafN(R2 + x))),
-                         uh(uh(leafN(R2 + x3), leafN(R3 + x2)), uh(leafN(R1 + x), leafN(R0 + x1)))) | 0;
-          const krI = uh(uh(uh(leafI(R0 + x2), leafI(R1 + x3)), uh(leafI(R3 + x1), leafI(R2 + x))),
-                         uh(uh(leafI(R2 + x3), leafI(R3 + x2)), uh(leafI(R1 + x), leafI(R0 + x1)))) | 0;
+          const orN = uh(uh(oh(lN[R1 + x2], uh(lN[R0 + x2], lN[R1 + x3])), oh(lN[R2 + x1], uh(lN[R3 + x1], lN[R2 + x]))),
+                         uh(oh(lN[R2 + x2], uh(lN[R2 + x3], lN[R3 + x2])), oh(lN[R1 + x1], uh(lN[R1 + x], lN[R0 + x1])))) | 0;
+          const orI = uh(uh(oh(lI[R1 + x2], uh(lI[R0 + x2], lI[R1 + x3])), oh(lI[R2 + x1], uh(lI[R3 + x1], lI[R2 + x]))),
+                         uh(oh(lI[R2 + x2], uh(lI[R2 + x3], lI[R3 + x2])), oh(lI[R1 + x1], uh(lI[R1 + x], lI[R0 + x1])))) | 0;
+          const krN = uh(uh(oh(leafN(R1 + x2), uh(leafN(R0 + x2), leafN(R1 + x3))), oh(leafN(R2 + x1), uh(leafN(R3 + x1), leafN(R2 + x)))),
+                         uh(oh(leafN(R2 + x2), uh(leafN(R2 + x3), leafN(R3 + x2))), oh(leafN(R1 + x1), uh(leafN(R1 + x), leafN(R0 + x1))))) | 0;
+          const krI = uh(uh(oh(leafI(R1 + x2), uh(leafI(R0 + x2), leafI(R1 + x3))), oh(leafI(R2 + x1), uh(leafI(R3 + x1), leafI(R2 + x)))),
+                         uh(oh(leafI(R2 + x2), uh(leafI(R2 + x3), leafI(R3 + x2))), oh(leafI(R1 + x1), uh(leafI(R1 + x), leafI(R0 + x1))))) | 0;
           const oN = (Math.imul(uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2])), (_OCT_CTR_MIX + h2N[R1 + x1]) | 1) + Math.imul(orN, _OCT_RING_MIX)) | 0;
           const oI = (Math.imul(uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2])), (_OCT_CTR_MIX + h2I[R1 + x1]) | 1) + Math.imul(orI, _OCT_RING_MIX)) | 0;
           const kN = (Math.imul(uh(uh(gN(R0 + x1), gN(R2 + x1)), uh(gN(R1 + x), gN(R1 + x2))), (_OCT_CTR_MIX + gN(R1 + x1)) | 1) + Math.imul(krN, _OCT_RING_MIX)) | 0;
