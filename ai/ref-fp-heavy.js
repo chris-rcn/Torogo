@@ -24,8 +24,8 @@ const { game3FromGame2 } = require('../game3.js');
 const WEIGHTS    = path.join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js');
 // Softmax temperature ramps DOWN linearly with phase (board fullness):
 // TEMP_START at the empty board, TEMP_END at the full board.
-const TEMP_START = 1.0;   // phase 0
-const TEMP_END   = 0.5;   // phase 1
+const TEMP_START = 1.8;   // phase 0
+const TEMP_END   = 0.1;   // phase 1
 const RANK_TOPN  = 14;
 
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-fp-heavy', path: WEIGHTS });
