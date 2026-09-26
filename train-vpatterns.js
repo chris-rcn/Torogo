@@ -264,7 +264,6 @@ function saveSource() {
   return (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
 }
 let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over feature updates (avgW; reset each print)
-let matchHit = 0, matchSampled = 0;  // per-interval on-policy moves that matched the --ext move (match column; 50% sampled; reset each print)
 
 // ── Training helpers ──────────────────────────────────────────────────────────
 
@@ -342,7 +341,7 @@ function trainGame(N) {
     featsArr.push(features);
     vals.push(features.val);
 
-    let move, onPolicy = false;
+    let move;
     if (Math.random() < EPSILON) {
       move = game.randomLegalMove();                 // full-width exploration (coverage off the filter)
     } else if (extGetMove && Math.random() > ON_POLICY) {
@@ -350,16 +349,8 @@ function trainGame(N) {
     } else if (fpWeights) {
       const cand = fpTopK(game, FP_WIDTH);           // greedy only within the fp filter
       move = (cand && cand.length) ? bestFiltered(game, cand, weights) : search1ply(game);
-      onPolicy = true;
     } else {
       move = search1ply(game);
-      onPolicy = true;
-    }
-    // matchExt: how often the on-policy move agrees with --ext.  Sample half the
-    // on-policy moves — generating the ext move is a full agent call.
-    if (onPolicy && SHOW_MATCH && Math.random() < 0.5) {
-      matchSampled++;
-      if (extGetMove(game).move === move) matchHit++;
     }
     game.play(move);
     if (useG3) g3.play(move);
@@ -395,6 +386,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
   const results = [];
   let totalMoves = 0;
   let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
+  let predHit = 0, predN = 0;     // mvPred: subject moves that match the eval agent's move (50% sampled)
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -420,6 +412,13 @@ function evalVsReference(N, refGetMove, nGames, budget) {
         const cand = fpWeights ? fpTopK(game, FP_WIDTH) : null;
         idx = (cand && cand.length) ? bestFiltered(game, cand, evalW)
                                     : search(game, { weights: evalW, specs, preparedSpecs: prepSpecs });
+        // mvPred: how often the subject's move matches the eval agent's.  Sample
+        // half the subject's moves — the eval agent call is a full search.
+        if (Math.random() < 0.5) {
+          predN++;
+          const mv = refGetMove(game, budget);
+          if ((mv.move !== undefined ? mv.move : PASS) === idx) predHit++;
+        }
       } else {
         const mv = refGetMove(game, budget);
         idx = mv.move !== undefined ? mv.move : PASS;
@@ -442,7 +441,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
   }
 
-  return { results, moves: totalMoves, accCorrect, accN };
+  return { results, moves: totalMoves, accCorrect, accN, predHit, predN };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -462,10 +461,6 @@ const extGetMove = EXT_AGENT
       return (typeof m.create === 'function' ? m.create(Util.makeCfg()) : m).getMove;
     })()
   : null;
-
-// matchExt column: only meaningful when the run mixes on-policy and --ext moves,
-// so it needs an ext agent to compare against and a non-trivial on-policy share.
-const SHOW_MATCH = !!extGetMove && ON_POLICY > 0 && ON_POLICY < 1;
 
 // Featurepol candidate filter (--fp-width): restrict the trainee's greedy and
 // epsilon moves — in self-play AND in the --eval reference games — to
@@ -595,7 +590,7 @@ console.log([
   'tTran'.padStart(5),
   'tTurn'.padStart(5),
   // Test / eval columns (right).
-  ...(SHOW_MATCH ? ['matchExt'.padStart(8)] : []),
+  ...(evalGetMove ? ['mvPred'.padStart(6)] : []),
   // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
   // interval's, and the rolling-half window).  Fixed 21 chars wide.
   ...(evalGetMove ? ['winRatio'.padStart(21), ' acc'.padStart(4)] : []),
@@ -647,16 +642,17 @@ while (true) {
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
-    let evalMatchMs = 0, evalMatchMoves = 0, evalAccC = 0, evalAccN = 0;
+    let evalMatchMs = 0, evalMatchMoves = 0, evalAccC = 0, evalAccN = 0, evalPredHit = 0, evalPredN = 0;
     if (evalGetMove) {
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
       const resultsBatch = [];
       while (true) {
-        const { results, moves, accCorrect, accN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        const { results, moves, accCorrect, accN, predHit, predN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
         for (const r of results) resultsBatch.push(r);
         evalMatchMoves += moves;
         evalAccC += accCorrect; evalAccN += accN;
+        evalPredHit += predHit; evalPredN += predN;
         evalMatchMs = Date.now() - tTestStart;
         if (evalMatchMs > 0.3 * intervalTrainMs) break;
         if (resultsBatch.length >= 2000) break;
@@ -693,8 +689,6 @@ while (true) {
     }
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
     wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
-    const matchCol = SHOW_MATCH ? Util.fmtRatio4(matchSampled > 0 ? matchHit / matchSampled : 0).padStart(8) : null;
-    matchHit = 0; matchSampled = 0;  // per-interval matchExt: reset at each print
 
     const tTestMs   = Date.now() - tTestStart;
     const elapsedMs = Date.now() - t0;
@@ -713,7 +707,7 @@ while (true) {
       Util.fmtMs(trainMs),
       Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
-      ...(matchCol ? [matchCol] : []),
+      ...(evalGetMove ? [Util.fmtRatio4(evalPredN > 0 ? evalPredHit / evalPredN : 0).padStart(6)] : []),
       ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
                           `/${Util.fmtRatio4(avgWR)}(${Util.fmt4i(evalHalf)})`).padStart(21),
                          Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0)] : []),
