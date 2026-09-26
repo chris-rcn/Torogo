@@ -97,6 +97,20 @@ const _NC3_CTR_MIX = 2649461;
 // hash is folded into the D4-symmetric arm combine as an odd multiplier, the
 // same trick the 3×3 uses for its centre cell.  ( | 1 forces the factor odd.)
 const _OCT_CTR_MIX = 0x51ed270b | 0;
+// Cross-corner ring term for the octagon.  The five-block combine hashes each 2×2
+// arm D4-invariantly, which discards how the arm's cells sit within it — so two
+// octagons differing only by an arm's internal orientation collide (measured 8:1
+// fidelity 54%).  Summing uh() over the four ADJACENT ring-cell pairs that
+// straddle the removed corners — (B,C)(D,E)(F,G)(H,A) with the ring labelled
+//   . A B .
+//   H . . C
+//   G . . D
+//   . F E .
+// — completes the ring's cyclic adjacency (the four within-edge pairs already
+// live in the arm blocks).  The sum is D4-invariant (the four pairs permute among
+// themselves) and each uh is over two prime leaves so the pair hash is exact.
+// Folded additively via this odd multiplier: measured 8:1 → 82%, 8:2 → 89%.
+const _OCT_RING_MIX = 0x9e3779b1 | 0;
 
 // ── Core encoding ─────────────────────────────────────────────────────────────
 
@@ -531,20 +545,31 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
         //     . D D .
         // uh(uh(up,down),uh(left,right)) is exactly D4-invariant over the arm
         // positions (90° swaps the two pairs, uh unordered); the ordered centre
-        // fold distinguishes the anchor.  Incremental (deltaZ has a do8 pass).
+        // fold distinguishes the anchor.  The cross-corner ring term (see
+        // _OCT_RING_MIX) is added on top to restore the lost arm orientation.
+        // Ring cells at (row,col) relative to the (y,x) top-left of the 4×4:
+        //   A=(0,x1) B=(0,x2) C=(1,x3) D=(2,x3) E=(3,x2) F=(3,x1) G=(2,x0) H=(1,x0)
+        // Incremental (deltaZ has a matching do8 pass).
         const tag8 = (tagBase << 3) | 6;
         const pS8  = phSalt[tag8];
         for (let y = 0; y < N; y++) {
           const y1 = y + 1 < N ? y + 1 : y + 1 - N;
           const y2 = y + 2 < N ? y + 2 : y + 2 - N;
-          const R0 = y * N, R1 = y1 * N, R2 = y2 * N;
+          const y3 = y + 3 < N ? y + 3 : y + 3 - N;
+          const R0 = y * N, R1 = y1 * N, R2 = y2 * N, R3 = y3 * N;
           for (let x = 0; x < N; x++) {
             const x1 = x + 1 < N ? x + 1 : x + 1 - N;
             const x2 = x + 2 < N ? x + 2 : x + 2 - N;
+            const x3 = x + 3 < N ? x + 3 : x + 3 - N;
             const armsN = uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2]));
             const armsI = uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2]));
-            const kN = Math.imul(armsN, (_OCT_CTR_MIX + h2N[R1 + x1]) | 1);
-            const kI = Math.imul(armsI, (_OCT_CTR_MIX + h2I[R1 + x1]) | 1);
+            // Cross-corner ring pairs (B,C)(D,E)(F,G)(H,A), summed and folded in.
+            const ringN = (uh(lN[R0 + x2], lN[R1 + x3]) + uh(lN[R2 + x3], lN[R3 + x2]) +
+                           uh(lN[R3 + x1], lN[R2 + x]) + uh(lN[R1 + x], lN[R0 + x1])) | 0;
+            const ringI = (uh(lI[R0 + x2], lI[R1 + x3]) + uh(lI[R2 + x3], lI[R3 + x2]) +
+                           uh(lI[R3 + x1], lI[R2 + x]) + uh(lI[R1 + x], lI[R0 + x1])) | 0;
+            const kN = (Math.imul(armsN, (_OCT_CTR_MIX + h2N[R1 + x1]) | 1) + Math.imul(ringN, _OCT_RING_MIX)) | 0;
+            const kI = (Math.imul(armsI, (_OCT_CTR_MIX + h2I[R1 + x1]) | 1) + Math.imul(ringI, _OCT_RING_MIX)) | 0;
             if (kN === kI) continue;   // colour-twin / all-empty: zero value
             outKeys[count] = mixTag(kN < kI ? kN : kI, tag8) ^ pS8;
             outPols[count] = kN < kI ? 1 : -1;
@@ -896,13 +921,25 @@ function deltaZ(game, prepSpecs, weights, move) {
           const y = (oc / N) | 0, x = oc % N;
           const y1 = y + 1 < N ? y + 1 : y + 1 - N;
           const y2 = y + 2 < N ? y + 2 : y + 2 - N;
-          const R0 = y * N, R1 = y1 * N, R2 = y2 * N;
+          const y3 = y + 3 < N ? y + 3 : y + 3 - N;
+          const R0 = y * N, R1 = y1 * N, R2 = y2 * N, R3 = y3 * N;
           const x1 = x + 1 < N ? x + 1 : x + 1 - N;
           const x2 = x + 2 < N ? x + 2 : x + 2 - N;
-          const oN = Math.imul(uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2])), (_OCT_CTR_MIX + h2N[R1 + x1]) | 1);
-          const oI = Math.imul(uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2])), (_OCT_CTR_MIX + h2I[R1 + x1]) | 1);
-          const kN = Math.imul(uh(uh(gN(R0 + x1), gN(R2 + x1)), uh(gN(R1 + x), gN(R1 + x2))), (_OCT_CTR_MIX + gN(R1 + x1)) | 1);
-          const kI = Math.imul(uh(uh(gI(R0 + x1), gI(R2 + x1)), uh(gI(R1 + x), gI(R1 + x2))), (_OCT_CTR_MIX + gI(R1 + x1)) | 1);
+          const x3 = x + 3 < N ? x + 3 : x + 3 - N;
+          // Cross-corner ring term (see _OCT_RING_MIX): old from stored leaves,
+          // new from override-aware leafN/leafI — mirroring the arm h2 old/new.
+          const orN = (uh(lN[R0 + x2], lN[R1 + x3]) + uh(lN[R2 + x3], lN[R3 + x2]) +
+                       uh(lN[R3 + x1], lN[R2 + x]) + uh(lN[R1 + x], lN[R0 + x1])) | 0;
+          const orI = (uh(lI[R0 + x2], lI[R1 + x3]) + uh(lI[R2 + x3], lI[R3 + x2]) +
+                       uh(lI[R3 + x1], lI[R2 + x]) + uh(lI[R1 + x], lI[R0 + x1])) | 0;
+          const krN = (uh(leafN(R0 + x2), leafN(R1 + x3)) + uh(leafN(R2 + x3), leafN(R3 + x2)) +
+                       uh(leafN(R3 + x1), leafN(R2 + x)) + uh(leafN(R1 + x), leafN(R0 + x1))) | 0;
+          const krI = (uh(leafI(R0 + x2), leafI(R1 + x3)) + uh(leafI(R2 + x3), leafI(R3 + x2)) +
+                       uh(leafI(R3 + x1), leafI(R2 + x)) + uh(leafI(R1 + x), leafI(R0 + x1))) | 0;
+          const oN = (Math.imul(uh(uh(h2N[R0 + x1], h2N[R2 + x1]), uh(h2N[R1 + x], h2N[R1 + x2])), (_OCT_CTR_MIX + h2N[R1 + x1]) | 1) + Math.imul(orN, _OCT_RING_MIX)) | 0;
+          const oI = (Math.imul(uh(uh(h2I[R0 + x1], h2I[R2 + x1]), uh(h2I[R1 + x], h2I[R1 + x2])), (_OCT_CTR_MIX + h2I[R1 + x1]) | 1) + Math.imul(orI, _OCT_RING_MIX)) | 0;
+          const kN = (Math.imul(uh(uh(gN(R0 + x1), gN(R2 + x1)), uh(gN(R1 + x), gN(R1 + x2))), (_OCT_CTR_MIX + gN(R1 + x1)) | 1) + Math.imul(krN, _OCT_RING_MIX)) | 0;
+          const kI = (Math.imul(uh(uh(gI(R0 + x1), gI(R2 + x1)), uh(gI(R1 + x), gI(R1 + x2))), (_OCT_CTR_MIX + gI(R1 + x1)) | 1) + Math.imul(krI, _OCT_RING_MIX)) | 0;
           if (oN !== oI) delta -= (oN < oI ? 1 : -1) * (weights.get(mixTag(oN < oI ? oN : oI, tag8)) ?? 0);
           if (kN !== kI) delta += (kN < kI ? 1 : -1) * (weights.get(mixTag(kN < kI ? kN : kI, tag8)) ?? 0);
         }
