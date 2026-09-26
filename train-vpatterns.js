@@ -598,6 +598,7 @@ console.log();
 // Produces no table output and its updates are discarded from the interval stats.
 if (BOOTSTRAP > 0 && !LOAD_PATH) {
   process.stdout.write('Bootstrapping... ');
+  const bootStart = Date.now();
   let nextPct = 5;   // report progress every 5% (integer compare avoids float drift)
   for (let i = 0; i < BOOTSTRAP; i++) {
     trainGame(TRAIN_SIZE, 1);
@@ -607,7 +608,7 @@ if (BOOTSTRAP > 0 && !LOAD_PATH) {
     }
   }
   wAbsSum = 0; wUpdateCount = 0;   // discard bootstrap updates from the first avgW
-  console.log();
+  console.log(` elapsed=${Util.fmtMs(Date.now() - bootStart)}`);
 }
 
 // Print header.
