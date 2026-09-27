@@ -68,7 +68,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
 //   TD_ACTOR_LR       actor step size                                  (default 0.1)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
-//   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 4,9)
+//   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
 //   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
 //                     the rest is the final result minus V             (default 0.5)
@@ -83,7 +83,7 @@ function create(cfg) {
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   const LR       = cfg.float('TD_ACTOR_LR', 0.1);
   const TEMP     = cfg.float('TD_TEMP', 1);
-  const cStr     = cfg.str('TD_CRITIC_LAYERS', '4,9');
+  const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
