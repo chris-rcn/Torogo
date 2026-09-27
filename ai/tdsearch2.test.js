@@ -250,7 +250,7 @@ function playRandom(g, rng, changed) {
 {
   const FeaturePol = require('../featurepol-lib.js');
   const path = 'out/featurepol-vlxe3ijb.js';
-  const a = agent({ TD_PRIOR_FPOL_DATA: path });
+  const a = agent({ TD_PRIOR_FPOL_DATA: path, TD_PRIOR_FPOL_WEIGHT: '1' });   // weight 1: scores must equal the model's
   const { weights } = FeaturePol.loadModel({ name: 'test', path });
   const N = 9, rng = makeRng(151);
   const fstate = FeaturePol.createState(N, weights.spec);

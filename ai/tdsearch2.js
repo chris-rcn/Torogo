@@ -126,8 +126,9 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 //   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior (default none)
-//   TD_PRIOR_FPOL_WEIGHT  the actor prior's weight in the score; its logits are large
-//                     (sd ~4 on 13x13), so below 1 keeps the sims exploring  (default 1)
+//   TD_PRIOR_FPOL_WEIGHT  the actor prior's weight in the score; featurepol logits are
+//                     large (sd 1-4 on 13x13) and only a light prior helps: 0.1 beat 0
+//                     and 0.2 at 300 ms on 1000 positions                 (default 0.1)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -171,7 +172,7 @@ function create(cfg) {
 
   // Priors: zero arrays without a file, so the lookups are unconditional.
   const fpolPriorPath = cfg.str('TD_PRIOR_FPOL_DATA', '');
-  const pa9 = fpolPriorPath ? actorPriorFromFeaturepol(fpolPriorPath, cfg.float('TD_PRIOR_FPOL_WEIGHT', 1)) : new Float32Array(2 * 6561);
+  const pa9 = fpolPriorPath ? actorPriorFromFeaturepol(fpolPriorPath, cfg.float('TD_PRIOR_FPOL_WEIGHT', 0.1)) : new Float32Array(2 * 6561);
   const pc9 = new Float32Array(2 * 19683);
   const HAS_PRIOR = false;                 // critic prior not yet wired
   // The layer-9 critic index is maintained if its table is on OR a prior is
