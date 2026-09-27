@@ -35,19 +35,22 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //
 // Everything is maintained incrementally: a move only changes points within
 // one cell of the placed or captured stones, and one pass over those points
-// refreshes both movers' actor scores and both movers' critic logits.  The
-// per-point codes and critic indices that pass computes are the features the
-// learning step needs, so the pass logs their old values and the backward
-// pass restores them step by step (O(changed points), no board snapshots).
+// refreshes both movers' actor scores and both movers' critic logits.
 // Sampling rejects illegal and true-eye points lazily (their weight is zeroed
 // until their neighbourhood changes).
 //
-// Learning, once per sim in a backward pass:
-//   critic: two-ply same-parity TD(0) — the target for step t is V at step t+2
-//           (the same mover's next position), the outcome at the end.
-//   actor:  REINFORCE with advantage A_t = (1−β)·δ_t + β·(R − V_t), all from the
-//           mover's view, where δ_t = V_{t+2} − V_t is the TD advantage and R
-//           the final result; β = TD_ADV_MIX.  Without a critic the baseline
+// Learning:
+//   critic: two-ply same-parity TD(0), ONLINE with a two-step lag — at step t
+//           the features of step t−2 (the same mover's previous position) are
+//           pushed toward V(s_t); the last two steps are pushed toward the
+//           outcome when the sim ends.  A three-slot ring of index snapshots
+//           supplies step t−2's features; the live logit is corrected for the
+//           features the two positions share.
+//   actor:  REINFORCE at sim end (it needs the final result), in step order,
+//           with advantage A_t = (1−β)·δ_t + β·(R − V_t) from the mover's view,
+//           where δ_t = V_{t+2} − V_t is the TD advantage, R the final result
+//           and β = TD_ADV_MIX.  Its per-step records are the sampled-from
+//           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
 // No pretrained models, no simulation truncation (planned later).
@@ -94,12 +97,11 @@ function create(cfg) {
   let nAct = 0;                                 // active critic features on the current board
   let mark = null, list = null;                 // dedup scratch for affected points
   let changed = null;                           // cells altered by a move (stone + captures)
-  // Per-step records for the backward pass.
-  let exs = null, Ss = null, movers = null, chosen = null, Vs = null, nActS = null;
-  // Change log: for every point recomputed during a sim step, its pre-move
-  // codes and critic indices.  logStart[t] = the log position at step t's start.
-  let logP = null, logK5 = null, logK9 = null, logI1 = null, logI4 = null, logI9 = null;
-  let logStart = null, logN = 0, logging = false;
+  // Per-step records for the actor's update at sim end.
+  let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
+  // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
+  // two-step-lagged critic update, with the active-feature count per slot.
+  let i1r = null, i4r = null, i9r = null, nActR = null;
   let maxSteps = 0;
   const base = [0.5, 0.5];                      // per-mover return baseline (critic off)
   let lastMoveCount = -1;
@@ -123,13 +125,12 @@ function create(cfg) {
     exs    = new Float64Array(maxSteps * area);
     Ss     = new Float64Array(maxSteps);
     Vs     = new Float64Array(maxSteps);
-    nActS  = new Int32Array(maxSteps);
     movers = new Uint8Array(maxSteps);
     chosen = new Int32Array(maxSteps);
-    const logCap = maxSteps * (area + 1);       // a step recomputes at most every point plus the ko point
-    logP = new Int32Array(logCap); logK5 = new Int32Array(logCap); logK9 = new Int32Array(logCap);
-    logI1 = new Int32Array(logCap); logI4 = new Int32Array(logCap); logI9 = new Int32Array(logCap);
-    logStart = new Int32Array(maxSteps + 1);
+    k5s = new Int32Array(USE5 ? maxSteps * area : 0);
+    k9s = new Int32Array(USE9 ? maxSteps * area : 0);
+    i1r = new Int32Array(C1 ? 3 * area : 0); i4r = new Int32Array(C4 ? 3 * area : 0); i9r = new Int32Array(C9 ? 3 * area : 0);
+    nActR = new Int32Array(3);
   }
 
   function reset() {
@@ -197,11 +198,6 @@ function create(cfg) {
   // in step) and every critic layer's index (Z kept in step).  Kept small so
   // V8 inlines the code and score helpers into it (the hot function).
   function recompute(cells, nbr, dnbr, p) {
-    if (logging) {
-      const n = logN++;
-      logP[n] = p; logK5[n] = k5a[p]; logK9[n] = k9a[p];
-      logI1[n] = i1[p]; logI4[n] = i4[p]; logI9[n] = i9[p];
-    }
     const k5 = (USE5 || NEED9) ? code5(cells, nbr, p) : 0;
     const k9 = NEED9 ? code9(cells, dnbr, p, k5) : 0;
     k5a[p] = k5; k9a[p] = k9;
@@ -219,7 +215,6 @@ function create(cfg) {
   function recomputeAll(cells, nbr, dnbr) {
     ex[0].fill(0); ex[1].fill(0); S[0] = S[1] = 0;
     i1.fill(-1); i4.fill(-1); i9.fill(-1); Z[0] = Z[1] = 0; nAct = 0;
-    logging = false; logN = 0;
     for (let p = 0; p < area; p++) recompute(cells, nbr, dnbr, p);
   }
 
@@ -264,15 +259,25 @@ function create(cfg) {
     const g = game.clone();
     const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
     recomputeAll(cells, nbr, dnbr);
-    logging = true;
     let t = 0;
     while (!g.gameOver && t < maxSteps - 1) {
       const m = g.current === BLACK ? 0 : 1;
+      const o = t * area;
+      if (CRITIC) {
+        Vs[t] = sigmoid(Z[m]);
+        const slot = t % 3, so = slot * area;
+        if (C1) i1r.set(i1, so);
+        if (C4) i4r.set(i4, so);
+        if (C9) i9r.set(i9, so);
+        nActR[slot] = nAct;
+        // Step t−2 (same mover) is now two plies on: push it toward V(s_t).
+        if (t >= 2) criticUpdate((t - 2) % 3, m, Vs[t - 2], Vs[t], true);
+      }
       const move = sample(g, m, rng);
-      exs.set(ex[m], t * area);
+      exs.set(ex[m], o);
+      if (USE5) k5s.set(k5a, o);
+      if (USE9) k9s.set(k9a, o);
       Ss[t] = S[m]; movers[t] = m; chosen[t] = move;
-      if (CRITIC) { Vs[t] = sigmoid(Z[m]); nActS[t] = nAct; }
-      logStart[t] = logN;
       const prevKo = g.ko;
       let nChanged = 0;
       if (move !== PASS) {
@@ -287,34 +292,28 @@ function create(cfg) {
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
       t++;
     }
-    logStart[t] = logN;
-    logging = false;
     const z = g.calcWinner() === BLACK ? 1 : 0;
+    // Terminal: the last two steps have no position two plies on.
+    if (CRITIC) for (let u = Math.max(0, t - 2); u < t; u++) criticUpdate(u % 3, movers[u], Vs[u], z, false);
     update(t, z);
     return t;
   }
 
-  // Restore the codes and indices to their state at the start of step t by
-  // replaying its log entries backwards (a point logged twice restores to its
-  // earliest value last).  Used by the backward pass; Z/S/ex are not restored,
-  // they are not needed there.
-  function revertStep(t) {
-    for (let n = logStart[t + 1] - 1; n >= logStart[t]; n--) {
-      const p = logP[n];
-      k5a[p] = logK5[n]; k9a[p] = logK9[n];
-      i1[p] = logI1[n]; i4[p] = logI4[n]; i9[p] = logI9[n];
-    }
-  }
-
-  // Critic TD step for the record at t: Δw = lr·(target − V)/n on every active
-  // feature of mover m's tables.  i1/i4/i9 hold step t's indices (see revertStep).
-  function criticUpdate(t, m, target) {
-    const n = nActS[t];
+  // Critic TD step for the position in ring slot `slot` (mover m, value v):
+  // Δw = lr·(target − v)/n on each of its active features in mover m's tables.
+  // A feature index encodes its anchor, so it is still active on the live board
+  // iff the live index at that anchor equals it; with `fixZ` the live logit
+  // Z[m] is corrected for those shared features.
+  function criticUpdate(slot, m, v, target, fixZ) {
+    const n = nActR[slot];
     if (n === 0) return;
-    const step = CLR * (target - Vs[t]) / n;
-    if (C1) { const b = m * area * 3;     for (let p = 0; p < area; p++) { const i = i1[p]; if (i >= 0) c1[b + i] += step; } }
-    if (C4) { const b = m * area * 81;    for (let p = 0; p < area; p++) { const i = i4[p]; if (i >= 0) c4[b + i] += step; } }
-    if (C9) { const b = m * area * 19683; for (let p = 0; p < area; p++) { const i = i9[p]; if (i >= 0) c9[b + i] += step; } }
+    const step = CLR * (target - v) / n;
+    const so = slot * area;
+    let dz = 0;
+    if (C1) { const b = m * area * 3;     for (let p = 0; p < area; p++) { const i = i1r[so + p]; if (i >= 0) { c1[b + i] += step; if (i1[p] === i) dz += step; } } }
+    if (C4) { const b = m * area * 81;    for (let p = 0; p < area; p++) { const i = i4r[so + p]; if (i >= 0) { c4[b + i] += step; if (i4[p] === i) dz += step; } } }
+    if (C9) { const b = m * area * 19683; for (let p = 0; p < area; p++) { const i = i9r[so + p]; if (i >= 0) { c9[b + i] += step; if (i9[p] === i) dz += step; } } }
+    if (fixZ) Z[m] += dz;
   }
 
   // Actor policy-gradient step for the record at t with advantage A (mover's
@@ -325,6 +324,7 @@ function create(cfg) {
     if (move === PASS) return;             // PASS is outside the softmax
     const o = t * area;
     const e = exs.subarray(o, o + area);
+    const k5 = k5s.subarray(o, o + area), k9 = k9s.subarray(o, o + area);
     const invS = 1 / Ss[t];
     const k = LR / TEMP * A;
     for (let p = 0; p < area; p++) {
@@ -333,8 +333,8 @@ function create(cfg) {
       const gr = k * ((p === move ? 1 : 0) - v * invS);
       const mp = m * area + p;
       if (USE1) w1[mp] += gr;
-      if (USE5) w5[mp * 81 + k5a[p]] += gr;
-      if (USE9) w9[mp * 6561 + k9a[p]] += gr;
+      if (USE5) w5[mp * 81 + k5[p]] += gr;
+      if (USE9) w9[mp * 6561 + k9[p]] += gr;
     }
   }
 
@@ -342,27 +342,25 @@ function create(cfg) {
   // G[m] carries the same-mover chain: the next value of mover m's positions
   // (V_{t+2}), starting from the outcome.  Values are BLACK's; the mover's view
   // is v for BLACK and 1 − v for WHITE.
-  // The backward pass walks the steps last to first, reverting each step's log
-  // first so the code/index arrays describe that step's position.
+  // Actor update over the sim's records, in step order.  z = outcome,
+  // P(BLACK wins) ∈ {0,1}; values are BLACK's, the mover's view is v for BLACK
+  // and 1 − v for WHITE.
   function update(steps, z) {
     if (!CRITIC) {
       const adv = [z - base[0], (1 - z) - base[1]];
       base[0] += (1 - BASE_EMA) * (z - base[0]);
       base[1] += (1 - BASE_EMA) * ((1 - z) - base[1]);
-      for (let t = steps - 1; t >= 0; t--) { revertStep(t); actorUpdate(t, movers[t], adv[movers[t]]); }
+      for (let t = 0; t < steps; t++) actorUpdate(t, movers[t], adv[movers[t]]);
       return;
     }
-    const G = [z, z];
-    for (let t = steps - 1; t >= 0; t--) {
-      revertStep(t);
+    for (let t = 0; t < steps; t++) {
       const m = movers[t];
-      const next = G[m], v = Vs[t];
+      const v = Vs[t];
+      const next = t + 2 < steps ? Vs[t + 2] : z;   // the same mover's next position, or the outcome
       const sign = m === 0 ? 1 : -1;      // mover's view of a BLACK-view difference
       const delta = sign * (next - v);    // TD advantage
       const mc    = sign * (z - v);       // final-result advantage
       actorUpdate(t, m, (1 - ADV_MIX) * delta + ADV_MIX * mc);
-      criticUpdate(t, m, next);
-      G[m] = v;
     }
   }
 
