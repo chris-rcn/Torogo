@@ -12,6 +12,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
 const ABSearch = Util.load('./ab-search.js', 'ABSearch');
+const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -68,6 +69,13 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
+// Priors (TD_PRIOR_DATA): location-independent twins of the two tables —
+// actor: (mover, 8-cell code around the point); critic: (mover, 2×2 code) —
+// added inside the score and the logit, so the online tables learn RESIDUALS
+// on them and the updates are unchanged.  They are distilled by
+// train-tdsearch2-priors.js: after a search, every root feature's prior weight
+// moves toward prior + residual (distilPriors).  Without a file both are zero.
+//
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
 // agent's rule, here a buffer so the actor cannot steer into the leaf
@@ -112,6 +120,7 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
+//   TD_PRIOR_DATA     priors file from train-tdsearch2-priors.js (default none: zero priors)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -152,7 +161,13 @@ function create(cfg) {
     vpatModel = VPat.modelFromRaw(raw);
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
-  const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
+
+  // Priors: zero arrays unless a file is given, so the lookups are unconditional.
+  const priorPath = cfg.str('TD_PRIOR_DATA', '');
+  let priors = priorPath ? (_isNode ? Priors.load(priorPath) : Priors.fromRaw(window.tdsearch2Priors)) : Priors.make();
+  let pa9 = priors.actor9, pc4 = priors.critic4;
+  const HAS_PRIOR = !!priorPath;
+  let need9      = USE9 || C9 || !!cfg.str('TD_PRIOR_DATA', '');   // the 8-cell code is needed (layers, or a prior)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
@@ -239,17 +254,18 @@ function create(cfg) {
     return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
   }
 
-  // Actor score for mover m at p from precomputed codes (active layers only).
+  // Actor score for mover m at p from precomputed codes (active layers only),
+  // on top of the actor prior for the point's 8-cell code.
   function scoreFrom(m, p, k5, k9) {
     const mp = m * area + p;
-    let s = w1[mp];
+    let s = w1[mp] + pa9[m * 6561 + k9];
     if (act5) s += w5[mp * 81 + k5];
     if (act9) s += w9[mp * 6561 + k9];
     return s;
   }
   function score(cells, nbr, dnbr, m, p) {
-    const k5 = (USE5 || NEED9) ? code5(cells, nbr, p) : 0;
-    const k9 = NEED9 ? code9(cells, dnbr, p, k5) : 0;
+    const k5 = (USE5 || need9) ? code5(cells, nbr, p) : 0;
+    const k9 = need9 ? code9(cells, dnbr, p, k5) : 0;
     return scoreFrom(m, p, k5, k9);
   }
 
@@ -272,19 +288,54 @@ function create(cfg) {
   function critIdx4(cells, nbr, dnbr, p) { const k4 = code4(cells, nbr, dnbr, p); return k4 === 0 ? -1 : p * 81 + k4; }
   function critIdx9(v, p, k9)         { const k = k9 + 6561 * (v + 1); return k === 0 ? -1 : p * 19683 + k; }
 
+  // Layer 4 carries the critic prior: a window's value is its table weight
+  // plus the prior for its code (index % 81), for either mover.
+  function swapCritic4(p, ni) {
+    const oi = i4[p];
+    if (oi === ni) return;
+    const size = area * 81;
+    for (let m = 0; m < 2; m++) {
+      const o = m * size, po = m * 81;
+      Z[m] += (ni >= 0 ? c4[o + ni] + pc4[po + ni % 81] : 0) - (oi >= 0 ? c4[o + oi] + pc4[po + oi % 81] : 0);
+    }
+    if (oi < 0) nAct++; else if (ni < 0) nAct--;
+    i4[p] = ni;
+  }
   function recomputeCritic(cells, nbr, dnbr, p, k9, v) {
     if (C1) swapCritic(c1, i1, area * 3, p, critIdx1(v, p));
-    if (C4) swapCritic(c4, i4, area * 81, p, critIdx4(cells, nbr, dnbr, p));
+    if (C4) swapCritic4(p, critIdx4(cells, nbr, dnbr, p));
     if (C9) swapCritic(c9, i9, area * 19683, p, critIdx9(v, p, k9));
   }
+
+  // Distillation (the trainer calls this after getMove on the same position):
+  // every feature the root exhibits moves its prior toward prior + residual by
+  // `step` × residual, for both movers.  Actor: each empty point's 8-cell code
+  // takes the point's layer-1 residual.  Critic: each active 2×2 window's code
+  // takes the window's residual.
+  function distilPriors(game, step) {
+    const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
+    for (let p = 0; p < area; p++) {
+      if (cells[p] === EMPTY) {
+        const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
+        for (let m = 0; m < 2; m++) pa9[m * 6561 + k9] += step * w1[m * area + p];
+      }
+      if (C4) {
+        const k4 = code4(cells, nbr, dnbr, p);
+        if (k4 !== 0) for (let m = 0; m < 2; m++) pc4[m * 81 + k4] += step * c4[m * area * 81 + p * 81 + k4];
+      }
+    }
+  }
+
+  // Share a priors object (the trainer's), so distillation edits it in place.
+  function setPriors(obj) { priors = obj; pa9 = obj.actor9; pc4 = obj.critic4; need9 = true; }
 
   // Recompute everything anchored at p: both movers' actor score/ex (S kept
   // in step; skipped in the playout tail, where the scores are unused) and
   // every critic layer's index (Z kept in step).  Kept small so V8 inlines
   // the code and score helpers into it (the hot function).
   function recompute(cells, nbr, dnbr, p) {
-    const k5 = (USE5 || NEED9) ? code5(cells, nbr, p) : 0;
-    const k9 = NEED9 ? code9(cells, dnbr, p, k5) : 0;
+    const k5 = (USE5 || need9) ? code5(cells, nbr, p) : 0;
+    const k9 = need9 ? code9(cells, dnbr, p, k5) : 0;
     k5a[p] = k5; k9a[p] = k9;
     const v  = cells[p];
     if (actorOn) {
@@ -570,10 +621,10 @@ function create(cfg) {
              get lastReturn() { return lastReturn; },
              rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
+             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC, HAS_PRIOR, pa9, pc4 };
   }
 
-  return { getMove, _internals };
+  return { getMove, distilPriors, setPriors, get priors() { return priors; }, _internals };
 }
 
 let _default = null;

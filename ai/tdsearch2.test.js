@@ -224,6 +224,55 @@ function playRandom(g, rng, changed) {
   check(threw, 'ab without a critic should be refused');
 }
 
+// ── Priors: enter the score and the logit; distillation moves them toward the residuals ──
+{
+  const Priors = require('../tdsearch2-priors.js');
+  const N = 7, rng = makeRng(91);
+  const a = agent({});
+  const g = new Game2(N, true);
+  for (let i = 0; i < 6; i++) g.play(g.randomLegalMove(rng));
+  a._internals().setup(N);
+  const pr = Priors.make();
+  for (let i = 0; i < pr.actor9.length; i++) pr.actor9[i] = rng.random() - 0.5;
+  for (let i = 0; i < pr.critic4.length; i++) pr.critic4[i] = rng.random() - 0.5;
+  a.setPriors(pr);
+  const st = a._internals();
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  // With zero tables the score IS the actor prior of the point's code, and the
+  // logit IS the sum of the critic prior over active windows.
+  const area = N * N;
+  let bad = 0, zExpect = [0, 0];
+  for (let p = 0; p < area; p++) {
+    const b = p * 4;
+    const k5 = (g.cells[g._nbr[b]] + 1) + 3 * (g.cells[g._nbr[b + 1]] + 1) + 9 * (g.cells[g._nbr[b + 2]] + 1) + 27 * (g.cells[g._nbr[b + 3]] + 1);
+    const k9 = k5 + 81 * ((g.cells[g._dnbr[b]] + 1) + 3 * (g.cells[g._dnbr[b + 1]] + 1) + 9 * (g.cells[g._dnbr[b + 2]] + 1) + 27 * (g.cells[g._dnbr[b + 3]] + 1));
+    if (g.cells[p] === EMPTY && Math.abs(st.sc[0][p] - pr.actor9[k9]) > 1e-6) bad++;
+    const k4 = (g.cells[p] + 1) + 3 * (g.cells[g._nbr[b + 3]] + 1) + 9 * (g.cells[g._nbr[b + 1]] + 1) + 27 * (g.cells[g._dnbr[b + 3]] + 1);
+    if (k4 !== 0) { zExpect[0] += pr.critic4[k4]; zExpect[1] += pr.critic4[81 + k4]; }
+  }
+  check(bad === 0, `${bad} points' scores differ from the actor prior`);
+  check(Math.abs(st.Z[0] - zExpect[0]) < 1e-6 && Math.abs(st.Z[1] - zExpect[1]) < 1e-6, `logits ${st.Z[0]},${st.Z[1]} differ from the critic prior sums ${zExpect}`);
+  // Distillation: a residual on one point moves that point's code prior by step × residual.
+  const p0 = g._emptyCells ? g._emptyCells[0] : 0;
+  let pt = -1; for (let p = 0; p < area; p++) if (g.cells[p] === EMPTY) { pt = p; break; }
+  st.w1[pt] = 2.0;   // mover 0 residual at pt
+  const b0 = pt * 4;
+  const k5 = (g.cells[g._nbr[b0]] + 1) + 3 * (g.cells[g._nbr[b0 + 1]] + 1) + 9 * (g.cells[g._nbr[b0 + 2]] + 1) + 27 * (g.cells[g._nbr[b0 + 3]] + 1);
+  const k9 = k5 + 81 * ((g.cells[g._dnbr[b0]] + 1) + 3 * (g.cells[g._dnbr[b0 + 1]] + 1) + 9 * (g.cells[g._dnbr[b0 + 2]] + 1) + 27 * (g.cells[g._dnbr[b0 + 3]] + 1));
+  const before = pr.actor9[k9];
+  a.distilPriors(g, 0.5);
+  check(pr.actor9[k9] >= before + 1.0 - 1e-6, `prior at the point's code should rise by >= 0.5*2 (other points sharing the code have zero residual): ${before} -> ${pr.actor9[k9]}`);
+  void p0;
+  // Round trip through the file format.
+  const S = require('path').join(process.env.TD_TEST_SCRATCH || require('os').tmpdir(), 'tdsearch2-priors-test.js');
+  Priors.save(S, pr, 'test');
+  const back = Priors.load(S);
+  let diff = 0;
+  for (let i = 0; i < pr.actor9.length; i++) if (back.actor9[i] !== pr.actor9[i]) diff++;
+  for (let i = 0; i < pr.critic4.length; i++) if (back.critic4[i] !== pr.critic4[i]) diff++;
+  check(diff === 0 && back.comment === 'test', `priors file round trip changed ${diff} values`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
