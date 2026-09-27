@@ -319,6 +319,11 @@ function prepareSpecs(specs, opts) {
 // and pass it as `game3` (advancing it with play/undo) instead of rebuilding.
 function needsGame3(prepSpecs) { return !!(prepSpecs && prepSpecs.hasLadder); }
 
+// componentValues sets this to an Int32Array for one extraction: each pattern
+// feature's anchor (top-left cell of its window; -1 where not recorded) is
+// written beside its key.  Null on the normal path: one null test per feature.
+let _anch = null;
+
 function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, game3RebuildOk) {
   const cells = game.cells;
   const cap   = game.N * game.N;
@@ -485,6 +490,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
           outKeys[count] = (libs + k1base) ^ phSalt[(tagBase << 3) | 1];
           outPols[count] = s > 0 ? 1 : -1;
           outTags[count] = (tagBase << 3) | 1;
+          if (_anch) _anch[count] = idx;
           count++;
         }
       }
@@ -521,6 +527,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
           outKeys[count] = mixTag(kN < kI ? kN : kI, tag) ^ pS2;
           outPols[count] = kN < kI ? 1 : -1;
           outTags[count] = tag;
+          if (_anch) _anch[count] = i;
           count++;
         }
       }
@@ -589,6 +596,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
             const kN = octKey8(lN, h2N, R0, R1, R2, R3, x, x1, x2, x3);
             const kI = octKey8(lI, h2I, R0, R1, R2, R3, x, x1, x2, x3);
             if (kN === kI) continue;   // colour-twin / all-empty: zero value
+            if (_anch) _anch[count] = R0 + x;
             outKeys[count] = mixTag(kN < kI ? kN : kI, tag8) ^ pS8;
             outPols[count] = kN < kI ? 1 : -1;
             outTags[count] = tag8;
@@ -616,6 +624,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
             outKeys[count] = mixTag(kN < kI ? kN : kI, tag) ^ pS3;
             outPols[count] = kN < kI ? 1 : -1;
             outTags[count] = tag;
+            if (_anch) _anch[count] = i;
             count++;
           }
         }
@@ -633,6 +642,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
               outKeys[count] = mixTag(kN < kI ? kN : kI, tag4) ^ pS4;
               outPols[count] = kN < kI ? 1 : -1;
               outTags[count] = tag4;
+              if (_anch) _anch[count] = r0 + x;
               count++;
             }
           }
@@ -1078,6 +1088,26 @@ function evaluateFeatures(features, weights) {
   return features.val;
 }
 
+// Per-feature breakdown of a position's value: for each emitted pattern
+// feature its anchor (the window's top-left cell; -1 for features without a
+// recorded anchor), its size code (see sizeCode) and its signed contribution
+// pol × weight to the logit.  For tools that convert one window family of a
+// model into another representation.  Not reentrant; a fresh extraction.
+function componentValues(game, model, game3) {
+  const cap = game.N * game.N;
+  const anch = new Int32Array(cap * model.preparedSpecs.totalSizes).fill(-1);
+  _anch = anch;
+  let f;
+  try { f = extractFeatures(game, model.preparedSpecs, false, undefined, false, game3, !game3); }
+  finally { _anch = null; }
+  const n = f.count, anchors = new Int32Array(n), sizes = new Int8Array(n), values = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    anchors[i] = anch[i]; sizes[i] = f.tags[i] & 7;
+    values[i] = f.pols[i] * (model.weights.get(f.keys[i]) ?? 0);
+  }
+  return { count: n, anchors, sizes, values };
+}
+
 // Convenience: extract features and evaluate in one call.
 // model must have a preparedSpecs property (see prepareSpecs).
 // A caller with a Game3 already synced to `game` (e.g. a search maintaining one)
@@ -1167,6 +1197,7 @@ const Patterns = {
   extractFeatures,
   needsGame3,
   evaluateFeatures,
+  componentValues,
   evaluate,
   deltaZ,
   loadWeights,

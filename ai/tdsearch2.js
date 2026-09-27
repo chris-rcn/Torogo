@@ -76,8 +76,9 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 // are converted at create time: the actor prior from a featurepol model's
 // stones8 space (TD_PRIOR_FPOL_DATA — every 8-cell pattern is placed on a
 // small board and its stones8 component read for each mover), the critic
-// prior from a vpat 3:1 model (TD_PRIOR_VPAT_DATA — not yet wired).  Without
-// a file a prior is zero.
+// prior from a vpat 3:1 model (TD_PRIOR_VPAT_DATA — every 3×3 pattern is
+// placed on a small board and its size-3 component read; a vpat model has
+// no side to move, so both movers share it).  Without a file a prior is zero.
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
@@ -126,6 +127,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 //   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior (default none)
+//   TD_PRIOR_VPAT_DATA  vpat 3:1 model whose 3x3 windows become the critic prior (default none)
+//   TD_PRIOR_VPAT_WEIGHT  the critic prior's weight in the logit           (default 1)
 //   TD_PRIOR_FPOL_WEIGHT  the actor prior's weight in the score; featurepol logits are
 //                     large (sd 1-4 on 13x13) and only a light prior helps: 0.1 beat 0
 //                     and 0.2 at 300 ms on 1000 positions                 (default 0.1)
@@ -173,12 +176,13 @@ function create(cfg) {
   // Priors: zero arrays without a file, so the lookups are unconditional.
   const fpolPriorPath = cfg.str('TD_PRIOR_FPOL_DATA', '');
   const pa9 = fpolPriorPath ? actorPriorFromFeaturepol(fpolPriorPath, cfg.float('TD_PRIOR_FPOL_WEIGHT', 0.1)) : new Float32Array(2 * 6561);
-  const pc9 = new Float32Array(2 * 19683);
-  const HAS_PRIOR = false;                 // critic prior not yet wired
+  const vpatPriorPath = cfg.str('TD_PRIOR_VPAT_DATA', '');
+  const pc9 = vpatPriorPath ? criticPriorFromVpat(vpatPriorPath, cfg.float('TD_PRIOR_VPAT_WEIGHT', 1)) : new Float32Array(2 * 19683);
+  const HAS_PRIOR = !!vpatPriorPath;       // the critic prior needs the layer-9 index maintained
   // The layer-9 critic index is maintained if its table is on OR a prior is
   // present (the prior needs the window's code either way).
   const K9 = C9 || HAS_PRIOR;
-  const need9    = USE9 || C9 || !!cfg.str('TD_PRIOR_FPOL_DATA', '');   // the 8-cell code is needed (layers, or the actor prior)
+  const need9    = USE9 || C9 || !!cfg.str('TD_PRIOR_FPOL_DATA', '') || !!cfg.str('TD_PRIOR_VPAT_DATA', '');   // the 8-cell code is needed (layers, or a prior)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
@@ -656,6 +660,32 @@ function actorPriorFromFeaturepol(path, weight) {
     }
   }
   return pa9;
+}
+
+// ── Critic prior from a vpat model ────────────────────────────────────────────
+// Our 3×3 critic code is a vpat size-3 window keyed without symmetry.  For
+// every code, place the 3×3 pattern at the centre of an empty 5×5 board and
+// read the model's size-3 component whose window is centred there (vpat
+// anchors a 3×3 at its top-left).  Colour only (maxLibs 1), so stones need no
+// liberties.  A vpat model has no side to move: both movers get the value.
+function criticPriorFromVpat(path, weight) {
+  const { Game2 } = Util.load('./game2.js', 'Game2');
+  const model = VPat.loadWeights(path);
+  const s3 = model.specs.filter(sp => sp.size === 3 && !sp.turn);
+  if (s3.length !== 1 || s3[0].maxLibs !== 1) throw new Error(`tdsearch2: TD_PRIOR_VPAT_DATA model ${path} must have one size-3 maxLibs-1 spec (has ${VPat.specString(model.specs)})`);
+  const N = 5, anchor = 1 * N + 1;      // the window whose centre is (2,2)
+  const cells9 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1], [0, 0]];   // code9 digits, then the centre
+  const pc9 = new Float32Array(2 * 19683);
+  for (let k = 1; k < 19683; k++) {       // 0 = all empty: no feature, no weight
+    const g = new Game2(N, false);
+    let r = k;
+    for (let i = 0; i < 9; i++) { const d = r % 3; r = (r - d) / 3; if (d !== 1) g._place((2 + cells9[i][0]) * N + 2 + cells9[i][1], d - 1); }
+    const cv = VPat.componentValues(g, model);
+    let w = 0;
+    for (let i = 0; i < cv.count; i++) if (cv.sizes[i] === 3 && cv.anchors[i] === anchor) { w = cv.values[i]; break; }
+    pc9[k] = pc9[19683 + k] = weight * w;
+  }
+  return pc9;
 }
 
 let _default = null;

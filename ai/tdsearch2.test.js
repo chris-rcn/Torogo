@@ -268,6 +268,27 @@ function playRandom(g, rng, changed) {
   check(compared > 100 && worst < 1e-5, `agent scores differ from featurepol stones8 by up to ${worst} over ${compared} moves`);
 }
 
+// ── Critic prior from vpat: the agent's logit equals the model's on random boards ──
+{
+  const VPat = require('../vpatterns.js');
+  const path = 'out/vpat-fold-vjjnk618.js';
+  const a = agent({ TD_PRIOR_VPAT_DATA: path, TD_CRITIC_LAYERS: '9' });   // only the 3x3 layer: the logit is the prior alone
+  const model = VPat.loadWeights(path);
+  const N = 9, rng = makeRng(161);
+  let worst = 0;
+  for (let trial = 0; trial < 3; trial++) {
+    const g = new Game2(N, true);
+    for (let i = 0; i < 15 + trial * 15; i++) g.play(g.randomLegalMove(rng));
+    a.getMove(g, 0, { rng });                       // no sims: tables stay zero
+    const st = a._internals();
+    const m = g.current === BLACK ? 0 : 1;
+    const f = VPat.extractFeatures(g, model.preparedSpecs);
+    VPat.evaluateFeatures(f, model.weights);
+    worst = Math.max(worst, Math.abs(st.Z[m] - f.z), Math.abs(st.Z[1 - m] - f.z));
+  }
+  check(worst < 1e-4, `agent logit differs from the vpat model's by up to ${worst}`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
