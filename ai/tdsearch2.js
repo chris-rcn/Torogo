@@ -28,8 +28,10 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 //   9: those plus the 4 diagonals           (mover, p, base-3 code of 8 cells)
 // and the policy is a softmax over the empty points.  The actor plays only
 // the first TD_ACTOR_DEPTH plies of a sim; the rest is the standard playout
-// (uniform below PPAT_MIN_PHASE, the ppat policy above it), as Silver et al.
-// switch to a default policy after a few plies.  Layers 5 and 9 are each
+// (uniform below PPAT_MIN_PHASE, the ppat policy above it).  Silver et al.
+// switch to a default policy after ~6 plies, but here the actor's own moves
+// are its training data: mdMae improved monotonically out to ~50 plies and
+// plateaued 50-100, with unlimited slightly worse (2026-09-27).  Layers 5 and 9 are each
 // active only for the first N plies of a sim (their depth knob; 0 = off): deep
 // in a sim the board has diverged from the root, so updates to those exact
 // local patterns land where no root will read them, while the first plies
@@ -70,7 +72,7 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 6)
+//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 80)
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
@@ -87,7 +89,7 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 6);
+  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 80);
   const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
   const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
