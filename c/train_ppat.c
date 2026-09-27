@@ -1826,7 +1826,7 @@ static void run_monitor(void) {
         double el = wall_now() - wall_start;
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         if (loaded) {
-            printf("%9d  %7s  %7s", 0, "-", "-");
+            printf("%9d  %7s", 0, "-");
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
@@ -1835,7 +1835,7 @@ static void run_monitor(void) {
             printf("  %8s  %7s", eb, "-");
             printf("\n");
         } else {
-            printf("%9d  %7s  %7s", 0, "-", "-");
+            printf("%9d  %7s", 0, "-");
             printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
