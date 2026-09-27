@@ -59,7 +59,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_LAYERS         actor layers, comma list from 1,5,9              (default 1,5,9)
+//   TD_ACTOR_LAYERS   actor layers, comma list from 1,5,9               (default 1,5,9)
 //   TD_LR             actor step size                                  (default 0.1)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4,9)
@@ -70,9 +70,9 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const layerList = cfg.str('TD_LAYERS', '1,5,9').split(',').map(s => parseInt(s, 10));
+  const layerList = cfg.str('TD_ACTOR_LAYERS', '1,5,9').split(',').map(s => parseInt(s, 10));
   const USE1 = layerList.includes(1), USE5 = layerList.includes(5), USE9 = layerList.includes(9);
-  if (!USE1 && !USE5 && !USE9) throw new Error('tdsearch2: TD_LAYERS must include at least one of 1,5,9');
+  if (!USE1 && !USE5 && !USE9) throw new Error('tdsearch2: TD_ACTOR_LAYERS must include at least one of 1,5,9');
   const LR       = cfg.float('TD_LR', 0.1);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4,9');

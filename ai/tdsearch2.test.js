@@ -28,7 +28,7 @@ function playRandom(g, rng, changed) {
 // ── Incremental score maintenance matches a full recompute ──────────────────
 {
   const N = 7, rng = makeRng(11);
-  const a = agent({ TD_LAYERS: '1,5,9', TD_TEMP: '1' });
+  const a = agent({ TD_ACTOR_LAYERS: '1,5,9', TD_TEMP: '1' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng });             // sizes the state (budget 0: no sims)
   const st = a._internals();
@@ -48,7 +48,7 @@ function playRandom(g, rng, changed) {
     if (n > 1) captures++;
     if (n > 0) st.recomputeAround(g, changed, n);
     // Reference: a fresh full recompute on a second instance.
-    const b = agent({ TD_LAYERS: '1,5,9', TD_TEMP: '1' });
+    const b = agent({ TD_ACTOR_LAYERS: '1,5,9', TD_TEMP: '1' });
     b._internals().setup(N);
     const sb = b._internals();
     sb.w9.set(st.w9); sb.w5.set(st.w5); sb.w1.set(st.w1);
@@ -76,7 +76,7 @@ function playRandom(g, rng, changed) {
 // ── REINFORCE update: gradient sums to zero, chosen point moves with the advantage ──
 {
   const N = 5;
-  const a = agent({ TD_LAYERS: '1', TD_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
+  const a = agent({ TD_ACTOR_LAYERS: '1', TD_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
@@ -101,7 +101,7 @@ function playRandom(g, rng, changed) {
 // ── Sampling respects legality and eyes; exhausted distribution passes ───────
 {
   const N = 5;
-  const a = agent({ TD_LAYERS: '1' });
+  const a = agent({ TD_ACTOR_LAYERS: '1' });
   const g = new Game2(N, false);
   a.getMove(g, 0, { rng: makeRng(7) });
   const st = a._internals();
