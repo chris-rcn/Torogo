@@ -67,13 +67,15 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
-// Truncation (TD_TRUNC_PHASE_DELTA > 0, root phase below TD_TRUNC_MAX_PHASE):
-// a sim plays TD_TRUNC_ACTOR_DEPTH actor plies, then UNIFORM random moves (a
-// buffer so the actor cannot steer into the leaf model's defects), and stops
-// after ceil(delta * area) plies — the fielded trunc agent's prefix rule — at
-// which point the vpat model's value of the position stands in for the
-// outcome everywhere the outcome is used.  The model is the anchor; no
-// grounding schedule.
+// Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
+// plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
+// agent's prefix rule, here a buffer so the actor cannot steer into the leaf
+// model's defects — and stops; the vpat model's value of the cut position
+// stands in for the outcome everywhere the outcome is used.  The model is the
+// anchor; no grounding schedule.  Truncation is used only when the cut's
+// phase (root phase + cut plies / area, captures ignored) is below
+// TD_TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
+// while the actor depth and delta are swept.
 //
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
@@ -97,10 +99,10 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     the rest is the final result minus V             (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
-//   TD_TRUNC_PHASE_DELTA  fullness advance, as a fraction of the area, at which a
-//                     sim is cut for the vpat leaf; 0 = no truncation   (default 0.2)
+//   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
+//                     fraction of the area; 0 = no truncation            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 20)
-//   TD_TRUNC_MAX_PHASE  truncate only when the root's phase is below this (default 0.30)
+//   TD_TRUNC_MAX_PHASE  truncate only when the CUT's phase would be below this (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -125,7 +127,7 @@ function create(cfg) {
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 20);
-  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.30);
+  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
   let vpatModel = null;
   if (TRUNC_DELTA > 0) {
     const vpatPath = _isNode
@@ -487,8 +489,8 @@ function create(cfg) {
     lastMoveCount = game.moveCount;
 
     const rng = options.rng || makeRng();
-    truncActive = TRUNC_DELTA > 0 && game.phase() < TRUNC_MAX_PHASE;
-    prefixLen = Math.ceil(TRUNC_DELTA * area);
+    prefixLen = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);      // plies to the cut
+    truncActive = TRUNC_DELTA > 0 && game.phase() + prefixLen / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0;
     while (true) {
