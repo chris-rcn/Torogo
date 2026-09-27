@@ -324,16 +324,22 @@ function create(cfg) {
   let dSumC9 = null, dCntC9 = null, dCodeC9 = null;
   // One grouped-mean transfer: residual(p) for the anchors whose code is
   // code(p) → prior[code] += step × mean, residual(p) −= that amount.  With
-  // symmetric distillation on, every other D4 image of the code gets the
-  // same increment (no residual to take it from: pure prior mass).
+  // symmetric distillation on, every other D4 image of the code gets the same
+  // increment, and the colour-inverted image of each gets it for the other
+  // mover, × sign (+1 actor, −1 critic) — pure prior mass, no residual taken.
   let symImages = null;   // { a9, c4, c9 } image tables, or null
-  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table, images) {
+  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table, images, sign) {
     for (let k = 0; k < ncodes; k++) if (cnt[k] > 0) {
-      sum[k] = step * sum[k] / cnt[k]; sum[ncodes + k] = step * sum[ncodes + k] / cnt[k];
-      prior[k] += sum[k]; prior[ncodes + k] += sum[ncodes + k];
+      const d0 = sum[k] = step * sum[k] / cnt[k], d1 = sum[ncodes + k] = step * sum[ncodes + k] / cnt[k];
+      prior[k] += d0; prior[ncodes + k] += d1;
       if (images) {
-        const n = images.count[k];
-        for (let j = 0; j < n; j++) { const q = images.list[k * 8 + j]; if (q !== k) { prior[q] += sum[k]; prior[ncodes + q] += sum[ncodes + k]; } }
+        const n = images.count[k], inv = images.inv;
+        for (let j = 0; j < n; j++) {
+          const q = images.list[k * 8 + j];
+          if (q !== k) { prior[q] += d0; prior[ncodes + q] += d1; }
+          const c = inv[q];                                   // colour image: the other mover's entry
+          prior[ncodes + c] += sign * d0; prior[c] += sign * d1;
+        }
       }
     }
     for (let p = 0; p < area; p++) {
@@ -369,9 +375,9 @@ function create(cfg) {
         if (k !== 0) { dCodeC9[p] = k; dCntC9[k]++; dSumC9[k] += c9[idxC9(0, p, k)]; dSumC9[19683 + k] += c9[idxC9(1, p, k)]; }
       }
     }
-    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1, symImages && symImages.a9);
-    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4, symImages && symImages.c4);
-    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9, symImages && symImages.c9);
+    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1, symImages && symImages.a9, 1);
+    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4, symImages && symImages.c4, -1);
+    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9, symImages && symImages.c9, -1);
   }
 
   // Symmetric distillation on/off (the trainer's choice; the agent never keys by symmetry).
@@ -706,9 +712,11 @@ function code4(cells, nbr, dnbr, p) {
   return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
 }
 
-// ── D4 images of the codes (for the priors trainer's symmetric distillation) ──
+// ── D4 and colour images of the codes (for the priors trainer's symmetric distillation) ──
 // The agent keys nothing by symmetry; the trainer writes each observed
-// residual into every D4 image of its pattern so the priors fill 8x faster.
+// residual into every D4 image of its pattern, and into the colour-inverted
+// image for the OTHER mover (actor weight equal, critic weight negated since
+// V is Black's), so the priors fill up to 16x faster.
 // A family is a list of cell coordinates (dy, dx) in digit order; an image
 // permutes the digits by where each cell lands.  `reanchor` shifts a window's
 // image back to its top-left corner (the 2×2 window is anchored, not centred).
@@ -737,13 +745,19 @@ function _d4Images(coords, reanchor) {
   }
   return { list, count };
 }
+// Colour inversion of a code: digit 0 (White) <-> 2 (Black), 1 (empty) fixed.
+function _colourInverse(n) {
+  const ncodes = Math.pow(3, n), inv = new Int32Array(ncodes);
+  for (let k = 0; k < ncodes; k++) { let r = k, out = 0, pw = 1; for (let i = 0; i < n; i++) { const d = r % 3; r = (r - d) / 3; out += (2 - d) * pw; pw *= 3; } inv[k] = out; }
+  return inv;
+}
 const _RING8 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];   // code5 digits then dnbr digits
 let _images = null;
 function d4Images() {
   if (!_images) _images = {
-    a9: _d4Images(_RING8, false),                          // actor: 8-cell code
-    c4: _d4Images([[0, 0], [0, 1], [1, 0], [1, 1]], true), // critic 2×2 (anchored)
-    c9: _d4Images([..._RING8, [0, 0]], false),             // critic 3×3: 8-cell code + centre digit
+    a9: { ..._d4Images(_RING8, false), inv: _colourInverse(8) },                          // actor: 8-cell code
+    c4: { ..._d4Images([[0, 0], [0, 1], [1, 0], [1, 1]], true), inv: _colourInverse(4) }, // critic 2×2 (anchored)
+    c9: { ..._d4Images([..._RING8, [0, 0]], false), inv: _colourInverse(9) },             // critic 3×3: 8-cell code + centre digit
   };
   return _images;
 }

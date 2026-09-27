@@ -20,7 +20,8 @@
 //   --seed N        rng seed (default: random, printed)
 //   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
 //   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
-//   --symmetry 0|1  write each residual into all 8 D4 images of its pattern (default 1)
+//   --symmetry 0|1  write each residual into all 8 D4 images of its pattern and
+//                   their colour inverses for the other mover        (default 1)
 //   Agent knobs come from the environment as usual (TD_*, PPAT_*, TRUNC_*),
 //   except that TD_CRITIC_LAYERS defaults to 1,4,9 here (the 3×3 critic prior
 //   is distilled from the online 3×3 layer, so a plain run trains all three
@@ -52,7 +53,8 @@ if (opts.help) {
   --seed N        rng seed (default: random, printed)
   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
-  --symmetry 0|1  write each residual into all 8 D4 images of its pattern (default 1)`);
+  --symmetry 0|1  write each residual into all 8 D4 images of its pattern and
+                  their colour inverses for the other mover        (default 1)`);
   process.exit(0);
 }
 const SIZE     = parseInt(opts.size || '13', 10);

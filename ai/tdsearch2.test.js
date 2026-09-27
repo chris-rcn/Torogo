@@ -375,6 +375,19 @@ function playRandom(g, rng, changed) {
   let missing = 0;
   for (let j = 0; j < img.count[k9]; j++) if (pr.actor9[img.list[k9 * 8 + j]] !== pr.actor9[k9]) missing++;
   check(pr.actor9[k9] > 0 && missing === 0, `all ${img.count[k9]} images should carry the increment; ${missing} differ`);
+  // Colour: the other mover's entry at the inverted code carries the same actor weight.
+  const inv9 = img.inv[k9];
+  check(pr.actor9[6561 + inv9] === pr.actor9[k9], `colour image for the other mover should equal: ${pr.actor9[6561 + inv9]} vs ${pr.actor9[k9]}`);
+  // Critic: negated for the other mover at the inverted code.
+  const anchor = pt;   // the 2x2 window anchored at pt is active if any of its cells is a stone
+  const k4 = codes.code4(g.cells, g._nbr, g._dnbr, anchor);
+  if (k4 !== 0) {
+    st.c4[anchor * 81 + k4] = 1.0;       // mover-0 residual on that window
+    a.distilPriors(g, 1.0);
+    const img4 = codes.d4Images().c4, inv4 = img4.inv[k4];
+    check(pr.critic4[k4] > 0 && Math.abs(pr.critic4[81 + inv4] + pr.critic4[k4]) < 1e-6,
+      `critic colour image should be negated: ${pr.critic4[k4]} vs ${pr.critic4[81 + inv4]}`);
+  }
 }
 
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
