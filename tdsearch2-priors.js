@@ -9,15 +9,19 @@
 // distilled from what its searches conclude (train-tdsearch2-priors.js).
 //   actor9:  one weight per (mover, 8-cell code around a point)  — 2 × 6561
 //   critic4: one weight per (mover, 2×2 window code)              — 2 × 81
-// No pattern symmetry: the board is in the orientation it is in.
+//   critic9: one weight per (mover, 3×3 window code)              — 2 × 19683
+// No pattern symmetry: the board is in the orientation it is in.  critic9
+// is distilled from the online 3×3 layer, which is switched on only while
+// training priors (TD_CRITIC_LAYERS=1,4,9): a move's sims are too few to
+// populate 3×3 codes, but thousands of roots are not.
 //
-// File format: a JS module exporting { actor9, critic4, comment } with the
-// arrays as base64 Float32Array bytes (little-endian).
+// File format: a JS module exporting { actor9, critic4, critic9, comment }
+// with the arrays as base64 Float32Array bytes (little-endian).
 
-const A9 = 2 * 6561, C4 = 2 * 81;
+const A9 = 2 * 6561, C4 = 2 * 81, C9 = 2 * 19683;
 
 function make() {
-  return { actor9: new Float32Array(A9), critic4: new Float32Array(C4), comment: '' };
+  return { actor9: new Float32Array(A9), critic4: new Float32Array(C4), critic9: new Float32Array(C9), comment: '' };
 }
 
 function encode(arr) {
@@ -37,12 +41,13 @@ function decode(b64, length) {
 
 // Priors from a loaded module object (require()d file or window global).
 function fromRaw(raw) {
-  if (!raw || typeof raw.actor9 !== 'string' || typeof raw.critic4 !== 'string') {
-    throw new Error('tdsearch2-priors: not a priors file (expected base64 actor9 and critic4)');
+  if (!raw || typeof raw.actor9 !== 'string' || typeof raw.critic4 !== 'string' || typeof raw.critic9 !== 'string') {
+    throw new Error('tdsearch2-priors: not a priors file (expected base64 actor9, critic4 and critic9)');
   }
   const p = make();
   p.actor9 = decode(raw.actor9, A9);
   p.critic4 = decode(raw.critic4, C4);
+  p.critic9 = decode(raw.critic9, C9);
   p.comment = raw.comment || '';
   return p;
 }
@@ -54,7 +59,7 @@ function load(filePath) {
 
 function literal(priors, comment) {
   return `{ comment: ${JSON.stringify(comment || priors.comment || '')}, ` +
-         `actor9: "${encode(priors.actor9)}", critic4: "${encode(priors.critic4)}" }`;
+         `actor9: "${encode(priors.actor9)}", critic4: "${encode(priors.critic4)}", critic9: "${encode(priors.critic9)}" }`;
 }
 
 // Atomic: written to a temp file then renamed, so a reader never sees a
@@ -73,7 +78,7 @@ function save(filePath, priors, comment) {
   fs.renameSync(tmp, filePath);
 }
 
-const Priors = { A9, C4, make, fromRaw, load, save, literal };
+const Priors = { A9, C4, C9, make, fromRaw, load, save, literal };
 if (typeof module !== 'undefined') module.exports = Priors;
 else window.TDSearch2Priors = Priors;
 

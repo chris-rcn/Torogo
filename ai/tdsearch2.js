@@ -69,9 +69,10 @@ const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
-// Priors (TD_PRIOR_DATA): location-independent twins of the two tables —
-// actor: (mover, 8-cell code around the point); critic: (mover, 2×2 code) —
-// added inside the score and the logit, so the online tables learn RESIDUALS
+// Priors (TD_PRIOR_DATA): location-independent twins of the tables — actor:
+// (mover, 8-cell code around the point); critic: (mover, 2×2 code) and
+// (mover, 3×3 code), the latter used whether or not the online 3×3 layer is
+// on — added inside the score and the logit, so the online tables learn RESIDUALS
 // on them and the updates are unchanged.  They are distilled by
 // train-tdsearch2-priors.js: after a search, distilPriors TRANSFERS residual
 // into prior — each code's prior moves by step × the mean residual of the
@@ -168,8 +169,11 @@ function create(cfg) {
   // Priors: zero arrays unless a file is given, so the lookups are unconditional.
   const priorPath = cfg.str('TD_PRIOR_DATA', '');
   let priors = priorPath ? (_isNode ? Priors.load(priorPath) : Priors.fromRaw(window.tdsearch2Priors)) : Priors.make();
-  let pa9 = priors.actor9, pc4 = priors.critic4;
+  let pa9 = priors.actor9, pc4 = priors.critic4, pc9 = priors.critic9;
   const HAS_PRIOR = !!priorPath;
+  // Critic index arrays are maintained for a layer if its table is on OR a
+  // prior file is loaded (the prior needs the window's code either way).
+  let K4 = C4 || HAS_PRIOR, K9 = C9 || HAS_PRIOR;   // setPriors turns both on
   let need9      = USE9 || C9 || !!cfg.str('TD_PRIOR_DATA', '');   // the 8-cell code is needed (layers, or a prior)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
@@ -276,23 +280,35 @@ function create(cfg) {
   function critIdx4(cells, nbr, dnbr, p) { const k4 = code4(cells, nbr, dnbr, p); return k4 === 0 ? -1 : p * 81 + k4; }
   function critIdx9(v, p, k9)         { const k = k9 + 6561 * (v + 1); return k === 0 ? -1 : p * 19683 + k; }
 
-  // Layer 4 carries the critic prior: a window's value is its table weight
-  // plus the prior for its code (index % 81), for either mover.
+  // Layers 4 and 9 carry the critic priors: a window's value is its table
+  // weight (if that layer is on) plus the prior for its code (index % codes),
+  // for either mover.  Only table features count toward nAct (the lr/n norm).
   function swapCritic4(p, ni) {
     const oi = i4[p];
     if (oi === ni) return;
     const size = area * 81;
     for (let m = 0; m < 2; m++) {
       const o = m * size, po = m * 81;
-      Z[m] += (ni >= 0 ? c4[o + ni] + pc4[po + ni % 81] : 0) - (oi >= 0 ? c4[o + oi] + pc4[po + oi % 81] : 0);
+      Z[m] += (ni >= 0 ? (C4 ? c4[o + ni] : 0) + pc4[po + ni % 81] : 0) - (oi >= 0 ? (C4 ? c4[o + oi] : 0) + pc4[po + oi % 81] : 0);
     }
-    if (oi < 0) nAct++; else if (ni < 0) nAct--;
+    if (C4) { if (oi < 0) nAct++; else if (ni < 0) nAct--; }
     i4[p] = ni;
+  }
+  function swapCritic9(p, ni) {
+    const oi = i9[p];
+    if (oi === ni) return;
+    const size = area * 19683;
+    for (let m = 0; m < 2; m++) {
+      const o = m * size, po = m * 19683;
+      Z[m] += (ni >= 0 ? (C9 ? c9[o + ni] : 0) + pc9[po + ni % 19683] : 0) - (oi >= 0 ? (C9 ? c9[o + oi] : 0) + pc9[po + oi % 19683] : 0);
+    }
+    if (C9) { if (oi < 0) nAct++; else if (ni < 0) nAct--; }
+    i9[p] = ni;
   }
   function recomputeCritic(cells, nbr, dnbr, p, k9, v) {
     if (C1) swapCritic(c1, i1, area * 3, p, critIdx1(v, p));
-    if (C4) swapCritic4(p, critIdx4(cells, nbr, dnbr, p));
-    if (C9) swapCritic(c9, i9, area * 19683, p, critIdx9(v, p, k9));
+    if (K4) swapCritic4(p, critIdx4(cells, nbr, dnbr, p));
+    if (K9) swapCritic9(p, critIdx9(v, p, k9));
   }
 
   // Distillation (the trainer calls this after getMove on the same position),
@@ -303,37 +319,54 @@ function create(cfg) {
   // every feature's total is invariant, so repeated distillation of the same
   // position converges instead of compounding.
   let dSum9 = null, dCnt9 = null, dCode9 = null, dSum4 = null, dCnt4 = null, dCode4 = null;
+  let dSumC9 = null, dCntC9 = null, dCodeC9 = null;
+  // One grouped-mean transfer: residual(p) for the anchors whose code is
+  // code(p) → prior[code] += step × mean, residual(p) −= that amount.
+  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table) {
+    for (let k = 0; k < ncodes; k++) if (cnt[k] > 0) {
+      sum[k] = step * sum[k] / cnt[k]; sum[ncodes + k] = step * sum[ncodes + k] / cnt[k];
+      prior[k] += sum[k]; prior[ncodes + k] += sum[ncodes + k];
+    }
+    for (let p = 0; p < area; p++) {
+      const k = codeAt[p];
+      if (k >= 0) { table[residualIdx(0, p, k)] -= sum[k]; table[residualIdx(1, p, k)] -= sum[ncodes + k]; }
+    }
+  }
+  const idxA9 = (m, p, k) => m * area + p;
+  const idxC4 = (m, p, k) => m * area * 81 + p * 81 + k;
+  const idxC9 = (m, p, k) => m * area * 19683 + p * 19683 + k;
   function distilPriors(game, step) {
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
     if (!dSum9) {
       dSum9 = new Float64Array(2 * 6561); dCnt9 = new Int32Array(6561); dCode9 = new Int32Array(area);
       dSum4 = new Float64Array(2 * 81);   dCnt4 = new Int32Array(81);   dCode4 = new Int32Array(area);
+      dSumC9 = new Float64Array(2 * 19683); dCntC9 = new Int32Array(19683); dCodeC9 = new Int32Array(area);
     }
-    dSum9.fill(0); dCnt9.fill(0); dSum4.fill(0); dCnt4.fill(0);
+    dSum9.fill(0); dCnt9.fill(0); dSum4.fill(0); dCnt4.fill(0); dSumC9.fill(0); dCntC9.fill(0);
     for (let p = 0; p < area; p++) {
-      dCode9[p] = -1; dCode4[p] = -1;
-      if (cells[p] === EMPTY) {
-        const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
+      dCode9[p] = -1; dCode4[p] = -1; dCodeC9[p] = -1;
+      const v = cells[p];
+      const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
+      if (v === EMPTY) {
         dCode9[p] = k9; dCnt9[k9]++;
         dSum9[k9] += w1[p]; dSum9[6561 + k9] += w1[area + p];
       }
       if (C4) {
         const k4 = code4(cells, nbr, dnbr, p);
-        if (k4 !== 0) { dCode4[p] = k4; dCnt4[k4]++; dSum4[k4] += c4[p * 81 + k4]; dSum4[81 + k4] += c4[area * 81 + p * 81 + k4]; }
+        if (k4 !== 0) { dCode4[p] = k4; dCnt4[k4]++; dSum4[k4] += c4[idxC4(0, p, k4)]; dSum4[81 + k4] += c4[idxC4(1, p, k4)]; }
+      }
+      if (C9) {
+        const k = k9 + 6561 * (v + 1);
+        if (k !== 0) { dCodeC9[p] = k; dCntC9[k]++; dSumC9[k] += c9[idxC9(0, p, k)]; dSumC9[19683 + k] += c9[idxC9(1, p, k)]; }
       }
     }
-    for (let k = 0; k < 6561; k++) if (dCnt9[k] > 0) { dSum9[k] = step * dSum9[k] / dCnt9[k]; dSum9[6561 + k] = step * dSum9[6561 + k] / dCnt9[k]; pa9[k] += dSum9[k]; pa9[6561 + k] += dSum9[6561 + k]; }
-    for (let k = 0; k < 81; k++)   if (dCnt4[k] > 0) { dSum4[k] = step * dSum4[k] / dCnt4[k]; dSum4[81 + k] = step * dSum4[81 + k] / dCnt4[k]; pc4[k] += dSum4[k]; pc4[81 + k] += dSum4[81 + k]; }
-    for (let p = 0; p < area; p++) {
-      const k9 = dCode9[p];
-      if (k9 >= 0) { w1[p] -= dSum9[k9]; w1[area + p] -= dSum9[6561 + k9]; }
-      const k4 = dCode4[p];
-      if (k4 >= 0) { c4[p * 81 + k4] -= dSum4[k4]; c4[area * 81 + p * 81 + k4] -= dSum4[81 + k4]; }
-    }
+    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1);
+    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4);
+    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9);
   }
 
   // Share a priors object (the trainer's), so distillation edits it in place.
-  function setPriors(obj) { priors = obj; pa9 = obj.actor9; pc4 = obj.critic4; need9 = true; }
+  function setPriors(obj) { priors = obj; pa9 = obj.actor9; pc4 = obj.critic4; pc9 = obj.critic9; need9 = true; K4 = true; K9 = true; }
 
   // Recompute everything anchored at p: both movers' actor score/ex (S kept
   // in step; skipped in the playout tail, where the scores are unused) and
@@ -627,7 +660,7 @@ function create(cfg) {
              get lastReturn() { return lastReturn; },
              rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC, HAS_PRIOR, pa9, pc4 };
+             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC, HAS_PRIOR, pa9, pc4, pc9 };
   }
 
   return { getMove, distilPriors, setPriors, get priors() { return priors; }, _internals };

@@ -20,6 +20,8 @@
 //   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
 //   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
 //   Agent knobs come from the environment as usual (TD_*, PPAT_*, TRUNC_*).
+//   To train the 3×3 critic prior, run with TD_CRITIC_LAYERS=1,4,9: the online
+//   3×3 layer is what it is distilled from.
 //
 // Progress columns actMae / crtMae score the PRIORS ALONE (no tables, no
 // sims) on the md positions, as evalmovedetails does: actMae plays the actor
@@ -88,7 +90,10 @@ function actorPick(g, budgetMs, options) {
 function criticLogit(g) {
   const m = g.current === BLACK ? 0 : 1, cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, area = g.N * g.N;
   let z = 0;
-  for (let p = 0; p < area; p++) { const k4 = codes.code4(cells, nbr, dnbr, p); if (k4 !== 0) z += priors.critic4[m * 81 + k4]; }
+  for (let p = 0; p < area; p++) {
+    const k4 = codes.code4(cells, nbr, dnbr, p); if (k4 !== 0) z += priors.critic4[m * 81 + k4];
+    const k9 = codes.code9(cells, dnbr, p, codes.code5(cells, nbr, p)) + 6561 * (cells[p] + 1); if (k9 !== 0) z += priors.critic9[m * 19683 + k9];
+  }
   return z;
 }
 function criticPick(g, budgetMs, options) {
@@ -117,7 +122,7 @@ function meanAbs(arr) { let s = 0, n = 0; for (let i = 0; i < arr.length; i++) i
 // Progress table: header once, rows at games 1, 2, 3, ... growing ×1.4.
 console.log([
   'game'.padStart(4), 'moves'.padStart(5), 'avgLen'.padStart(6), 'blkWR'.padStart(6),
-  'nzP9'.padStart(5), 'avgP9'.padStart(7), 'nzP4'.padStart(4), 'avgP4'.padStart(7),
+  'nzA9'.padStart(5), 'avgA9'.padStart(6), 'nzC4'.padStart(4), 'avgC4'.padStart(6), 'nzC9'.padStart(5), 'avgC9'.padStart(6),
   ...(mdPositions.length ? ['actMae'.padStart(6), 'crtMae'.padStart(6)] : []),
   'tMv'.padStart(5), 'elapsed'.padStart(7),
 ].join('  '));
@@ -129,13 +134,14 @@ const maxMoves = 3 * SIZE * SIZE + 20;
 row();   // baseline: the starting priors (zero, or --load)
 
 function row() {
-  const p9 = meanAbs(priors.actor9), p4 = meanAbs(priors.critic4);
+  const p9 = meanAbs(priors.actor9), p4 = meanAbs(priors.critic4), pc9 = meanAbs(priors.critic9);
   const md = mdColumns();                // scored first, so elapsed is the wall clock at print time
   const el = Date.now() - t0;
   console.log([
     Util.fmt4i(games), Util.fmt4i(moves).padStart(5), (games ? Util.fmt4(moves / games) : '-').padStart(6),
     (games ? Util.fmtRatio4(blackWins / games) : '-').padStart(6),
-    Util.fmt4i(p9.n).padStart(5), p9.mean.toFixed(4).padStart(7), Util.fmt4i(p4.n), p4.mean.toFixed(4).padStart(7),
+    Util.fmt4i(p9.n).padStart(5), p9.mean.toFixed(4).padStart(6), Util.fmt4i(p4.n), p4.mean.toFixed(4).padStart(6),
+    Util.fmt4i(pc9.n).padStart(5), pc9.mean.toFixed(4).padStart(6),
     ...md,
     (moves ? Util.fmtMs((el - mdMs) / moves) : '-').padStart(5), Util.fmtMs(el).padStart(7),
   ].join('  '));

@@ -235,6 +235,7 @@ function playRandom(g, rng, changed) {
   const pr = Priors.make();
   for (let i = 0; i < pr.actor9.length; i++) pr.actor9[i] = rng.random() - 0.5;
   for (let i = 0; i < pr.critic4.length; i++) pr.critic4[i] = rng.random() - 0.5;
+  for (let i = 0; i < pr.critic9.length; i++) pr.critic9[i] = rng.random() - 0.5;
   a.setPriors(pr);
   const st = a._internals();
   st.recomputeAll(g.cells, g._nbr, g._dnbr);
@@ -249,6 +250,8 @@ function playRandom(g, rng, changed) {
     if (g.cells[p] === EMPTY && Math.abs(st.sc[0][p] - pr.actor9[k9]) > 1e-6) bad++;
     const k4 = (g.cells[p] + 1) + 3 * (g.cells[g._nbr[b + 3]] + 1) + 9 * (g.cells[g._nbr[b + 1]] + 1) + 27 * (g.cells[g._dnbr[b + 3]] + 1);
     if (k4 !== 0) { zExpect[0] += pr.critic4[k4]; zExpect[1] += pr.critic4[81 + k4]; }
+    const kc9 = k9 + 6561 * (g.cells[p] + 1);   // 3×3 prior enters even with the online 3×3 layer off
+    if (kc9 !== 0) { zExpect[0] += pr.critic9[kc9]; zExpect[1] += pr.critic9[19683 + kc9]; }
   }
   check(bad === 0, `${bad} points' scores differ from the actor prior`);
   check(Math.abs(st.Z[0] - zExpect[0]) < 1e-6 && Math.abs(st.Z[1] - zExpect[1]) < 1e-6, `logits ${st.Z[0]},${st.Z[1]} differ from the critic prior sums ${zExpect}`);
@@ -274,7 +277,29 @@ function playRandom(g, rng, changed) {
   let diff = 0;
   for (let i = 0; i < pr.actor9.length; i++) if (back.actor9[i] !== pr.actor9[i]) diff++;
   for (let i = 0; i < pr.critic4.length; i++) if (back.critic4[i] !== pr.critic4[i]) diff++;
+  for (let i = 0; i < pr.critic9.length; i++) if (back.critic9[i] !== pr.critic9[i]) diff++;
   check(diff === 0 && back.comment === 'test', `priors file round trip changed ${diff} values`);
+}
+
+// ── 3×3 critic prior is distilled from the online 3×3 layer when it is on ───
+{
+  const Priors = require('../tdsearch2-priors.js');
+  const N = 7;
+  const a = agent({ TD_CRITIC_LAYERS: '1,4,9', TD_SIMS: '5' });
+  const g = new Game2(N, true);
+  const pr = Priors.make();
+  a.setPriors(pr);
+  a.getMove(g, 1000, { rng: makeRng(101) });
+  a.distilPriors(g, 0.5);
+  let nz = 0; for (let i = 0; i < pr.critic9.length; i++) if (pr.critic9[i] !== 0) nz++;
+  check(nz > 0, 'critic9 prior should receive the online 3x3 residual');
+  const b = agent({ TD_SIMS: '5' });   // layers 1,4: no 3x3 residual to distil
+  const pr2 = Priors.make();
+  b.setPriors(pr2);
+  b.getMove(g, 1000, { rng: makeRng(103) });
+  b.distilPriors(g, 0.5);
+  let nz2 = 0; for (let i = 0; i < pr2.critic9.length; i++) if (pr2.critic9[i] !== 0) nz2++;
+  check(nz2 === 0, 'critic9 prior must stay zero when the online 3x3 layer is off');
 }
 
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
