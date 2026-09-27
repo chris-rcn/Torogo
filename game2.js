@@ -1095,46 +1095,14 @@ class Game2 {
 
   // ── Scoring ───────────────────────────────────────────────────────────────
 
-  // Accurate area score via flood-fill of empty regions.
+  // Area score: the one-pass neighbour estimate (see estimateScore).  The
+  // flood-fill territory count this once wrapped was never needed.
   // Returns { black, white } where white already includes komi.
   calcScore() {
-    return this.estimateScore();  // I don't think we ever need to do the flood fill.
-    const N      = this.N;
-    const cap    = N * N;
-    const cells  = this.cells;
-    const nbr    = this._nbr;
-    const visited = new Uint8Array(cap);
-    let black = 0, white = 0;
-
-    for (let i = 0; i < cap; i++) {
-      if      (cells[i] === BLACK) black++;
-      else if (cells[i] === WHITE) white++;
-    }
-
-    for (let start = 0; start < cap; start++) {
-      if (cells[start] !== EMPTY || visited[start]) continue;
-      let bBorder = false, wBorder = false;
-      const region = [start];
-      visited[start] = 1;
-      for (let qi = 0; qi < region.length; qi++) {
-        const i = region[qi];
-        const b = i * 4;
-        for (let k = 0; k < 4; k++) {
-          const n = nbr[b + k];
-          const c = cells[n];
-          if      (c === EMPTY && !visited[n]) { visited[n] = 1; region.push(n); }
-          else if (c === BLACK) bBorder = true;
-          else if (c === WHITE) wBorder = true;
-        }
-      }
-      if      (bBorder && !wBorder) black += region.length;
-      else if (wBorder && !bBorder) white += region.length;
-    }
-
-    return { black, white: white + KOMI(N) };
+    return this.estimateScore();
   }
 
-  // Accurate winner using flood-fill territory + komi.  Returns BLACK or WHITE.
+  // Winner by calcScore (estimate + komi).  Returns BLACK or WHITE.
   calcWinner() {
     const score = this.calcScore();
     return score.black > score.white ? BLACK : WHITE;
