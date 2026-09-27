@@ -323,11 +323,18 @@ function create(cfg) {
   let dSum9 = null, dCnt9 = null, dCode9 = null, dSum4 = null, dCnt4 = null, dCode4 = null;
   let dSumC9 = null, dCntC9 = null, dCodeC9 = null;
   // One grouped-mean transfer: residual(p) for the anchors whose code is
-  // code(p) → prior[code] += step × mean, residual(p) −= that amount.
-  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table) {
+  // code(p) → prior[code] += step × mean, residual(p) −= that amount.  With
+  // symmetric distillation on, every other D4 image of the code gets the
+  // same increment (no residual to take it from: pure prior mass).
+  let symImages = null;   // { a9, c4, c9 } image tables, or null
+  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table, images) {
     for (let k = 0; k < ncodes; k++) if (cnt[k] > 0) {
       sum[k] = step * sum[k] / cnt[k]; sum[ncodes + k] = step * sum[ncodes + k] / cnt[k];
       prior[k] += sum[k]; prior[ncodes + k] += sum[ncodes + k];
+      if (images) {
+        const n = images.count[k];
+        for (let j = 0; j < n; j++) { const q = images.list[k * 8 + j]; if (q !== k) { prior[q] += sum[k]; prior[ncodes + q] += sum[ncodes + k]; } }
+      }
     }
     for (let p = 0; p < area; p++) {
       const k = codeAt[p];
@@ -362,10 +369,13 @@ function create(cfg) {
         if (k !== 0) { dCodeC9[p] = k; dCntC9[k]++; dSumC9[k] += c9[idxC9(0, p, k)]; dSumC9[19683 + k] += c9[idxC9(1, p, k)]; }
       }
     }
-    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1);
-    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4);
-    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9);
+    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1, symImages && symImages.a9);
+    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4, symImages && symImages.c4);
+    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9, symImages && symImages.c9);
   }
+
+  // Symmetric distillation on/off (the trainer's choice; the agent never keys by symmetry).
+  function setSymmetricDistillation(on) { symImages = on ? d4Images() : null; }
 
   // Share a priors object (the trainer's), so distillation edits it in place.
   function setPriors(obj) { priors = obj; pa9 = obj.actor9; pc4 = obj.critic4; pc9 = obj.critic9; need9 = true; K4 = true; K9 = true; }
@@ -676,7 +686,7 @@ function create(cfg) {
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC, HAS_PRIOR, pa9, pc4, pc9 };
   }
 
-  return { getMove, distilPriors, setPriors, get priors() { return priors; }, _internals };
+  return { getMove, distilPriors, setPriors, setSymmetricDistillation, get priors() { return priors; }, _internals };
 }
 
 // ── Feature keys ──────────────────────────────────────────────────────────────
@@ -696,10 +706,52 @@ function code4(cells, nbr, dnbr, p) {
   return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
 }
 
+// ── D4 images of the codes (for the priors trainer's symmetric distillation) ──
+// The agent keys nothing by symmetry; the trainer writes each observed
+// residual into every D4 image of its pattern so the priors fill 8x faster.
+// A family is a list of cell coordinates (dy, dx) in digit order; an image
+// permutes the digits by where each cell lands.  `reanchor` shifts a window's
+// image back to its top-left corner (the 2×2 window is anchored, not centred).
+const _D4 = [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0],
+             [1, 0, 0, -1], [-1, 0, 0, 1], [0, 1, 1, 0], [0, -1, -1, 0]];   // (dy,dx) -> (a*dy+b*dx, c*dy+d*dx)
+function _d4Images(coords, reanchor) {
+  const n = coords.length, ncodes = Math.pow(3, n);
+  const pow = []; for (let i = 0; i < n; i++) pow.push(Math.pow(3, i));
+  // perm[op][i] = digit index the source cell i lands on under op
+  const perm = _D4.map(([a, b, c, d]) => {
+    let img = coords.map(([dy, dx]) => [a * dy + b * dx, c * dy + d * dx]);
+    if (reanchor) { const my = Math.min(...img.map(q => q[0])), mx = Math.min(...img.map(q => q[1])); img = img.map(([y, x]) => [y - my, x - mx]); }
+    return img.map(([y, x]) => coords.findIndex(([cy, cx]) => cy === y && cx === x));
+  });
+  if (perm.some(pm => pm.includes(-1))) throw new Error('tdsearch2: D4 image of the cell set leaves the set');
+  const list = new Int32Array(ncodes * 8), count = new Uint8Array(ncodes), digits = new Int32Array(n);
+  for (let k = 0; k < ncodes; k++) {
+    let r = k; for (let i = 0; i < n; i++) { digits[i] = r % 3; r = (r - digits[i]) / 3; }
+    let c = 0;
+    for (let op = 0; op < 8; op++) {
+      let img = 0; for (let i = 0; i < n; i++) img += digits[i] * pow[perm[op][i]];
+      let dup = false; for (let j = 0; j < c; j++) if (list[k * 8 + j] === img) { dup = true; break; }
+      if (!dup) list[k * 8 + c++] = img;
+    }
+    count[k] = c;
+  }
+  return { list, count };
+}
+const _RING8 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];   // code5 digits then dnbr digits
+let _images = null;
+function d4Images() {
+  if (!_images) _images = {
+    a9: _d4Images(_RING8, false),                          // actor: 8-cell code
+    c4: _d4Images([[0, 0], [0, 1], [1, 0], [1, 1]], true), // critic 2×2 (anchored)
+    c9: _d4Images([..._RING8, [0, 0]], false),             // critic 3×3: 8-cell code + centre digit
+  };
+  return _images;
+}
+
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
 // codes: the feature-key functions, for tools that key the priors the same way.
-if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), codes: { code5, code9, code4 } };
+if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), codes: { code5, code9, code4, d4Images } };
 else window.getMove = (g, b, o) => _def().getMove(g, b, o);
 
 })();

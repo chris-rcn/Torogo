@@ -20,6 +20,7 @@
 //   --seed N        rng seed (default: random, printed)
 //   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
 //   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
+//   --symmetry 0|1  write each residual into all 8 D4 images of its pattern (default 1)
 //   Agent knobs come from the environment as usual (TD_*, PPAT_*, TRUNC_*),
 //   except that TD_CRITIC_LAYERS defaults to 1,4,9 here (the 3×3 critic prior
 //   is distilled from the online 3×3 layer, so a plain run trains all three
@@ -39,7 +40,7 @@ const Priors = require('./tdsearch2-priors.js');
 const { create, codes } = require('./ai/tdsearch2.js');
 const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['size', 'sims', 'games', 'lr', 'save', 'load', 'seed', 'md-file', 'md-limit']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['size', 'sims', 'games', 'lr', 'save', 'load', 'seed', 'md-file', 'md-limit', 'symmetry']);
 if (opts.help) {
   console.log(`Usage: node train-tdsearch2-priors.js [options]
   --size N        board size                              (default 13)
@@ -50,7 +51,8 @@ if (opts.help) {
   --load PATH     start from an existing priors file
   --seed N        rng seed (default: random, printed)
   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
-  --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)`);
+  --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
+  --symmetry 0|1  write each residual into all 8 D4 images of its pattern (default 1)`);
   process.exit(0);
 }
 const SIZE     = parseInt(opts.size || '13', 10);
@@ -61,6 +63,7 @@ const SEED     = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.random
 const SAVE     = opts.save || path.join('out', `tdsearch2-priors-${Util.randomSeed().toString(36)}.js`);
 const MD_FILE  = opts['md-file'] || 'movedetails_5059.md';
 const MD_LIMIT = parseInt(opts['md-limit'] || '1000', 10);
+const SYMMETRY = (opts.symmetry || '1') !== '0';
 const mdPositions = MD_LIMIT > 0 ? loadPositions(MD_FILE).slice(0, MD_LIMIT) : [];
 
 const priors = opts.load ? Priors.load(opts.load) : Priors.make();
@@ -70,8 +73,9 @@ const agent  = create(Util.makeCfg(null, {
   ...(process.env.TD_ROOT_SELECT === undefined ? { TD_ROOT_SELECT: 'softmax' } : {}),      // play sampled moves
 }));
 agent.setPriors(priors);
+agent.setSymmetricDistillation(SYMMETRY);
 
-console.log(`size: ${SIZE}  sims: ${SIMS}  games: ${GAMES || 'unlimited'}  lr: ${PRIOR_LR}  seed: ${SEED}`);
+console.log(`size: ${SIZE}  sims: ${SIMS}  games: ${GAMES || 'unlimited'}  lr: ${PRIOR_LR}  symmetry: ${SYMMETRY ? 'on' : 'off'}  seed: ${SEED}`);
 console.log(`save: ${SAVE}${opts.load ? `  load: ${opts.load}` : ''}`);
 if (mdPositions.length) console.log(`md: ${MD_FILE}  positions: ${mdPositions.length}`);
 

@@ -324,6 +324,59 @@ function playRandom(g, rng, changed) {
   check((counts.get(pt) || 0) >= 18, `the peaked point should be sampled almost always, got ${counts.get(pt) || 0}/20`);
 }
 
+// ── D4 image tables: a rotated board's codes are images of the original's ──
+{
+  const { codes } = require('./tdsearch2.js');
+  const img = codes.d4Images();
+  const N = 7, rng = makeRng(121);
+  const g = new Game2(N, false);
+  for (let i = 0; i < 20; i++) g.play(g.randomLegalMove(rng));
+  // Rotate the board 90 degrees: (y, x) -> (x, N-1-y).
+  const r = new Game2(N, false);
+  const rc = new Int8Array(N * N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) rc[x * N + (N - 1 - y)] = g.cells[y * N + x];
+  r.cells.set(rc);
+  const inImages = (tab, k, q) => { for (let j = 0; j < tab.count[k]; j++) if (tab.list[k * 8 + j] === q) return true; return false; };
+  let bad9 = 0, badC9 = 0, bad4 = 0;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const p = y * N + x, q = x * N + (N - 1 - y);                    // point image
+    const k9 = codes.code9(g.cells, g._dnbr, p, codes.code5(g.cells, g._nbr, p));
+    const q9 = codes.code9(r.cells, r._dnbr, q, codes.code5(r.cells, r._nbr, q));
+    if (!inImages(img.a9, k9, q9)) bad9++;
+    const kc = k9 + 6561 * (g.cells[p] + 1), qc = q9 + 6561 * (r.cells[q] + 1);
+    if (!inImages(img.c9, kc, qc)) badC9++;
+    // The 2x2 window at (y,x) lands at anchor (x, N-2-y) after rotation.
+    const qa = x * N + ((N - 2 - y + N) % N);
+    const k4 = codes.code4(g.cells, g._nbr, g._dnbr, p), q4 = codes.code4(r.cells, r._nbr, r._dnbr, qa);
+    if (!inImages(img.c4, k4, q4)) bad4++;
+  }
+  check(bad9 === 0 && badC9 === 0 && bad4 === 0, `rotated codes not among the images: 8-cell ${bad9}, 3x3 ${badC9}, 2x2 ${bad4}`);
+  check(img.a9.count[0] === 1 && img.c4.count[0] === 1, 'the all-empty pattern is its own only image');
+}
+
+// ── Symmetric distillation credits every image of an observed pattern ───────
+{
+  const Priors = require('../tdsearch2-priors.js');
+  const { codes } = require('./tdsearch2.js');
+  const N = 7, rng = makeRng(131);
+  const a = agent({});
+  const g = new Game2(N, true);
+  for (let i = 0; i < 6; i++) g.play(g.randomLegalMove(rng));
+  a._internals().setup(N);
+  const pr = Priors.make();
+  a.setPriors(pr);
+  a.setSymmetricDistillation(true);
+  const st = a._internals();
+  let pt = -1; for (let p = 0; p < N * N; p++) if (g.cells[p] === EMPTY) { pt = p; break; }
+  st.w1[pt] = 1.0;
+  a.distilPriors(g, 1.0);
+  const k9 = codes.code9(g.cells, g._dnbr, pt, codes.code5(g.cells, g._nbr, pt));
+  const img = codes.d4Images().a9;
+  let missing = 0;
+  for (let j = 0; j < img.count[k9]; j++) if (pr.actor9[img.list[k9 * 8 + j]] !== pr.actor9[k9]) missing++;
+  check(pr.actor9[k9] > 0 && missing === 0, `all ${img.count[k9]} images should carry the increment; ${missing} differ`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
