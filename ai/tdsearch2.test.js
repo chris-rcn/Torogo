@@ -118,7 +118,7 @@ function playRandom(g, rng, changed) {
 // ── Depth switch: refreshing without layers 5/9 leaves layer-1 scores only ──
 {
   const N = 5, rng = makeRng(31);
-  const a = agent({ TD_ACTOR_LAYER5_DEPTH: '3', TD_ACTOR_LAYER9_DEPTH: '3' });
+  const a = agent({ TD_ACTOR_LAYER5_DEPTH: '3', TD_ACTOR_LAYER9_DEPTH: '3', TD_PRIOR_FPOL_DATA: '', TD_PRIOR_VPAT_DATA: '' });   // no priors: scores are the tables alone
   const g = new Game2(N, true);
   for (let i = 0; i < 6; i++) g.play(g.randomLegalMove(rng));
   a._internals().setup(N);

@@ -78,7 +78,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 // small board and its stones8 component read for each mover), the critic
 // prior from a vpat 3:1 model (TD_PRIOR_VPAT_DATA — every 3×3 pattern is
 // placed on a small board and its size-3 component read; a vpat model has
-// no side to move, so both movers share it).  Without a file a prior is zero.
+// no side to move, so both movers share it).  Both default to fielded
+// models; an empty path turns a prior off (zero).
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
@@ -126,8 +127,10 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
-//   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior (default none)
-//   TD_PRIOR_VPAT_DATA  vpat 3:1 model whose 3x3 windows become the critic prior (default none)
+//   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior;
+//                     '' = none                  (default out/featurepol-yp81nwj8.js)
+//   TD_PRIOR_VPAT_DATA  vpat 3:1 model whose 3x3 windows become the critic prior;
+//                     '' = none                  (default out/vpat-fold-vjjnk618.js)
 //   TD_PRIOR_VPAT_WEIGHT  the critic prior's weight in the logit           (default 1)
 //   TD_PRIOR_FPOL_WEIGHT  the actor prior's weight in the score; featurepol logits are
 //                     large (sd 1-4 on 13x13) and only a light prior helps: 0.1 beat 0
@@ -174,15 +177,15 @@ function create(cfg) {
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
 
   // Priors: zero arrays without a file, so the lookups are unconditional.
-  const fpolPriorPath = cfg.str('TD_PRIOR_FPOL_DATA', '');
+  const fpolPriorPath = _isNode ? cfg.str('TD_PRIOR_FPOL_DATA', require('path').join(__dirname, '..', 'out', 'featurepol-yp81nwj8.js')) : '';
   const pa9 = fpolPriorPath ? actorPriorFromFeaturepol(fpolPriorPath, cfg.float('TD_PRIOR_FPOL_WEIGHT', 0.1)) : new Float32Array(2 * 6561);
-  const vpatPriorPath = cfg.str('TD_PRIOR_VPAT_DATA', '');
+  const vpatPriorPath = _isNode ? cfg.str('TD_PRIOR_VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-fold-vjjnk618.js')) : '';
   const pc9 = vpatPriorPath ? criticPriorFromVpat(vpatPriorPath, cfg.float('TD_PRIOR_VPAT_WEIGHT', 1)) : new Float32Array(2 * 19683);
   const HAS_PRIOR = !!vpatPriorPath;       // the critic prior needs the layer-9 index maintained
   // The layer-9 critic index is maintained if its table is on OR a prior is
   // present (the prior needs the window's code either way).
   const K9 = C9 || HAS_PRIOR;
-  const need9    = USE9 || C9 || !!cfg.str('TD_PRIOR_FPOL_DATA', '') || !!cfg.str('TD_PRIOR_VPAT_DATA', '');   // the 8-cell code is needed (layers, or a prior)
+  const need9    = USE9 || C9 || !!fpolPriorPath || !!vpatPriorPath;   // the 8-cell code is needed (layers, or a prior)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
