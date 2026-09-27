@@ -96,7 +96,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     delivers the outcome.  Silver et al. leave this open;
 //                     measured 0.0214 vs 0.0228 at 200 ms, 27% faster  (default 0)
 //   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
-//                     the rest is the final result minus V             (default 0.5)
+//                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
@@ -123,7 +123,7 @@ function create(cfg) {
   const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
   const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
-  const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
+  const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
