@@ -88,7 +88,7 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
 //   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
-//   TD_ACTOR_LR       actor step size                                  (default 0.1)
+//   TD_ACTOR_LR       actor step size                                  (default 0.05)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.5)
@@ -121,7 +121,7 @@ function create(cfg) {
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
-  const LR       = cfg.float('TD_ACTOR_LR', 0.1);
+  const LR       = cfg.float('TD_ACTOR_LR', 0.05);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
