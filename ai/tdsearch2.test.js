@@ -36,6 +36,9 @@ function playRandom(g, rng, changed) {
   for (let i = 0; i < st.w9.length; i++) st.w9[i] = (rng.random() - 0.5) * 2;
   for (let i = 0; i < st.w5.length; i++) st.w5[i] = (rng.random() - 0.5);
   for (let i = 0; i < st.w1.length; i++) st.w1[i] = (rng.random() - 0.5) * 0.5;
+  for (let i = 0; i < st.c9.length; i++) st.c9[i] = (rng.random() - 0.5) * 0.1;
+  for (let i = 0; i < st.c4.length; i++) st.c4[i] = (rng.random() - 0.5) * 0.1;
+  for (let i = 0; i < st.c1.length; i++) st.c1[i] = (rng.random() - 0.5) * 0.1;
   st.recomputeAll(g.cells, g._nbr, g._dnbr);
   const changed = new Int32Array(N * N + 1);
   let captures = 0, worst = 0;
@@ -49,8 +52,14 @@ function playRandom(g, rng, changed) {
     b._internals().setup(N);
     const sb = b._internals();
     sb.w9.set(st.w9); sb.w5.set(st.w5); sb.w1.set(st.w1);
+    sb.c9.set(st.c9); sb.c4.set(st.c4); sb.c1.set(st.c1);
     sb.recomputeAll(g.cells, g._nbr, g._dnbr);
+    for (let p = 0; p < N * N; p++) {
+      if (st.i1[p] !== sb.i1[p] || st.i4[p] !== sb.i4[p] || st.i9[p] !== sb.i9[p]) worst = 1;
+    }
     for (let m = 0; m < 2; m++) {
+      const dZ = Math.abs(st.Z[m] - sb.Z[m]);
+      if (dZ > worst) worst = dZ;
       for (let p = 0; p < N * N; p++) {
         const d = Math.abs(st.ex[m][p] - sb.ex[m][p]);
         if (d > worst) worst = d;
@@ -61,13 +70,13 @@ function playRandom(g, rng, changed) {
     void before;
   }
   check(captures > 0, `incremental test saw no captures (${captures})`);
-  check(worst < 1e-9, `incremental ex/S drifted from full recompute by ${worst}`);
+  check(worst < 1e-9, `incremental ex/S/Z/indices drifted from full recompute by ${worst}`);
 }
 
 // ── REINFORCE update: gradient sums to zero, chosen point moves with the advantage ──
 {
   const N = 5;
-  const a = agent({ TD_LAYERS: '1', TD_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9' });
+  const a = agent({ TD_LAYERS: '1', TD_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
@@ -106,6 +115,34 @@ function playRandom(g, rng, changed) {
   check(st.sample(g, 0, rng) === PASS, 'empty distribution should sample PASS');
 }
 
+// ── Critic: a lopsided position's value moves toward the outcome ────────────
+{
+  const N = 7;
+  const a = agent({ TD_SIMS: '40' });
+  const g = new Game2(N, true);
+  // Black builds a big framework while White passes; Black wins these sims.
+  const rng = makeRng(21);
+  for (let i = 0; i < 12; i++) { g.play(PASS); g.play(g.randomLegalMove(rng)); }
+  check(!g.gameOver && g.current === -1, 'setup: expected White to move in a live game');
+  const r = a.getMove(g, 1000, { rng });
+  const st = a._internals();
+  check(st.CRITIC, 'critic should be on by default');
+  const m = g.current === BLACK ? 0 : 1;
+  const V = st.sigmoid(st.Z[m]);
+  check(V > 0.6, `root value should favour Black after 40 sims, got ${V.toFixed(3)}`);
+  check(/V=0\.[6-9]/.test(r.info), `info should report the critic value: ${r.info}`);
+}
+{
+  // Critic off: no critic tables, the EMA baseline moves instead.
+  const N = 5;
+  const a = agent({ TD_CRITIC_LAYERS: 'none', TD_SIMS: '5' });
+  const g = new Game2(N, true);
+  a.getMove(g, 1000, { rng: makeRng(2) });
+  const st = a._internals();
+  check(!st.CRITIC && st.c9.length === 0, 'critic tables should be empty when off');
+  check(st.base[0] !== 0.5, 'EMA baseline should move when the critic is off');
+}
+
 // ── getMove: legal moves, a sims cap, and reset on a new game ───────────────
 {
   const N = 7;
@@ -138,6 +175,7 @@ function playRandom(g, rng, changed) {
   a.getMove(new Game2(N, true), 0, { rng });
   let any = 0;
   for (let i = 0; i < st.w9.length; i++) if (st.w9[i] !== 0) any++;
+  for (let i = 0; i < st.c9.length; i++) if (st.c9[i] !== 0) any++;
   check(any === 0 && st.base[0] === 0.5, `new game did not reset (nonzero weights: ${any})`);
 }
 
