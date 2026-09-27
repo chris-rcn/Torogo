@@ -147,7 +147,7 @@ function meanAbs(arr) { let s = 0, n = 0; for (let i = 0; i < arr.length; i++) i
 // Progress table: header once, rows at games 1, 2, 3, ... growing ×1.4.
 console.log([
   'game'.padStart(4), 'moves'.padStart(5), 'avgLen'.padStart(6), 'blkWR'.padStart(6), 'tMv'.padStart(5),
-  'nzA9'.padStart(5), 'avgA9'.padStart(6), 'nzC9'.padStart(5), 'avgC9'.padStart(6),
+  'avgA9'.padStart(6), 'nzA9'.padStart(5), 'avgC9'.padStart(6), 'nzC9'.padStart(5),
   ...(mdPositions.length ? ['actMae'.padStart(6), 'crtMae'.padStart(6)] : []),
   'elapsed'.padStart(7),
 ].join('  '));
@@ -166,8 +166,8 @@ function row() {
     Util.fmt4i(games), Util.fmt4i(moves).padStart(5), (games ? Util.fmt4(moves / games) : '-').padStart(6),
     (games ? Util.fmtRatio4(blackWins / games) : '-').padStart(6),
     (moves ? Util.fmtMs((el - mdMs) / moves) : '-').padStart(5),
-    Util.fmt4i(p9.n).padStart(5), p9.mean.toFixed(4).padStart(6),
-    Util.fmt4i(pc9.n).padStart(5), pc9.mean.toFixed(4).padStart(6),
+    p9.mean.toFixed(4).padStart(6), Util.fmt4i(p9.n).padStart(5),
+    pc9.mean.toFixed(4).padStart(6), Util.fmt4i(pc9.n).padStart(5),
     ...md,
     Util.fmtMs(el).padStart(7),
   ].join('  '));
