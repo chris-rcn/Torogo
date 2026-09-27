@@ -101,7 +101,7 @@ function create(cfg) {
   // Hard failure, not a fallback: this agent exists to measure a ppat model, so
   // silently running uniform playouts would produce a meaningless comparison.
   if (!model) throw new Error(`mc-ppat: cannot load ppat weights from ${ppatPath}`);
-  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
   // Optional featurepol pruning (off unless FP_TOP > 0).
   const FP_TOP = Math.max(0, cfg.int('FP_TOP', 0));

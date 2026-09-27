@@ -165,7 +165,7 @@ const ppatStates = new Map();                 // size -> ppat scratch state
 if (PREFIX_DELTA !== null) {
   PPat = require('./ppat-lib.js');
   ppatModel = PPat.loadWeights(path.join(__dirname, 'out', 'ppat-data-233162-best-ref-candidate.js'));
-  ppatModel.uniformBelowPhase = 0.6;
+  ppatModel.ppatMinPhase = 0.6;
 }
 
 // Corpus mode: load games up front (token->index only; each game is replay-

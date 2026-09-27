@@ -73,7 +73,7 @@ const area = SIZE * SIZE;
 const PREFIX_LEN = Math.ceil(DELTA * area);
 
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
-ppatModel.uniformBelowPhase = 0.6;
+ppatModel.ppatMinPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
 
 const corpus = fs.readFileSync(opts.corpus, 'utf-8').split('\n').filter(l => l && l[0] !== '#');

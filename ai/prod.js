@@ -96,7 +96,7 @@ function create() {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  _model.uniformBelowPhase = 0.6;
+  _model.ppatMinPhase = 0.6;
 
   // featurepol policy model (priors + top-K pruning): the fixed prod checkpoint
   // (window.featurepolModel in the browser).  loadModel throws if it is missing.

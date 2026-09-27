@@ -112,7 +112,7 @@ function create(cfg) {
   const ppatModel = _isNode ? PPat.loadWeights(ppatPath)
                             : PPat.loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
   if (!ppatModel) throw new Error(`tdsearch2: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
-  ppatModel.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  ppatModel.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
   let ppatState = null;
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──

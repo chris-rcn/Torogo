@@ -103,7 +103,7 @@ function create(cfg) {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  _model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).

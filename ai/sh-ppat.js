@@ -33,7 +33,7 @@ function create(cfg) {
   const PLAYOUTS = cfg.int('PLAYOUTS', 1000);
 
   const model = PPat.loadWeights(cfg.str('PPAT_DATA', path.join(__dirname, '..', 'ppat-data.js')));
-  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0);
+  model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0);
 
   console.log(`sh-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights, ` +
               `${PLAYOUTS} playouts/decision, halving over all legal moves`);

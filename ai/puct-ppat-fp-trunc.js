@@ -207,7 +207,7 @@ function create(cfg) {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  _model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  _model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
   // Auto-calibrate the work-model coefficients for the loaded ppat/vpat models
   // (each skipped when its env var pins it).  Time four playout-shaped loops, each
@@ -317,7 +317,7 @@ function create(cfg) {
     // wherever that endpoint's phase lands.
     let truncArmed = _truncActive;
 
-    const ubp = _model.uniformBelowPhase;   // moves below this fullness skip extraction (uniform)
+    const ubp = _model.ppatMinPhase;   // moves below this fullness skip extraction (uniform)
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
     let moves = 0, uniformMoves = 0;

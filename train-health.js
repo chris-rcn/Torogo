@@ -419,7 +419,7 @@ const GAMES = Math.min(opts.games !== undefined ? parseInt(opts.games, 10) : Inf
 // The standard playout policy, as deployed (prod.js): band-trained ppat,
 // uniform below phase 0.6.
 const ppatModel = PPat.loadWeights(path.join(__dirname, 'ppat-data.js'));
-ppatModel.uniformBelowPhase = 0.6;
+ppatModel.ppatMinPhase = 0.6;
 const ppatState = PPat.createState(SIZE);
 console.log(`train-health: corpus ${CORPUS} (${corpusCount} games, using ${GAMES})  eval-phase [${EVAL_MIN}, ${EVAL_MAX}] (leaf band [${+MIN_PH.toFixed(3)}, ${+MAX_PH.toFixed(3)}])  delta ${DELTA}${USE_CORPUS_FATE ? '  corpus-fate' : (PLAYOUT_COUNT > 1 ? `  playout-count ${PLAYOUT_COUNT}` : '')}  size ${SIZE}  lr ${LR}  ninecell 3-state (color)  max-libs ${MAX_LIBS}${MAX_STONES > 0 ? `  max-stones ${MAX_STONES}` : ''}${LIB_STONE_LIBS > 0 ? `  max-lib-stone ${LIB_STONE_LIBS},${LIB_STONE_STONES}` : ''}  max-join-libs ${MAX_JOIN_LIBS}${LADDER2 ? '  ladder2' : ''}` +
             (STONE_NINECELLS ? '' : '  stone-ninecells 0') +

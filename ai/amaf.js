@@ -69,12 +69,12 @@ function create(cfg) {
     ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
   if (!model) throw new Error(`amaf: cannot load ppat weights from ${_isNode ? _ppatPath : 'window.PPATWeights'}`);
-  model.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 1);
+  model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 1);
   const stateByN = new Map();
 
   console.log(`amaf[${cfg.slot != null ? cfg.slot : '-'}]: ppat playouts from ` +
     `${_isNode ? require('path').basename(_ppatPath) : 'window.PPATWeights'}, ` +
-    `uniform-below ${model.uniformBelowPhase}`);
+    `uniform-below ${model.ppatMinPhase}`);
 
   // ppat playout.  Returns { winner, played } where played is a Float32Array of
   // length cap: positive value = played by BLACK, negative = played by WHITE,

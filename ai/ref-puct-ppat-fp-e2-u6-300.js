@@ -74,7 +74,7 @@ function create() {
   const _model = _isNode
     ? loadWeights(require('path').join(__dirname, '..', 'ref', 'ppat-3374337.js'))
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
-  if (_model) _model.uniformBelowPhase = 0.6;
+  if (_model) _model.ppatMinPhase = 0.6;
 
   // featurepol policy model (priors + top-K pruning).  FP_WEIGHTS overrides
   // the default checkpoint (browser: window.featurepolModel).

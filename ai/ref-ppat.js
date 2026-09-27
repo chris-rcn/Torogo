@@ -17,7 +17,7 @@ const model = loadWeights(path.join(__dirname, '..', 'ref', 'ppat-3374337.js'));
 // Standard-playout phase split: uniform below 0.6, ppat above — ppat was
 // band-trained and should not operate below its band (changed 2026-09-07;
 // earlier this rung sampled ppat at every phase).
-model.uniformBelowPhase = 0.6;
+model.ppatMinPhase = 0.6;
 
 console.error(`ref-ppat: ${model.weights.length} weights (${model.phaseCount} phase(s)) [policy sampling, no search]`);
 

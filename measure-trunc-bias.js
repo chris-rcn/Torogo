@@ -25,7 +25,7 @@
 // References are delta-independent, so --delta takes a comma list and the
 // (dominant) reference cost is shared across the whole sweep.
 //
-// Playouts mirror the trunc agent's: ppat policy with uniformBelowPhase
+// Playouts mirror the trunc agent's: ppat policy with ppatMinPhase
 // (PPAT_MIN_PHASE semantics); truncation is net empty-count advance, so
 // captures during the prefix delay it, as deployed.
 
@@ -104,7 +104,7 @@ const NULL_K = parseInt(opts['null-playouts'] || '200', 10);
 const vpatModel = (NULL_MODE || EMIT_PATH) ? null : VPat.loadWeights(opts.vpat);
 const ppatModel = PPat.loadWeights(opts.ppat ||
   path.join(__dirname, 'out', 'ppat-data-233162-best-ref-candidate.js'));
-ppatModel.uniformBelowPhase = parseFloat(opts['ppat-min-phase'] || '0.6');
+ppatModel.ppatMinPhase = parseFloat(opts['ppat-min-phase'] || '0.6');
 if (EMIT_PATH) console.log(`emit: ${EMIT_PATH} (bias test set — no evaluator)`);
 else if (NULL_MODE) console.log(`evaluator: NULL CHECK — ${NULL_K}-playout vote at the truncation point`);
 else console.log(`vpat: ${opts.vpat} (${vpatModel.weights.size} weights, ` +
@@ -231,7 +231,7 @@ let emitFd = null;
 if (EMIT_PATH) {
   emitFd = fs.openSync(EMIT_PATH, 'w');
   fs.writeSync(emitFd, `# bias-pairs: delta: ${DELTAS[0]} ref-playouts: ${REF_K} ` +
-    `ppat: ${opts.ppat || 'default-233162'} ppat-min-phase: ${ppatModel.uniformBelowPhase} ` +
+    `ppat: ${opts.ppat || 'default-233162'} ppat-min-phase: ${ppatModel.ppatMinPhase} ` +
     `seed: ${SEED} source: ${opts.file || opts.games} start-band: [${MIN_PH}, ${MAX_PH}] ` +
     `date: ${new Date().toISOString().slice(0, 10)}\n`);
   fs.writeSync(emitFd, `# format: size endpointPhase startMoves movesToE1 movesToE2 pa pb\n`);

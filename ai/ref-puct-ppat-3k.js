@@ -79,7 +79,7 @@ function create() {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  if (_model) _model.uniformBelowPhase = 0;
+  if (_model) _model.ppatMinPhase = 0;
 
   // npat policy model (priors + top-K pruning), from the canonical npat-data.js.
   const npatModel   = NPat.loadModel({ name: 'ref-puct-ppat-3k' });

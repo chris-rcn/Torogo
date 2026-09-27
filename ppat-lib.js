@@ -659,9 +659,9 @@ function ppatMove(game, state, model, rng = Math) {
   // Uniform fast-path: in the early game the trained policy is ≈ uniform while
   // feature extraction is the dominant per-step cost, so below a board-fullness
   // threshold skip extraction and pick a uniform random legal move.
-  // model.uniformBelowPhase is a runtime/deployment knob (set by the agent), a
+  // model.ppatMinPhase is a runtime/deployment knob (set by the agent), a
   // fraction in [0,1] of board fullness (cap-empty)/cap; 0/undefined = off.
-  const ubp = model.uniformBelowPhase;
+  const ubp = model.ppatMinPhase;
   if (ubp > 0) {
     const cap = game.N * game.N;
     const fullness = (cap - game.emptyCount) / cap;
