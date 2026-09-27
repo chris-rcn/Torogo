@@ -242,21 +242,6 @@ function create(cfg) {
     base[0] = base[1] = 0.5;
   }
 
-  // Window codes at p from a cell array (base 3, cell + 1 per digit).
-  function code5(cells, nbr, p) {
-    const b = p * 4;
-    return (cells[nbr[b]] + 1) + 3 * (cells[nbr[b + 1]] + 1) + 9 * (cells[nbr[b + 2]] + 1) + 27 * (cells[nbr[b + 3]] + 1);
-  }
-  function code9(cells, dnbr, p, c5) {
-    const b = p * 4;
-    return c5 + 81 * ((cells[dnbr[b]] + 1) + 3 * (cells[dnbr[b + 1]] + 1) + 9 * (cells[dnbr[b + 2]] + 1) + 27 * (cells[dnbr[b + 3]] + 1));
-  }
-  // 2×2 window anchored at p: p, right, down, down-right (nbr 3, nbr 1, dnbr 3).
-  function code4(cells, nbr, dnbr, p) {
-    const b = p * 4;
-    return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
-  }
-
   // Actor score for mover m at p from precomputed codes (active layers only),
   // on top of the actor prior for the point's 8-cell code.
   function scoreFrom(m, p, k5, k9) {
@@ -648,9 +633,27 @@ function create(cfg) {
   return { getMove, distilPriors, setPriors, get priors() { return priors; }, _internals };
 }
 
+// ── Feature keys ──────────────────────────────────────────────────────────────
+// Module-level so tools can key the priors the same way (exported as `codes`).
+// Window codes at p from a cell array (base 3, cell + 1 per digit).
+function code5(cells, nbr, p) {
+  const b = p * 4;
+  return (cells[nbr[b]] + 1) + 3 * (cells[nbr[b + 1]] + 1) + 9 * (cells[nbr[b + 2]] + 1) + 27 * (cells[nbr[b + 3]] + 1);
+}
+function code9(cells, dnbr, p, c5) {
+  const b = p * 4;
+  return c5 + 81 * ((cells[dnbr[b]] + 1) + 3 * (cells[dnbr[b + 1]] + 1) + 9 * (cells[dnbr[b + 2]] + 1) + 27 * (cells[dnbr[b + 3]] + 1));
+}
+// 2×2 window anchored at p: p, right, down, down-right (nbr 3, nbr 1, dnbr 3).
+function code4(cells, nbr, dnbr, p) {
+  const b = p * 4;
+  return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
+}
+
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
-if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
+// codes: the feature-key functions, for tools that key the priors the same way.
+if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), codes: { code5, code9, code4 } };
 else window.getMove = (g, b, o) => _def().getMove(g, b, o);
 
 })();

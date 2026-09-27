@@ -17,16 +17,25 @@
 //   --save PATH     priors file, saved at every row (default out/tdsearch2-priors-<id>.js)
 //   --load PATH     start from an existing priors file
 //   --seed N        rng seed (default: random, printed)
+//   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
+//   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
 //   Agent knobs come from the environment as usual (TD_*, PPAT_*, TRUNC_*).
+//
+// Progress columns actMae / crtMae score the PRIORS ALONE (no tables, no
+// sims) on the md positions, as evalmovedetails does: actMae plays the actor
+// prior's argmax; crtMae plays a one-ply search over the critic prior (each
+// candidate played on a clone, the prior summed over the result's 2×2
+// windows for the side then to move, best in the mover's view).
 
 const path = require('path');
 const Util = require('./util.js');
 const { Game2, BLACK } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Priors = require('./tdsearch2-priors.js');
-const { create } = require('./ai/tdsearch2.js');
+const { create, codes } = require('./ai/tdsearch2.js');
+const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['size', 'budget', 'games', 'lr', 'save', 'load', 'seed']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['size', 'budget', 'games', 'lr', 'save', 'load', 'seed', 'md-file', 'md-limit']);
 if (opts.help) {
   console.log(`Usage: node train-tdsearch2-priors.js [options]
   --size N        board size                              (default 13)
@@ -35,7 +44,9 @@ if (opts.help) {
   --lr F          distillation step per root              (default 0.1)
   --save PATH     priors file, saved at every row (default out/tdsearch2-priors-<id>.js)
   --load PATH     start from an existing priors file
-  --seed N        rng seed (default: random, printed)`);
+  --seed N        rng seed (default: random, printed)
+  --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
+  --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)`);
   process.exit(0);
 }
 const SIZE     = parseInt(opts.size || '13', 10);
@@ -44,6 +55,9 @@ const GAMES    = parseInt(opts.games || '0', 10);
 const PRIOR_LR = parseFloat(opts['lr'] || '0.1');
 const SEED     = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 const SAVE     = opts.save || path.join('out', `tdsearch2-priors-${Util.randomSeed().toString(36)}.js`);
+const MD_FILE  = opts['md-file'] || 'movedetails_5059.md';
+const MD_LIMIT = parseInt(opts['md-limit'] || '1000', 10);
+const mdPositions = MD_LIMIT > 0 ? loadPositions(MD_FILE).slice(0, MD_LIMIT) : [];
 
 const priors = opts.load ? Priors.load(opts.load) : Priors.make();
 const agent  = create(Util.makeCfg());
@@ -51,6 +65,52 @@ agent.setPriors(priors);
 
 console.log(`size: ${SIZE}  budget: ${BUDGET}ms  games: ${GAMES || 'unlimited'}  lr: ${PRIOR_LR}  seed: ${SEED}`);
 console.log(`save: ${SAVE}${opts.load ? `  load: ${opts.load}` : ''}`);
+if (mdPositions.length) console.log(`md: ${MD_FILE}  positions: ${mdPositions.length}`);
+
+// ── Priors-only pickers for the md columns ───────────────────────────────────
+const { PASS, EMPTY } = require('./game2.js');
+function legalPoints(g) {
+  const pts = [];
+  for (let p = 0; p < g.N * g.N; p++) if (g.cells[p] === EMPTY && g.isLegal(p) && !g.isTrueEye(p)) pts.push(p);
+  return pts;
+}
+// Actor prior alone: argmax of the (mover, 8-cell code) weight.
+function actorPick(g, budgetMs, options) {
+  const rng = options.rng, m = g.current === BLACK ? 0 : 1, cells = g.cells, nbr = g._nbr, dnbr = g._dnbr;
+  let best = PASS, bestS = -Infinity;
+  for (const p of legalPoints(g)) {
+    const s = priors.actor9[m * 6561 + codes.code9(cells, dnbr, p, codes.code5(cells, nbr, p))] + rng.random() * 1e-9;
+    if (s > bestS) { bestS = s; best = p; }
+  }
+  return { move: best };
+}
+// Critic prior alone, one ply: the prior's logit of each candidate's result.
+function criticLogit(g) {
+  const m = g.current === BLACK ? 0 : 1, cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, area = g.N * g.N;
+  let z = 0;
+  for (let p = 0; p < area; p++) { const k4 = codes.code4(cells, nbr, dnbr, p); if (k4 !== 0) z += priors.critic4[m * 81 + k4]; }
+  return z;
+}
+function criticPick(g, budgetMs, options) {
+  const rng = options.rng, isBlack = g.current === BLACK;
+  let best = PASS, bestV = -Infinity;
+  for (const p of legalPoints(g)) {
+    const c = g.clone(); c.play(p);
+    const vB = 1 / (1 + Math.exp(-criticLogit(c)));
+    const v = (isBlack ? vB : 1 - vB) + rng.random() * 1e-9;
+    if (v > bestV) { bestV = v; best = p; }
+  }
+  return { move: best };
+}
+let mdMs = 0;   // time spent in the md columns, kept out of tMv
+function mdColumns() {
+  if (!mdPositions.length) return [];
+  const t = Date.now();
+  const cols = [evalPositions(actorPick, mdPositions, 0).maeErr.toFixed(4).padStart(6),
+                evalPositions(criticPick, mdPositions, 0).maeErr.toFixed(4).padStart(6)];
+  mdMs += Date.now() - t;
+  return cols;
+}
 
 function meanAbs(arr) { let s = 0, n = 0; for (let i = 0; i < arr.length; i++) if (arr[i] !== 0) { s += Math.abs(arr[i]); n++; } return { mean: n ? s / n : 0, n }; }
 
@@ -58,6 +118,7 @@ function meanAbs(arr) { let s = 0, n = 0; for (let i = 0; i < arr.length; i++) i
 console.log([
   'game'.padStart(4), 'moves'.padStart(5), 'avgLen'.padStart(6), 'blkWR'.padStart(6),
   'nzP9'.padStart(5), 'avgP9'.padStart(7), 'nzP4'.padStart(4), 'avgP4'.padStart(7),
+  ...(mdPositions.length ? ['actMae'.padStart(6), 'crtMae'.padStart(6)] : []),
   'tMv'.padStart(5), 'elapsed'.padStart(7),
 ].join('  '));
 
@@ -65,15 +126,17 @@ const t0 = Date.now();
 let games = 0, moves = 0, blackWins = 0, nextRow = 1, lastRow = 0;
 const rng = makeRng(SEED);
 const maxMoves = 3 * SIZE * SIZE + 20;
+row();   // baseline: the starting priors (zero, or --load)
 
 function row() {
   const el = Date.now() - t0;
   const p9 = meanAbs(priors.actor9), p4 = meanAbs(priors.critic4);
   console.log([
-    Util.fmt4i(games), Util.fmt4i(moves).padStart(5), Util.fmt4(moves / games).padStart(6),
-    Util.fmtRatio4(blackWins / games).padStart(6),
+    Util.fmt4i(games), Util.fmt4i(moves).padStart(5), (games ? Util.fmt4(moves / games) : '-').padStart(6),
+    (games ? Util.fmtRatio4(blackWins / games) : '-').padStart(6),
     Util.fmt4i(p9.n).padStart(5), p9.mean.toFixed(4).padStart(7), Util.fmt4i(p4.n), p4.mean.toFixed(4).padStart(7),
-    Util.fmtMs(el / moves), Util.fmtMs(el).padStart(7),
+    ...mdColumns(),
+    (moves ? Util.fmtMs((el - mdMs) / moves) : '-').padStart(5), Util.fmtMs(el).padStart(7),
   ].join('  '));
   Priors.save(SAVE, priors, `Generated by train-tdsearch2-priors.js — games: ${games}, moves: ${moves}, size: ${SIZE}, budget: ${BUDGET}ms, lr: ${PRIOR_LR}, seed: ${SEED}, elapsed: ${Util.fmtMs(el).trim()}`);
 }
