@@ -18,3 +18,4 @@ c/train-ppat
 # ai/ alias symlinks — personal shorthands to ref agents (rfs.js is tracked)
 ai/rfh.js
 ai/rfs2.js
+ai/rff.js
