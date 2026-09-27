@@ -99,6 +99,8 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
+//   TD_ROOT_SELECT    actor = play the actor's argmax; visits = play the point most
+//                     often sampled as a sim's first ply, ties by actor score (default actor)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = no truncation            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 4)
@@ -126,6 +128,8 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
+  const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
+  if (ROOT_SELECT !== 'actor' && ROOT_SELECT !== 'visits') throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor or visits, got ${ROOT_SELECT}`);
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
@@ -167,6 +171,7 @@ function create(cfg) {
   // Per-step records for the actor's update at sim end.
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
+  let rootVisits = null;                        // per point: sims whose first ply was that point
   let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
@@ -197,6 +202,7 @@ function create(cfg) {
     movers = new Uint8Array(maxSteps);
     chosen = new Int32Array(maxSteps);
     fromActor = new Uint8Array(maxSteps);
+    rootVisits = new Int32Array(area);
     ppatState = PPat.createState(N);
     k5s = new Int32Array(USE5 ? maxSteps * area : 0);
     k9s = new Int32Array(USE9 ? maxSteps * area : 0);
@@ -388,6 +394,7 @@ function create(cfg) {
       }
       fromActor[t] = actorOn ? 1 : 0;
       movers[t] = m; chosen[t] = move;
+      if (t === 0 && move !== PASS) rootVisits[move]++;
       const prevKo = g.ko;
       let nChanged = 0;
       if (move !== PASS) {
@@ -493,6 +500,7 @@ function create(cfg) {
     truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
     truncActive = TRUNC_DELTA > 0 && game.phase() + truncPly / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
+    rootVisits.fill(0);
     let sims = 0, longest = 0, totalSteps = 0;
     while (true) {
       if (SIMS_CAP > 0 ? sims >= SIMS_CAP : Date.now() - tStart >= budgetMs) break;
@@ -502,20 +510,24 @@ function create(cfg) {
       sims++;
     }
 
-    // Play the learned policy's argmax over legal non-eye points.
+    // Root selection over legal non-eye points: the actor's argmax, or the
+    // most-visited first ply with the actor score breaking ties (so with no
+    // sims at all it is the actor's argmax).
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
     const m = game.current === BLACK ? 0 : 1;
     act5 = USE5; act9 = USE9;             // the root is ply 0
     actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);       // root scores and logits
-    let best = PASS, bestS = -Infinity;
+    const byVisits = ROOT_SELECT === 'visits';
+    let best = PASS, bestS = -Infinity, bestV = -1;
     for (let p = 0; p < area; p++) {
       if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
       const s = sc[m][p] + rng.random() * 1e-9;
-      if (s > bestS) { bestS = s; best = p; }
+      const v = byVisits ? rootVisits[p] : 0;
+      if (v > bestV || (v === bestV && s > bestS)) { bestV = v; bestS = s; best = p; }
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}${byVisits ? ` visits=${bestV}` : ''}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
@@ -525,6 +537,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastCriticSteps() { return lastCriticSteps; },
              get lastReturn() { return lastReturn; },
+             rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }

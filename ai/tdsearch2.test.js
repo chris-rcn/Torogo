@@ -193,6 +193,20 @@ function playRandom(g, rng, changed) {
   check(full > 22 && (st.lastReturn === 0 || st.lastReturn === 1), `untruncated sim should run to the end with a 0/1 outcome (${full} steps, return ${st.lastReturn})`);
 }
 
+// ── Root selection by visits: the played point is the most-sampled first ply ──
+{
+  const N = 7;
+  const a = agent({ TD_ROOT_SELECT: 'visits', TD_SIMS: '50' });
+  const g = new Game2(N, true);
+  const r = a.getMove(g, 1000, { rng: makeRng(71) });
+  const st = a._internals();
+  let total = 0, top = 0;
+  for (let p = 0; p < N * N; p++) { total += st.rootVisits[p]; if (st.rootVisits[p] > top) top = st.rootVisits[p]; }
+  check(total === 50, `every sim's first ply should be counted, got ${total}`);
+  check(st.rootVisits[r.move] === top, `played point has ${st.rootVisits[r.move]} visits, max is ${top}`);
+  check(new RegExp(`visits=${top}\\b`).test(r.info), `info should report the visits: ${r.info}`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
