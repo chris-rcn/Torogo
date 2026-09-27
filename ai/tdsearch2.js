@@ -10,6 +10,7 @@ const Util = (typeof require === 'function') ? require('../util.js') : window.Ut
 const { BLACK, EMPTY, PASS } = Util.load('./game2.js', 'Game2');
 const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
+const VPat = Util.load('./vpatterns.js', 'VPatterns');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -66,7 +67,13 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
-// No simulation truncation (planned later).
+// Truncation (TD_TRUNC_PHASE_DELTA > 0, root phase below TD_TRUNC_MAX_PHASE):
+// a sim plays TD_TRUNC_ACTOR_DEPTH actor plies, then UNIFORM random moves (a
+// buffer so the actor cannot steer into the leaf model's defects), and stops
+// after ceil(delta * area) plies — the fielded trunc agent's prefix rule — at
+// which point the vpat model's value of the position stands in for the
+// outcome everywhere the outcome is used.  The model is the anchor; no
+// grounding schedule.
 //
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
@@ -90,6 +97,11 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 //                     the rest is the final result minus V             (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
+//   TD_TRUNC_PHASE_DELTA  fullness advance, as a fraction of the area, at which a
+//                     sim is cut for the vpat leaf; 0 = no truncation   (default 0)
+//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 20)
+//   TD_TRUNC_MAX_PHASE  truncate only when the root's phase is below this (default 0.30)
+//   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -111,6 +123,20 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
+  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0);
+  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 20);
+  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.30);
+  let vpatModel = null;
+  if (TRUNC_DELTA > 0) {
+    const vpatPath = _isNode
+      ? cfg.str('TRUNC_VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-1j9ad1fk.js'))
+      : null;
+    const raw = _isNode ? require(require('path').resolve(vpatPath))
+                        : (typeof window !== 'undefined' && window.truncVpatModel) || null;
+    if (!raw) throw new Error(`tdsearch2: cannot load the truncation vpat model from ${_isNode ? vpatPath : 'window.truncVpatModel'}`);
+    vpatModel = VPat.modelFromRaw(raw);
+  }
+  let truncActive = false, prefixLen = 0;   // per move: truncate this move's sims; plies to the cut
   const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
@@ -138,7 +164,7 @@ function create(cfg) {
   // Per-step records for the actor's update at sim end.
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
-  let lastActorSteps = 0, lastCriticSteps = 0;
+  let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
   let i1r = null, i4r = null, i9r = null, nActR = null;
@@ -310,6 +336,11 @@ function create(cfg) {
 
   function sigmoid(z) { return 1 / (1 + Math.exp(-z)); }
 
+  // Leaf value of a truncated sim: P(BLACK wins) from the vpat model.
+  function vpatValueB(g) {
+    return VPat.evaluateFeatures(VPat.extractFeatures(g, vpatModel.preparedSpecs, false, undefined, true), vpatModel.weights);
+  }
+
   // One simulation from `game`; returns the step count.  Records per step the
   // board, the sampled-from distribution, mover, chosen move, V(s_t) and the
   // critic's active feature indices, for the backward pass.
@@ -320,10 +351,11 @@ function create(cfg) {
     actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);
     let t = 0, actorSteps = 0, criticSteps = 0;
-    while (!g.gameOver && t < maxSteps - 1) {
+    const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
+    while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= prefixLen)) {
       const m = g.current === BLACK ? 0 : 1;
       const o = t * area;
-      actorOn = t < ACTOR_DEPTH;
+      actorOn = t < actorDepth;
       criticOn = CRITIC && (actorOn || CRITIC_TAIL);
       if (actorOn) {
         const a5 = t < D5, a9 = t < D9;
@@ -349,7 +381,7 @@ function create(cfg) {
         Ss[t] = S[m];
         actorSteps++;
       } else {
-        move = PPat.ppatMove(g, ppatState, ppatModel, rng);
+        move = truncActive ? g.randomLegalMove(rng) : PPat.ppatMove(g, ppatState, ppatModel, rng);
       }
       fromActor[t] = actorOn ? 1 : 0;
       movers[t] = m; chosen[t] = move;
@@ -368,7 +400,11 @@ function create(cfg) {
       t++;
     }
     lastActorSteps = actorSteps; lastCriticSteps = criticSteps;
-    const z = g.calcWinner() === BLACK ? 1 : 0;
+    // The return: the outcome, or at a cut the vpat leaf value.
+    const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
+            : (truncActive && t >= prefixLen) ? vpatValueB(g)
+            : (g.calcWinner() === BLACK ? 1 : 0);
+    lastReturn = z;
     // Terminal: the last two critic steps have no valued position two plies on.
     if (CRITIC) for (let u = Math.max(0, criticSteps - 2); u < criticSteps; u++) criticUpdate(u % 3, movers[u], Vs[u], z, false);
     update(t, z, criticSteps);
@@ -451,6 +487,8 @@ function create(cfg) {
     lastMoveCount = game.moveCount;
 
     const rng = options.rng || makeRng();
+    truncActive = TRUNC_DELTA > 0 && game.phase() < TRUNC_MAX_PHASE;
+    prefixLen = Math.ceil(TRUNC_DELTA * area);
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0;
     while (true) {
@@ -474,7 +512,7 @@ function create(cfg) {
       if (s > bestS) { bestS = s; best = p; }
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest} V=${val.toFixed(3)} score=${bestS.toFixed(3)}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${prefixLen}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
@@ -483,6 +521,8 @@ function create(cfg) {
              setActive: (a5, a9) => { act5 = a5; act9 = a9; },
              get lastActorSteps() { return lastActorSteps; },
              get lastCriticSteps() { return lastCriticSteps; },
+             get lastReturn() { return lastReturn; },
+             setTrunc: (active, plies) => { truncActive = active; prefixLen = plies; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 

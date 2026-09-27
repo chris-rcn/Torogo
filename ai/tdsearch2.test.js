@@ -174,6 +174,25 @@ function playRandom(g, rng, changed) {
   check(c > 0 && w > 0, `critic (${c}) and actor (${w}) should both have learned`);
 }
 
+// ── Truncation: actor plies, a random buffer, a cut at the prefix, a vpat leaf ──
+{
+  const N = 9;
+  const a = agent({ TD_TRUNC_PHASE_DELTA: '0.2', TD_TRUNC_ACTOR_DEPTH: '5', TD_TRUNC_MAX_PHASE: '1' });
+  const g = new Game2(N, true);
+  const r = a.getMove(g, 0, { rng: makeRng(61) });   // budget 0: sets up, arms truncation
+  check(/trunc=17\b/.test(r.info), `info should show the 17-ply prefix: ${r.info}`);
+  const st = a._internals();
+  const steps = st.simulate(g, makeRng(63));
+  check(steps === 17, `truncated sim should stop at ceil(0.2*81)=17 plies, ran ${steps}`);
+  check(st.lastActorSteps === 5, `actor should play 5 plies, played ${st.lastActorSteps}`);
+  const z = st.lastReturn;
+  check(z > 0 && z < 1, `return should be a vpat value strictly inside (0,1), got ${z}`);
+  // Above the phase gate the same instance runs full sims with the outcome.
+  st.setTrunc(false, 0);
+  const full = st.simulate(g, makeRng(65));
+  check(full > 17 && (st.lastReturn === 0 || st.lastReturn === 1), `untruncated sim should run to the end with a 0/1 outcome (${full} steps, return ${st.lastReturn})`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
