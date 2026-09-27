@@ -207,6 +207,23 @@ function playRandom(g, rng, changed) {
   check(new RegExp(`visits=${top}\\b`).test(r.info), `info should report the visits: ${r.info}`);
 }
 
+// ── Root selection by alpha-beta over the critic ────────────────────────────
+{
+  const N = 7;
+  const a = agent({ TD_ROOT_SELECT: 'ab', TD_AB_DEPTH: '2', TD_AB_WIDTH: '4', TD_SIMS: '20' });
+  const g = new Game2(N, true);
+  const rng = makeRng(81);
+  for (let i = 0; i < 4; i++) {
+    const r = a.getMove(g, 1000, { rng });
+    check(g.isLegal(r.move) && r.move !== PASS, `ab root returned ${r.move}`);
+    check(/ab=d2w4\b/.test(r.info), `info should name the search: ${r.info}`);
+    g.play(r.move);
+  }
+  let threw = false;
+  try { agent({ TD_ROOT_SELECT: 'ab', TD_CRITIC_LAYERS: 'none' }); } catch (e) { threw = true; }
+  check(threw, 'ab without a critic should be refused');
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

@@ -11,6 +11,7 @@ const { BLACK, EMPTY, PASS } = Util.load('./game2.js', 'Game2');
 const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
+const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -100,7 +101,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_ROOT_SELECT    actor = play the actor's argmax; visits = play the point most
-//                     often sampled as a sim's first ply, ties by actor score (default actor)
+//                     often sampled as a sim's first ply, ties by actor score;
+//                     ab = alpha-beta over the critic's value with the actor's
+//                     top-TD_AB_WIDTH points as candidates at every node (default actor)
+//   TD_AB_DEPTH       ab: search depth in plies                        (default 2)
+//   TD_AB_WIDTH       ab: candidates per node, the actor's top points   (default 5)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = no truncation            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 4)
@@ -129,7 +134,10 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
-  if (ROOT_SELECT !== 'actor' && ROOT_SELECT !== 'visits') throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor or visits, got ${ROOT_SELECT}`);
+  if (ROOT_SELECT !== 'actor' && ROOT_SELECT !== 'visits' && ROOT_SELECT !== 'ab') throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, visits or ab, got ${ROOT_SELECT}`);
+  const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
+  const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
+  if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
@@ -487,6 +495,22 @@ function create(cfg) {
     }
   }
 
+  // Root alpha-beta over the critic.  Every node is a clone: a full recompute
+  // on its board gives both the actor scores (candidate ordering) and the
+  // critic logit (the value).  ~depth^width nodes per move, negligible.
+  function abEvaluate(g) {
+    recomputeAll(g.cells, g._nbr, g._dnbr);
+    return sigmoid(Z[g.current === BLACK ? 0 : 1]);
+  }
+  function abCandidates(g) {
+    recomputeAll(g.cells, g._nbr, g._dnbr);
+    const m = g.current === BLACK ? 0 : 1, cells = g.cells, scm = sc[m];
+    const pts = [];
+    for (let p = 0; p < area; p++) if (cells[p] === EMPTY && g.isLegal(p) && !g.isTrueEye(p)) pts.push(p);
+    pts.sort((a, b) => scm[b] - scm[a]);
+    return pts.length > AB_WIDTH ? pts.slice(0, AB_WIDTH) : pts;
+  }
+
   function getMove(game, budgetMs = 1000, options = {}) {
     if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
       return { move: PASS, info: 'end the game; ahead' };
@@ -517,17 +541,24 @@ function create(cfg) {
     const m = game.current === BLACK ? 0 : 1;
     act5 = USE5; act9 = USE9;             // the root is ply 0
     actorOn = true; criticOn = CRITIC;
-    recomputeAll(cells, nbr, dnbr);       // root scores and logits
-    const byVisits = ROOT_SELECT === 'visits';
     let best = PASS, bestS = -Infinity, bestV = -1;
-    for (let p = 0; p < area; p++) {
-      if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
-      const s = sc[m][p] + rng.random() * 1e-9;
-      const v = byVisits ? rootVisits[p] : 0;
-      if (v > bestV || (v === bestV && s > bestS)) { bestV = v; bestS = s; best = p; }
+    if (ROOT_SELECT === 'ab') {
+      best = ABSearch.search(game, AB_DEPTH, abEvaluate, 1e-9, { getCandidates: abCandidates, rng });
+      recomputeAll(cells, nbr, dnbr);     // back to the root's scores and logits
+      if (best !== PASS) bestS = sc[m][best];
+    } else {
+      recomputeAll(cells, nbr, dnbr);     // root scores and logits
+      const byVisits = ROOT_SELECT === 'visits';
+      for (let p = 0; p < area; p++) {
+        if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
+        const s = sc[m][p] + rng.random() * 1e-9;
+        const v = byVisits ? rootVisits[p] : 0;
+        if (v > bestV || (v === bestV && s > bestS)) { bestV = v; bestS = s; best = p; }
+      }
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}${byVisits ? ` visits=${bestV}` : ''}` };
+    const how = ROOT_SELECT === 'ab' ? ` ab=d${AB_DEPTH}w${AB_WIDTH}` : ROOT_SELECT === 'visits' ? ` visits=${bestV}` : '';
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}${how}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
