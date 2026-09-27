@@ -246,6 +246,28 @@ function playRandom(g, rng, changed) {
   check((counts.get(pt) || 0) >= 18, `the peaked point should be sampled almost always, got ${counts.get(pt) || 0}/20`);
 }
 
+// ── Actor prior from featurepol: the agent's root scores equal the model's stones8 scores ──
+{
+  const FeaturePol = require('../featurepol-lib.js');
+  const path = 'out/featurepol-vlxe3ijb.js';
+  const a = agent({ TD_PRIOR_FPOL_DATA: path });
+  const { weights } = FeaturePol.loadModel({ name: 'test', path });
+  const N = 9, rng = makeRng(151);
+  const fstate = FeaturePol.createState(N, weights.spec);
+  let worst = 0, compared = 0;
+  for (let trial = 0; trial < 3; trial++) {
+    const g = new Game2(N, true);
+    for (let i = 0; i < 15 + trial * 10; i++) g.play(g.randomLegalMove(rng));
+    a.getMove(g, 0, { rng });                       // no sims: tables stay zero, scores = prior
+    const st = a._internals();
+    const m = g.current === BLACK ? 0 : 1;
+    for (const { move, score } of FeaturePol.evaluate(g, fstate, weights)) {
+      worst = Math.max(worst, Math.abs(st.sc[m][move] - score)); compared++;
+    }
+  }
+  check(compared > 100 && worst < 1e-5, `agent scores differ from featurepol stones8 by up to ${worst} over ${compared} moves`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

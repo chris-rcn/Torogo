@@ -12,6 +12,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
 const ABSearch = Util.load('./ab-search.js', 'ABSearch');
+const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -72,9 +73,11 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 // code around the point); critic: (mover, 3×3 code), used whether or not the
 // online 3×3 layer is on — added inside the score and the logit, so the
 // online tables learn RESIDUALS on them and the updates are unchanged.  They
-// are converted at create time from a featurepol stones8 model
-// (TD_PRIOR_FPOL_DATA) and a vpat 3:1 model (TD_PRIOR_VPAT_DATA) — not yet
-// wired; until then both are zero.
+// are converted at create time: the actor prior from a featurepol model's
+// stones8 space (TD_PRIOR_FPOL_DATA — every 8-cell pattern is placed on a
+// small board and its stones8 component read for each mover), the critic
+// prior from a vpat 3:1 model (TD_PRIOR_VPAT_DATA — not yet wired).  Without
+// a file a prior is zero.
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
@@ -122,6 +125,9 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
+//   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior (default none)
+//   TD_PRIOR_FPOL_WEIGHT  the actor prior's weight in the score; its logits are large
+//                     (sd ~4 on 13x13), so below 1 keeps the sims exploring  (default 1)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -163,14 +169,15 @@ function create(cfg) {
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
 
-  // Priors: zero arrays until the conversion knobs are wired, so the lookups
-  // are unconditional.
-  const pa9 = new Float32Array(2 * 6561), pc9 = new Float32Array(2 * 19683);
-  const HAS_PRIOR = false;
+  // Priors: zero arrays without a file, so the lookups are unconditional.
+  const fpolPriorPath = cfg.str('TD_PRIOR_FPOL_DATA', '');
+  const pa9 = fpolPriorPath ? actorPriorFromFeaturepol(fpolPriorPath, cfg.float('TD_PRIOR_FPOL_WEIGHT', 1)) : new Float32Array(2 * 6561);
+  const pc9 = new Float32Array(2 * 19683);
+  const HAS_PRIOR = false;                 // critic prior not yet wired
   // The layer-9 critic index is maintained if its table is on OR a prior is
   // present (the prior needs the window's code either way).
   const K9 = C9 || HAS_PRIOR;
-  const need9    = USE9 || C9;             // the 8-cell code is needed (layers; a prior would need it too)
+  const need9    = USE9 || C9 || !!cfg.str('TD_PRIOR_FPOL_DATA', '');   // the 8-cell code is needed (layers, or the actor prior)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
@@ -619,6 +626,35 @@ function code9(cells, dnbr, p, c5) {
 function code4(cells, nbr, dnbr, p) {
   const b = p * 4;
   return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
+}
+
+// ── Actor prior from a featurepol model ───────────────────────────────────────
+// stones8 is our 8-cell code by another name.  For every code and mover, place
+// the ring around the centre of an empty 5×5 board (the ring's outer
+// neighbours are empty, so every stone has liberties and legality is exact)
+// and read the model's stones8 component at the centre.  A centre the mover
+// cannot play (suicide, or a true eye) has no component and stays 0 — it is
+// never sampled anyway.
+function actorPriorFromFeaturepol(path, weight) {
+  const { Game2 } = Util.load('./game2.js', 'Game2');
+  const { weights } = FeaturePol.loadModel({ name: 'tdsearch2-actor-prior', path });
+  const spaceIdx = weights.spec.spaces.findIndex(sp => sp.str === 'stones8');
+  if (spaceIdx < 0) throw new Error(`tdsearch2: TD_PRIOR_FPOL_DATA model ${path} has no stones8 space (spec '${weights.spec.str}')`);
+  const N = 5, centre = 2 * N + 2, nSpaces = weights.spec.spaces.length;
+  const state = FeaturePol.createState(N, weights.spec, { components: true });
+  const ring = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];   // code digit order
+  const pa9 = new Float32Array(2 * 6561);
+  for (let k = 0; k < 6561; k++) {
+    for (let m = 0; m < 2; m++) {
+      const g = new Game2(N, false);
+      let r = k;
+      for (let i = 0; i < 8; i++) { const d = r % 3; r = (r - d) / 3; if (d !== 1) g._place((2 + ring[i][0]) * N + 2 + ring[i][1], d - 1); }
+      g.current = m === 0 ? BLACK : -BLACK;
+      const cv = FeaturePol.componentValues(g, state, weights);
+      for (let i = 0; i < cv.count; i++) if (cv.moves[i] === centre) { pa9[m * 6561 + k] = weight * cv.values[i * nSpaces + spaceIdx]; break; }
+    }
+  }
+  return pa9;
 }
 
 let _default = null;

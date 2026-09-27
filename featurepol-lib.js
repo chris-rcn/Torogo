@@ -1399,7 +1399,9 @@ function _intern(w, key) {
 
 function _wrap(x, N) { x %= N; return x < 0 ? x + N : x; }
 
-function createState(N, spec) {
+// opts.components: also record, per move and space, where that space's keys
+// start in `keys`, so componentValues can give a per-space breakdown.
+function createState(N, spec, opts) {
   spec = parseSpec(spec);
   const cap = N * N;
   // Upper bound on keys emitted per move; a board-maximum thermometer space
@@ -1433,6 +1435,7 @@ function createState(N, spec) {
     pScore:   new Float64Array(cap),            // plain-space score, drives the shortlist
     pOrder:   new Int32Array(cap),
     memo:     new Float64Array(spec.numSlots),  // per-move scratch: one value per distinct fixed-space term
+    spaceOff: (opts && opts.components) ? new Int32Array(cap * spec.spaces.length) : null,   // see componentValues
     ladderSizes: new Uint16Array(cap * 4),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
@@ -1597,7 +1600,7 @@ function extractFeatures(game, state, weights, game3) {
   }
   const computers = spec.computers, numSlots = spec.numSlots;
   const emC = game._emptyCells, ec = game.emptyCount;
-  const moves = state.moves, keys = state.keys, keyOff = state.keyOff;
+  const moves = state.moves, keys = state.keys, keyOff = state.keyOff, spaceOff = state.spaceOff;
   let accA = state.accA, accB = state.accB;
   let count = 0, pos = 0;
   keyOff[0] = 0;
@@ -1608,6 +1611,7 @@ function extractFeatures(game, state, weights, game3) {
     for (let sl = 0; sl < numSlots; sl++) memo[sl] = computers[sl](ctx, idx);
     for (let s = 0; s < nSpaces; s++) {
       const sp = spaces[s];
+      if (spaceOff) spaceOff[count * nSpaces + s] = pos;
       if (sp.listFn) {
         const n = sp.listFn(ctx, idx, _listBuf);
         for (let j = 0; j < n; j++) {
@@ -1685,6 +1689,28 @@ function computeSoftmax(state, weights, temperature = 1) {
   const inv = 1 / sum;
   for (let i = 0; i < n; i++) pr[i] *= inv;
   return n;
+}
+
+// Per-space breakdown of every candidate move's score: values[i * nSpaces + s]
+// is the sum of move i's weights from space s (the spaces in spec order, named
+// in `spaces`).  The state must have been created with { components: true }.
+// Whole-position extraction only (no top-N rank shortlist).  For tools that
+// convert one space of a model into another representation.
+function componentValues(game, state, weights, game3) {
+  if (!state.spaceOff) throw new Error('featurepol componentValues: create the state with { components: true }');
+  const spec = weights.spec, nSpaces = spec.spaces.length;
+  if (weights.rankTopN > 0 && spec.rankSpaces && spec.rankSpaces.length > 0) throw new Error('featurepol componentValues: not available on the top-N rank path');
+  extractFeatures(game, state, weights, game3);
+  const n = state.count, vals = weights.vals, keys = state.keys, keyOff = state.keyOff, so = state.spaceOff;
+  const values = new Float64Array(n * nSpaces);
+  for (let i = 0; i < n; i++) {
+    for (let s = 0; s < nSpaces; s++) {
+      const start = so[i * nSpaces + s], end = s + 1 < nSpaces ? so[i * nSpaces + s + 1] : keyOff[i + 1];
+      let v = 0; for (let k = start; k < end; k++) v += vals[keys[k]];
+      values[i * nSpaces + s] = v;
+    }
+  }
+  return { count: n, moves: state.moves, spaces: spec.spaces.map(sp => sp.str), values };
 }
 
 function evaluate(game, state, weights) {
@@ -1950,6 +1976,7 @@ const FeaturePol = {
   internKey: _intern,
   extractFeatures,
   computeSoftmax,
+  componentValues,
   evaluate,
   scoreAll,
   policyMove,
