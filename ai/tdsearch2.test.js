@@ -144,6 +144,21 @@ function playRandom(g, rng, changed) {
   check(Math.abs(sum - st.S[1]) < 1e-9, 'refreshScores left S inconsistent');
 }
 
+// ── Playout tail: the actor plays only the first TD_ACTOR_DEPTH plies ───────
+{
+  const N = 9;
+  const a = agent({ TD_ACTOR_DEPTH: '3' });
+  const g = new Game2(N, true);
+  a.getMove(g, 0, { rng: makeRng(41) });
+  const st = a._internals();
+  const steps = st.simulate(g, makeRng(43));
+  check(steps > 3, `sim should run past the actor depth, got ${steps} steps`);
+  check(st.lastActorSteps === 3, `actor should play exactly 3 plies, played ${st.lastActorSteps}`);
+  let nonzero = 0;
+  for (let i = 0; i < st.w1.length; i++) if (st.w1[i] !== 0) nonzero++;
+  check(nonzero > 0, 'actor learned nothing from its plies');
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

@@ -5,9 +5,11 @@
 
 (function () {
 
+const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const Util = (typeof require === 'function') ? require('../util.js') : window.Util;
 const { BLACK, EMPTY, PASS } = Util.load('./game2.js', 'Game2');
 const { makeRng } = Util.load('./xorshift.js', 'XorShift');
+const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -24,7 +26,10 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //   1: the point itself                    (mover, p)               always on
 //   5: its 4 orthogonal neighbours          (mover, p, base-3 code of 4 cells)
 //   9: those plus the 4 diagonals           (mover, p, base-3 code of 8 cells)
-// and the policy is a softmax over the empty points.  Layers 5 and 9 are each
+// and the policy is a softmax over the empty points.  The actor plays only
+// the first TD_ACTOR_DEPTH plies of a sim; the rest is the standard playout
+// (uniform below PPAT_MIN_PHASE, the ppat policy above it), as Silver et al.
+// switch to a default policy after a few plies.  Layers 5 and 9 are each
 // active only for the first N plies of a sim (their depth knob; 0 = off): deep
 // in a sim the board has diverged from the root, so updates to those exact
 // local patterns land where no root will read them, while the first plies
@@ -51,19 +56,24 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //           outcome when the sim ends.  A three-slot ring of index snapshots
 //           supplies step t−2's features; the live logit is corrected for the
 //           features the two positions share.
-//   actor:  REINFORCE at sim end (it needs the final result), in step order,
+//   actor:  REINFORCE at sim end (it needs the final result), in step order
+//           over the plies it played (playout-tail moves carry no gradient),
 //           with advantage A_t = ρ·δ_t + (1−ρ)·(R − V_t) from the mover's view,
 //           where δ_t = V_{t+2} − V_t is the TD advantage, R the final result
 //           and ρ = TD_ADV_RATIO.  Its per-step records are the sampled-from
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
-// No pretrained models, no simulation truncation (planned later).
+// No simulation truncation (planned later).
 //
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
+//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 6)
+//   PPAT_DATA         ppat weight file for the playout tail
+//                     (default out/ppat-data-233162-best-ref-candidate.js)
+//   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
 //   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
 //   TD_ACTOR_LR       actor step size                                  (default 0.1)
@@ -77,10 +87,12 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
+  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 6);
   const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
   const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
+  let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const LR       = cfg.float('TD_ACTOR_LR', 0.1);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
@@ -92,6 +104,16 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
+
+  // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
+  const ppatPath = _isNode
+    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
+    : null;
+  const ppatModel = _isNode ? PPat.loadWeights(ppatPath)
+                            : PPat.loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+  if (!ppatModel) throw new Error(`tdsearch2: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
+  ppatModel.uniformBelowPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  let ppatState = null;
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
@@ -107,6 +129,8 @@ function create(cfg) {
   let changed = null;                           // cells altered by a move (stone + captures)
   // Per-step records for the actor's update at sim end.
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
+  let fromActor = null;                         // step sampled from the actor (else the tail)
+  let lastActorSteps = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
   let i1r = null, i4r = null, i9r = null, nActR = null;
@@ -135,6 +159,8 @@ function create(cfg) {
     Vs     = new Float64Array(maxSteps);
     movers = new Uint8Array(maxSteps);
     chosen = new Int32Array(maxSteps);
+    fromActor = new Uint8Array(maxSteps);
+    ppatState = PPat.createState(N);
     k5s = new Int32Array(USE5 ? maxSteps * area : 0);
     k9s = new Int32Array(USE9 ? maxSteps * area : 0);
     i1r = new Int32Array(C1 ? 3 * area : 0); i4r = new Int32Array(C4 ? 3 * area : 0); i9r = new Int32Array(C9 ? 3 * area : 0);
@@ -202,19 +228,22 @@ function create(cfg) {
   }
 
   // Recompute everything anchored at p: both movers' actor score/ex (S kept
-  // in step) and every critic layer's index (Z kept in step).  Kept small so
-  // V8 inlines the code and score helpers into it (the hot function).
+  // in step; skipped in the playout tail, where the scores are unused) and
+  // every critic layer's index (Z kept in step).  Kept small so V8 inlines
+  // the code and score helpers into it (the hot function).
   function recompute(cells, nbr, dnbr, p) {
     const k5 = (USE5 || NEED9) ? code5(cells, nbr, p) : 0;
     const k9 = NEED9 ? code9(cells, dnbr, p, k5) : 0;
     k5a[p] = k5; k9a[p] = k9;
     const v  = cells[p];
-    for (let m = 0; m < 2; m++) {
-      const old = ex[m][p];
-      let e = 0;
-      if (v === EMPTY) { const s = scoreFrom(m, p, k5, k9); sc[m][p] = s; e = Math.exp(s / TEMP); }
-      ex[m][p] = e;
-      S[m] += e - old;
+    if (actorOn) {
+      for (let m = 0; m < 2; m++) {
+        const old = ex[m][p];
+        let e = 0;
+        if (v === EMPTY) { const s = scoreFrom(m, p, k5, k9); sc[m][p] = s; e = Math.exp(s / TEMP); }
+        ex[m][p] = e;
+        S[m] += e - old;
+      }
     }
     if (CRITIC) recomputeCritic(cells, nbr, dnbr, p, k9, v);
   }
@@ -280,13 +309,17 @@ function create(cfg) {
     const g = game.clone();
     const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
     act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
+    actorOn = true;
     recomputeAll(cells, nbr, dnbr);
-    let t = 0;
+    let t = 0, actorSteps = 0;
     while (!g.gameOver && t < maxSteps - 1) {
       const m = g.current === BLACK ? 0 : 1;
       const o = t * area;
-      const a5 = t < D5, a9 = t < D9;
-      if (a5 !== act5 || a9 !== act9) { act5 = a5; act9 = a9; refreshScores(cells); }
+      actorOn = t < ACTOR_DEPTH;
+      if (actorOn) {
+        const a5 = t < D5, a9 = t < D9;
+        if (a5 !== act5 || a9 !== act9) { act5 = a5; act9 = a9; refreshScores(cells); }
+      }
       if (CRITIC) {
         Vs[t] = sigmoid(Z[m]);
         const slot = t % 3, so = slot * area;
@@ -297,11 +330,19 @@ function create(cfg) {
         // Step t−2 (same mover) is now two plies on: push it toward V(s_t).
         if (t >= 2) criticUpdate((t - 2) % 3, m, Vs[t - 2], Vs[t], true);
       }
-      const move = sample(g, m, rng);
-      exs.set(ex[m], o);
-      if (act5) k5s.set(k5a, o);
-      if (act9) k9s.set(k9a, o);
-      Ss[t] = S[m]; movers[t] = m; chosen[t] = move;
+      let move;
+      if (actorOn) {
+        move = sample(g, m, rng);
+        exs.set(ex[m], o);
+        if (act5) k5s.set(k5a, o);
+        if (act9) k9s.set(k9a, o);
+        Ss[t] = S[m];
+        actorSteps++;
+      } else {
+        move = PPat.ppatMove(g, ppatState, ppatModel, rng);
+      }
+      fromActor[t] = actorOn ? 1 : 0;
+      movers[t] = m; chosen[t] = move;
       const prevKo = g.ko;
       let nChanged = 0;
       if (move !== PASS) {
@@ -316,6 +357,7 @@ function create(cfg) {
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
       t++;
     }
+    lastActorSteps = actorSteps;
     const z = g.calcWinner() === BLACK ? 1 : 0;
     // Terminal: the last two steps have no position two plies on.
     if (CRITIC) for (let u = Math.max(0, t - 2); u < t; u++) criticUpdate(u % 3, movers[u], Vs[u], z, false);
@@ -345,7 +387,7 @@ function create(cfg) {
   // Δw(a) = lr/T · A · ([a = chosen] − π(a)) on each layer's weight for (m, a).
   function actorUpdate(t, m, A) {
     const move = chosen[t];
-    if (move === PASS) return;             // PASS is outside the softmax
+    if (!fromActor[t] || move === PASS) return;   // tail moves and PASS are outside the softmax
     const o = t * area;
     const e = exs.subarray(o, o + area);
     const k5 = k5s.subarray(o, o + area), k9 = k9s.subarray(o, o + area);
@@ -413,6 +455,7 @@ function create(cfg) {
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
     const m = game.current === BLACK ? 0 : 1;
     act5 = USE5; act9 = USE9;             // the root is ply 0
+    actorOn = true;
     recomputeAll(cells, nbr, dnbr);       // root scores and logits
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
@@ -428,6 +471,7 @@ function create(cfg) {
   function _internals() {
     return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid,
              setActive: (a5, a9) => { act5 = a5; act9 = a9; },
+             get lastActorSteps() { return lastActorSteps; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 
