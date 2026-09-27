@@ -439,7 +439,7 @@ console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
-if (EVAL_RANK_TOPN > 0) console.log(`eval-rank-topn=${EVAL_RANK_TOPN} (eval ranks the best ${EVAL_RANK_TOPN} moves; self-play ranks every candidate)`);
+if (EVAL_RANK_TOPN > 0 && weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) console.log(`eval-rank-topn=${EVAL_RANK_TOPN} (eval ranks the best ${EVAL_RANK_TOPN} moves; self-play ranks every candidate)`);
 if (RANK_POS_RATIO < 1) {
   FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
   console.log(`rank-pos-ratio=${RANK_POS_RATIO} (self-play positions using the rank feature; eval uses 1)`);
