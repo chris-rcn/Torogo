@@ -1373,7 +1373,7 @@ static long    next_print_pos;
 static double  last_print_test_s;      /* duration of the most recent tested row */
 static double  cumulative_test_s = 0;
 
-/* Render the trMSE column: only FULL epochs are shown — a freshly-completed
+/* Render the trMSE_c column: only FULL epochs are shown — a freshly-completed
  * epoch (full_count>0, mean differs from *last_full) prints once; every other
  * row prints "...".  Partial running means are not shown: they mix a shrinking
  * epoch fraction with position order and read as noise.  *last_full latches
@@ -1795,7 +1795,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
  * workers never stall on the (expensive) test. */
 static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
-    printf("%9s  %7s  %7s", "positions", "trMSE", "trMSE_c");
+    printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
@@ -1846,8 +1846,7 @@ static void run_monitor(void) {
         fflush(stdout);
     }
 
-    double mon_last_full = -1;   /* latches the last full-epoch trMSE shown */
-    double mon_last_full_c = -1; /* same, for trMSE_c */
+    double mon_last_full_c = -1; /* latches the last full-epoch trMSE_c shown */
     struct stat mon_last_st; memset(&mon_last_st, 0, sizeof mon_last_st);
     /* Geometric test cadence, same shape as single-process: after a row at
      * elapsed E the next test is due at E + clamp(0.5·E, last_test_s,
@@ -1926,15 +1925,14 @@ static void run_monitor(void) {
         char eb[32]; snprintf(eb, sizeof(eb), "%.1fm", el / 60.0);
         /* Train MSE = last completed epoch over the (fixed) training set, aggregated
          * across workers — read straight from the checkpoint. */
-        double dsum, psum, fsum; long dcnt, pcnt; char trbuf[24], trcbuf[24], tecbuf[16], maebuf[16];
+        double dsum, psum, fsum; long dcnt, pcnt; char trcbuf[24], tecbuf[16], maebuf[16];
         if (ckpt_train_sq(cfg_monitor, &dsum, &dcnt, &psum, &pcnt, &fsum) == 0) {
-            trmse_col(dsum, dcnt, psum, pcnt, &mon_last_full, trbuf, sizeof trbuf);
-            /* trMSE_c: floor-corrected, same completed-epoch blend as trMSE. */
+            /* trMSE_c: floor-corrected, completed-epoch blend. */
             trmse_col(dsum - fsum, dcnt, psum, pcnt, &mon_last_full_c, trcbuf, sizeof trcbuf);
-        } else { trbuf[0] = '-'; trbuf[1] = 0; trcbuf[0] = '-'; trcbuf[1] = 0; }
+        } else { trcbuf[0] = '-'; trcbuf[1] = 0; }
         int is_best = (n_test > 0) ? (tr.mse_c < mon_best_te_c)
                                    : (ref_theta ? match_score_peak : 0);
-        printf("%9ld  %7s  %7s", agg, trbuf, trcbuf);
+        printf("%9ld  %7s", agg, trcbuf);
         printf("  %6d  %7.4f  %6.3f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
@@ -2009,21 +2007,19 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     /* positions column = aggregate across workers (≈ workers × this process's count,
      * barrier-locked); posMs stays per-process (worker 0's CPU time / its own count).
      * tPos = how many test positions this row used (always the full test set). */
-    static double last_full = -1;
     static double last_full_c = -1;
     static float best_te_c = 1e30f;
     static float best_mae = 1e30f;
-    char trbuf[24], trcbuf[24], tecbuf[16], maebuf[16];
+    char trcbuf[24], tecbuf[16], maebuf[16];
     /* A test set decides -best by teMSE_c (floor-corrected, a held-out
      * yardstick); without one, fall back to the directWR peak.  With neither,
      * write no -best at all. */
     int is_best = run_tests && (n_test > 0 ? (mse_c < best_te_c)
                                            : (ref_theta ? match_score_peak : 0));
-    trmse_col(done_sq_sum, done_sq_count, epoch_sq_sum, epoch_sq_count, &last_full, trbuf, sizeof trbuf);
-    /* trMSE_c: floor-corrected, same completed-epoch blend as trMSE (solo only). */
+    /* trMSE_c: floor-corrected, completed-epoch blend (solo only). */
     trmse_col(done_sq_sum - done_floor_sum, done_sq_count, epoch_sq_sum, epoch_sq_count,
               &last_full_c, trcbuf, sizeof trcbuf);
-    printf("%9ld  %7s  %7s", (long)cfg_workers * total_positions, trbuf, trcbuf);
+    printf("%9ld  %7s", (long)cfg_workers * total_positions, trcbuf);
     printf("  %6d  %7.4f  %6.3f", live_weights(), avg_abs_weight(),
            avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
@@ -2422,7 +2418,7 @@ int main(int argc, char **argv) {
     if (cfg_worker_id == 0) {
     char best_file[320]; best_path(weights_file, best_file, sizeof best_file);
     print_banner(false, weights_file, best_file);
-    printf("%9s  %7s  %7s", "positions", "trMSE", "trMSE_c");
+    printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "directWR");
     if (n_test > 0) printf("  %7s", "teMSE_c");
