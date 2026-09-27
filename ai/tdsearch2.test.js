@@ -259,9 +259,13 @@ function playRandom(g, rng, changed) {
   const b0 = pt * 4;
   const k5 = (g.cells[g._nbr[b0]] + 1) + 3 * (g.cells[g._nbr[b0 + 1]] + 1) + 9 * (g.cells[g._nbr[b0 + 2]] + 1) + 27 * (g.cells[g._nbr[b0 + 3]] + 1);
   const k9 = k5 + 81 * ((g.cells[g._dnbr[b0]] + 1) + 3 * (g.cells[g._dnbr[b0 + 1]] + 1) + 9 * (g.cells[g._dnbr[b0 + 2]] + 1) + 27 * (g.cells[g._dnbr[b0 + 3]] + 1));
-  const before = pr.actor9[k9];
+  const before = pr.actor9[k9], totalBefore = pr.actor9[k9] + st.w1[pt];
   a.distilPriors(g, 0.5);
-  check(pr.actor9[k9] >= before + 1.0 - 1e-6, `prior at the point's code should rise by >= 0.5*2 (other points sharing the code have zero residual): ${before} -> ${pr.actor9[k9]}`);
+  check(pr.actor9[k9] > before, `prior at the point's code should rise: ${before} -> ${pr.actor9[k9]}`);
+  check(Math.abs(pr.actor9[k9] + st.w1[pt] - totalBefore) < 1e-6, `the point's total should be invariant under distillation`);
+  a.distilPriors(g, 0.5);
+  const total2 = pr.actor9[k9] + st.w1[pt];
+  check(Math.abs(total2 - totalBefore) < 1e-6, 'repeated distillation must not compound the total');
   void p0;
   // Round trip through the file format.
   const S = require('path').join(process.env.TD_TEST_SCRATCH || require('os').tmpdir(), 'tdsearch2-priors-test.js');

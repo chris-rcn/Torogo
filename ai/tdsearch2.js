@@ -73,8 +73,11 @@ const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 // actor: (mover, 8-cell code around the point); critic: (mover, 2×2 code) —
 // added inside the score and the logit, so the online tables learn RESIDUALS
 // on them and the updates are unchanged.  They are distilled by
-// train-tdsearch2-priors.js: after a search, every root feature's prior weight
-// moves toward prior + residual (distilPriors).  Without a file both are zero.
+// train-tdsearch2-priors.js: after a search, distilPriors TRANSFERS residual
+// into prior — each code's prior moves by step × the mean residual of the
+// root's features carrying that code, and that amount comes off each of
+// those residuals, so every feature's total (prior + residual) is unchanged
+// and nothing compounds across moves.  Without a file both are zero.
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
@@ -307,22 +310,40 @@ function create(cfg) {
     if (C9) swapCritic(c9, i9, area * 19683, p, critIdx9(v, p, k9));
   }
 
-  // Distillation (the trainer calls this after getMove on the same position):
-  // every feature the root exhibits moves its prior toward prior + residual by
-  // `step` × residual, for both movers.  Actor: each empty point's 8-cell code
-  // takes the point's layer-1 residual.  Critic: each active 2×2 window's code
-  // takes the window's residual.
+  // Distillation (the trainer calls this after getMove on the same position),
+  // for both movers.  Actor: group the root's empty points by 8-cell code; the
+  // code's prior moves by step × the mean layer-1 residual of the group, and
+  // that amount comes off each member's residual.  Critic: the same over the
+  // root's active 2×2 windows and their residuals.  A transfer, not an add:
+  // every feature's total is invariant, so repeated distillation of the same
+  // position converges instead of compounding.
+  let dSum9 = null, dCnt9 = null, dCode9 = null, dSum4 = null, dCnt4 = null, dCode4 = null;
   function distilPriors(game, step) {
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
+    if (!dSum9) {
+      dSum9 = new Float64Array(2 * 6561); dCnt9 = new Int32Array(6561); dCode9 = new Int32Array(area);
+      dSum4 = new Float64Array(2 * 81);   dCnt4 = new Int32Array(81);   dCode4 = new Int32Array(area);
+    }
+    dSum9.fill(0); dCnt9.fill(0); dSum4.fill(0); dCnt4.fill(0);
     for (let p = 0; p < area; p++) {
+      dCode9[p] = -1; dCode4[p] = -1;
       if (cells[p] === EMPTY) {
         const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
-        for (let m = 0; m < 2; m++) pa9[m * 6561 + k9] += step * w1[m * area + p];
+        dCode9[p] = k9; dCnt9[k9]++;
+        dSum9[k9] += w1[p]; dSum9[6561 + k9] += w1[area + p];
       }
       if (C4) {
         const k4 = code4(cells, nbr, dnbr, p);
-        if (k4 !== 0) for (let m = 0; m < 2; m++) pc4[m * 81 + k4] += step * c4[m * area * 81 + p * 81 + k4];
+        if (k4 !== 0) { dCode4[p] = k4; dCnt4[k4]++; dSum4[k4] += c4[p * 81 + k4]; dSum4[81 + k4] += c4[area * 81 + p * 81 + k4]; }
       }
+    }
+    for (let k = 0; k < 6561; k++) if (dCnt9[k] > 0) { dSum9[k] = step * dSum9[k] / dCnt9[k]; dSum9[6561 + k] = step * dSum9[6561 + k] / dCnt9[k]; pa9[k] += dSum9[k]; pa9[6561 + k] += dSum9[6561 + k]; }
+    for (let k = 0; k < 81; k++)   if (dCnt4[k] > 0) { dSum4[k] = step * dSum4[k] / dCnt4[k]; dSum4[81 + k] = step * dSum4[81 + k] / dCnt4[k]; pc4[k] += dSum4[k]; pc4[81 + k] += dSum4[81 + k]; }
+    for (let p = 0; p < area; p++) {
+      const k9 = dCode9[p];
+      if (k9 >= 0) { w1[p] -= dSum9[k9]; w1[area + p] -= dSum9[6561 + k9]; }
+      const k4 = dCode4[p];
+      if (k4 >= 0) { c4[p * 81 + k4] -= dSum4[k4]; c4[area * 81 + p * 81 + k4] -= dSum4[81 + k4]; }
     }
   }
 
