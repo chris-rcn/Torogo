@@ -70,10 +70,10 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
 // agent's prefix rule, here a buffer so the actor cannot steer into the leaf
-// model's defects — and stops; the vpat model's value of the cut position
+// model's defects — and stops; the vpat model's value of the truncation point
 // stands in for the outcome everywhere the outcome is used.  The model is the
-// anchor; no grounding schedule.  Truncation is used only when the cut's
-// phase (root phase + cut plies / area, captures ignored) is below
+// anchor; no grounding schedule.  Truncation is used only when the truncation
+// point's phase (root phase + prefix plies / area, captures ignored) is below
 // TD_TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
 // while the actor depth and delta are swept.
 //
@@ -102,7 +102,8 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = no truncation            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 20)
-//   TD_TRUNC_MAX_PHASE  truncate only when the CUT's phase would be below this (default 0.5)
+//   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
+//                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -138,7 +139,7 @@ function create(cfg) {
     if (!raw) throw new Error(`tdsearch2: cannot load the truncation vpat model from ${_isNode ? vpatPath : 'window.truncVpatModel'}`);
     vpatModel = VPat.modelFromRaw(raw);
   }
-  let truncActive = false, prefixLen = 0;   // per move: truncate this move's sims; plies to the cut
+  let truncActive = false, prefixLen = 0;   // per move: truncate this move's sims; plies to the truncation point
   const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
@@ -402,7 +403,7 @@ function create(cfg) {
       t++;
     }
     lastActorSteps = actorSteps; lastCriticSteps = criticSteps;
-    // The return: the outcome, or at a cut the vpat leaf value.
+    // The return: the outcome, or at the truncation point the vpat leaf value.
     const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
             : (truncActive && t >= prefixLen) ? vpatValueB(g)
             : (g.calcWinner() === BLACK ? 1 : 0);
@@ -489,7 +490,7 @@ function create(cfg) {
     lastMoveCount = game.moveCount;
 
     const rng = options.rng || makeRng();
-    prefixLen = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);      // plies to the cut
+    prefixLen = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);      // plies to the truncation point
     truncActive = TRUNC_DELTA > 0 && game.phase() + prefixLen / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0;
