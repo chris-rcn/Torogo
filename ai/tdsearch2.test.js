@@ -147,7 +147,7 @@ function playRandom(g, rng, changed) {
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
-  const a = agent({ TD_SIMS: '40' });
+  const a = agent({ TD_SIMS: '40', TD_CRITIC_LAYERS: '1,4,9' });   // the layer set this threshold was set on
   const g = new Game2(N, true);
   // Black builds a big framework while White passes; Black wins these sims.
   const rng = makeRng(21);
