@@ -159,6 +159,21 @@ function playRandom(g, rng, changed) {
   check(nonzero > 0, 'actor learned nothing from its plies');
 }
 
+// ── Critic tail off: the critic stops at the actor depth, the actor still learns ──
+{
+  const N = 9;
+  const a = agent({ TD_ACTOR_DEPTH: '4', TD_CRITIC_TAIL: '0' });
+  const g = new Game2(N, true);
+  a.getMove(g, 0, { rng: makeRng(51) });
+  const st = a._internals();
+  const steps = st.simulate(g, makeRng(53));
+  check(steps > 4, `sim should run past the actor depth, got ${steps}`);
+  check(st.lastCriticSteps === 4, `critic should stop at ply 4, recorded ${st.lastCriticSteps}`);
+  let c = 0; for (let i = 0; i < st.c4.length; i++) if (st.c4[i] !== 0) c++;
+  let w = 0; for (let i = 0; i < st.w1.length; i++) if (st.w1[i] !== 0) w++;
+  check(c > 0 && w > 0, `critic (${c}) and actor (${w}) should both have learned`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

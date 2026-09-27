@@ -82,6 +82,9 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
+//   TD_CRITIC_TAIL    1 = the critic is maintained and learns through the playout
+//                     tail; 0 = it stops at the actor depth, the tail only
+//                     delivers the outcome (Silver et al. leave this open) (default 1)
 //   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
 //                     the rest is the final result minus V             (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
@@ -102,6 +105,8 @@ function create(cfg) {
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
   const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
+  const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 1) !== 0;
+  let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
@@ -132,7 +137,7 @@ function create(cfg) {
   // Per-step records for the actor's update at sim end.
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
-  let lastActorSteps = 0;
+  let lastActorSteps = 0, lastCriticSteps = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
   let i1r = null, i4r = null, i9r = null, nActR = null;
@@ -247,7 +252,7 @@ function create(cfg) {
         S[m] += e - old;
       }
     }
-    if (CRITIC) recomputeCritic(cells, nbr, dnbr, p, k9, v);
+    if (criticOn) recomputeCritic(cells, nbr, dnbr, p, k9, v);
   }
 
   function recomputeAll(cells, nbr, dnbr) {
@@ -311,18 +316,20 @@ function create(cfg) {
     const g = game.clone();
     const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
     act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
-    actorOn = true;
+    actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);
-    let t = 0, actorSteps = 0;
+    let t = 0, actorSteps = 0, criticSteps = 0;
     while (!g.gameOver && t < maxSteps - 1) {
       const m = g.current === BLACK ? 0 : 1;
       const o = t * area;
       actorOn = t < ACTOR_DEPTH;
+      criticOn = CRITIC && (actorOn || CRITIC_TAIL);
       if (actorOn) {
         const a5 = t < D5, a9 = t < D9;
         if (a5 !== act5 || a9 !== act9) { act5 = a5; act9 = a9; refreshScores(cells); }
       }
-      if (CRITIC) {
+      if (criticOn) {
+        criticSteps = t + 1;
         Vs[t] = sigmoid(Z[m]);
         const slot = t % 3, so = slot * area;
         if (C1) i1r.set(i1, so);
@@ -359,11 +366,11 @@ function create(cfg) {
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
       t++;
     }
-    lastActorSteps = actorSteps;
+    lastActorSteps = actorSteps; lastCriticSteps = criticSteps;
     const z = g.calcWinner() === BLACK ? 1 : 0;
-    // Terminal: the last two steps have no position two plies on.
-    if (CRITIC) for (let u = Math.max(0, t - 2); u < t; u++) criticUpdate(u % 3, movers[u], Vs[u], z, false);
-    update(t, z);
+    // Terminal: the last two critic steps have no valued position two plies on.
+    if (CRITIC) for (let u = Math.max(0, criticSteps - 2); u < criticSteps; u++) criticUpdate(u % 3, movers[u], Vs[u], z, false);
+    update(t, z, criticSteps);
     return t;
   }
 
@@ -414,7 +421,7 @@ function create(cfg) {
   // Actor update over the sim's records, in step order.  z = outcome,
   // P(BLACK wins) ∈ {0,1}; values are BLACK's, the mover's view is v for BLACK
   // and 1 − v for WHITE.
-  function update(steps, z) {
+  function update(steps, z, criticSteps) {
     if (!CRITIC) {
       const adv = [z - base[0], (1 - z) - base[1]];
       base[0] += (1 - BASE_EMA) * (z - base[0]);
@@ -425,7 +432,7 @@ function create(cfg) {
     for (let t = 0; t < steps; t++) {
       const m = movers[t];
       const v = Vs[t];
-      const next = t + 2 < steps ? Vs[t + 2] : z;   // the same mover's next position, or the outcome
+      const next = t + 2 < criticSteps ? Vs[t + 2] : z;   // the same mover's next valued position, or the outcome
       const sign = m === 0 ? 1 : -1;      // mover's view of a BLACK-view difference
       const delta = sign * (next - v);    // TD advantage
       const mc    = sign * (z - v);       // final-result advantage
@@ -457,7 +464,7 @@ function create(cfg) {
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
     const m = game.current === BLACK ? 0 : 1;
     act5 = USE5; act9 = USE9;             // the root is ply 0
-    actorOn = true;
+    actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);       // root scores and logits
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
@@ -474,6 +481,7 @@ function create(cfg) {
     return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid,
              setActive: (a5, a9) => { act5 = a5; act9 = a9; },
              get lastActorSteps() { return lastActorSteps; },
+             get lastCriticSteps() { return lastCriticSteps; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 
