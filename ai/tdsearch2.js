@@ -52,9 +52,9 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //           supplies step t−2's features; the live logit is corrected for the
 //           features the two positions share.
 //   actor:  REINFORCE at sim end (it needs the final result), in step order,
-//           with advantage A_t = (1−β)·δ_t + β·(R − V_t) from the mover's view,
+//           with advantage A_t = ρ·δ_t + (1−ρ)·(R − V_t) from the mover's view,
 //           where δ_t = V_{t+2} − V_t is the TD advantage, R the final result
-//           and β = TD_ADV_RESULT_RATIO.  Its per-step records are the sampled-from
+//           and ρ = TD_ADV_RATIO.  Its per-step records are the sampled-from
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
@@ -70,7 +70,8 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4,9)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
-//   TD_ADV_RESULT_RATIO  β: share of the advantage taken from the final result (default 0.5)
+//   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
+//                     the rest is the final result minus V             (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 function create(cfg) {
@@ -87,7 +88,7 @@ function create(cfg) {
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
   const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
-  const ADV_RESULT_RATIO = cfg.float('TD_ADV_RESULT_RATIO', 0.5);
+  const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
@@ -384,7 +385,7 @@ function create(cfg) {
       const sign = m === 0 ? 1 : -1;      // mover's view of a BLACK-view difference
       const delta = sign * (next - v);    // TD advantage
       const mc    = sign * (z - v);       // final-result advantage
-      actorUpdate(t, m, (1 - ADV_RESULT_RATIO) * delta + ADV_RESULT_RATIO * mc);
+      actorUpdate(t, m, ADV_RATIO * delta + (1 - ADV_RATIO) * mc);
     }
   }
 
