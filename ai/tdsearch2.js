@@ -101,7 +101,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = no truncation            (default 0.2)
-//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 20)
+//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 4)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
@@ -127,7 +127,7 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
-  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 20);
+  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
   let vpatModel = null;
   if (TRUNC_DELTA > 0) {
