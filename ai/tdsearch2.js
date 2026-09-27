@@ -322,30 +322,42 @@ function create(cfg) {
   // position converges instead of compounding.
   let dSum9 = null, dCnt9 = null, dCode9 = null, dSum4 = null, dCnt4 = null, dCode4 = null;
   let dSumC9 = null, dCntC9 = null, dCodeC9 = null;
-  // One grouped-mean transfer: residual(p) for the anchors whose code is
-  // code(p) → prior[code] += step × mean, residual(p) −= that amount.  With
-  // symmetric distillation on, every other D4 image of the code gets the same
-  // increment, and the colour-inverted image of each gets it for the other
-  // mover, × sign (+1 actor, −1 critic) — pure prior mass, no residual taken.
+  // One grouped-mean transfer.  Features are grouped into CLASSES; a class's
+  // prior entries move by step × the mean residual of the root's features in
+  // it, and that amount comes off each of those residuals, so every feature's
+  // total (prior + residual) is invariant.  Without symmetry a class is one
+  // (mover, code) entry.  With symmetry a class is an orbit: the D4 images of
+  // a code for one mover together with their colour inverses for the other
+  // mover (a mover-1 feature is viewed as mover 0 with colours swapped); its
+  // representative is the orbit's smallest mover-0-view code, and mover-1
+  // features enter and leave with × sign (+1 actor, −1 critic, since V is
+  // Black's).  Grouping by orbit is what keeps the invariant exact when a
+  // pattern and its image occur at the same root.
   let symImages = null;   // { a9, c4, c9 } image tables, or null
+  function classOf(images, ncodes, m, k) {
+    return images ? images.rep[m === 0 ? k : images.inv[k]] : m * ncodes + k;
+  }
   function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table, images, sign) {
-    for (let k = 0; k < ncodes; k++) if (cnt[k] > 0) {
-      const d0 = sum[k] = step * sum[k] / cnt[k], d1 = sum[ncodes + k] = step * sum[ncodes + k] / cnt[k];
-      prior[k] += d0; prior[ncodes + k] += d1;
-      if (images) {
-        const n = images.count[k], inv = images.inv;
-        for (let j = 0; j < n; j++) {
-          const q = images.list[k * 8 + j];
-          if (q !== k) { prior[q] += d0; prior[ncodes + q] += d1; }
-          const c = inv[q];                                   // colour image: the other mover's entry
-          prior[ncodes + c] += sign * d0; prior[c] += sign * d1;
-        }
-      }
+    const nclass = images ? ncodes : 2 * ncodes;
+    for (let c = 0; c < nclass; c++) if (cnt[c] > 0) {
+      const d = sum[c] = step * sum[c] / cnt[c];
+      if (!images) { prior[c] += d; continue; }
+      // Every member of the orbit: D4 images for mover 0, their colour inverses for mover 1.
+      const n = images.count[c], inv = images.inv;
+      for (let j = 0; j < n; j++) { const q = images.list[c * 8 + j]; prior[q] += d; prior[ncodes + inv[q]] += sign * d; }
     }
     for (let p = 0; p < area; p++) {
       const k = codeAt[p];
-      if (k >= 0) { table[residualIdx(0, p, k)] -= sum[k]; table[residualIdx(1, p, k)] -= sum[ncodes + k]; }
+      if (k < 0) continue;
+      table[residualIdx(0, p, k)] -= sum[classOf(images, ncodes, 0, k)];
+      table[residualIdx(1, p, k)] -= (images ? sign : 1) * sum[classOf(images, ncodes, 1, k)];
     }
+  }
+  // Add one feature's two residuals (mover 0, mover 1) to their classes.
+  function accumulate(images, ncodes, sum, cnt, k, r0, r1, sign) {
+    const c0 = classOf(images, ncodes, 0, k), c1 = classOf(images, ncodes, 1, k);
+    sum[c0] += r0; cnt[c0]++;
+    sum[c1] += (images ? sign : 1) * r1; cnt[c1]++;
   }
   const idxA9 = (m, p, k) => m * area + p;
   const idxC4 = (m, p, k) => m * area * 81 + p * 81 + k;
@@ -363,16 +375,16 @@ function create(cfg) {
       const v = cells[p];
       const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
       if (v === EMPTY) {
-        dCode9[p] = k9; dCnt9[k9]++;
-        dSum9[k9] += w1[p]; dSum9[6561 + k9] += w1[area + p];
+        dCode9[p] = k9;
+        accumulate(symImages && symImages.a9, 6561, dSum9, dCnt9, k9, w1[p], w1[area + p], 1);
       }
       if (C4) {
         const k4 = code4(cells, nbr, dnbr, p);
-        if (k4 !== 0) { dCode4[p] = k4; dCnt4[k4]++; dSum4[k4] += c4[idxC4(0, p, k4)]; dSum4[81 + k4] += c4[idxC4(1, p, k4)]; }
+        if (k4 !== 0) { dCode4[p] = k4; accumulate(symImages && symImages.c4, 81, dSum4, dCnt4, k4, c4[idxC4(0, p, k4)], c4[idxC4(1, p, k4)], -1); }
       }
       if (C9) {
         const k = k9 + 6561 * (v + 1);
-        if (k !== 0) { dCodeC9[p] = k; dCntC9[k]++; dSumC9[k] += c9[idxC9(0, p, k)]; dSumC9[19683 + k] += c9[idxC9(1, p, k)]; }
+        if (k !== 0) { dCodeC9[p] = k; accumulate(symImages && symImages.c9, 19683, dSumC9, dCntC9, k, c9[idxC9(0, p, k)], c9[idxC9(1, p, k)], -1); }
       }
     }
     transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1, symImages && symImages.a9, 1);
@@ -743,7 +755,10 @@ function _d4Images(coords, reanchor) {
     }
     count[k] = c;
   }
-  return { list, count };
+  // rep[k]: the smallest D4 image of k — the orbit's representative.
+  const rep = new Int32Array(ncodes);
+  for (let k = 0; k < ncodes; k++) { let r = k; for (let j = 0; j < count[k]; j++) if (list[k * 8 + j] < r) r = list[k * 8 + j]; rep[k] = r; }
+  return { list, count, rep };
 }
 // Colour inversion of a code: digit 0 (White) <-> 2 (Black), 1 (empty) fixed.
 function _colourInverse(n) {

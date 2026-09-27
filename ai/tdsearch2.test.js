@@ -390,6 +390,37 @@ function playRandom(g, rng, changed) {
   }
 }
 
+// ── Orbit grouping: totals are invariant even when a pattern and its images co-occur ──
+{
+  const Priors = require('../tdsearch2-priors.js');
+  const N = 9, rng = makeRng(141);
+  const a = agent({ TD_CRITIC_LAYERS: '1,4,9' });
+  const g = new Game2(N, true);       // one centre stone: its 8 neighbours are one orbit of patterns
+  a._internals().setup(N);
+  const pr = Priors.make();
+  a.setPriors(pr);
+  a.setSymmetricDistillation(true);
+  const st = a._internals();
+  const area = N * N;
+  for (let p = 0; p < area; p++) { st.w1[p] = rng.random(); st.w1[area + p] = rng.random(); }
+  for (let i = 0; i < st.c4.length; i++) st.c4[i] = rng.random() - 0.5;
+  for (let i = 0; i < st.c9.length; i++) st.c9[i] = rng.random() - 0.5;
+  const { codes } = require('./tdsearch2.js');
+  const totalA = (m, p) => st.w1[m * area + p] + pr.actor9[m * 6561 + codes.code9(g.cells, g._dnbr, p, codes.code5(g.cells, g._nbr, p))];
+  const totalC4 = (m, p) => { const k = codes.code4(g.cells, g._nbr, g._dnbr, p); return k ? st.c4[m * area * 81 + p * 81 + k] + pr.critic4[m * 81 + k] : 0; };
+  const before = [];
+  for (let m = 0; m < 2; m++) for (let p = 0; p < area; p++) before.push(g.cells[p] === EMPTY ? totalA(m, p) : 0, totalC4(m, p));
+  for (let rep = 0; rep < 3; rep++) a.distilPriors(g, 0.7);
+  let worst = 0, i = 0;
+  for (let m = 0; m < 2; m++) for (let p = 0; p < area; p++) {
+    const ta = g.cells[p] === EMPTY ? totalA(m, p) : 0, tc = totalC4(m, p);
+    worst = Math.max(worst, Math.abs(ta - before[i++]), Math.abs(tc - before[i++]));
+  }
+  check(worst < 1e-5, `orbit-grouped distillation changed a feature's total by ${worst}`);
+  let nz = 0; for (let k = 0; k < pr.actor9.length; k++) if (pr.actor9[k] !== 0) nz++;
+  check(nz > 0, 'priors should have received mass');
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
