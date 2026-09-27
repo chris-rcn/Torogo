@@ -14,7 +14,7 @@ const { PASS } = require('../game2.js');
 const { game3FromGame2 } = require('../game3.js');
 
 const WEIGHTS     = path.join(__dirname, '..', 'ref', 'ref-fp-fast.js');
-const TEMPERATURE = 1;
+const TEMPERATURE = 2.0;
 
 const { weights, modelName } = FeaturePol.loadModel({ name: 'ref-fp-fast', path: WEIGHTS });
 const stateByN = new Map();
