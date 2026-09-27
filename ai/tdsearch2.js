@@ -98,7 +98,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_TRUNC_PHASE_DELTA  fullness advance, as a fraction of the area, at which a
-//                     sim is cut for the vpat leaf; 0 = no truncation   (default 0)
+//                     sim is cut for the vpat leaf; 0 = no truncation   (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 20)
 //   TD_TRUNC_MAX_PHASE  truncate only when the root's phase is below this (default 0.30)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
@@ -123,7 +123,7 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
-  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0);
+  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 20);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.30);
   let vpatModel = null;

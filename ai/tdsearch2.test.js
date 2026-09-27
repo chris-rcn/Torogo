@@ -147,7 +147,7 @@ function playRandom(g, rng, changed) {
 // ── Playout tail: the actor plays only the first TD_ACTOR_DEPTH plies ───────
 {
   const N = 9;
-  const a = agent({ TD_ACTOR_DEPTH: '3' });
+  const a = agent({ TD_ACTOR_DEPTH: '3', TD_TRUNC_PHASE_DELTA: '0' });   // untruncated: the ppat tail
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(41) });
   const st = a._internals();
@@ -162,7 +162,7 @@ function playRandom(g, rng, changed) {
 // ── Critic tail off: the critic stops at the actor depth, the actor still learns ──
 {
   const N = 9;
-  const a = agent({ TD_ACTOR_DEPTH: '4', TD_CRITIC_TAIL: '0' });
+  const a = agent({ TD_ACTOR_DEPTH: '4', TD_CRITIC_TAIL: '0', TD_TRUNC_PHASE_DELTA: '0' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(51) });
   const st = a._internals();
