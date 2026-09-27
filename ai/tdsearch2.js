@@ -90,7 +90,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_ACTOR_LR       actor step size                                  (default 0.1)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
-//   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
+//   TD_CRITIC_LR      critic step size, per active feature             (default 0.5)
 //   TD_CRITIC_TAIL    1 = the critic is maintained and learns through the playout
 //                     tail; 0 = it stops at the actor depth, the tail only
 //                     delivers the outcome.  Silver et al. leave this open;
@@ -122,7 +122,7 @@ function create(cfg) {
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
-  const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
+  const CLR      = cfg.float('TD_CRITIC_LR', 0.5);
   const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
