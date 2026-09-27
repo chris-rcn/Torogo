@@ -302,6 +302,28 @@ function playRandom(g, rng, changed) {
   check(nz2 === 0, 'critic9 prior must stay zero when the online 3x3 layer is off');
 }
 
+// ── Root selection by softmax: legal sampled moves, peaked where the score is ──
+{
+  const N = 7;
+  const a = agent({ TD_ROOT_SELECT: 'softmax', TD_SIMS: '1' });
+  const g = new Game2(N, true);
+  a._internals().setup(N);
+  const st = a._internals();
+  const rng = makeRng(111);
+  // A huge layer-1 weight on one point for the mover: the sample lands there almost always.
+  let pt = -1; for (let p = 0; p < N * N; p++) if (g.cells[p] === EMPTY && g.isLegal(p)) { pt = p; break; }
+  const m = g.current === BLACK ? 0 : 1;
+  const counts = new Map();
+  for (let i = 0; i < 20; i++) {
+    st.reset(); st.w1[m * N * N + pt] = 30;
+    const r = a.getMove(g, 1000, { rng });
+    check(g.isLegal(r.move) && r.move !== PASS, `softmax root returned ${r.move}`);
+    check(/ softmax$/.test(r.info), `info should say softmax: ${r.info}`);
+    counts.set(r.move, (counts.get(r.move) || 0) + 1);
+  }
+  check((counts.get(pt) || 0) >= 18, `the peaked point should be sampled almost always, got ${counts.get(pt) || 0}/20`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

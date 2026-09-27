@@ -112,10 +112,12 @@ const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
-//   TD_ROOT_SELECT    actor = play the actor's argmax; visits = play the point most
-//                     often sampled as a sim's first ply, ties by actor score;
-//                     ab = alpha-beta over the critic's value with the actor's
-//                     top-TD_AB_WIDTH points as candidates at every node (default actor)
+//   TD_ROOT_SELECT    actor = play the actor's argmax; softmax = sample the actor's
+//                     softmax at TD_TEMP (self-play diversity, e.g. for training);
+//                     visits = play the point most often sampled as a sim's first
+//                     ply, ties by actor score; ab = alpha-beta over the critic's
+//                     value with the actor's top-TD_AB_WIDTH points as candidates
+//                     at every node                                    (default actor)
 //   TD_AB_DEPTH       ab: search depth in plies                        (default 2)
 //   TD_AB_WIDTH       ab: candidates per node, the actor's top points   (default 5)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
@@ -147,7 +149,7 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
-  if (ROOT_SELECT !== 'actor' && ROOT_SELECT !== 'visits' && ROOT_SELECT !== 'ab') throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, visits or ab, got ${ROOT_SELECT}`);
+  if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
   const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
   if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
@@ -636,6 +638,17 @@ function create(cfg) {
       best = ABSearch.search(game, AB_DEPTH, abEvaluate, 1e-9, { getCandidates: abCandidates, rng });
       recomputeAll(cells, nbr, dnbr);     // back to the root's scores and logits
       if (best !== PASS) bestS = sc[m][best];
+    } else if (ROOT_SELECT === 'softmax') {
+      recomputeAll(cells, nbr, dnbr);     // root scores and logits
+      // Sample the actor's softmax over legal non-eye points.
+      let tot = 0;
+      for (let p = 0; p < area; p++) if (cells[p] === EMPTY && game.isLegal(p) && !game.isTrueEye(p)) tot += ex[m][p];
+      let u = rng.random() * tot;
+      for (let p = 0; p < area; p++) {
+        if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
+        best = p; bestS = sc[m][p];
+        u -= ex[m][p]; if (u < 0) break;
+      }
     } else {
       recomputeAll(cells, nbr, dnbr);     // root scores and logits
       const byVisits = ROOT_SELECT === 'visits';
@@ -647,7 +660,7 @@ function create(cfg) {
       }
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
-    const how = ROOT_SELECT === 'ab' ? ` ab=d${AB_DEPTH}w${AB_WIDTH}` : ROOT_SELECT === 'visits' ? ` visits=${bestV}` : '';
+    const how = ROOT_SELECT === 'ab' ? ` ab=d${AB_DEPTH}w${AB_WIDTH}` : ROOT_SELECT === 'visits' ? ` visits=${bestV}` : ROOT_SELECT === 'softmax' ? ' softmax' : '';
     return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}${how}` };
   }
 

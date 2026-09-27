@@ -4,10 +4,11 @@
 // location-independent priors (tdsearch2-priors.js) by self-play.
 //
 // Loop: the agent searches a root; every feature the root exhibits moves its
-// prior weight toward prior + residual (agent.distilPriors); the move is
-// played; repeat.  Both sides are the same agent instance, so the priors see
-// both colours.  The agent's online tables reset per game as usual; the priors
-// persist and are saved at every progress row.
+// prior weight toward prior + residual (agent.distilPriors); a move SAMPLED
+// from the actor's softmax is played (TD_ROOT_SELECT softmax, for position
+// diversity); repeat.  Both sides are the same agent instance, so the priors
+// see both colours.  The agent's online tables reset per game as usual; the
+// priors persist and are saved at every progress row.
 //
 // Usage: node train-tdsearch2-priors.js [options]
 //   --size N        board size                              (default 13)
@@ -20,9 +21,9 @@
 //   --md-file PATH  movedetails file for the progress columns (default movedetails_5059.md)
 //   --md-limit N    positions of it to score, the same every row; 0 = off (default 1000)
 //   Agent knobs come from the environment as usual (TD_*, PPAT_*, TRUNC_*),
-//   except that TD_CRITIC_LAYERS defaults to 1,4,9 here (the environment
-//   still overrides): the 3×3 critic prior is distilled from the online 3×3
-//   layer, so a plain run trains all three priors.
+//   except that TD_CRITIC_LAYERS defaults to 1,4,9 here (the 3×3 critic prior
+//   is distilled from the online 3×3 layer, so a plain run trains all three
+//   priors) and TD_ROOT_SELECT to softmax; the environment still overrides both.
 //
 // Progress columns actMae / crtMae score the PRIORS ALONE (no tables, no
 // sims) on the md positions, as evalmovedetails does: actMae plays the actor
@@ -66,6 +67,7 @@ const priors = opts.load ? Priors.load(opts.load) : Priors.make();
 const agent  = create(Util.makeCfg(null, {
   TD_SIMS: String(SIMS),                      // a fixed sim count, not a time budget
   ...(process.env.TD_CRITIC_LAYERS === undefined ? { TD_CRITIC_LAYERS: '1,4,9' } : {}),   // the 3x3 layer feeds critic9
+  ...(process.env.TD_ROOT_SELECT === undefined ? { TD_ROOT_SELECT: 'softmax' } : {}),      // play sampled moves
 }));
 agent.setPriors(priors);
 
