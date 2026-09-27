@@ -20,11 +20,16 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 // the orientation it is in — and indexed combinatorially, no hashing.  All are
 // keyed by the side to move as well as the point.
 //
-// Actor: score(p) for an empty point p is the sum of the enabled layers
-//   1: the point itself                    (mover, p)
+// Actor: score(p) for an empty point p is the sum of the layers
+//   1: the point itself                    (mover, p)               always on
 //   5: its 4 orthogonal neighbours          (mover, p, base-3 code of 4 cells)
 //   9: those plus the 4 diagonals           (mover, p, base-3 code of 8 cells)
-// and the policy is a softmax over the empty points.
+// and the policy is a softmax over the empty points.  Layers 5 and 9 are each
+// active only for the first N plies of a sim (their depth knob; 0 = off): deep
+// in a sim the board has diverged from the root, so updates to those exact
+// local patterns land where no root will read them, while the first plies
+// serve this root and the next move's.  At the ply a layer switches off, the
+// scores are refreshed once without it.
 //
 // Critic: V(s) = σ(z), z = the sum over anchors p of the enabled layers
 //   1: the cell at p                        (mover, p, colour)
@@ -59,7 +64,8 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_ACTOR_LAYERS   actor layers, comma list from 1,5,9               (default 1,5,9)
+//   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
+//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
 //   TD_ACTOR_LR       actor step size                                  (default 0.1)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4,9)
@@ -70,9 +76,10 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const layerList = cfg.str('TD_ACTOR_LAYERS', '1,5,9').split(',').map(s => parseInt(s, 10));
-  const USE1 = layerList.includes(1), USE5 = layerList.includes(5), USE9 = layerList.includes(9);
-  if (!USE1 && !USE5 && !USE9) throw new Error('tdsearch2: TD_ACTOR_LAYERS must include at least one of 1,5,9');
+  const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
+  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
+  const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
+  let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   const LR       = cfg.float('TD_ACTOR_LR', 0.1);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4,9');
@@ -83,7 +90,7 @@ function create(cfg) {
   const ADV_MIX  = cfg.float('TD_ADV_MIX', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
-  const NEED9    = USE9 || C9;
+  const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
@@ -109,8 +116,8 @@ function create(cfg) {
   function setup(N) {
     area = N * N;
     w1 = new Float32Array(2 * area);
-    w5 = new Float32Array(2 * area * 81);
-    w9 = new Float32Array(2 * area * 6561);
+    w5 = new Float32Array(USE5 ? 2 * area * 81 : 0);
+    w9 = new Float32Array(USE9 ? 2 * area * 6561 : 0);
     c1 = new Float32Array(C1 ? 2 * area * 3 : 0);
     c4 = new Float32Array(C4 ? 2 * area * 81 : 0);
     c9 = new Float32Array(C9 ? 2 * area * 19683 : 0);
@@ -154,13 +161,12 @@ function create(cfg) {
     return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
   }
 
-  // Actor score for mover m at p from precomputed codes.
+  // Actor score for mover m at p from precomputed codes (active layers only).
   function scoreFrom(m, p, k5, k9) {
     const mp = m * area + p;
-    let s = 0;
-    if (USE1) s += w1[mp];
-    if (USE5) s += w5[mp * 81 + k5];
-    if (USE9) s += w9[mp * 6561 + k9];
+    let s = w1[mp];
+    if (act5) s += w5[mp * 81 + k5];
+    if (act9) s += w9[mp * 6561 + k9];
     return s;
   }
   function score(cells, nbr, dnbr, m, p) {
@@ -218,6 +224,20 @@ function create(cfg) {
     for (let p = 0; p < area; p++) recompute(cells, nbr, dnbr, p);
   }
 
+  // Refresh only the actor scores from the stored codes, after the active
+  // layer set changes mid-sim.  Exclusions are lifted; sampling re-applies them.
+  function refreshScores(cells) {
+    S[0] = S[1] = 0;
+    for (let p = 0; p < area; p++) {
+      for (let m = 0; m < 2; m++) {
+        let e = 0;
+        if (cells[p] === EMPTY) { const s = scoreFrom(m, p, k5a[p], k9a[p]); sc[m][p] = s; e = Math.exp(s / TEMP); }
+        ex[m][p] = e;
+        S[m] += e;
+      }
+    }
+  }
+
   // After stone changes at the cells in `changed`, recompute every point
   // whose 3×3 neighbourhood contains one of them (the cell and its 8
   // neighbours).  That covers every actor and critic feature that can move.
@@ -258,11 +278,14 @@ function create(cfg) {
   function simulate(game, rng) {
     const g = game.clone();
     const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
+    act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
     recomputeAll(cells, nbr, dnbr);
     let t = 0;
     while (!g.gameOver && t < maxSteps - 1) {
       const m = g.current === BLACK ? 0 : 1;
       const o = t * area;
+      const a5 = t < D5, a9 = t < D9;
+      if (a5 !== act5 || a9 !== act9) { act5 = a5; act9 = a9; refreshScores(cells); }
       if (CRITIC) {
         Vs[t] = sigmoid(Z[m]);
         const slot = t % 3, so = slot * area;
@@ -275,8 +298,8 @@ function create(cfg) {
       }
       const move = sample(g, m, rng);
       exs.set(ex[m], o);
-      if (USE5) k5s.set(k5a, o);
-      if (USE9) k9s.set(k9a, o);
+      if (act5) k5s.set(k5a, o);
+      if (act9) k9s.set(k9a, o);
       Ss[t] = S[m]; movers[t] = m; chosen[t] = move;
       const prevKo = g.ko;
       let nChanged = 0;
@@ -325,6 +348,7 @@ function create(cfg) {
     const o = t * area;
     const e = exs.subarray(o, o + area);
     const k5 = k5s.subarray(o, o + area), k9 = k9s.subarray(o, o + area);
+    const u5 = t < D5, u9 = t < D9;        // layers that were active at this ply
     const invS = 1 / Ss[t];
     const k = LR / TEMP * A;
     for (let p = 0; p < area; p++) {
@@ -332,9 +356,9 @@ function create(cfg) {
       if (v <= 0) continue;
       const gr = k * ((p === move ? 1 : 0) - v * invS);
       const mp = m * area + p;
-      if (USE1) w1[mp] += gr;
-      if (USE5) w5[mp * 81 + k5[p]] += gr;
-      if (USE9) w9[mp * 6561 + k9[p]] += gr;
+      w1[mp] += gr;
+      if (u5) w5[mp * 81 + k5[p]] += gr;
+      if (u9) w9[mp * 6561 + k9[p]] += gr;
     }
   }
 
@@ -387,6 +411,7 @@ function create(cfg) {
     // Play the learned policy's argmax over legal non-eye points.
     const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
     const m = game.current === BLACK ? 0 : 1;
+    act5 = USE5; act9 = USE9;             // the root is ply 0
     recomputeAll(cells, nbr, dnbr);       // root scores and logits
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
@@ -400,7 +425,8 @@ function create(cfg) {
 
   // Test hook: live views of the internals (state arrays are created by setup).
   function _internals() {
-    return { setup, reset, recomputeAll, recomputeAround, score, sample, simulate, update, sigmoid,
+    return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid,
+             setActive: (a5, a9) => { act5 = a5; act9 = a9; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 

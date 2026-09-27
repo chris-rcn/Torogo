@@ -28,7 +28,7 @@ function playRandom(g, rng, changed) {
 // ── Incremental score maintenance matches a full recompute ──────────────────
 {
   const N = 7, rng = makeRng(11);
-  const a = agent({ TD_ACTOR_LAYERS: '1,5,9', TD_TEMP: '1' });
+  const a = agent({ TD_ACTOR_LAYER5_DEPTH: '9999', TD_ACTOR_LAYER9_DEPTH: '9999', TD_TEMP: '1' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng });             // sizes the state (budget 0: no sims)
   const st = a._internals();
@@ -48,7 +48,7 @@ function playRandom(g, rng, changed) {
     if (n > 1) captures++;
     if (n > 0) st.recomputeAround(g, changed, n);
     // Reference: a fresh full recompute on a second instance.
-    const b = agent({ TD_ACTOR_LAYERS: '1,5,9', TD_TEMP: '1' });
+    const b = agent({ TD_ACTOR_LAYER5_DEPTH: '9999', TD_ACTOR_LAYER9_DEPTH: '9999', TD_TEMP: '1' });
     b._internals().setup(N);
     const sb = b._internals();
     sb.w9.set(st.w9); sb.w5.set(st.w5); sb.w1.set(st.w1);
@@ -76,7 +76,7 @@ function playRandom(g, rng, changed) {
 // ── REINFORCE update: gradient sums to zero, chosen point moves with the advantage ──
 {
   const N = 5;
-  const a = agent({ TD_ACTOR_LAYERS: '1', TD_ACTOR_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
+  const a = agent({ TD_ACTOR_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
@@ -101,7 +101,7 @@ function playRandom(g, rng, changed) {
 // ── Sampling respects legality and eyes; exhausted distribution passes ───────
 {
   const N = 5;
-  const a = agent({ TD_ACTOR_LAYERS: '1' });
+  const a = agent({});
   const g = new Game2(N, false);
   a.getMove(g, 0, { rng: makeRng(7) });
   const st = a._internals();
@@ -113,6 +113,35 @@ function playRandom(g, rng, changed) {
   }
   st.ex[0].fill(0); st.S[0] = 0;
   check(st.sample(g, 0, rng) === PASS, 'empty distribution should sample PASS');
+}
+
+// ── Depth switch: refreshing without layers 5/9 leaves layer-1 scores only ──
+{
+  const N = 5, rng = makeRng(31);
+  const a = agent({ TD_ACTOR_LAYER5_DEPTH: '3', TD_ACTOR_LAYER9_DEPTH: '3' });
+  const g = new Game2(N, true);
+  for (let i = 0; i < 6; i++) g.play(g.randomLegalMove(rng));
+  a._internals().setup(N);
+  const st = a._internals();
+  for (let i = 0; i < st.w9.length; i++) st.w9[i] = rng.random();
+  for (let i = 0; i < st.w5.length; i++) st.w5[i] = rng.random();
+  for (let i = 0; i < st.w1.length; i++) st.w1[i] = rng.random() - 0.5;
+  st.setActive(true, true);
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  const area = N * N;
+  let differs = 0;
+  for (let p = 0; p < area; p++) if (g.cells[p] === EMPTY && st.sc[0][p] !== st.w1[p]) differs++;
+  check(differs > 0, 'with layers on, scores should include layer 5/9 terms');
+  st.setActive(false, false);
+  st.refreshScores(g.cells);
+  let bad = 0, sum = 0;
+  for (let p = 0; p < area; p++) {
+    if (g.cells[p] !== EMPTY) { if (st.ex[1][p] !== 0) bad++; continue; }
+    if (st.sc[1][p] !== st.w1[area + p]) bad++;
+    sum += st.ex[1][p];
+  }
+  check(bad === 0, `after the switch ${bad} points still carry layer 5/9 terms`);
+  check(Math.abs(sum - st.S[1]) < 1e-9, 'refreshScores left S inconsistent');
 }
 
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
@@ -146,7 +175,7 @@ function playRandom(g, rng, changed) {
 // ── getMove: legal moves, a sims cap, and reset on a new game ───────────────
 {
   const N = 7;
-  const a = agent({ TD_SIMS: '3' });
+  const a = agent({ TD_SIMS: '3', TD_ACTOR_LAYER9_DEPTH: '9999' });
   const g = new Game2(N, true);
   const rng = makeRng(13);
   for (let i = 0; i < 6; i++) {
@@ -164,7 +193,7 @@ function playRandom(g, rng, changed) {
   // Time-budgeted instance: learn on one game, then a fresh game with budget 0
   // runs no sims, so the reset must leave every weight at zero.
   const N = 7;
-  const a = agent({});
+  const a = agent({ TD_ACTOR_LAYER9_DEPTH: '4' });
   const g = new Game2(N, true);
   const rng = makeRng(17);
   for (let i = 0; i < 3; i++) g.play(a.getMove(g, 20, { rng }).move);
