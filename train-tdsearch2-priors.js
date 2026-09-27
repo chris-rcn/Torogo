@@ -10,7 +10,7 @@
 // persist and are saved at every progress row.
 //
 // Usage: node train-tdsearch2-priors.js [options]
-//   --size N        board size                              (default 9)
+//   --size N        board size                              (default 13)
 //   --budget MS     tdsearch2 think time per move           (default 100)
 //   --games N       games to play; 0 = until stopped         (default 0)
 //   --prior-lr F    distillation step per root              (default 0.1)
@@ -29,7 +29,7 @@ const { create } = require('./ai/tdsearch2.js');
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['size', 'budget', 'games', 'prior-lr', 'save', 'load', 'seed']);
 if (opts.help) {
   console.log(`Usage: node train-tdsearch2-priors.js [options]
-  --size N        board size                              (default 9)
+  --size N        board size                              (default 13)
   --budget MS     tdsearch2 think time per move           (default 100)
   --games N       games to play; 0 = until stopped         (default 0)
   --prior-lr F    distillation step per root              (default 0.1)
@@ -38,7 +38,7 @@ if (opts.help) {
   --seed N        rng seed (default: random, printed)`);
   process.exit(0);
 }
-const SIZE     = parseInt(opts.size || '9', 10);
+const SIZE     = parseInt(opts.size || '13', 10);
 const BUDGET   = parseInt(opts.budget || '100', 10);
 const GAMES    = parseInt(opts.games || '0', 10);
 const PRIOR_LR = parseFloat(opts['prior-lr'] || '0.1');
