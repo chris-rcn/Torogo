@@ -69,7 +69,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 //   TD_ACTOR_LR       actor step size                                  (default 0.1)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4,9)
-//   TD_CRITIC_LR      critic step size, per active feature             (default 0.3)
+//   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
 //   TD_ADV_MIX        β: share of the final result in the advantage    (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
@@ -86,7 +86,7 @@ function create(cfg) {
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
-  const CLR      = cfg.float('TD_CRITIC_LR', 0.3);
+  const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
   const ADV_MIX  = cfg.float('TD_ADV_MIX', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
