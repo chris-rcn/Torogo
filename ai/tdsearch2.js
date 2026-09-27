@@ -12,7 +12,6 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
 const ABSearch = Util.load('./ab-search.js', 'ABSearch');
-const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 
 // tdsearch2 — online actor-critic learning during think time.
 //
@@ -69,16 +68,13 @@ const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 //           distribution and the point codes.  Without a critic the baseline
 //           is a per-mover EMA of sim returns.
 //
-// Priors (TD_PRIOR_DATA): location-independent twins of the tables — actor:
-// (mover, 8-cell code around the point); critic: (mover, 2×2 code) and
-// (mover, 3×3 code), the latter used whether or not the online 3×3 layer is
-// on — added inside the score and the logit, so the online tables learn RESIDUALS
-// on them and the updates are unchanged.  They are distilled by
-// train-tdsearch2-priors.js: after a search, distilPriors TRANSFERS residual
-// into prior — each code's prior moves by step × the mean residual of the
-// root's features carrying that code, and that amount comes off each of
-// those residuals, so every feature's total (prior + residual) is unchanged
-// and nothing compounds across moves.  Without a file both are zero.
+// Priors: location-independent twins of two tables — actor: (mover, 8-cell
+// code around the point); critic: (mover, 3×3 code), used whether or not the
+// online 3×3 layer is on — added inside the score and the logit, so the
+// online tables learn RESIDUALS on them and the updates are unchanged.  They
+// are converted at create time from a featurepol stones8 model
+// (TD_PRIOR_FPOL_DATA) and a vpat 3:1 model (TD_PRIOR_VPAT_DATA) — not yet
+// wired; until then both are zero.
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
@@ -126,7 +122,6 @@ const Priors = Util.load('./tdsearch2-priors.js', 'TDSearch2Priors');
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.5)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
-//   TD_PRIOR_DATA     priors file from train-tdsearch2-priors.js (default none: zero priors)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -168,15 +163,14 @@ function create(cfg) {
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
 
-  // Priors: zero arrays unless a file is given, so the lookups are unconditional.
-  const priorPath = cfg.str('TD_PRIOR_DATA', '');
-  let priors = priorPath ? (_isNode ? Priors.load(priorPath) : Priors.fromRaw(window.tdsearch2Priors)) : Priors.make();
-  let pa9 = priors.actor9, pc4 = priors.critic4, pc9 = priors.critic9;
-  const HAS_PRIOR = !!priorPath;
-  // Critic index arrays are maintained for a layer if its table is on OR a
-  // prior file is loaded (the prior needs the window's code either way).
-  let K4 = C4 || HAS_PRIOR, K9 = C9 || HAS_PRIOR;   // setPriors turns both on
-  let need9      = USE9 || C9 || !!cfg.str('TD_PRIOR_DATA', '');   // the 8-cell code is needed (layers, or a prior)
+  // Priors: zero arrays until the conversion knobs are wired, so the lookups
+  // are unconditional.
+  const pa9 = new Float32Array(2 * 6561), pc9 = new Float32Array(2 * 19683);
+  const HAS_PRIOR = false;
+  // The layer-9 critic index is maintained if its table is on OR a prior is
+  // present (the prior needs the window's code either way).
+  const K9 = C9 || HAS_PRIOR;
+  const need9    = USE9 || C9;             // the 8-cell code is needed (layers; a prior would need it too)
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
@@ -282,20 +276,9 @@ function create(cfg) {
   function critIdx4(cells, nbr, dnbr, p) { const k4 = code4(cells, nbr, dnbr, p); return k4 === 0 ? -1 : p * 81 + k4; }
   function critIdx9(v, p, k9)         { const k = k9 + 6561 * (v + 1); return k === 0 ? -1 : p * 19683 + k; }
 
-  // Layers 4 and 9 carry the critic priors: a window's value is its table
-  // weight (if that layer is on) plus the prior for its code (index % codes),
-  // for either mover.  Only table features count toward nAct (the lr/n norm).
-  function swapCritic4(p, ni) {
-    const oi = i4[p];
-    if (oi === ni) return;
-    const size = area * 81;
-    for (let m = 0; m < 2; m++) {
-      const o = m * size, po = m * 81;
-      Z[m] += (ni >= 0 ? (C4 ? c4[o + ni] : 0) + pc4[po + ni % 81] : 0) - (oi >= 0 ? (C4 ? c4[o + oi] : 0) + pc4[po + oi % 81] : 0);
-    }
-    if (C4) { if (oi < 0) nAct++; else if (ni < 0) nAct--; }
-    i4[p] = ni;
-  }
+  // Layer 9 carries the critic prior: a window's value is its table weight
+  // (if the layer is on) plus the prior for its code (index % 19683), for
+  // either mover.  Only table features count toward nAct (the lr/n norm).
   function swapCritic9(p, ni) {
     const oi = i9[p];
     if (oi === ni) return;
@@ -309,94 +292,9 @@ function create(cfg) {
   }
   function recomputeCritic(cells, nbr, dnbr, p, k9, v) {
     if (C1) swapCritic(c1, i1, area * 3, p, critIdx1(v, p));
-    if (K4) swapCritic4(p, critIdx4(cells, nbr, dnbr, p));
+    if (C4) swapCritic(c4, i4, area * 81, p, critIdx4(cells, nbr, dnbr, p));
     if (K9) swapCritic9(p, critIdx9(v, p, k9));
   }
-
-  // Distillation (the trainer calls this after getMove on the same position),
-  // for both movers.  Actor: group the root's empty points by 8-cell code; the
-  // code's prior moves by step × the mean layer-1 residual of the group, and
-  // that amount comes off each member's residual.  Critic: the same over the
-  // root's active 2×2 windows and their residuals.  A transfer, not an add:
-  // every feature's total is invariant, so repeated distillation of the same
-  // position converges instead of compounding.
-  let dSum9 = null, dCnt9 = null, dCode9 = null, dSum4 = null, dCnt4 = null, dCode4 = null;
-  let dSumC9 = null, dCntC9 = null, dCodeC9 = null;
-  // One grouped-mean transfer.  Features are grouped into CLASSES; a class's
-  // prior entries move by step × the mean residual of the root's features in
-  // it, and that amount comes off each of those residuals, so every feature's
-  // total (prior + residual) is invariant.  Without symmetry a class is one
-  // (mover, code) entry.  With symmetry a class is an orbit: the D4 images of
-  // a code for one mover together with their colour inverses for the other
-  // mover (a mover-1 feature is viewed as mover 0 with colours swapped); its
-  // representative is the orbit's smallest mover-0-view code, and mover-1
-  // features enter and leave with × sign (+1 actor, −1 critic, since V is
-  // Black's).  Grouping by orbit is what keeps the invariant exact when a
-  // pattern and its image occur at the same root.
-  let symImages = null;   // { a9, c4, c9 } image tables, or null
-  function classOf(images, ncodes, m, k) {
-    return images ? images.rep[m === 0 ? k : images.inv[k]] : m * ncodes + k;
-  }
-  function transfer(step, ncodes, codeAt, sum, cnt, prior, residualIdx, table, images, sign) {
-    const nclass = images ? ncodes : 2 * ncodes;
-    for (let c = 0; c < nclass; c++) if (cnt[c] > 0) {
-      const d = sum[c] = step * sum[c] / cnt[c];
-      if (!images) { prior[c] += d; continue; }
-      // Every member of the orbit: D4 images for mover 0, their colour inverses for mover 1.
-      const n = images.count[c], inv = images.inv;
-      for (let j = 0; j < n; j++) { const q = images.list[c * 8 + j]; prior[q] += d; prior[ncodes + inv[q]] += sign * d; }
-    }
-    for (let p = 0; p < area; p++) {
-      const k = codeAt[p];
-      if (k < 0) continue;
-      table[residualIdx(0, p, k)] -= sum[classOf(images, ncodes, 0, k)];
-      table[residualIdx(1, p, k)] -= (images ? sign : 1) * sum[classOf(images, ncodes, 1, k)];
-    }
-  }
-  // Add one feature's two residuals (mover 0, mover 1) to their classes.
-  function accumulate(images, ncodes, sum, cnt, k, r0, r1, sign) {
-    const c0 = classOf(images, ncodes, 0, k), c1 = classOf(images, ncodes, 1, k);
-    sum[c0] += r0; cnt[c0]++;
-    sum[c1] += (images ? sign : 1) * r1; cnt[c1]++;
-  }
-  const idxA9 = (m, p, k) => m * area + p;
-  const idxC4 = (m, p, k) => m * area * 81 + p * 81 + k;
-  const idxC9 = (m, p, k) => m * area * 19683 + p * 19683 + k;
-  function distilPriors(game, step) {
-    const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
-    if (!dSum9) {
-      dSum9 = new Float64Array(2 * 6561); dCnt9 = new Int32Array(6561); dCode9 = new Int32Array(area);
-      dSum4 = new Float64Array(2 * 81);   dCnt4 = new Int32Array(81);   dCode4 = new Int32Array(area);
-      dSumC9 = new Float64Array(2 * 19683); dCntC9 = new Int32Array(19683); dCodeC9 = new Int32Array(area);
-    }
-    dSum9.fill(0); dCnt9.fill(0); dSum4.fill(0); dCnt4.fill(0); dSumC9.fill(0); dCntC9.fill(0);
-    for (let p = 0; p < area; p++) {
-      dCode9[p] = -1; dCode4[p] = -1; dCodeC9[p] = -1;
-      const v = cells[p];
-      const k9 = code9(cells, dnbr, p, code5(cells, nbr, p));
-      if (v === EMPTY) {
-        dCode9[p] = k9;
-        accumulate(symImages && symImages.a9, 6561, dSum9, dCnt9, k9, w1[p], w1[area + p], 1);
-      }
-      if (C4) {
-        const k4 = code4(cells, nbr, dnbr, p);
-        if (k4 !== 0) { dCode4[p] = k4; accumulate(symImages && symImages.c4, 81, dSum4, dCnt4, k4, c4[idxC4(0, p, k4)], c4[idxC4(1, p, k4)], -1); }
-      }
-      if (C9) {
-        const k = k9 + 6561 * (v + 1);
-        if (k !== 0) { dCodeC9[p] = k; accumulate(symImages && symImages.c9, 19683, dSumC9, dCntC9, k, c9[idxC9(0, p, k)], c9[idxC9(1, p, k)], -1); }
-      }
-    }
-    transfer(step, 6561, dCode9, dSum9, dCnt9, pa9, idxA9, w1, symImages && symImages.a9, 1);
-    if (C4) transfer(step, 81, dCode4, dSum4, dCnt4, pc4, idxC4, c4, symImages && symImages.c4, -1);
-    if (C9) transfer(step, 19683, dCodeC9, dSumC9, dCntC9, pc9, idxC9, c9, symImages && symImages.c9, -1);
-  }
-
-  // Symmetric distillation on/off (the trainer's choice; the agent never keys by symmetry).
-  function setSymmetricDistillation(on) { symImages = on ? d4Images() : null; }
-
-  // Share a priors object (the trainer's), so distillation edits it in place.
-  function setPriors(obj) { priors = obj; pa9 = obj.actor9; pc4 = obj.critic4; pc9 = obj.critic9; need9 = true; K4 = true; K9 = true; }
 
   // Recompute everything anchored at p: both movers' actor score/ex (S kept
   // in step; skipped in the playout tail, where the scores are unused) and
@@ -701,14 +599,13 @@ function create(cfg) {
              get lastReturn() { return lastReturn; },
              rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC, HAS_PRIOR, pa9, pc4, pc9 };
+             sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 
-  return { getMove, distilPriors, setPriors, setSymmetricDistillation, get priors() { return priors; }, _internals };
+  return { getMove, _internals };
 }
 
 // ── Feature keys ──────────────────────────────────────────────────────────────
-// Module-level so tools can key the priors the same way (exported as `codes`).
 // Window codes at p from a cell array (base 3, cell + 1 per digit).
 function code5(cells, nbr, p) {
   const b = p * 4;
@@ -724,63 +621,9 @@ function code4(cells, nbr, dnbr, p) {
   return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
 }
 
-// ── D4 and colour images of the codes (for the priors trainer's symmetric distillation) ──
-// The agent keys nothing by symmetry; the trainer writes each observed
-// residual into every D4 image of its pattern, and into the colour-inverted
-// image for the OTHER mover (actor weight equal, critic weight negated since
-// V is Black's), so the priors fill up to 16x faster.
-// A family is a list of cell coordinates (dy, dx) in digit order; an image
-// permutes the digits by where each cell lands.  `reanchor` shifts a window's
-// image back to its top-left corner (the 2×2 window is anchored, not centred).
-const _D4 = [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0],
-             [1, 0, 0, -1], [-1, 0, 0, 1], [0, 1, 1, 0], [0, -1, -1, 0]];   // (dy,dx) -> (a*dy+b*dx, c*dy+d*dx)
-function _d4Images(coords, reanchor) {
-  const n = coords.length, ncodes = Math.pow(3, n);
-  const pow = []; for (let i = 0; i < n; i++) pow.push(Math.pow(3, i));
-  // perm[op][i] = digit index the source cell i lands on under op
-  const perm = _D4.map(([a, b, c, d]) => {
-    let img = coords.map(([dy, dx]) => [a * dy + b * dx, c * dy + d * dx]);
-    if (reanchor) { const my = Math.min(...img.map(q => q[0])), mx = Math.min(...img.map(q => q[1])); img = img.map(([y, x]) => [y - my, x - mx]); }
-    return img.map(([y, x]) => coords.findIndex(([cy, cx]) => cy === y && cx === x));
-  });
-  if (perm.some(pm => pm.includes(-1))) throw new Error('tdsearch2: D4 image of the cell set leaves the set');
-  const list = new Int32Array(ncodes * 8), count = new Uint8Array(ncodes), digits = new Int32Array(n);
-  for (let k = 0; k < ncodes; k++) {
-    let r = k; for (let i = 0; i < n; i++) { digits[i] = r % 3; r = (r - digits[i]) / 3; }
-    let c = 0;
-    for (let op = 0; op < 8; op++) {
-      let img = 0; for (let i = 0; i < n; i++) img += digits[i] * pow[perm[op][i]];
-      let dup = false; for (let j = 0; j < c; j++) if (list[k * 8 + j] === img) { dup = true; break; }
-      if (!dup) list[k * 8 + c++] = img;
-    }
-    count[k] = c;
-  }
-  // rep[k]: the smallest D4 image of k — the orbit's representative.
-  const rep = new Int32Array(ncodes);
-  for (let k = 0; k < ncodes; k++) { let r = k; for (let j = 0; j < count[k]; j++) if (list[k * 8 + j] < r) r = list[k * 8 + j]; rep[k] = r; }
-  return { list, count, rep };
-}
-// Colour inversion of a code: digit 0 (White) <-> 2 (Black), 1 (empty) fixed.
-function _colourInverse(n) {
-  const ncodes = Math.pow(3, n), inv = new Int32Array(ncodes);
-  for (let k = 0; k < ncodes; k++) { let r = k, out = 0, pw = 1; for (let i = 0; i < n; i++) { const d = r % 3; r = (r - d) / 3; out += (2 - d) * pw; pw *= 3; } inv[k] = out; }
-  return inv;
-}
-const _RING8 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];   // code5 digits then dnbr digits
-let _images = null;
-function d4Images() {
-  if (!_images) _images = {
-    a9: { ..._d4Images(_RING8, false), inv: _colourInverse(8) },                          // actor: 8-cell code
-    c4: { ..._d4Images([[0, 0], [0, 1], [1, 0], [1, 1]], true), inv: _colourInverse(4) }, // critic 2×2 (anchored)
-    c9: { ..._d4Images([..._RING8, [0, 0]], false), inv: _colourInverse(9) },             // critic 3×3: 8-cell code + centre digit
-  };
-  return _images;
-}
-
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
-// codes: the feature-key functions, for tools that key the priors the same way.
-if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), codes: { code5, code9, code4, d4Images } };
+if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
 else window.getMove = (g, b, o) => _def().getMove(g, b, o);
 
 })();
