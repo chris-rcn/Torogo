@@ -84,7 +84,8 @@ const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.6)
 //   TD_CRITIC_TAIL    1 = the critic is maintained and learns through the playout
 //                     tail; 0 = it stops at the actor depth, the tail only
-//                     delivers the outcome (Silver et al. leave this open) (default 1)
+//                     delivers the outcome.  Silver et al. leave this open;
+//                     measured 0.0214 vs 0.0228 at 200 ms, 27% faster  (default 0)
 //   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
 //                     the rest is the final result minus V             (default 0.5)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
@@ -105,7 +106,7 @@ function create(cfg) {
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
   const CLR      = cfg.float('TD_CRITIC_LR', 0.6);
-  const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 1) !== 0;
+  const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.5);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
