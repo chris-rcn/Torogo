@@ -174,13 +174,13 @@ function playRandom(g, rng, changed) {
   check(c > 0 && w > 0, `critic (${c}) and actor (${w}) should both have learned`);
 }
 
-// ── Truncation: actor plies, a random buffer, a vpat leaf at the prefix end ──
+// ── Truncation: actor plies, a random buffer, then the vpat leaf ────────────
 {
   const N = 9;
   const a = agent({ TD_TRUNC_PHASE_DELTA: '0.2', TD_TRUNC_ACTOR_DEPTH: '5', TD_TRUNC_MAX_PHASE: '1' });
   const g = new Game2(N, true);
   const r = a.getMove(g, 0, { rng: makeRng(61) });   // budget 0: sets up, arms truncation
-  check(/trunc=22\b/.test(r.info), `info should show the 5 + ceil(0.2*81) = 22-ply prefix: ${r.info}`);
+  check(/trunc=22\b/.test(r.info), `info should show truncation at ply 5 + ceil(0.2*81) = 22: ${r.info}`);
   const st = a._internals();
   const steps = st.simulate(g, makeRng(63));
   check(steps === 22, `truncated sim should stop at 5 + 17 = 22 plies, ran ${steps}`);

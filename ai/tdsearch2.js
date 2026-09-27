@@ -69,11 +69,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //
 // Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
-// agent's prefix rule, here a buffer so the actor cannot steer into the leaf
+// agent's rule, here a buffer so the actor cannot steer into the leaf
 // model's defects — and stops; the vpat model's value of the truncation point
 // stands in for the outcome everywhere the outcome is used.  The model is the
 // anchor; no grounding schedule.  Truncation is used only when the truncation
-// point's phase (root phase + prefix plies / area, captures ignored) is below
+// point's phase (root phase + truncation ply / area, captures ignored) is below
 // TD_TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
 // while the actor depth and delta are swept.
 //
@@ -139,7 +139,7 @@ function create(cfg) {
     if (!raw) throw new Error(`tdsearch2: cannot load the truncation vpat model from ${_isNode ? vpatPath : 'window.truncVpatModel'}`);
     vpatModel = VPat.modelFromRaw(raw);
   }
-  let truncActive = false, prefixLen = 0;   // per move: truncate this move's sims; plies to the truncation point
+  let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
   const NEED9    = USE9 || C9;             // the 8-cell code is ever needed
 
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
@@ -355,7 +355,7 @@ function create(cfg) {
     recomputeAll(cells, nbr, dnbr);
     let t = 0, actorSteps = 0, criticSteps = 0;
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
-    while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= prefixLen)) {
+    while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
       const m = g.current === BLACK ? 0 : 1;
       const o = t * area;
       actorOn = t < actorDepth;
@@ -405,7 +405,7 @@ function create(cfg) {
     lastActorSteps = actorSteps; lastCriticSteps = criticSteps;
     // The return: the outcome, or at the truncation point the vpat leaf value.
     const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
-            : (truncActive && t >= prefixLen) ? vpatValueB(g)
+            : (truncActive && t >= truncPly) ? vpatValueB(g)
             : (g.calcWinner() === BLACK ? 1 : 0);
     lastReturn = z;
     // Terminal: the last two critic steps have no valued position two plies on.
@@ -490,8 +490,8 @@ function create(cfg) {
     lastMoveCount = game.moveCount;
 
     const rng = options.rng || makeRng();
-    prefixLen = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);      // plies to the truncation point
-    truncActive = TRUNC_DELTA > 0 && game.phase() + prefixLen / area < TRUNC_MAX_PHASE;
+    truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
+    truncActive = TRUNC_DELTA > 0 && game.phase() + truncPly / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0;
     while (true) {
@@ -515,7 +515,7 @@ function create(cfg) {
       if (s > bestS) { bestS = s; best = p; }
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${prefixLen}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
@@ -525,7 +525,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastCriticSteps() { return lastCriticSteps; },
              get lastReturn() { return lastReturn; },
-             setTrunc: (active, plies) => { truncActive = active; prefixLen = plies; },
+             setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
   }
 
