@@ -129,6 +129,19 @@ function mdColumns() {
   return cols;
 }
 
+// Guard: the priors feed the agent's softmax and logit, so a runaway entry
+// overflows exp() into NaN that then distils back into every prior.  Fail
+// loudly at the first non-finite or out-of-range entry instead.
+const PRIOR_BOUND = 30;   // logit units; exp(30) is already 1e13
+function checkPriors(where) {
+  for (const [name, arr] of [['actor9', priors.actor9], ['critic4', priors.critic4], ['critic9', priors.critic9]]) {
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (!(Math.abs(v) <= PRIOR_BOUND)) throw new Error(`priors ${name}[${i}] = ${v} at ${where} (bound ${PRIOR_BOUND})`);
+    }
+  }
+}
+
 function meanAbs(arr) { let s = 0, n = 0; for (let i = 0; i < arr.length; i++) if (arr[i] !== 0) { s += Math.abs(arr[i]); n++; } return { mean: n ? s / n : 0, n }; }
 
 // Progress table: header once, rows at games 1, 2, 3, ... growing ×1.4.
@@ -166,6 +179,7 @@ while (GAMES === 0 || games < GAMES) {
   while (!game.gameOver && n < maxMoves) {
     const r = agent.getMove(game, 0, { rng });   // TD_SIMS decides; the budget is ignored
     agent.distilPriors(game, PRIOR_LR);
+    checkPriors(`game ${games + 1} move ${n + 1}`);
     game.play(r.move);
     n++;
   }
