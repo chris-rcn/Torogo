@@ -575,7 +575,7 @@ while (gamesPlayed < gameLimit && !decided) {
   }
 }
 
-// Final stats row (always printed, even if maybePrint already fired).
-printStats(gamesPlayed);
+// Final stats row, unless the last periodic row was already this game.
+if (gamesPlayed !== lastPrintGames) printStats(gamesPlayed);
 
 
