@@ -8,31 +8,31 @@
 //   elo = a - sum_b w_b * x_b        with every w_b >= 0
 //
 // by non-negative least squares (coordinate descent), where x_b is the band's
-// mae, its mse, or both (--use).  Bands are used only if every agent has at
-// least --min-n positions in them.  Prints the input table, each agent's
-// fitted Elo and residual, and the fitted weights (Elo lost per 0.01 of band
-// mae, per 0.001 of band mse).
+// mae, its mse, or both (--use).  Every agent evaluated the same positions, so
+// every file must carry the same per-band counts (a mismatch is a mixed sweep
+// and an error); every band with positions is used.  Prints the input table,
+// each agent's fitted Elo and residual, and the fitted weights (Elo lost per
+// 0.01 of band mae, per 0.001 of band mse).
 //
-// Usage: node md-phase-fit.js [--dir md-phase] [--min-n 20] [--use mae|mse|both]
+// Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
 
 const fs   = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'min-n', 'use']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'use']);
 if (opts.help) {
-  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--min-n 20] [--use mae|mse|both]
+  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
 
 Fit elo = a - sum_b w_b * x_b (w_b >= 0) over the agents whose
-md-phase/<agent>.txt is complete, then print the mapping.
+md-phase/<agent>.txt is complete, then print the mapping.  All files must
+share one per-band position count (same positions for every agent).
   --dir    directory of md-phase-sweep.sh outputs (default md-phase)
-  --min-n  a band is used only if every agent has this many positions in it (default 20)
   --use    band regressors: mae, mse, or both (default both)`);
   process.exit(0);
 }
 const dir  = opts.dir || 'md-phase';
-const minN = parseInt(opts['min-n'] || '20', 10);
 const use_ = opts.use || 'both';
 if (!['mae', 'mse', 'both'].includes(use_)) { console.error('--use must be mae, mse or both'); process.exit(1); }
 
@@ -62,8 +62,13 @@ for (const f of fs.readdirSync(dir).sort()) {
 if (agents.length === 0) { console.error(`no finished files in ${dir}`); process.exit(1); }
 
 const nb = agents[0].bands.length;
+const counts = agents[0].bands.map(b => b.n).join(',');
+for (const a of agents) {
+  const c = a.bands.map(b => b.n).join(',');
+  if (c !== counts) { console.error(`${a.name}: band counts [${c}] differ from ${agents[0].name}'s [${counts}]; the files are not from one sweep`); process.exit(1); }
+}
 const use = [];
-for (let b = 0; b < nb; b++) if (agents.every(a => a.bands[b].n >= minN)) use.push(b);
+for (let b = 0; b < nb; b++) if (agents[0].bands[b].n > 0) use.push(b);
 
 // --- regressor columns: [{ band, kind, scale }] where scale is the unit the
 // weight is reported in (0.01 mae, 0.001 mse)
@@ -98,7 +103,7 @@ const rms = Math.sqrt(ss / rows);
 // --- display
 const bandName = b => `${agents[0].bands[b].lo.toFixed(1)}-${agents[0].bands[b].hi.toFixed(1)}`;
 const bandHdr = use.map(bandName);
-console.log(`agents: ${rows}  bands used: ${use.length} of ${nb} (min-n ${minN})  regressors: ${k} (${use_})  intercept: ${a0.toFixed(0)}  rms residual: ${rms.toFixed(0)} Elo`);
+console.log(`agents: ${rows}  bands: ${use.length} of ${nb} (${agents[0].bands[use[0]].n} positions each)  regressors: ${k} (${use_})  intercept: ${a0.toFixed(0)}  rms residual: ${rms.toFixed(0)} Elo`);
 if (rows <= k + 1) console.log(`note: ${rows} agents for ${k + 1} parameters; the fit is underdetermined`);
 console.log('');
 for (const kind of ['mae', 'mse']) {
