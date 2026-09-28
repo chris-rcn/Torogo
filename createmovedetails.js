@@ -16,36 +16,34 @@
 // per game keeps the samples independent.  Games with no eligible position
 // emit nothing.
 //
-// Output is newline-delimited JSON, one object per position, appended to the
-// save file as it is produced.  The first line is a '#' comment recording the
-// generation parameters.  Status is printed at an exponentially
-// increasing interval (× 1.5 each time).  Runs indefinitely (Ctrl-C to stop).
+// Output goes to stdout, one row per position as it is produced, after a
+// '#' comment recording the generation parameters (redirect it to the file).
+// Status goes to stderr at an exponentially increasing interval (× 1.5 each
+// time).  Runs indefinitely (Ctrl-C to stop).  Several processes can run at
+// once, each to its own file; the files concatenate.
 //
 // Usage:
 //   node createmovedetails.js [--agent prod] [--budget 2000] [--size 13]
-//                             [--phase-buckets 10] [--save <path.ndjson>]
+//                             [--phase-buckets 10] > out/movedetails-<name>.md
 //
 //   --phase-buckets  equal-width phase bands kept level (default 10)
-//   --save    output path  (default: out/movedetails-<random>.ndjson)
 
-const fs   = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
 const { Game2, PASS, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'save', 'size', 'phase-buckets']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'size', 'phase-buckets']);
 
 if (opts.help) {
-  console.log('Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>] [--phase-buckets <n>] [--save <path>]');
+  console.log('Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>] [--phase-buckets <n>] > out.md');
   process.exit(0);
 }
 
 const agentName = opts.agent || 'prod';
 const budget    = parseInt(opts.budget || '1', 10);
 const boardSize = parseInt(opts.size   || '13',   10);
-const SAVE_PATH = opts.save || `out/movedetails-${Math.random().toString(36).slice(2, 10)}.md`;
 const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, if set (overrides budget)
 const phaseBuckets = parseInt(opts['phase-buckets'] || '10', 10);
 
@@ -53,6 +51,9 @@ if (isNaN(budget) || budget < 1)       { console.error('--budget must be a posit
 if (isNaN(phaseBuckets) || phaseBuckets < 1) { console.error('--phase-buckets must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
 
+// stdout is the data stream.  Agents print their load banners with
+// console.log, so from here on console.log goes to stderr with the status.
+console.log = console.error;
 const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
 // create(cfg)-style agents (phase-mux, the puct family) instantiate with a
 // plain env reader; bare { getMove } modules are used directly.
@@ -78,12 +79,11 @@ function legalMoves(game2) {
   return moves;
 }
 
-fs.writeFileSync(SAVE_PATH, `# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  phase-buckets=${phaseBuckets}\n`);
+process.stdout.write(`# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  phase-buckets=${phaseBuckets}\n`);
 
-console.log(`agent=${agentName}  size=${boardSize}  budget=${budget}ms`);
-console.log(`Out: ${SAVE_PATH}`);
-console.log();
-console.log([
+console.error(`agent=${agentName}  size=${boardSize}  budget=${budget}ms`);
+console.error();
+console.error([
   'pos'    .padStart(5),
   'elapsed'.padStart(7),
   'tPos'   .padStart(5),
@@ -97,7 +97,7 @@ let posCount = 0;
 
 function printStats() {
   const elapsedMs = performance.now() - startTime;
-  console.log([
+  console.error([
     Util.fmt4i(posCount)            .padStart(5),
     Util.fmtMs(elapsedMs)           .padStart(7),
     Util.fmtMs(elapsedMs / posCount).padStart(5),
@@ -168,7 +168,7 @@ while (true) {
   // The new format holds EVERY stone: prepend the free centre stone so the
   // position replays from an empty board.  Phase is stored (board fullness).
   const phase = 1 - position.emptyCount / (N * N);
-  fs.appendFileSync(SAVE_PATH,
+  process.stdout.write(
     MD.formatRow({ boardSize, phase, history: [MD.centerMove(N), ...history], candidates: moveInfos }) + '\n');
   posCount++;
 
