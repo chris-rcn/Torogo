@@ -5,7 +5,7 @@
 //
 // Each self-play game is played to completion, recording the agent's
 // rootWinRatio at every position.  One random eligible position — win ratio
-// within [0.3, 0.7] and board fullness (phase) below 0.7 — is then revisited
+// within [0.3, 0.7] and board fullness (phase) below 0.8 — is then revisited
 // for deep analysis: every legal move
 // is enumerated, the game is cloned, the move is made, then the agent's
 // getMove is called with the full budget.  The rootWinRatio is flipped to the
@@ -59,7 +59,7 @@ const WR_DEV = 0.2;
 
 // ...and only in the opening/middle game: board fullness (phase = 1 −
 // empty/area) must be below this, skipping crowded late-game positions.
-const PHASE_MAX = 0.7;
+const PHASE_MAX = 0.8;
 
 function legalMoves(game2) {
   const N   = game2.N;
