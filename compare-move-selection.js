@@ -43,6 +43,7 @@ const { performance } = require('perf_hooks');
 const { Game2, BLACK, coordStr, parseMove } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
+const MD   = require('./movedetails-format.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
   ['p1', 'p2', 'file', 'referee', 'budget', 'referee-budget', 'limit', 'oversample', 'seed',
@@ -141,14 +142,10 @@ function runFileMode() {
   const oversample = opts.oversample !== undefined ? parseInt(opts.oversample, 10) : 1;
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
 
-  const loadPositions = fp => fs.readFileSync(fp, 'utf8').split('\n')
-    .filter(l => l.trim() && !l.startsWith('#')).map(l => JSON.parse(l));
-  const positionPhase = position => {
-    const { boardSize, history } = position;
-    const g = new Game2(boardSize, true);
-    for (const h of history) g.play(parseMove(h, boardSize));
-    return 1 - g.emptyCount / (boardSize * boardSize);
-  };
+  // The *.md row format (movedetails-format.js): the phase is stored, and the
+  // history replays from an EMPTY board (it includes the centre stone).
+  const loadPositions = fp => fs.readFileSync(fp, 'utf8').split('\n').map(MD.parseRow).filter(Boolean);
+  const positionPhase = position => position.phase;
 
   const pool = loadPositions(opts.file);
   const positions = (bandActive
@@ -159,14 +156,14 @@ function runFileMode() {
   }
 
   // One agent's chosen move + its win-prob gap to the file's top-rated move.
-  const moveGap = (agent, boardSize, history, candidates, top, budget, isP1) => {
-    const game = new Game2(boardSize, true);
-    for (const h of history) game.play(parseMove(h, boardSize));
+  const moveGap = (agent, position, budget, isP1) => {
+    const { boardSize, candidates } = position, top = candidates[0];
+    const game = MD.buildGame(position);
     const mv  = agent(game, budget, { rng: makeRng(isP1 ? p1Seed++ : p2Seed++) });
     const str = coordStr(mv.move, boardSize);
     const found = candidates.find(c => c.m === str);
-    const cand  = (found?.kwr != null) ? found : candidates.findLast(c => c.kwr != null);
-    return { str, gap: (top.kwr - cand.kwr) / 1000 };
+    const cand  = (found?.winRatio != null) ? found : candidates.findLast(c => c.winRatio != null);
+    return { str, gap: top.winRatio - cand.winRatio };
   };
 
   console.log(`p1=${p1Name}  p2=${p2Name}  budget=${budgetMs}ms  seed=${SEED}`);
@@ -189,15 +186,14 @@ function runFileMode() {
 
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
-      const { boardSize, history, candidates } = positions[i];
-      const top = candidates[0];
+      const position = positions[i];
       let r1, r2;
       if (evals % 2 === 0) {   // alternate the first mover
-        r1 = moveGap(p1, boardSize, history, candidates, top, budget1, true);
-        r2 = moveGap(p2, boardSize, history, candidates, top, budget2, false);
+        r1 = moveGap(p1, position, budget1, true);
+        r2 = moveGap(p2, position, budget2, false);
       } else {
-        r2 = moveGap(p2, boardSize, history, candidates, top, budget2, false);
-        r1 = moveGap(p1, boardSize, history, candidates, top, budget1, true);
+        r2 = moveGap(p2, position, budget2, false);
+        r1 = moveGap(p1, position, budget1, true);
       }
       sum1 += r1.gap; sum2 += r2.gap;
       if (r1.str === r2.str) agreeN++;
