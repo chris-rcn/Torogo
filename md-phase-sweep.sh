@@ -1,8 +1,7 @@
 #!/bin/sh
 # Per-phase movedetails MAE for every rated CGOS house agent, in cost order.
 # One output file per agent: md-phase/<agent>.txt (the full evalmovedetails
-# output, phase-band table and SUMMARY at the end).  stdout gets one line per
-# agent start plus its evalmovedetails progress rows and SUMMARY line.  An agent whose file already
+# output, phase-band table and SUMMARY at the end).  An agent whose file already
 # holds a SUMMARY line is skipped, so the sweep can be resumed.
 #
 # usage: md-phase-sweep.sh [--limit N] [agent ...]
@@ -26,5 +25,6 @@ for a in $agents; do
   f=md-phase/$a.txt
   if grep -q '^SUMMARY' $f 2>/dev/null; then echo "skip $a (done)"; continue; fi
   echo "$(date +%H:%M) $a"
-  node evalmovedetails.js --file movedetails_5059.md --agent $a --limit $limit --show-phases 10 2>&1 | tee $f | grep -E '^ *[0-9]+ +[0-9.]+[a-z]+ |^SUMMARY'
+  node evalmovedetails.js --file movedetails_5059.md --agent $a --limit $limit --show-phases 10 > $f 2>&1
+  grep '^SUMMARY' $f
 done
