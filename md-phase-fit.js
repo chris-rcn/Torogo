@@ -11,8 +11,8 @@
 // mae, its mse, or both (--use).  Every agent evaluated the same positions, so
 // every file must carry the same per-band counts (a mismatch is a mixed sweep
 // and an error); every band with positions is used.  Prints the input table,
-// each agent's fitted Elo and residual, and the fitted weights (Elo lost per
-// 0.01 of band mae, per 0.001 of band mse).
+// each agent's fitted Elo and residual, and the fitted weights, every one as
+// Elo lost per 0.01 of its regressor.
 //
 // Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
 
@@ -70,12 +70,11 @@ for (const a of agents) {
 const use = [];
 for (let b = 0; b < nb; b++) if (agents[0].bands[b].n > 0) use.push(b);
 
-// --- regressor columns: [{ band, kind, scale }] where scale is the unit the
-// weight is reported in (0.01 mae, 0.001 mse)
+// --- regressor columns: [{ band, kind }]
 const cols = [];
 for (const b of use) {
-  if (use_ !== 'mse') cols.push({ band: b, kind: 'mae', scale: 0.01 });
-  if (use_ !== 'mae') cols.push({ band: b, kind: 'mse', scale: 0.001 });
+  if (use_ !== 'mse') cols.push({ band: b, kind: 'mae' });
+  if (use_ !== 'mae') cols.push({ band: b, kind: 'mse' });
 }
 
 // --- NNLS by coordinate descent on w (>= 0) with a free intercept a
@@ -118,5 +117,11 @@ for (const kind of ['mae', 'mse']) {
   }
   console.log('');
 }
-console.log(`Elo lost per 0.01 of band mae / per 0.001 of band mse:`);
-for (let j = 0; j < k; j++) console.log(`  ${bandName(cols[j].band)} ${cols[j].kind}: ${(w[j] * cols[j].scale).toFixed(1)}`);
+// weights, all as Elo lost per 0.01 of the regressor, one row per band
+const kinds = use_ === 'both' ? ['mae', 'mse'] : [use_];
+console.log(`Elo lost per 0.01 of band ${kinds.join(' / ')}:`);
+console.log(`  ${'band'.padEnd(7)} ${kinds.map(t => t.padStart(7)).join(' ')}`);
+for (const b of use) {
+  const cells = kinds.map(t => { const j = cols.findIndex(c => c.band === b && c.kind === t); return (w[j] * 0.01).toFixed(0).padStart(7); });
+  console.log(`  ${bandName(b).padEnd(7)} ${cells.join(' ')}`);
+}
