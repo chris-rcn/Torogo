@@ -289,6 +289,48 @@ function playRandom(g, rng, changed) {
   check(worst < 1e-4, `agent logit differs from the vpat model's by up to ${worst}`);
 }
 
+// ── Sim one-ply search: the pick is the argmax of the exact one-ply critic value ──
+{
+  const N = 9, rng = makeRng(171);
+  const a = agent({ TD_SIM_SEARCH_MOVES: '2', TD_CRITIC_LAYERS: '1,4,9' });   // default priors on: nontrivial values
+  // A position with at least one capturing candidate, so both value paths run.
+  let g = null;
+  for (let attempt = 0; attempt < 50 && !g; attempt++) {
+    const t = new Game2(N, true);
+    for (let i = 0; i < 30; i++) t.play(t.randomLegalMove(rng));
+    for (let p = 0; p < N * N; p++) if (t.cells[p] === EMPTY && t.isLegal(p) && !t.isTrueEye(p) && t.isCapture(p)) { g = t; break; }
+  }
+  check(g !== null, 'could not find a position with a capturing candidate');
+  a._internals().setup(N);
+  const st = a._internals();
+  for (let i = 0; i < st.c4.length; i++) st.c4[i] = (rng.random() - 0.5) * 0.2;
+  for (let i = 0; i < st.c1.length; i++) st.c1[i] = (rng.random() - 0.5) * 0.2;
+  const m = g.current === BLACK ? 0 : 1;
+  // Reference: every legal non-eye candidate played on a clone and fully recomputed.
+  const ref = new Map();
+  let captures = 0;
+  for (let p = 0; p < N * N; p++) {
+    if (g.cells[p] !== EMPTY || !g.isLegal(p) || g.isTrueEye(p)) continue;
+    if (g.isCapture(p)) captures++;
+    const c = g.clone(); c.play(p);
+    st.recomputeAll(c.cells, c._nbr, c._dnbr);
+    const vB = st.sigmoid(st.Z[1 - m]);
+    ref.set(p, m === 0 ? vB : 1 - vB);
+  }
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  const pick = st.searchMove(g, m, makeRng(173));
+  const best = Math.max(...ref.values());
+  check(captures > 0 && ref.has(pick) && Math.abs(ref.get(pick) - best) < 1e-9, `search picked ${pick} valued ${ref.get(pick)}, best is ${best} (capturing candidates: ${captures})`);
+  // And the live state is intact afterwards: the same logit as a fresh recompute.
+  const zLive = st.Z[m];
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  check(Math.abs(zLive - st.Z[m]) < 1e-9, `live logit ${zLive} drifted from ${st.Z[m]} after the search`);
+  // A sim with searched plies runs and the actor still learns from them.
+  const steps = st.simulate(g, makeRng(175));
+  let nz = 0; for (let i = 0; i < st.w1.length; i++) if (st.w1[i] !== 0) nz++;
+  check(steps > 2 && nz > 0, `sim ran ${steps} plies, actor entries learned: ${nz}`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

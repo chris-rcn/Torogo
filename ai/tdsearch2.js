@@ -113,6 +113,11 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
+//   TD_SIM_SEARCH_MOVES  on each of a sim's first N actor plies, the move may be the
+//                     critic's one-ply argmax (mover's view) instead of the actor's
+//                     sample; needs a critic                              (default 0)
+//   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
+//                     sampling — the softmax sample is the exploration    (default 1)
 //   TD_ROOT_SELECT    actor = play the actor's argmax; softmax = sample the actor's
 //                     softmax at TD_TEMP (self-play diversity, e.g. for training);
 //                     visits = play the point most often sampled as a sim's first
@@ -156,11 +161,14 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
+  const SEARCH_MOVES = cfg.int('TD_SIM_SEARCH_MOVES', 0);
+  const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 1);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
   const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
   if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
+  if (SEARCH_MOVES > 0 && !CRITIC) throw new Error('tdsearch2: TD_SIM_SEARCH_MOVES needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
@@ -386,6 +394,72 @@ function create(cfg) {
 
   function sigmoid(z) { return 1 / (1 + Math.exp(-z)); }
 
+  // ── One-ply search over the critic (sim plies) ──────────────────────────────
+  // The critic's value of each legal non-eye candidate's RESULT, in the
+  // mover's view; the argmax (dithered) is played.  A non-capturing move
+  // changes only the windows containing the point — the 1×1 at p, the four
+  // 2×2s and the nine 3×3s — so its logit change for the side then to move is
+  // ~15 lookups off the live indices, with the stone set temporarily in
+  // `cells`.  A capturing move is played on a clone and fully recomputed (that
+  // clobbers the live state, restored afterwards by one recompute of the
+  // current board).  Illegal and true-eye points are excluded from the actor's
+  // distribution as sample() does, so the ply's recorded distribution is exact.
+  let srchVal = null, srchKind = null;
+  function critVal9(m, i) { return i < 0 ? 0 : (C9 ? c9[m * area * 19683 + i] : 0) + pc9[m * 19683 + i % 19683]; }
+  function critVal4(m, i) { return i < 0 || !C4 ? 0 : c4[m * area * 81 + i]; }
+  function critVal1(m, i) { return i < 0 || !C1 ? 0 : c1[m * area * 3 + i]; }
+  function searchMove(g, m, rng) {
+    if (!srchVal) { srchVal = new Float64Array(area); srchKind = new Int8Array(area); }
+    const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, colour = m === 0 ? BLACK : -BLACK, o = 1 - m;
+    // Pass 1: legality (excluding as sample() does), and capturing candidates via a clone.
+    let anyClone = false, nCand = 0;
+    for (let p = 0; p < area; p++) {
+      srchKind[p] = 0;
+      if (cells[p] !== EMPTY) continue;
+      if (!g.isLegal(p) || g.isTrueEye(p)) { S[m] -= ex[m][p]; ex[m][p] = 0; continue; }
+      nCand++;
+      if (g.isCapture(p)) {
+        const c = g.clone(); c.play(p);
+        recomputeAll(c.cells, c._nbr, c._dnbr);
+        srchVal[p] = sigmoid(Z[o]); srchKind[p] = 2; anyClone = true;
+      } else srchKind[p] = 1;
+    }
+    if (nCand === 0) return PASS;
+    if (anyClone) recomputeAll(cells, nbr, dnbr);
+    // Pass 2: non-capturing candidates by local delta on the live indices.
+    const zBase = Z[o];
+    for (let p = 0; p < area; p++) {
+      if (srchKind[p] !== 1) continue;
+      let dz = 0;
+      cells[p] = colour;
+      if (C1) dz += critVal1(o, p * 3 + colour + 1) - critVal1(o, i1[p]);
+      if (C4) {
+        const b = p * 4;
+        for (let j = 0; j < 4; j++) {                                     // windows containing p: anchors p, left, up, up-left
+          const a = j === 0 ? p : j === 1 ? nbr[b + 2] : j === 2 ? nbr[b] : dnbr[b];
+          const k4 = code4(cells, nbr, dnbr, a); dz += critVal4(o, k4 === 0 ? -1 : a * 81 + k4) - critVal4(o, i4[a]);
+        }
+      }
+      if (K9) {
+        const b = p * 4;
+        for (let j = -1; j < 8; j++) {
+          const a = j < 0 ? p : j < 4 ? nbr[b + j] : dnbr[b + j - 4];   // p and its 8 neighbours
+          const k = code9(cells, dnbr, a, code5(cells, nbr, a)) + 6561 * (cells[a] + 1);
+          dz += critVal9(o, k === 0 ? -1 : a * 19683 + k) - critVal9(o, i9[a]);
+        }
+      }
+      cells[p] = EMPTY;
+      srchVal[p] = sigmoid(zBase + dz);
+    }
+    let best = PASS, bestV = -Infinity;
+    for (let p = 0; p < area; p++) {
+      if (!srchKind[p]) continue;
+      const v = (m === 0 ? srchVal[p] : 1 - srchVal[p]) + rng.random() * 1e-9;
+      if (v > bestV) { bestV = v; best = p; }
+    }
+    return best;
+  }
+
   // Leaf value of a truncated sim: P(BLACK wins) from the vpat model.
   function vpatValueB(g) {
     return VPat.evaluateFeatures(VPat.extractFeatures(g, vpatModel.preparedSpecs, false, undefined, true), vpatModel.weights);
@@ -424,7 +498,7 @@ function create(cfg) {
       }
       let move;
       if (actorOn) {
-        move = sample(g, m, rng);
+        move = (t < SEARCH_MOVES && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) ? searchMove(g, m, rng) : sample(g, m, rng);
         exs.set(ex[m], o);
         if (act5) k5s.set(k5a, o);
         if (act9) k9s.set(k9a, o);
@@ -609,6 +683,7 @@ function create(cfg) {
   function _internals() {
     return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid,
              setActive: (a5, a9) => { act5 = a5; act9 = a9; },
+             searchMove,
              get lastActorSteps() { return lastActorSteps; },
              get lastCriticSteps() { return lastCriticSteps; },
              get lastReturn() { return lastReturn; },
