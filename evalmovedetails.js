@@ -22,7 +22,8 @@
 //                 seed it had in a full sweep
 //   --seed        starting agent rng seed (default: random, logged at startup)
 //   --oversample  evaluate each position this many times    (default: 1)
-//   --show-phases P  at the end, print a P-row table of phase-band → MAE and MSE,
+//   --show-phases    at the end, print a table of phase-band → MAE and MSE over
+//                    --phase-buckets N equal-width bands (default 10),
 //                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
@@ -110,7 +111,7 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 }
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'min-phase', 'max-phase', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
     console.log(`Usage: node evalmovedetails.js --agent <name> --file <path> [options]
@@ -129,8 +130,10 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     agent seed it had in a full sweep (not with --min/max-phase)
   --seed N          starting agent rng seed (default: random, logged at startup)
   --oversample N    evaluate each position N times, distinct seeds (default 1)
-  --show-phases P   at the end, print a P-row phase-band -> MAE and MSE table
+  --show-phases     at the end, print a phase-band -> MAE and MSE table
                     (phase = board fullness in [0,1])
+  --phase-buckets N equal-width phase bands for the table, the same knob
+                    filter-movedetails uses (default 10)
   --verbose         per-position comparison table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -142,7 +145,8 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
-  const showPhases = opts['show-phases'] !== undefined ? parseInt(opts['show-phases'], 10) : null;
+  const phaseBuckets = opts['phase-buckets'] !== undefined ? parseInt(opts['phase-buckets'], 10) : 10;
+  const showPhases   = opts['show-phases'] ? phaseBuckets : null;   // band count, null = no table
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
   const maxPhase   = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
   const verbose    = !!opts.verbose;
@@ -151,7 +155,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   if (isNaN(limit) || limit < 1)           { console.error('--limit must be a positive integer'); process.exit(1); }
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
   if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
-  if (showPhases !== null && (isNaN(showPhases) || showPhases < 1)) { console.error('--show-phases must be a positive integer'); process.exit(1); }
+  if (isNaN(phaseBuckets) || phaseBuckets < 1) { console.error('--phase-buckets must be a positive integer'); process.exit(1); }
   if (isNaN(minPhase) || isNaN(maxPhase) || minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
     console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1'); process.exit(1);
   }
