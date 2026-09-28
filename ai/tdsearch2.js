@@ -96,7 +96,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 50)
+//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 35)
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
@@ -158,7 +158,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 50);
+  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 35);
   const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
   const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
