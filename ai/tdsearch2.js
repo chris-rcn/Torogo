@@ -63,11 +63,12 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //           features the two positions share.
 //   actor:  REINFORCE at sim end (it needs the final result), in step order
 //           over the plies it played (playout-tail moves carry no gradient),
-//           with advantage A_t = ρ·δ_t + (1−ρ)·(R − V_t) from the mover's view,
-//           where δ_t = V_{t+2} − V_t is the TD advantage, R the final result
-//           and ρ = TD_ADV_RATIO.  Its per-step records are the sampled-from
-//           distribution and the point codes.  Without a critic the baseline
-//           is a per-mover EMA of sim returns.
+//           with the step  TD_ACTOR_TD_LR·δ_t + TD_ACTOR_TERM_LR·(R − V_t)  in
+//           the mover's view, where δ_t = V_{t+2} − V_t is the TD advantage
+//           and R the sim's return — two step sizes, one per term, so each
+//           is tuned alone.  Its per-step records are the sampled-from
+//           distribution and the point codes.  Without a critic only the
+//           terminal term exists, with a per-mover EMA of returns as baseline.
 //
 // Priors: location-independent twins of two tables — actor: (mover, 8-cell
 // code around the point); critic: (mover, 3×3 code), used whether or not the
@@ -101,7 +102,9 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
 //   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
-//   TD_ACTOR_LR       actor step size                                  (default 0.05)
+//   TD_ACTOR_TD_LR    actor step size on the TD term, V two plies on minus V (default 0.04)
+//   TD_ACTOR_TERM_LR  actor step size on the terminal term, the return minus V;
+//                     the only term with the critic off                 (default 0.01)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.5)
@@ -109,8 +112,6 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     tail; 0 = it stops at the actor depth, the tail only
 //                     delivers the outcome.  Silver et al. leave this open;
 //                     measured 0.0214 vs 0.0228 at 200 ms, 27% faster  (default 0)
-//   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
-//                     the rest is the final result minus V             (default 0.8)
 //   TD_ACTOR_RETURN_EMA     with the critic OFF, the actor's baseline is a per-mover EMA of
 //                     sim returns; this is its decay                     (default 0.9)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
@@ -162,7 +163,8 @@ function create(cfg) {
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
-  const LR       = cfg.float('TD_ACTOR_LR', 0.05);
+  const TD_LR    = cfg.float('TD_ACTOR_TD_LR', 0.04);
+  const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.01);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
@@ -171,7 +173,6 @@ function create(cfg) {
   const CLR      = cfg.float('TD_CRITIC_LR', 0.5);
   const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
-  const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
@@ -597,10 +598,11 @@ function create(cfg) {
     if (fixZ) Z[m] += dz;
   }
 
-  // Actor policy-gradient step for the record at t with advantage A (mover's
-  // view): for every point a in the sampled-from distribution,
-  // Δw(a) = lr/T · A · ([a = chosen] − π(a)) on each layer's weight for (m, a).
-  function actorUpdate(t, m, A) {
+  // Actor policy-gradient step for the record at t with the step-scaled
+  // advantage g (mover's view, learning rates already applied): for every
+  // point a in the sampled-from distribution,
+  // Δw(a) = g/T · ([a = chosen] − π(a)) on each layer's weight for (m, a).
+  function actorUpdate(t, m, g) {
     const move = chosen[t];
     if (!fromActor[t] || move === PASS) return;   // tail moves and PASS are outside the softmax
     const o = t * area;
@@ -608,7 +610,7 @@ function create(cfg) {
     const k5 = k5s.subarray(o, o + area), k9 = k9s.subarray(o, o + area);
     const u5 = t < D5, u9 = t < D9;        // layers that were active at this ply
     const invS = 1 / Ss[t];
-    const k = LR / TEMP * A;
+    const k = g / TEMP;
     for (let p = 0; p < area; p++) {
       const v = e[p];
       if (v <= 0) continue;
@@ -632,7 +634,7 @@ function create(cfg) {
       const adv = [z - base[0], (1 - z) - base[1]];
       base[0] += (1 - BASE_EMA) * (z - base[0]);
       base[1] += (1 - BASE_EMA) * ((1 - z) - base[1]);
-      for (let t = 0; t < steps; t++) actorUpdate(t, movers[t], adv[movers[t]]);
+      for (let t = 0; t < steps; t++) actorUpdate(t, movers[t], TERM_LR * adv[movers[t]]);
       return;
     }
     for (let t = 0; t < steps; t++) {
@@ -642,7 +644,7 @@ function create(cfg) {
       const sign = m === 0 ? 1 : -1;      // mover's view of a BLACK-view difference
       const delta = sign * (next - v);    // TD advantage
       const mc    = sign * (z - v);       // final-result advantage
-      actorUpdate(t, m, ADV_RATIO * delta + (1 - ADV_RATIO) * mc);
+      actorUpdate(t, m, TD_LR * delta + TERM_LR * mc);
     }
   }
 

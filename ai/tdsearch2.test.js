@@ -76,7 +76,7 @@ function playRandom(g, rng, changed) {
 // ── REINFORCE update: gradient sums to zero, chosen point moves with the advantage ──
 {
   const N = 5;
-  const a = agent({ TD_ACTOR_LR: '0.5', TD_TEMP: '2', TD_ACTOR_RETURN_EMA: '0.9', TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0' });
+  const a = agent({ TD_ACTOR_TERM_LR: '0.5', TD_TEMP: '2', TD_ACTOR_RETURN_EMA: '0.9', TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
