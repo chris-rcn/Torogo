@@ -124,6 +124,9 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     sampling — the softmax sample is the exploration.  300 ms on
 //                     1000 positions: 0 -> 0.0149, 0.1 -> 0.0127, 0.2 -> 0.0132,
 //                     0.4 -> 0.0135: an occasional critic pick, not the default ply (default 0.1)
+//   TD_SIM_SEARCH_EPSILON  on a ply the search would play, probability of a UNIFORM
+//                     random legal move instead (Silver et al.'s epsilon-greedy);
+//                     exploration that needs no actor                    (default 0.1)
 //   TD_SIM_SEARCH_WIDTH  a searched ply values only the actor's top K legal points
 //                     (score incl. the prior); 0 = every legal point.  200 ms on 1000
 //                     positions: 4 -> 0.0169, 8 -> 0.0164, 16 -> 0.0150, 0 -> 0.0155;
@@ -174,6 +177,7 @@ function create(cfg) {
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
   const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
+  const SEARCH_EPSILON = cfg.float('TD_SIM_SEARCH_EPSILON', 0.1);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
@@ -232,7 +236,7 @@ function create(cfg) {
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
   let rootVisits = null;                        // per point: sims whose first ply was that point
-  let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0, lastSearched = 0;
+  let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0, lastSearched = 0, lastRandom = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
   let i1r = null, i4r = null, i9r = null, nActR = null;
@@ -418,6 +422,12 @@ function create(cfg) {
   // With SEARCH_WIDTH > 0 only the actor's top K legal points (by score, prior
   // included) are valued: the actor orders, the critic verifies.
   let srchVal = null, srchKind = null, srchTop = null;
+  // Exclude illegal and true-eye points from mover m's distribution, as
+  // sample() does lazily, so a ply not chosen by sample() records an exact one.
+  function excludeIllegal(g, m) {
+    const cells = g.cells, e = ex[m];
+    for (let p = 0; p < area; p++) if (cells[p] === EMPTY && e[p] > 0 && (!g.isLegal(p) || g.isTrueEye(p))) { S[m] -= e[p]; e[p] = 0; }
+  }
   function critVal9(m, i) { return i < 0 ? 0 : (C9 ? c9[m * area * 19683 + i] : 0) + pc9[m * 19683 + i % 19683]; }
   function critVal4(m, i) { return i < 0 || !C4 ? 0 : c4[m * area * 81 + i]; }
   function critVal1(m, i) { return i < 0 || !C1 ? 0 : c1[m * area * 3 + i]; }
@@ -496,7 +506,7 @@ function create(cfg) {
     act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
     actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);
-    let t = 0, actorSteps = 0, criticSteps = 0, searched = 0;
+    let t = 0, actorSteps = 0, criticSteps = 0, searched = 0, randomPlies = 0;
     let onPV = true;                       // every ply so far was the actor's argmax or a searched pick
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
@@ -522,15 +532,16 @@ function create(cfg) {
       let move;
       if (actorOn) {
         const maysearch = onPV && t < SEARCH_PLIES;
-        if (maysearch && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) { move = searchMove(g, m, rng); searched++; }
-        else {
-          move = sample(g, m, rng);
-          if (maysearch) {                 // stays on the PV only if the sample was the actor's argmax
-            const scm = sc[m], e = ex[m];
-            let bestS = -Infinity;
-            for (let p = 0; p < area; p++) if (e[p] > 0 && scm[p] > bestS) bestS = scm[p];
-            onPV = move !== PASS && scm[move] === bestS;
-          }
+        let searchedNow = false;
+        if (maysearch && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) {
+          if (SEARCH_EPSILON > 0 && rng.random() < SEARCH_EPSILON) { excludeIllegal(g, m); move = g.randomLegalMove(rng); randomPlies++; }
+          else { move = searchMove(g, m, rng); searched++; searchedNow = true; }
+        } else move = sample(g, m, rng);
+        if (maysearch && !searchedNow) {   // stays on the PV only if the move was the actor's argmax
+          const scm = sc[m], e = ex[m];
+          let bestS = -Infinity;
+          for (let p = 0; p < area; p++) if (e[p] > 0 && scm[p] > bestS) bestS = scm[p];
+          onPV = move !== PASS && scm[move] === bestS;
         }
         exs.set(ex[m], o);
         if (act5) k5s.set(k5a, o);
@@ -557,7 +568,7 @@ function create(cfg) {
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
       t++;
     }
-    lastActorSteps = actorSteps; lastCriticSteps = criticSteps; lastSearched = searched;
+    lastActorSteps = actorSteps; lastCriticSteps = criticSteps; lastSearched = searched; lastRandom = randomPlies;
     // The return: the outcome, or at the truncation point the vpat leaf value.
     const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
             : (truncActive && t >= truncPly) ? vpatValueB(g)
@@ -721,6 +732,7 @@ function create(cfg) {
              get lastCriticSteps() { return lastCriticSteps; },
              get lastReturn() { return lastReturn; },
              get lastSearched() { return lastSearched; },
+             get lastRandom() { return lastRandom; },
              rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };

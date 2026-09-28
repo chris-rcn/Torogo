@@ -363,7 +363,7 @@ function playRandom(g, rng, changed) {
   const r0 = makeRng(191);
   for (let i = 0; i < 10; i++) g.play(g.randomLegalMove(r0));
   // Ratio 1: every ply up to the limit is searched, and a searched pick stays on the PV.
-  const a = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '1', TD_TRUNC_PHASE_DELTA: '0' });
+  const a = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '1', TD_SIM_SEARCH_EPSILON: '0', TD_TRUNC_PHASE_DELTA: '0' });
   a.getMove(g, 0, { rng: r0 });
   const st = a._internals();
   st.simulate(g, makeRng(193));
@@ -378,12 +378,34 @@ function playRandom(g, rng, changed) {
   // once: with ratio 0 at ply 0 forced by a tiny ratio... instead use ratio 0.5
   // over many sims and check searching never exceeds the ply limit and rarely
   // reaches it (a random sample matches the argmax with probability ~1/candidates).
-  const c = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '0.5', TD_TEMP: '100', TD_TRUNC_PHASE_DELTA: '0' });
+  const c = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '0.5', TD_SIM_SEARCH_EPSILON: '0', TD_TEMP: '100', TD_TRUNC_PHASE_DELTA: '0' });
   c.getMove(g, 0, { rng: makeRng(199) });
   const sc = c._internals();
   let total = 0, over = 0;
   for (let i = 0; i < 40; i++) { sc.simulate(g, makeRng(200 + i)); total += sc.lastSearched; if (sc.lastSearched > 3) over++; }
   check(over === 0 && total > 0 && total < 40 * 3 * 0.5, `PV gating: ${total} searched plies over 40 sims (limit 3 each); over-limit sims ${over}`);
+}
+
+// ── Epsilon: a searched ply becomes a uniform random legal move with that probability ──
+{
+  const N = 9;
+  const g = new Game2(N, true);
+  const r0 = makeRng(211);
+  for (let i = 0; i < 10; i++) g.play(g.randomLegalMove(r0));
+  // Epsilon 1 with ratio 1: every searchable ply is random, none searched, and
+  // a random ply leaves the PV unless it hit the argmax, so at most a few plies.
+  const a = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '1', TD_SIM_SEARCH_EPSILON: '1', TD_TRUNC_PHASE_DELTA: '0' });
+  a.getMove(g, 0, { rng: r0 });
+  const st = a._internals();
+  let random = 0, searched = 0;
+  for (let i = 0; i < 20; i++) { st.simulate(g, makeRng(220 + i)); random += st.lastRandom; searched += st.lastSearched; }
+  check(searched === 0 && random >= 20 && random <= 60, `epsilon 1: searched ${searched}, random plies ${random} over 20 sims`);
+  // Epsilon 0: all searched.
+  const b = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '1', TD_SIM_SEARCH_EPSILON: '0', TD_TRUNC_PHASE_DELTA: '0' });
+  b.getMove(g, 0, { rng: makeRng(231) });
+  const sb = b._internals();
+  sb.simulate(g, makeRng(233));
+  check(sb.lastRandom === 0 && sb.lastSearched === 3, `epsilon 0: random ${sb.lastRandom}, searched ${sb.lastSearched}`);
 }
 
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
