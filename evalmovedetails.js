@@ -330,9 +330,9 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
-  // Fixed-width fields, the headline (mae) last; the band field always
-  // prints so the columns line up across banded and unbanded runs.
-  console.log(`SUMMARY band=${(bandActive ? `${minPhase}-${maxPhase}` : '0-1').padEnd(8)} ` +
+  // Fixed-width fields, the headline (mae) last; the band always prints as
+  // two decimals (0.00-1.00 when unbanded) so the columns line up.
+  console.log(`SUMMARY band=${minPhase.toFixed(2)}-${maxPhase.toFixed(2)} ` +
     `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
     `mae=${(gapSum / evals).toFixed(4)}`);
 }
