@@ -143,7 +143,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   TD_AB_WIDTH       ab: candidates per node, the actor's top points   (default 5)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = no truncation            (default 0.2)
-//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 4)
+//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 5)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this                                       (default 0.52)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
@@ -187,7 +187,7 @@ function create(cfg) {
   if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
   if (SEARCH_PLIES > 0 && !CRITIC) throw new Error('tdsearch2: TD_SIM_SEARCH_PLIES needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
-  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
+  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
   let vpatModel = null;
   if (TRUNC_DELTA > 0) {
