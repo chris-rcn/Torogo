@@ -113,7 +113,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_ACTOR_RETURN_EMA     with the critic OFF, the actor's baseline is a per-mover EMA of
 //                     sim returns; this is its decay                     (default 0.9)
-//   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
+//   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, WHILE THE SIM IS ON
 //                     THE PRINCIPAL VARIATION (every ply so far was the actor's
 //                     argmax or a searched pick), the move may be the critic's
@@ -170,7 +170,7 @@ function create(cfg) {
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
-  const SIMS_CAP = cfg.int('TD_SIMS', 0);
+  const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
   const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
@@ -667,7 +667,7 @@ function create(cfg) {
     rootVisits.fill(0);
     let sims = 0, longest = 0, totalSteps = 0;
     while (true) {
-      if (SIMS_CAP > 0 ? sims >= SIMS_CAP : Date.now() - tStart >= budgetMs) break;
+      if (PLAYOUTS_CAP > 0 ? sims >= PLAYOUTS_CAP : Date.now() - tStart >= budgetMs) break;
       const steps = simulate(game, rng);
       if (steps > longest) longest = steps;
       totalSteps += steps;

@@ -80,7 +80,7 @@ function playRandom(g, rng, changed) {
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
-  // Build one recorded step by hand: run one sim with TD_SIMS-free internals.
+  // Build one recorded step by hand: run one sim with PLAYOUTS-free internals.
   // Simulate records steps then updates; instead exercise update() via simulate
   // on a copied instance and inspect the layer-1 weights.
   st.recomputeAll(g.cells, g._nbr, g._dnbr);
@@ -196,7 +196,7 @@ function playRandom(g, rng, changed) {
 // ── Root selection by visits: the played point is the most-sampled first ply ──
 {
   const N = 7;
-  const a = agent({ TD_ROOT_SELECT: 'visits', TD_SIMS: '50' });
+  const a = agent({ TD_ROOT_SELECT: 'visits', PLAYOUTS: '50' });
   const g = new Game2(N, true);
   const r = a.getMove(g, 1000, { rng: makeRng(71) });
   const st = a._internals();
@@ -210,7 +210,7 @@ function playRandom(g, rng, changed) {
 // ── Root selection by alpha-beta over the critic ────────────────────────────
 {
   const N = 7;
-  const a = agent({ TD_ROOT_SELECT: 'ab', TD_AB_DEPTH: '2', TD_AB_WIDTH: '4', TD_SIMS: '20' });
+  const a = agent({ TD_ROOT_SELECT: 'ab', TD_AB_DEPTH: '2', TD_AB_WIDTH: '4', PLAYOUTS: '20' });
   const g = new Game2(N, true);
   const rng = makeRng(81);
   for (let i = 0; i < 4; i++) {
@@ -227,7 +227,7 @@ function playRandom(g, rng, changed) {
 // ── Root selection by softmax: legal sampled moves, peaked where the score is ──
 {
   const N = 7;
-  const a = agent({ TD_ROOT_SELECT: 'softmax', TD_SIMS: '1' });
+  const a = agent({ TD_ROOT_SELECT: 'softmax', PLAYOUTS: '1' });
   const g = new Game2(N, true);
   a._internals().setup(N);
   const st = a._internals();
@@ -389,7 +389,7 @@ function playRandom(g, rng, changed) {
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;
-  const a = agent({ TD_SIMS: '40', TD_CRITIC_LAYERS: '1,4,9' });   // the layer set this threshold was set on
+  const a = agent({ PLAYOUTS: '40', TD_CRITIC_LAYERS: '1,4,9' });   // the layer set this threshold was set on
   const g = new Game2(N, true);
   // Black builds a big framework while White passes; Black wins these sims.
   const rng = makeRng(21);
@@ -406,7 +406,7 @@ function playRandom(g, rng, changed) {
 {
   // Critic off: no critic tables, the EMA baseline moves instead.
   const N = 5;
-  const a = agent({ TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0', TD_SIMS: '5' });
+  const a = agent({ TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0', PLAYOUTS: '5' });
   const g = new Game2(N, true);
   a.getMove(g, 1000, { rng: makeRng(2) });
   const st = a._internals();
@@ -417,7 +417,7 @@ function playRandom(g, rng, changed) {
 // ── getMove: legal moves, a sims cap, and reset on a new game ───────────────
 {
   const N = 7;
-  const a = agent({ TD_SIMS: '3', TD_ACTOR_LAYER9_DEPTH: '9999' });
+  const a = agent({ PLAYOUTS: '3', TD_ACTOR_LAYER9_DEPTH: '9999' });
   const g = new Game2(N, true);
   const rng = makeRng(13);
   for (let i = 0; i < 6; i++) {
