@@ -25,7 +25,8 @@
 //   --show-phases    at the end, print a table of phase-band → MAE and MSE over
 //                    --phase-buckets N equal-width bands (default 10),
 //   --elo-map PATH   map the per-band mae/mse to a CGOS Elo estimate with the
-//                    curves md-phase-fit.js --save wrote; elo= joins SUMMARY,
+//                    curves md-phase-fit.js --save wrote (default
+//                    out/elo-map.json); elo= joins SUMMARY,
 //                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
@@ -139,6 +140,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
                     md-phase-fit.js --save wrote (its bucket count applies, and
                     every mapped band must get positions); elo= joins SUMMARY
+                    (default out/elo-map.json)
   --verbose         per-position comparison table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -150,12 +152,13 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
-  const eloMap       = opts['elo-map'] ? JSON.parse(fs.readFileSync(opts['elo-map'], 'utf8')) : null;
-  if (eloMap && opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
+  const eloMapPath   = opts['elo-map'] || path.join(__dirname, 'out', 'elo-map.json');
+  if (!fs.existsSync(eloMapPath)) { console.error(`--elo-map ${eloMapPath} not found (write one with md-phase-fit.js --save)`); process.exit(1); }
+  const eloMap       = JSON.parse(fs.readFileSync(eloMapPath, 'utf8'));
+  if (opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
     console.error(`--phase-buckets ${opts['phase-buckets']} differs from the elo map's ${eloMap.phaseBuckets}`); process.exit(1);
   }
-  const phaseBuckets = eloMap ? eloMap.phaseBuckets : opts['phase-buckets'] !== undefined ? parseInt(opts['phase-buckets'], 10) : 10;
-  const showPhases   = opts['show-phases'] || eloMap ? phaseBuckets : null;   // band count, null = no bands
+  const phaseBuckets = eloMap.phaseBuckets;   // band count: the map's, always accumulated
   const printPhases  = !!opts['show-phases'];
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
   const maxPhase   = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
@@ -165,7 +168,6 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   if (isNaN(limit) || limit < 1)           { console.error('--limit must be a positive integer'); process.exit(1); }
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
   if (seed !== null && isNaN(seed))        { console.error('--seed must be an integer'); process.exit(1); }
-  if (isNaN(phaseBuckets) || phaseBuckets < 1) { console.error('--phase-buckets must be a positive integer'); process.exit(1); }
   if (isNaN(minPhase) || isNaN(maxPhase) || minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
     console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1'); process.exit(1);
   }
@@ -219,19 +221,16 @@ const agent = (typeof _agentMod.create === 'function'
     'mae'    .padStart(5),   // headline: mean win-prob gap (expected strength cost)
   ].join('  '));
 
-  // Phase bands: partition phase ∈ [0,1] (board fullness) into P equal-width
-  // bands and accumulate gap and gap² per band, so the end-of-run table shows
-  // where in the game the agent loses the most (mae and mse per band; mse
-  // weights the blunders).
-  let phaseBandSum = null, phaseBandSqSum = null, phaseBandN = null;
-  if (showPhases !== null) {
-    phaseBandSum   = new Float64Array(showPhases);
-    phaseBandSqSum = new Float64Array(showPhases);
-    phaseBandN     = new Int32Array(showPhases);
-  }
+  // Phase bands: partition phase ∈ [0,1] (board fullness) into the map's
+  // equal-width bands and accumulate gap and gap² per band, for the Elo map
+  // and the --show-phases table (mae and mse per band; mse weights the
+  // blunders).
+  const phaseBandSum   = new Float64Array(phaseBuckets);
+  const phaseBandSqSum = new Float64Array(phaseBuckets);
+  const phaseBandN     = new Int32Array(phaseBuckets);
   function phaseBandOf(phase) {
-    let b = Math.floor(phase * showPhases);
-    if (b >= showPhases) b = showPhases - 1;   // phase === 1 lands in the last band
+    let b = Math.floor(phase * phaseBuckets);
+    if (b >= phaseBuckets) b = phaseBuckets - 1;   // phase === 1 lands in the last band
     if (b < 0) b = 0;
     return b;
   }
@@ -280,12 +279,10 @@ const agent = (typeof _agentMod.create === 'function'
       gapSqSum += gap * gap;
       evals++;
 
-      if (showPhases !== null) {
-        const b = phaseBandOf(phase);
-        phaseBandSum[b]   += gap;
-        phaseBandSqSum[b] += gap * gap;
-        phaseBandN[b]++;
-      }
+      const b = phaseBandOf(phase);
+      phaseBandSum[b]   += gap;
+      phaseBandSqSum[b] += gap * gap;
+      phaseBandN[b]++;
 
       if (worst.length < WORST_N || gap > worst[worst.length - 1].gap) {
         const rec = { index: indexBase + i, gap, hist: positions[i].history.length,
@@ -334,9 +331,9 @@ const agent = (typeof _agentMod.create === 'function'
       'mae'  .padStart(5),
       'mse'  .padStart(7),
     ].join('  '));
-    for (let b = 0; b < showPhases; b++) {
-      const lo = b / showPhases;
-      const hi = (b + 1) / showPhases;
+    for (let b = 0; b < phaseBuckets; b++) {
+      const lo = b / phaseBuckets;
+      const hi = (b + 1) / phaseBuckets;
       const n  = phaseBandN[b];
       const mae = n > 0 ? Util.fmtRatio4(phaseBandSum[b] / n) : '-';
       const mse = n > 0 ? (phaseBandSqSum[b] / n).toFixed(5) : '-';
@@ -351,18 +348,14 @@ const agent = (typeof _agentMod.create === 'function'
 
   // --elo-map: elo = intercept - sum_kind A * sum_b exp(k * mid_b) * x_{b,kind}
   // over the map's bands, x = the band's mae or mse.
-  let eloStr = '';
-  if (eloMap) {
-    let elo = eloMap.intercept;
-    for (const [kind, { A, k }] of Object.entries(eloMap.curves)) {
-      for (const { lo, hi } of eloMap.bands) {
-        const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
-        if (n === 0) { console.error(`--elo-map: band ${lo.toFixed(2)}-${hi.toFixed(2)} got no positions`); process.exit(1); }
-        const x = kind === 'mae' ? phaseBandSum[b] / n : phaseBandSqSum[b] / n;
-        elo -= A * Math.exp(k * (lo + hi) / 2) * x;
-      }
+  let elo = eloMap.intercept;
+  for (const [kind, { A, k }] of Object.entries(eloMap.curves)) {
+    for (const { lo, hi } of eloMap.bands) {
+      const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
+      if (n === 0) { console.error(`--elo-map: band ${lo.toFixed(2)}-${hi.toFixed(2)} got no positions`); process.exit(1); }
+      const x = kind === 'mae' ? phaseBandSum[b] / n : phaseBandSqSum[b] / n;
+      elo -= A * Math.exp(k * (lo + hi) / 2) * x;
     }
-    eloStr = ` elo=${elo.toFixed(0).padStart(5)}`;
   }
 
   // Single greppable summary line (grep for "SUMMARY").
@@ -371,7 +364,7 @@ const agent = (typeof _agentMod.create === 'function'
   // prints as two decimals (0.00-1.00 when unbanded) so the columns line up.
   console.log(`SUMMARY band=${minPhase.toFixed(2)}-${maxPhase.toFixed(2)} ` +
     `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
-    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)}${eloStr}`);
+    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)} elo=${elo.toFixed(0).padStart(5)}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };
