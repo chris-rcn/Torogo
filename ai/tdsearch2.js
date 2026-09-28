@@ -400,14 +400,14 @@ function create(cfg) {
 
   // ── One-ply search over the critic (sim plies) ──────────────────────────────
   // The critic's value of each legal non-eye candidate's RESULT, in the
-  // mover's view; the argmax (dithered) is played.  A non-capturing move
-  // changes only the windows containing the point — the 1×1 at p, the four
-  // 2×2s and the nine 3×3s — so its logit change for the side then to move is
-  // ~15 lookups off the live indices, with the stone set temporarily in
-  // `cells`.  A capturing move is played on a clone and fully recomputed (that
-  // clobbers the live state, restored afterwards by one recompute of the
-  // current board).  Illegal and true-eye points are excluded from the actor's
-  // distribution as sample() does, so the ply's recorded distribution is exact.
+  // mover's view; the argmax (dithered) is played.  A move changes only the
+  // windows containing a changed cell — the placed stone and any captured
+  // stones — so its logit change for the side then to move is a delta over
+  // the union of those cells' 3×3 neighbourhoods (every 1×1, 2×2 and 3×3
+  // window that can differ), read off the live indices with the changes set
+  // temporarily in `cells`.  No clone.  Illegal and true-eye points are
+  // excluded from the actor's distribution as sample() does, so the ply's
+  // recorded distribution is exact.
   // With SEARCH_WIDTH > 0 only the actor's top K legal points (by score, prior
   // included) are valued: the actor orders, the critic verifies.
   let srchVal = null, srchKind = null, srchTop = null;
@@ -435,40 +435,35 @@ function create(cfg) {
     }
     if (K > 0) for (let j = 0; j < nCand; j++) srchKind[srchTop[j]] = 1;
     if (nCand === 0) return PASS;
-    // Capturing candidates via a clone (the live state is restored below).
-    let anyClone = false;
-    for (let p = 0; p < area; p++) {
-      if (srchKind[p] !== 1) continue;
-      if (g.isCapture(p)) {
-        const c = g.clone(); c.play(p);
-        recomputeAll(c.cells, c._nbr, c._dnbr);
-        srchVal[p] = sigmoid(Z[o]); srchKind[p] = 2; anyClone = true;
-      }
-    }
-    if (anyClone) recomputeAll(cells, nbr, dnbr);
-    // Pass 2: non-capturing candidates by local delta on the live indices.
+    // Pass 2: each candidate's value by local delta on the live indices.
     const zBase = Z[o];
     for (let p = 0; p < area; p++) {
       if (srchKind[p] !== 1) continue;
-      let dz = 0;
+      const caps = g.isCapture(p) ? g.captureList(p) : null;
+      // Apply the move to the cells; gather every anchor whose window can change.
       cells[p] = colour;
-      if (C1) dz += critVal1(o, p * 3 + colour + 1) - critVal1(o, i1[p]);
-      if (C4) {
-        const b = p * 4;
-        for (let j = 0; j < 4; j++) {                                     // windows containing p: anchors p, left, up, up-left
-          const a = j === 0 ? p : j === 1 ? nbr[b + 2] : j === 2 ? nbr[b] : dnbr[b];
-          const k4 = code4(cells, nbr, dnbr, a); dz += critVal4(o, k4 === 0 ? -1 : a * 81 + k4) - critVal4(o, i4[a]);
+      let n = 0;
+      for (let ci = -1; ci < (caps ? caps.length : 0); ci++) {
+        const q = ci < 0 ? p : caps[ci];
+        if (ci >= 0) cells[q] = EMPTY;
+        const b = q * 4;
+        if (!mark[q]) { mark[q] = 1; list[n++] = q; }
+        for (let d = 0; d < 4; d++) {
+          const a = nbr[b + d];  if (!mark[a]) { mark[a] = 1; list[n++] = a; }
+          const c = dnbr[b + d]; if (!mark[c]) { mark[c] = 1; list[n++] = c; }
         }
       }
-      if (K9) {
-        const b = p * 4;
-        for (let j = -1; j < 8; j++) {
-          const a = j < 0 ? p : j < 4 ? nbr[b + j] : dnbr[b + j - 4];   // p and its 8 neighbours
-          const k = code9(cells, dnbr, a, code5(cells, nbr, a)) + 6561 * (cells[a] + 1);
-          dz += critVal9(o, k === 0 ? -1 : a * 19683 + k) - critVal9(o, i9[a]);
-        }
+      let dz = 0;
+      for (let i = 0; i < n; i++) {
+        const a = list[i]; mark[a] = 0;
+        const v = cells[a];
+        if (C1) dz += critVal1(o, v === EMPTY ? -1 : a * 3 + v + 1) - critVal1(o, i1[a]);
+        if (C4) { const k4 = code4(cells, nbr, dnbr, a); dz += critVal4(o, k4 === 0 ? -1 : a * 81 + k4) - critVal4(o, i4[a]); }
+        if (K9) { const k = code9(cells, dnbr, a, code5(cells, nbr, a)) + 6561 * (v + 1); dz += critVal9(o, k === 0 ? -1 : a * 19683 + k) - critVal9(o, i9[a]); }
       }
+      // Restore the cells.
       cells[p] = EMPTY;
+      if (caps) for (let ci = 0; ci < caps.length; ci++) cells[caps[ci]] = -colour;
       srchVal[p] = sigmoid(zBase + dz);
     }
     let best = PASS, bestV = -Infinity;
