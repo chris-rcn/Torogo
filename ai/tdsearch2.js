@@ -104,7 +104,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
 //   TD_ACTOR_TD_LR    actor step size on the TD term, V two plies on minus V (default 0.04)
 //   TD_ACTOR_TERM_LR  actor step size on the terminal term, the return minus V;
-//                     the only term with the critic off                 (default 0.01)
+//                     the only term with the critic off.  From-scratch ladder at
+//                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.5)
@@ -164,7 +165,7 @@ function create(cfg) {
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const TD_LR    = cfg.float('TD_ACTOR_TD_LR', 0.04);
-  const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.01);
+  const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.002);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
