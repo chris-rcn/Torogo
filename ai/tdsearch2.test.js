@@ -356,6 +356,36 @@ function playRandom(g, rng, changed) {
   check(ref.has(pick) && Math.abs(ref.get(pick) - best) < 1e-9, `width-${K} search picked ${pick} (in top ${K}: ${ref.has(pick)}), value ${ref.get(pick)} vs best ${best}`);
 }
 
+// ── Search follows the PV: searched picks keep it, a non-argmax sample ends it ──
+{
+  const N = 9;
+  const g = new Game2(N, true);
+  const r0 = makeRng(191);
+  for (let i = 0; i < 10; i++) g.play(g.randomLegalMove(r0));
+  // Ratio 1: every ply up to the limit is searched, and a searched pick stays on the PV.
+  const a = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '1', TD_TRUNC_PHASE_DELTA: '0' });
+  a.getMove(g, 0, { rng: r0 });
+  const st = a._internals();
+  st.simulate(g, makeRng(193));
+  check(st.lastSearched === 3, `ratio 1 should search all 3 PV plies, searched ${st.lastSearched}`);
+  // Ratio 0: never searched.
+  const b = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '0', TD_TRUNC_PHASE_DELTA: '0' });
+  b.getMove(g, 0, { rng: makeRng(195) });
+  const sb = b._internals();
+  sb.simulate(g, makeRng(197));
+  check(sb.lastSearched === 0, `ratio 0 should never search, searched ${sb.lastSearched}`);
+  // A huge temperature makes samples near-uniform, so the sim leaves the PV at
+  // once: with ratio 0 at ply 0 forced by a tiny ratio... instead use ratio 0.5
+  // over many sims and check searching never exceeds the ply limit and rarely
+  // reaches it (a random sample matches the argmax with probability ~1/candidates).
+  const c = agent({ TD_SIM_SEARCH_PLIES: '3', TD_SIM_SEARCH_RATIO: '0.5', TD_TEMP: '100', TD_TRUNC_PHASE_DELTA: '0' });
+  c.getMove(g, 0, { rng: makeRng(199) });
+  const sc = c._internals();
+  let total = 0, over = 0;
+  for (let i = 0; i < 40; i++) { sc.simulate(g, makeRng(200 + i)); total += sc.lastSearched; if (sc.lastSearched > 3) over++; }
+  check(over === 0 && total > 0 && total < 40 * 3 * 0.5, `PV gating: ${total} searched plies over 40 sims (limit 3 each); over-limit sims ${over}`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

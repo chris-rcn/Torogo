@@ -113,10 +113,12 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
-//   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, the move may be the
-//                     critic's one-ply argmax (mover's view) instead of the actor's
-//                     sample; needs a critic.  300 ms: 1 best, each further ply
-//                     costs ~0.0008                                       (default 1)
+//   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, WHILE THE SIM IS ON
+//                     THE PRINCIPAL VARIATION (every ply so far was the actor's
+//                     argmax or a searched pick), the move may be the critic's
+//                     one-ply argmax (mover's view) instead of the actor's sample;
+//                     the first sampled deviation ends searching for that sim.
+//                     Needs a critic.                                     (default 1)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
 //                     sampling — the softmax sample is the exploration.  300 ms on
 //                     1000 positions: 0 -> 0.0149, 0.1 -> 0.0127, 0.2 -> 0.0132,
@@ -229,7 +231,7 @@ function create(cfg) {
   let exs = null, Ss = null, movers = null, chosen = null, Vs = null, k5s = null, k9s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
   let rootVisits = null;                        // per point: sims whose first ply was that point
-  let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0;
+  let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0, lastSearched = 0;
   // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
   // two-step-lagged critic update, with the active-feature count per slot.
   let i1r = null, i4r = null, i9r = null, nActR = null;
@@ -493,7 +495,8 @@ function create(cfg) {
     act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
     actorOn = true; criticOn = CRITIC;
     recomputeAll(cells, nbr, dnbr);
-    let t = 0, actorSteps = 0, criticSteps = 0;
+    let t = 0, actorSteps = 0, criticSteps = 0, searched = 0;
+    let onPV = true;                       // every ply so far was the actor's argmax or a searched pick
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
       const m = g.current === BLACK ? 0 : 1;
@@ -517,7 +520,17 @@ function create(cfg) {
       }
       let move;
       if (actorOn) {
-        move = (t < SEARCH_PLIES && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) ? searchMove(g, m, rng) : sample(g, m, rng);
+        const maysearch = onPV && t < SEARCH_PLIES;
+        if (maysearch && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) { move = searchMove(g, m, rng); searched++; }
+        else {
+          move = sample(g, m, rng);
+          if (maysearch) {                 // stays on the PV only if the sample was the actor's argmax
+            const scm = sc[m], e = ex[m];
+            let bestS = -Infinity;
+            for (let p = 0; p < area; p++) if (e[p] > 0 && scm[p] > bestS) bestS = scm[p];
+            onPV = move !== PASS && scm[move] === bestS;
+          }
+        }
         exs.set(ex[m], o);
         if (act5) k5s.set(k5a, o);
         if (act9) k9s.set(k9a, o);
@@ -543,7 +556,7 @@ function create(cfg) {
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
       t++;
     }
-    lastActorSteps = actorSteps; lastCriticSteps = criticSteps;
+    lastActorSteps = actorSteps; lastCriticSteps = criticSteps; lastSearched = searched;
     // The return: the outcome, or at the truncation point the vpat leaf value.
     const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
             : (truncActive && t >= truncPly) ? vpatValueB(g)
@@ -706,6 +719,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastCriticSteps() { return lastCriticSteps; },
              get lastReturn() { return lastReturn; },
+             get lastSearched() { return lastSearched; },
              rootVisits,
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
              sc, ex, S, Z, i1, i4, i9, k5a, k9a, base, w1, w5, w9, c1, c4, c9, area, CRITIC };
