@@ -330,11 +330,11 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
-  // The agent name goes last: the fixed-width fields then line up across agents.
-  console.log(`SUMMARY file=${path.basename(opts.file)} ` +
-    `pos=${positions.length} evals=${evals} mae=${(gapSum / evals).toFixed(4)} ` +
-    `budget=${budgetMs}ms tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)}` +
-    (bandActive ? ` band=${minPhase}-${maxPhase}` : '') + ` agent=${agentName}`);
+  // Fixed-width fields, the headline (mae) last; the band field always
+  // prints so the columns line up across banded and unbanded runs.
+  console.log(`SUMMARY band=${(bandActive ? `${minPhase}-${maxPhase}` : '0-1').padEnd(8)} ` +
+    `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
+    `mae=${(gapSum / evals).toFixed(4)}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };
