@@ -22,7 +22,7 @@
 //                 seed it had in a full sweep
 //   --seed        starting agent rng seed (default: random, logged at startup)
 //   --oversample  evaluate each position this many times    (default: 1)
-//   --show-phases P  at the end, print a P-row table of phase-band → MAE,
+//   --show-phases P  at the end, print a P-row table of phase-band → MAE and MSE,
 //                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
@@ -129,7 +129,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     agent seed it had in a full sweep (not with --min/max-phase)
   --seed N          starting agent rng seed (default: random, logged at startup)
   --oversample N    evaluate each position N times, distinct seeds (default 1)
-  --show-phases P   at the end, print a P-row phase-band -> MAE table
+  --show-phases P   at the end, print a P-row phase-band -> MAE and MSE table
                     (phase = board fullness in [0,1])
   --verbose         per-position comparison table
   --help            show this message`);
@@ -206,12 +206,14 @@ const agent = (typeof _agentMod.create === 'function'
   ].join('  '));
 
   // Phase bands: partition phase ∈ [0,1] (board fullness) into P equal-width
-  // bands and accumulate gap per band, so the end-of-run table shows where in
-  // the game the agent loses the most (mae per band).
-  let phaseBandSum = null, phaseBandN = null;
+  // bands and accumulate gap and gap² per band, so the end-of-run table shows
+  // where in the game the agent loses the most (mae and mse per band; mse
+  // weights the blunders).
+  let phaseBandSum = null, phaseBandSqSum = null, phaseBandN = null;
   if (showPhases !== null) {
-    phaseBandSum = new Float64Array(showPhases);
-    phaseBandN   = new Int32Array(showPhases);
+    phaseBandSum   = new Float64Array(showPhases);
+    phaseBandSqSum = new Float64Array(showPhases);
+    phaseBandN     = new Int32Array(showPhases);
   }
   function phaseBandOf(phase) {
     let b = Math.floor(phase * showPhases);
@@ -222,7 +224,7 @@ const agent = (typeof _agentMod.create === 'function'
 
   const startTime = performance.now();
   let nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
-  let gapSum = 0;
+  let gapSum = 0, gapSqSum = 0;
 
   function printStats(count) {
     const elapsedMs = performance.now() - startTime;
@@ -260,12 +262,14 @@ const agent = (typeof _agentMod.create === 'function'
   for (let j = 0; j < oversample; j++) {
     for (let i = 0; i < positions.length; i++) {
       const { agentMove, agentStr, topCand, agentCand, phase, gap } = evalPosition(agent, positions[i], budgetMs);
-      gapSum += gap;
+      gapSum   += gap;
+      gapSqSum += gap * gap;
       evals++;
 
       if (showPhases !== null) {
         const b = phaseBandOf(phase);
-        phaseBandSum[b] += gap;
+        phaseBandSum[b]   += gap;
+        phaseBandSqSum[b] += gap * gap;
         phaseBandN[b]++;
       }
 
@@ -314,27 +318,30 @@ const agent = (typeof _agentMod.create === 'function'
       'phase'.padStart(9),
       'n'    .padStart(5),
       'mae'  .padStart(5),
+      'mse'  .padStart(7),
     ].join('  '));
     for (let b = 0; b < showPhases; b++) {
       const lo = b / showPhases;
       const hi = (b + 1) / showPhases;
       const n  = phaseBandN[b];
       const mae = n > 0 ? Util.fmtRatio4(phaseBandSum[b] / n) : '-';
+      const mse = n > 0 ? (phaseBandSqSum[b] / n).toFixed(5) : '-';
       console.log([
         `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(9),
         Util.fmt4i(n).padStart(5),
         mae          .padStart(5),
+        mse          .padStart(7),
       ].join('  '));
     }
   }
 
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
-  // Fixed-width fields, the headline (mae) last; the band always prints as
-  // two decimals (0.00-1.00 when unbanded) so the columns line up.
+  // Fixed-width fields, the headline (mae) last but for mse; the band always
+  // prints as two decimals (0.00-1.00 when unbanded) so the columns line up.
   console.log(`SUMMARY band=${minPhase.toFixed(2)}-${maxPhase.toFixed(2)} ` +
     `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
-    `mae=${(gapSum / evals).toFixed(4)}`);
+    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };
