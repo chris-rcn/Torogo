@@ -331,6 +331,31 @@ function playRandom(g, rng, changed) {
   check(steps > 2 && nz > 0, `sim ran ${steps} plies, actor entries learned: ${nz}`);
 }
 
+// ── Sim search width: the pick is the best-valued of the actor's top K legal points ──
+{
+  const N = 9, rng = makeRng(181);
+  const K = 5;
+  const a = agent({ TD_SIM_SEARCH_PLIES: '1', TD_SIM_SEARCH_WIDTH: String(K), TD_CRITIC_LAYERS: '1,4' });
+  const g = new Game2(N, true);
+  for (let i = 0; i < 25; i++) g.play(g.randomLegalMove(rng));
+  a._internals().setup(N);
+  const st = a._internals();
+  for (let i = 0; i < st.c4.length; i++) st.c4[i] = (rng.random() - 0.5) * 0.3;
+  for (let i = 0; i < st.w1.length; i++) st.w1[i] = rng.random() * 2;     // distinct actor scores
+  const m = g.current === BLACK ? 0 : 1;
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  const legal = [];
+  for (let p = 0; p < N * N; p++) if (g.cells[p] === EMPTY && g.isLegal(p) && !g.isTrueEye(p)) legal.push(p);
+  legal.sort((x, y) => st.sc[m][y] - st.sc[m][x]);
+  const top = legal.slice(0, K);
+  const ref = new Map();
+  for (const p of top) { const c = g.clone(); c.play(p); st.recomputeAll(c.cells, c._nbr, c._dnbr); const vB = st.sigmoid(st.Z[1 - m]); ref.set(p, m === 0 ? vB : 1 - vB); }
+  st.recomputeAll(g.cells, g._nbr, g._dnbr);
+  const pick = st.searchMove(g, m, makeRng(183));
+  const best = Math.max(...ref.values());
+  check(ref.has(pick) && Math.abs(ref.get(pick) - best) < 1e-9, `width-${K} search picked ${pick} (in top ${K}: ${ref.has(pick)}), value ${ref.get(pick)} vs best ${best}`);
+}
+
 // ── Critic: a lopsided position's value moves toward the outcome ────────────
 {
   const N = 7;

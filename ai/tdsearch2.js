@@ -118,6 +118,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     sample; needs a critic                              (default 0)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
 //                     sampling — the softmax sample is the exploration    (default 1)
+//   TD_SIM_SEARCH_WIDTH  a searched ply values only the actor's top K legal points
+//                     (score incl. the prior); 0 = every legal point       (default 0)
 //   TD_ROOT_SELECT    actor = play the actor's argmax; softmax = sample the actor's
 //                     softmax at TD_TEMP (self-play diversity, e.g. for training);
 //                     visits = play the point most often sampled as a sim's first
@@ -163,6 +165,7 @@ function create(cfg) {
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 1);
+  const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 0);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
@@ -404,27 +407,43 @@ function create(cfg) {
   // clobbers the live state, restored afterwards by one recompute of the
   // current board).  Illegal and true-eye points are excluded from the actor's
   // distribution as sample() does, so the ply's recorded distribution is exact.
-  let srchVal = null, srchKind = null;
+  // With SEARCH_WIDTH > 0 only the actor's top K legal points (by score, prior
+  // included) are valued: the actor orders, the critic verifies.
+  let srchVal = null, srchKind = null, srchTop = null;
   function critVal9(m, i) { return i < 0 ? 0 : (C9 ? c9[m * area * 19683 + i] : 0) + pc9[m * 19683 + i % 19683]; }
   function critVal4(m, i) { return i < 0 || !C4 ? 0 : c4[m * area * 81 + i]; }
   function critVal1(m, i) { return i < 0 || !C1 ? 0 : c1[m * area * 3 + i]; }
   function searchMove(g, m, rng) {
-    if (!srchVal) { srchVal = new Float64Array(area); srchKind = new Int8Array(area); }
+    if (!srchVal) { srchVal = new Float64Array(area); srchKind = new Int8Array(area); srchTop = new Int32Array(area); }
     const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, colour = m === 0 ? BLACK : -BLACK, o = 1 - m;
-    // Pass 1: legality (excluding as sample() does), and capturing candidates via a clone.
-    let anyClone = false, nCand = 0;
+    // Pass 1: legality (excluding as sample() does).  Candidates: every legal
+    // point, or with a width the top K by actor score (a small insertion list).
+    let nCand = 0;
+    const K = SEARCH_WIDTH, scm = sc[m];
     for (let p = 0; p < area; p++) {
       srchKind[p] = 0;
       if (cells[p] !== EMPTY) continue;
       if (!g.isLegal(p) || g.isTrueEye(p)) { S[m] -= ex[m][p]; ex[m][p] = 0; continue; }
-      nCand++;
+      if (K <= 0) { srchKind[p] = 1; nCand++; continue; }
+      // Keep the K best scores seen so far, descending, in srchTop[0..nCand).
+      let j = nCand < K ? nCand : K - 1;
+      if (nCand >= K && scm[srchTop[j]] >= scm[p]) continue;
+      while (j > 0 && scm[srchTop[j - 1]] < scm[p]) { srchTop[j] = srchTop[j - 1]; j--; }
+      srchTop[j] = p;
+      if (nCand < K) nCand++;
+    }
+    if (K > 0) for (let j = 0; j < nCand; j++) srchKind[srchTop[j]] = 1;
+    if (nCand === 0) return PASS;
+    // Capturing candidates via a clone (the live state is restored below).
+    let anyClone = false;
+    for (let p = 0; p < area; p++) {
+      if (srchKind[p] !== 1) continue;
       if (g.isCapture(p)) {
         const c = g.clone(); c.play(p);
         recomputeAll(c.cells, c._nbr, c._dnbr);
         srchVal[p] = sigmoid(Z[o]); srchKind[p] = 2; anyClone = true;
-      } else srchKind[p] = 1;
+      }
     }
-    if (nCand === 0) return PASS;
     if (anyClone) recomputeAll(cells, nbr, dnbr);
     // Pass 2: non-capturing candidates by local delta on the live indices.
     const zBase = Z[o];
