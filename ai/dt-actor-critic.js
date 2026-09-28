@@ -14,7 +14,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 
-// tdsearch2 — online actor-critic learning during think time.
+// dt-actor-critic — online actor-critic learning during think time.
 //
 // Each move, self-play simulations run from the current position.  The actor
 // policy that plays them is updated by policy gradient; the critic value is
@@ -181,11 +181,11 @@ function create(cfg) {
   const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
   const SEARCH_EPSILON = cfg.float('TD_SIM_SEARCH_EPSILON', 0.1);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
-  if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
+  if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`dt-actor-critic: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
   const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
-  if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
-  if (SEARCH_PLIES > 0 && !CRITIC) throw new Error('tdsearch2: TD_SIM_SEARCH_PLIES needs a critic (TD_CRITIC_LAYERS)');
+  if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('dt-actor-critic: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
+  if (SEARCH_PLIES > 0 && !CRITIC) throw new Error('dt-actor-critic: TD_SIM_SEARCH_PLIES needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
@@ -196,7 +196,7 @@ function create(cfg) {
       : null;
     const raw = _isNode ? require(require('path').resolve(vpatPath))
                         : (typeof window !== 'undefined' && window.truncVpatModel) || null;
-    if (!raw) throw new Error(`tdsearch2: cannot load the truncation vpat model from ${_isNode ? vpatPath : 'window.truncVpatModel'}`);
+    if (!raw) throw new Error(`dt-actor-critic: cannot load the truncation vpat model from ${_isNode ? vpatPath : 'window.truncVpatModel'}`);
     vpatModel = VPat.modelFromRaw(raw);
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
@@ -218,7 +218,7 @@ function create(cfg) {
     : null;
   const ppatModel = _isNode ? PPat.loadWeights(ppatPath)
                             : PPat.loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
-  if (!ppatModel) throw new Error(`tdsearch2: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
+  if (!ppatModel) throw new Error(`dt-actor-critic: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
   ppatModel.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
   let ppatState = null;
 
@@ -769,9 +769,9 @@ function code4(cells, nbr, dnbr, p) {
 // never sampled anyway.
 function actorPriorFromFeaturepol(path, weight) {
   const { Game2 } = Util.load('./game2.js', 'Game2');
-  const { weights } = FeaturePol.loadModel({ name: 'tdsearch2-actor-prior', path });
+  const { weights } = FeaturePol.loadModel({ name: 'dt-actor-critic-actor-prior', path });
   const spaceIdx = weights.spec.spaces.findIndex(sp => sp.str === 'stones8');
-  if (spaceIdx < 0) throw new Error(`tdsearch2: TD_PRIOR_FPOL_DATA model ${path} has no stones8 space (spec '${weights.spec.str}')`);
+  if (spaceIdx < 0) throw new Error(`dt-actor-critic: TD_PRIOR_FPOL_DATA model ${path} has no stones8 space (spec '${weights.spec.str}')`);
   const N = 5, centre = 2 * N + 2, nSpaces = weights.spec.spaces.length;
   const state = FeaturePol.createState(N, weights.spec, { components: true });
   const ring = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];   // code digit order
@@ -799,7 +799,7 @@ function criticPriorFromVpat(path, weight) {
   const { Game2 } = Util.load('./game2.js', 'Game2');
   const model = VPat.loadWeights(path);
   const s3 = model.specs.filter(sp => sp.size === 3 && !sp.turn);
-  if (s3.length !== 1 || s3[0].maxLibs !== 1) throw new Error(`tdsearch2: TD_PRIOR_VPAT_DATA model ${path} must have one size-3 maxLibs-1 spec (has ${VPat.specString(model.specs)})`);
+  if (s3.length !== 1 || s3[0].maxLibs !== 1) throw new Error(`dt-actor-critic: TD_PRIOR_VPAT_DATA model ${path} must have one size-3 maxLibs-1 spec (has ${VPat.specString(model.specs)})`);
   const N = 5, anchor = 1 * N + 1;      // the window whose centre is (2,2)
   const cells9 = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1], [0, 0]];   // code9 digits, then the centre
   const pc9 = new Float32Array(2 * 19683);

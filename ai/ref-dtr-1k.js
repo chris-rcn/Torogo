@@ -27,7 +27,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // policy that plays them is updated by REINFORCE from the simulations'
 // returns, and the actor's argmax is played.  The policy persists across the
 // moves of one game (reset on a new game) so knowledge accumulates.  No
-// critic, no priors, no search: the actor-only case of tdsearch2.
+// critic, no priors, no search: the actor-only case of dt-actor-critic.
 //
 // Features are LOCATION-DEPENDENT by design — no symmetry, the board is in
 // the orientation it is in — and indexed combinatorially, no hashing.  All are

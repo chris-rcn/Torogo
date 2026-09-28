@@ -1,14 +1,14 @@
 'use strict';
 
-// Tests for ai/tdsearch2.js.  Run directly: node ai/tdsearch2.test.js
+// Tests for ai/dt-actor-critic.js.  Run directly: node ai/dt-actor-critic.test.js
 
 const { Game2, BLACK, WHITE, EMPTY, PASS } = require('../game2.js');
 const { makeRng } = require('../xorshift.js');
 const Util = require('../util.js');
-const { create } = require('./tdsearch2.js');
+const { create } = require('./dt-actor-critic.js');
 
 let failures = 0;
-function check(cond, msg) { if (!cond) { failures++; console.error('FAIL [tdsearch2]:', msg); } }
+function check(cond, msg) { if (!cond) { failures++; console.error('FAIL [dt-actor-critic]:', msg); } }
 
 function agent(overrides) { return create(Util.makeCfg(null, overrides)); }
 
@@ -472,5 +472,5 @@ function playRandom(g, rng, changed) {
   check(any === 0 && st.base[0] === 0.5, `new game did not reset (nonzero weights: ${any})`);
 }
 
-if (failures) { console.error(`[tdsearch2] ${failures} test(s) failed`); process.exit(1); }
-else console.log('[tdsearch2] all tests passed');
+if (failures) { console.error(`[dt-actor-critic] ${failures} test(s) failed`); process.exit(1); }
+else console.log('[dt-actor-critic] all tests passed');
