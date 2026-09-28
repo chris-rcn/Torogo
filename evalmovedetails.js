@@ -139,7 +139,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     filter-movedetails uses (default 10)
   --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
                     md-phase-fit.js --save wrote (its bucket count applies; a
-                    mapped band with no positions gives elo=-); elo= joins
+                    mapped band with no results gives elo=-); elo= joins
                     SUMMARY (default out/elo-map.json)
   --verbose         per-position comparison table
   --help            show this message`);
@@ -348,12 +348,12 @@ const agent = (typeof _agentMod.create === 'function'
 
   // --elo-map: elo = intercept - sum_kind A * sum_b exp(k * mid_b) * x_{b,kind}
   // over the map's bands, x = the band's mae or mse.
-  // A mapped band with no positions leaves the estimate undefined: elo=- and
+  // A mapped band with no results leaves the estimate undefined: elo=- and
   // a note on stderr, the rest of the summary as usual.
   const empty = eloMap.bands.filter(({ lo, hi }) => phaseBandN[phaseBandOf((lo + hi) / 2)] === 0);
   let elo = eloMap.intercept;
   if (empty.length) {
-    console.error(`--elo-map: no positions in band${empty.length > 1 ? 's' : ''} ${empty.map(({ lo, hi }) => `${lo.toFixed(2)}-${hi.toFixed(2)}`).join(', ')}; elo not estimated`);
+    console.error(`--elo-map: no results in band${empty.length > 1 ? 's' : ''} ${empty.map(({ lo, hi }) => `${lo.toFixed(2)}-${hi.toFixed(2)}`).join(', ')}; elo not estimated`);
     elo = NaN;
   } else {
     for (const [kind, { A, k }] of Object.entries(eloMap.curves)) {
