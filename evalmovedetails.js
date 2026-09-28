@@ -24,6 +24,8 @@
 //   --oversample  evaluate each position this many times    (default: 1)
 //   --show-phases    at the end, print a table of phase-band → MAE and MSE over
 //                    --phase-buckets N equal-width bands (default 10),
+//   --elo-map PATH   map the per-band mae/mse to a CGOS Elo estimate with the
+//                    curves md-phase-fit.js --save wrote; elo= joins SUMMARY,
 //                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
@@ -111,7 +113,7 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 }
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'min-phase', 'max-phase', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'elo-map', 'min-phase', 'max-phase', 'verbose']);
 
   if (opts.help || !opts.file || !opts.agent) {
     console.log(`Usage: node evalmovedetails.js --agent <name> --file <path> [options]
@@ -134,6 +136,9 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     (phase = board fullness in [0,1])
   --phase-buckets N equal-width phase bands for the table, the same knob
                     filter-movedetails uses (default 10)
+  --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
+                    md-phase-fit.js --save wrote (its bucket count applies, and
+                    every mapped band must get positions); elo= joins SUMMARY
   --verbose         per-position comparison table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -145,8 +150,13 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
-  const phaseBuckets = opts['phase-buckets'] !== undefined ? parseInt(opts['phase-buckets'], 10) : 10;
-  const showPhases   = opts['show-phases'] ? phaseBuckets : null;   // band count, null = no table
+  const eloMap       = opts['elo-map'] ? JSON.parse(fs.readFileSync(opts['elo-map'], 'utf8')) : null;
+  if (eloMap && opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
+    console.error(`--phase-buckets ${opts['phase-buckets']} differs from the elo map's ${eloMap.phaseBuckets}`); process.exit(1);
+  }
+  const phaseBuckets = eloMap ? eloMap.phaseBuckets : opts['phase-buckets'] !== undefined ? parseInt(opts['phase-buckets'], 10) : 10;
+  const showPhases   = opts['show-phases'] || eloMap ? phaseBuckets : null;   // band count, null = no bands
+  const printPhases  = !!opts['show-phases'];
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
   const maxPhase   = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
   const verbose    = !!opts.verbose;
@@ -316,7 +326,7 @@ const agent = (typeof _agentMod.create === 'function'
     }
   }
 
-  if (showPhases !== null) {
+  if (printPhases) {
     console.log(`\nPhase bands:`);
     console.log([
       'phase'.padStart(9),
@@ -339,13 +349,29 @@ const agent = (typeof _agentMod.create === 'function'
     }
   }
 
+  // --elo-map: elo = intercept - sum_kind A * sum_b exp(k * mid_b) * x_{b,kind}
+  // over the map's bands, x = the band's mae or mse.
+  let eloStr = '';
+  if (eloMap) {
+    let elo = eloMap.intercept;
+    for (const [kind, { A, k }] of Object.entries(eloMap.curves)) {
+      for (const { lo, hi } of eloMap.bands) {
+        const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
+        if (n === 0) { console.error(`--elo-map: band ${lo.toFixed(2)}-${hi.toFixed(2)} got no positions`); process.exit(1); }
+        const x = kind === 'mae' ? phaseBandSum[b] / n : phaseBandSqSum[b] / n;
+        elo -= A * Math.exp(k * (lo + hi) / 2) * x;
+      }
+    }
+    eloStr = ` elo=${elo.toFixed(0).padStart(5)}`;
+  }
+
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
   // Fixed-width fields, the headline (mae) last but for mse; the band always
   // prints as two decimals (0.00-1.00 when unbanded) so the columns line up.
   console.log(`SUMMARY band=${minPhase.toFixed(2)}-${maxPhase.toFixed(2)} ` +
     `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
-    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)}`);
+    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)}${eloStr}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };

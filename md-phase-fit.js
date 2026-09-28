@@ -17,23 +17,26 @@
 // each agent's fitted Elo and residual, and the curves as Elo lost per 0.01
 // of the regressor in each band.
 //
-// Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
+// --save PATH writes the fitted mapping as JSON for evalmovedetails --elo-map.
+//
+// Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both] [--save PATH]
 
 const fs   = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'use']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'use', 'save']);
 if (opts.help) {
-  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
+  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both] [--save PATH]
 
 Fit elo = a - sum_b w_b * x_b, with each kind's band weights on one
 log-linear curve w_b = A * exp(k * phase_b), over the agents whose
 md-phase/<agent>.txt is complete, then print the mapping.  All files must
 share one per-band position count (same positions for every agent).
   --dir    directory of md-phase-sweep.sh outputs (default md-phase)
-  --use    band regressors: mae, mse, or both (default both)`);
+  --use    band regressors: mae, mse, or both (default both)
+  --save   write the fitted mapping as JSON, for evalmovedetails --elo-map`);
   process.exit(0);
 }
 const dir  = opts.dir || 'md-phase';
@@ -140,3 +143,13 @@ for (let i = 0; i < use.length; i++)
 console.log(`  ${'k'.padEnd(7)} ${kinds.map((t, j) => bestKs[j].toFixed(2).padStart(7)).join(' ')}`);
 for (let j = 0; j < kinds.length; j++)
   if (bestKs[j] <= K_LO || bestKs[j] >= K_HI) console.log(`  note: ${kinds[j]} k is at the grid bound [${K_LO}, ${K_HI}]`);
+
+if (opts.save) {
+  const map = {
+    fitted: new Date().toISOString(), agents: rows, rmsResidual: Math.round(rms),
+    phaseBuckets: nb, bands: use.map(b => ({ lo: agents[0].bands[b].lo, hi: agents[0].bands[b].hi })),
+    intercept: a0, curves: Object.fromEntries(kinds.map((t, j) => [t, { A: A[j], k: bestKs[j] }])),
+  };
+  fs.writeFileSync(opts.save, JSON.stringify(map, null, 1) + '\n');
+  console.log(`saved: ${opts.save}`);
+}
