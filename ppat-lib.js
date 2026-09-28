@@ -766,7 +766,6 @@ function loadWeights(pathOrObj) {
   const localEnd = phases * (nPat + 7);   // the twelvecell block starts here
   for (let i = phases * nPat; i < localEnd && i < raw.weights.length; i++)
     if (raw.weights[i] !== 0) { skipLocal = false; break; }
-  if (skipLocal) console.error('ppat loadWeights: local weights all zero, skipping local feature extraction');
   // Early pass travels with the model and is OFF unless the file says the
   // model was trained for it.  The pass logit is pinned at 0, so the board
   // weights' ABSOLUTE level is the threshold — and in a model trained without
