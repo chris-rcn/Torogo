@@ -111,7 +111,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     measured 0.0214 vs 0.0228 at 200 ms, 27% faster  (default 0)
 //   TD_ADV_RATIO      ρ: share of the TD advantage in the actor's advantage;
 //                     the rest is the final result minus V             (default 0.8)
-//   TD_RETURN_EMA     with the critic OFF, the actor's baseline is a per-mover EMA of
+//   TD_ACTOR_RETURN_EMA     with the critic OFF, the actor's baseline is a per-mover EMA of
 //                     sim returns; this is its decay                     (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, WHILE THE SIM IS ON
@@ -169,7 +169,7 @@ function create(cfg) {
   const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
-  const BASE_EMA = cfg.float('TD_RETURN_EMA', 0.9);
+  const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
