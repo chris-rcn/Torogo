@@ -233,15 +233,9 @@ function create(cfg) {
   let fromActor = null;                         // step sampled from the actor (else the tail)
   let rootVisits = null;                        // per point: sims whose first ply was that point
   let lastActorSteps = 0, lastCriticSteps = 0, lastReturn = 0, lastSearched = 0;
-  // Live compact lists of the critic's ACTIVE features per layer — (anchor,
-  // index) pairs, swap-with-last removal via a per-anchor position — so a
-  // snapshot copies n entries and an update touches n entries, not every
-  // anchor.  Snapshots go in a three-slot ring (step t in slot t % 3) for the
-  // two-step-lagged critic update.
-  let l1a = null, l1p = null, l4a = null, l4p = null, l9a = null, l9p = null;
-  const ln = [0, 0, 0];                             // live counts per layer (1, 4, 9)
-  let r1a = null, r1i = null, r4a = null, r4i = null, r9a = null, r9i = null;
-  const rn = new Int32Array(9);                     // ring counts: slot*3 + layer
+  // Three-slot ring of critic index snapshots (step t in slot t % 3) for the
+  // two-step-lagged critic update, with the active-feature count per slot.
+  let i1r = null, i4r = null, i9r = null, nActR = null;
   let maxSteps = 0;
   const base = [0.5, 0.5];                      // per-mover return baseline (critic off)
   let lastMoveCount = -1;
@@ -272,12 +266,8 @@ function create(cfg) {
     ppatState = PPat.createState(N);
     k5s = new Int32Array(USE5 ? maxSteps * area : 0);
     k9s = new Int32Array(USE9 ? maxSteps * area : 0);
-    l1a = new Int32Array(C1 ? area : 0); l1p = new Int32Array(C1 ? area : 0).fill(-1);
-    l4a = new Int32Array(C4 ? area : 0); l4p = new Int32Array(C4 ? area : 0).fill(-1);
-    l9a = new Int32Array(C9 ? area : 0); l9p = new Int32Array(C9 ? area : 0).fill(-1);
-    r1a = new Int32Array(C1 ? 3 * area : 0); r1i = new Int32Array(C1 ? 3 * area : 0);
-    r4a = new Int32Array(C4 ? 3 * area : 0); r4i = new Int32Array(C4 ? 3 * area : 0);
-    r9a = new Int32Array(C9 ? 3 * area : 0); r9i = new Int32Array(C9 ? 3 * area : 0);
+    i1r = new Int32Array(C1 ? 3 * area : 0); i4r = new Int32Array(C4 ? 3 * area : 0); i9r = new Int32Array(C9 ? 3 * area : 0);
+    nActR = new Int32Array(3);
   }
 
   function reset() {
@@ -301,20 +291,16 @@ function create(cfg) {
     return scoreFrom(m, p, k5, k9);
   }
 
-  // Active-list maintenance for one layer (L = 0, 1, 2 for layers 1, 4, 9).
-  function listAdd(la, lp, L, p)    { lp[p] = ln[L]; la[ln[L]++] = p; }
-  function listRemove(la, lp, L, p) { const j = lp[p], last = --ln[L]; if (j !== last) { const q = la[last]; la[j] = q; lp[q] = j; } lp[p] = -1; }
-
-  // Swap one critic layer's index at anchor p, keeping both movers' logits,
-  // the active-feature count and the layer's active list in step.
-  function swapCritic(w, idx, size, p, ni, la, lp, L) {
+  // Swap one critic layer's index at anchor p, keeping both movers' logits
+  // and the active-feature count in step.
+  function swapCritic(w, idx, size, p, ni) {
     const oi = idx[p];
     if (oi === ni) return;
     for (let m = 0; m < 2; m++) {
       const o = m * size;
       Z[m] += (ni >= 0 ? w[o + ni] : 0) - (oi >= 0 ? w[o + oi] : 0);
     }
-    if (oi < 0) { nAct++; listAdd(la, lp, L, p); } else if (ni < 0) { nAct--; listRemove(la, lp, L, p); }
+    if (oi < 0) nAct++; else if (ni < 0) nAct--;
     idx[p] = ni;
   }
 
@@ -335,12 +321,12 @@ function create(cfg) {
       const o = m * size, po = m * 19683;
       Z[m] += (ni >= 0 ? (C9 ? c9[o + ni] : 0) + pc9[po + ni % 19683] : 0) - (oi >= 0 ? (C9 ? c9[o + oi] : 0) + pc9[po + oi % 19683] : 0);
     }
-    if (C9) { if (oi < 0) { nAct++; listAdd(l9a, l9p, 2, p); } else if (ni < 0) { nAct--; listRemove(l9a, l9p, 2, p); } }
+    if (C9) { if (oi < 0) nAct++; else if (ni < 0) nAct--; }
     i9[p] = ni;
   }
   function recomputeCritic(cells, nbr, dnbr, p, k9, v) {
-    if (C1) swapCritic(c1, i1, area * 3, p, critIdx1(v, p), l1a, l1p, 0);
-    if (C4) swapCritic(c4, i4, area * 81, p, critIdx4(cells, nbr, dnbr, p), l4a, l4p, 1);
+    if (C1) swapCritic(c1, i1, area * 3, p, critIdx1(v, p));
+    if (C4) swapCritic(c4, i4, area * 81, p, critIdx4(cells, nbr, dnbr, p));
     if (K9) swapCritic9(p, critIdx9(v, p, k9));
   }
 
@@ -368,7 +354,6 @@ function create(cfg) {
   function recomputeAll(cells, nbr, dnbr) {
     ex[0].fill(0); ex[1].fill(0); S[0] = S[1] = 0;
     i1.fill(-1); i4.fill(-1); i9.fill(-1); Z[0] = Z[1] = 0; nAct = 0;
-    ln[0] = ln[1] = ln[2] = 0; l1p.fill(-1); l4p.fill(-1); l9p.fill(-1);
     for (let p = 0; p < area; p++) recompute(cells, nbr, dnbr, p);
   }
 
@@ -527,9 +512,10 @@ function create(cfg) {
         criticSteps = t + 1;
         Vs[t] = sigmoid(Z[m]);
         const slot = t % 3, so = slot * area;
-        if (C1) { const n = ln[0]; rn[slot * 3] = n;     for (let j = 0; j < n; j++) { const a = l1a[j]; r1a[so + j] = a; r1i[so + j] = i1[a]; } }
-        if (C4) { const n = ln[1]; rn[slot * 3 + 1] = n; for (let j = 0; j < n; j++) { const a = l4a[j]; r4a[so + j] = a; r4i[so + j] = i4[a]; } }
-        if (C9) { const n = ln[2]; rn[slot * 3 + 2] = n; for (let j = 0; j < n; j++) { const a = l9a[j]; r9a[so + j] = a; r9i[so + j] = i9[a]; } }
+        if (C1) i1r.set(i1, so);
+        if (C4) i4r.set(i4, so);
+        if (C9) i9r.set(i9, so);
+        nActR[slot] = nAct;
         // Step t−2 (same mover) is now two plies on: push it toward V(s_t).
         if (t >= 2) criticUpdate((t - 2) % 3, m, Vs[t - 2], Vs[t], true);
       }
@@ -584,20 +570,19 @@ function create(cfg) {
   }
 
   // Critic TD step for the position in ring slot `slot` (mover m, value v):
-  // Δw = lr·(target − v)/n on each of its active features in mover m's tables,
-  // walking the slot's compact (anchor, index) lists.  A feature is still
-  // active on the live board iff the live index at its anchor equals it; with
-  // `fixZ` the live logit Z[m] is corrected for those shared features.
+  // Δw = lr·(target − v)/n on each of its active features in mover m's tables.
+  // A feature index encodes its anchor, so it is still active on the live board
+  // iff the live index at that anchor equals it; with `fixZ` the live logit
+  // Z[m] is corrected for those shared features.
   function criticUpdate(slot, m, v, target, fixZ) {
-    const n1 = C1 ? rn[slot * 3] : 0, n4 = C4 ? rn[slot * 3 + 1] : 0, n9 = C9 ? rn[slot * 3 + 2] : 0;
-    const n = n1 + n4 + n9;
+    const n = nActR[slot];
     if (n === 0) return;
     const step = CLR * (target - v) / n;
     const so = slot * area;
     let dz = 0;
-    if (C1) { const b = m * area * 3;     for (let j = 0; j < n1; j++) { const i = r1i[so + j]; c1[b + i] += step; if (i1[r1a[so + j]] === i) dz += step; } }
-    if (C4) { const b = m * area * 81;    for (let j = 0; j < n4; j++) { const i = r4i[so + j]; c4[b + i] += step; if (i4[r4a[so + j]] === i) dz += step; } }
-    if (C9) { const b = m * area * 19683; for (let j = 0; j < n9; j++) { const i = r9i[so + j]; c9[b + i] += step; if (i9[r9a[so + j]] === i) dz += step; } }
+    if (C1) { const b = m * area * 3;     for (let p = 0; p < area; p++) { const i = i1r[so + p]; if (i >= 0) { c1[b + i] += step; if (i1[p] === i) dz += step; } } }
+    if (C4) { const b = m * area * 81;    for (let p = 0; p < area; p++) { const i = i4r[so + p]; if (i >= 0) { c4[b + i] += step; if (i4[p] === i) dz += step; } } }
+    if (C9) { const b = m * area * 19683; for (let p = 0; p < area; p++) { const i = i9r[so + p]; if (i >= 0) { c9[b + i] += step; if (i9[p] === i) dz += step; } } }
     if (fixZ) Z[m] += dz;
   }
 
