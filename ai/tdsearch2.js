@@ -121,8 +121,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     0.5-0.9 at 100 ms, 0.8 best at 30 ms, 1 slightly worse (default 0.7)
 //   TD_SIM_SEARCH_WIDTH  a searched ply values only the actor's top K legal points
 //                     (score incl. the prior); 0 = every legal point.  200 ms on 1000
-//                     positions: 4 -> 0.0169, 8 -> 0.0164, 16 -> 0.0150, 0 -> 0.0155,
-//                     unsearched 0.0164                                   (default 16)
+//                     positions: 4 -> 0.0169, 8 -> 0.0164, 16 -> 0.0150, 0 -> 0.0155;
+//                     300 ms: 15 -> 0.0141, 25-40 -> 0.0137, 60 -> 0.0143  (default 30)
 //   TD_ROOT_SELECT    actor = play the actor's argmax; softmax = sample the actor's
 //                     softmax at TD_TEMP (self-play diversity, e.g. for training);
 //                     visits = play the point most often sampled as a sim's first
@@ -168,7 +168,7 @@ function create(cfg) {
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.7);
-  const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 16);
+  const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
