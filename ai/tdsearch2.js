@@ -115,7 +115,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
 //   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, the move may be the
 //                     critic's one-ply argmax (mover's view) instead of the actor's
-//                     sample; needs a critic                              (default 0)
+//                     sample; needs a critic.  300 ms: 1 best, each further ply
+//                     costs ~0.0008                                       (default 1)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
 //                     sampling — the softmax sample is the exploration.  300 ms on
 //                     1000 positions: 0 -> 0.0149, 0.1 -> 0.0127, 0.2 -> 0.0132,
@@ -167,7 +168,7 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
-  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
+  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
   const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');

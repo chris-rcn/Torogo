@@ -76,7 +76,7 @@ function playRandom(g, rng, changed) {
 // ── REINFORCE update: gradient sums to zero, chosen point moves with the advantage ──
 {
   const N = 5;
-  const a = agent({ TD_ACTOR_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none' });
+  const a = agent({ TD_ACTOR_LR: '0.5', TD_TEMP: '2', TD_BASELINE: '0.9', TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0' });
   const g = new Game2(N, true);
   a.getMove(g, 0, { rng: makeRng(3) });
   const st = a._internals();
@@ -220,7 +220,7 @@ function playRandom(g, rng, changed) {
     g.play(r.move);
   }
   let threw = false;
-  try { agent({ TD_ROOT_SELECT: 'ab', TD_CRITIC_LAYERS: 'none' }); } catch (e) { threw = true; }
+  try { agent({ TD_ROOT_SELECT: 'ab', TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0' }); } catch (e) { threw = true; }
   check(threw, 'ab without a critic should be refused');
 }
 
@@ -376,7 +376,7 @@ function playRandom(g, rng, changed) {
 {
   // Critic off: no critic tables, the EMA baseline moves instead.
   const N = 5;
-  const a = agent({ TD_CRITIC_LAYERS: 'none', TD_SIMS: '5' });
+  const a = agent({ TD_CRITIC_LAYERS: 'none', TD_SIM_SEARCH_PLIES: '0', TD_SIMS: '5' });
   const g = new Game2(N, true);
   a.getMove(g, 1000, { rng: makeRng(2) });
   const st = a._internals();
