@@ -330,10 +330,11 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
-  console.log(`SUMMARY agent=${agentName} file=${path.basename(opts.file)} ` +
+  // The agent name goes last: the fixed-width fields then line up across agents.
+  console.log(`SUMMARY file=${path.basename(opts.file)} ` +
     `pos=${positions.length} evals=${evals} mae=${(gapSum / evals).toFixed(4)} ` +
     `budget=${budgetMs}ms tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)}` +
-    (bandActive ? ` band=${minPhase}-${maxPhase}` : ''));
+    (bandActive ? ` band=${minPhase}-${maxPhase}` : '') + ` agent=${agentName}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample };
