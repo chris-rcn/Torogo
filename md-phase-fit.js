@@ -5,14 +5,17 @@
 // Reads every finished md-phase/<agent>.txt (written by md-phase-sweep.sh),
 // takes each agent's Elo and game count from cgos/standings.js, and fits
 //
-//   elo = a - sum_b w_b * x_b        with every w_b >= 0
+//   elo = a - sum_b w_b * x_b        with w_b = A * exp(k * phase_b), A >= 0
 //
-// by non-negative least squares (coordinate descent), where x_b is the band's
-// mae, its mse, or both (--use).  Every agent evaluated the same positions, so
+// where x_b is the band's mae, its mse, or both (--use), and each kind's band
+// weights lie on one log-linear curve over phase, w_b = A * exp(k * mid_b),
+// so neighbouring bands cannot take unrelated weights: two parameters per
+// kind plus the intercept.  Fit by a grid over k with a non-negative linear
+// solve for A at each point.  Every agent evaluated the same positions, so
 // every file must carry the same per-band counts (a mismatch is a mixed sweep
 // and an error); every band with positions is used.  Prints the input table,
-// each agent's fitted Elo and residual, and the fitted weights, every one as
-// Elo lost per 0.01 of its regressor.
+// each agent's fitted Elo and residual, and the curves as Elo lost per 0.01
+// of the regressor in each band.
 //
 // Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
 
@@ -25,7 +28,8 @@ const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'use']);
 if (opts.help) {
   console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both]
 
-Fit elo = a - sum_b w_b * x_b (w_b >= 0) over the agents whose
+Fit elo = a - sum_b w_b * x_b, with each kind's band weights on one
+log-linear curve w_b = A * exp(k * phase_b), over the agents whose
 md-phase/<agent>.txt is complete, then print the mapping.  All files must
 share one per-band position count (same positions for every agent).
   --dir    directory of md-phase-sweep.sh outputs (default md-phase)
@@ -70,43 +74,54 @@ for (const a of agents) {
 const use = [];
 for (let b = 0; b < nb; b++) if (agents[0].bands[b].n > 0) use.push(b);
 
-// --- regressor columns: [{ band, kind }]
-const cols = [];
-for (const b of use) {
-  if (use_ !== 'mse') cols.push({ band: b, kind: 'mae' });
-  if (use_ !== 'mae') cols.push({ band: b, kind: 'mse' });
+// --- model: elo = a - sum_kind A_kind * sum_b exp(k_kind * mid_b) * x_{b,kind}
+// Each kind's band weights lie on one log-linear curve over the band midpoint
+// phase, so neighbouring bands cannot get unrelated weights.  For fixed k the
+// model is linear in (a, A): grid over k per kind, and at each grid point
+// solve for the intercept and the non-negative amplitudes by coordinate
+// descent; keep the grid point with the smallest rms residual.
+const kinds = use_ === 'both' ? ['mae', 'mse'] : [use_];
+const rows = agents.length;
+const mids = use.map(b => (agents[0].bands[b].lo + agents[0].bands[b].hi) / 2);
+const y = agents.map(a => a.elo);
+
+function fitFor(ks) {   // ks: k per kind -> { a0, A, rms }
+  const Z = agents.map(a => kinds.map((t, j) => use.reduce((z, b, i) => z + Math.exp(ks[j] * mids[i]) * a.bands[b][t], 0)));
+  const A = kinds.map(() => 0);
+  let a0 = 0;
+  const resid = i => { let r = y[i] - a0; for (let j = 0; j < kinds.length; j++) r += A[j] * Z[i][j]; return r; };
+  for (let it = 0; it < 200; it++) {
+    let sum = 0; for (let i = 0; i < rows; i++) sum += y[i] + (resid(i) - y[i] + a0); a0 = sum / rows;   // mean(y + ZA)
+    for (let j = 0; j < kinds.length; j++) {
+      let num = 0, den = 0;
+      for (let i = 0; i < rows; i++) { const r = resid(i) - A[j] * Z[i][j]; num -= Z[i][j] * r; den += Z[i][j] * Z[i][j]; }
+      A[j] = den > 0 ? Math.max(0, num / den) : 0;
+    }
+  }
+  let ss = 0; for (let i = 0; i < rows; i++) ss += resid(i) ** 2;
+  return { a0, A, rms: Math.sqrt(ss / rows), resid };
 }
 
-// --- NNLS by coordinate descent on w (>= 0) with a free intercept a
-const rows = agents.length, k = cols.length;
-const X = agents.map(a => cols.map(c => a.bands[c.band][c.kind]));
-const y = agents.map(a => a.elo);
-const w = new Array(k).fill(0);
-let a0 = 0;
-function residual(i) { let r = y[i] - a0; for (let j = 0; j < k; j++) r += w[j] * X[i][j]; return r; }
-for (let it = 0; it < 20000; it++) {
-  let s = 0; for (let i = 0; i < rows; i++) s += residual(i) + a0; a0 = s / rows;   // intercept = mean(y + Xw)
-  for (let j = 0; j < k; j++) {
-    // minimise sum_i (y_i - a0 + sum_l w_l x_il)^2 over w_j alone, clamped at 0
-    let num = 0, den = 0;
-    for (let i = 0; i < rows; i++) {
-      const r = residual(i) - w[j] * X[i][j];   // residual with w_j removed
-      num -= X[i][j] * r; den += X[i][j] * X[i][j];
-    }
-    w[j] = den > 0 ? Math.max(0, num / den) : 0;
-  }
-}
-let ss = 0; for (let i = 0; i < rows; i++) ss += residual(i) ** 2;
-const rms = Math.sqrt(ss / rows);
+const K_LO = -12, K_HI = 12, K_STEP = 0.25;
+const grid = [];
+for (let k = K_LO; k <= K_HI + 1e-9; k += K_STEP) grid.push(k);
+let best = null, bestKs = null;
+const walk = (ks) => {
+  if (ks.length === kinds.length) { const f = fitFor(ks); if (!best || f.rms < best.rms) { best = f; bestKs = ks.slice(); } return; }
+  for (const k of grid) walk([...ks, k]);
+};
+walk([]);
+const { a0, A, rms } = best;
+const residual = best.resid;
+// weight of band i for kind j, in Elo per unit of the regressor
+const weight = (j, i) => A[j] * Math.exp(bestKs[j] * mids[i]);
 
 // --- display
 const bandName = b => `${agents[0].bands[b].lo.toFixed(1)}-${agents[0].bands[b].hi.toFixed(1)}`;
 const bandHdr = use.map(bandName);
-console.log(`agents: ${rows}  bands: ${use.length} of ${nb} (${agents[0].bands[use[0]].n} positions each)  regressors: ${k} (${use_})  intercept: ${a0.toFixed(0)}  rms residual: ${rms.toFixed(0)} Elo`);
-if (rows <= k + 1) console.log(`note: ${rows} agents for ${k + 1} parameters; the fit is underdetermined`);
+console.log(`agents: ${rows}  bands: ${use.length} of ${nb} (${agents[0].bands[use[0]].n} positions each)  curves: ${kinds.join(', ')}  parameters: ${1 + 2 * kinds.length}  intercept: ${a0.toFixed(0)}  rms residual: ${rms.toFixed(0)} Elo`);
 console.log('');
-for (const kind of ['mae', 'mse']) {
-  if (use_ !== 'both' && use_ !== kind) continue;
+for (const kind of kinds) {
   const dp = kind === 'mae' ? 4 : 5;
   console.log(`${kind} per band:`);
   console.log(`${'agent'.padEnd(28)} ${'elo'.padStart(5)} ${'games'.padStart(5)}  ${bandHdr.map(h => h.padStart(7)).join(' ')}   ${'all'.padStart(7)} ${'fit'.padStart(5)} ${'resid'.padStart(5)}`);
@@ -117,11 +132,11 @@ for (const kind of ['mae', 'mse']) {
   }
   console.log('');
 }
-// weights, all as Elo lost per 0.01 of the regressor, one row per band
-const kinds = use_ === 'both' ? ['mae', 'mse'] : [use_];
-console.log(`Elo lost per 0.01 of band ${kinds.join(' / ')}:`);
+// the curves: weight per band as Elo lost per 0.01 of the regressor
+console.log(`Elo lost per 0.01 of band ${kinds.join(' / ')}  (weight = A * exp(k * phase)):`);
 console.log(`  ${'band'.padEnd(7)} ${kinds.map(t => t.padStart(7)).join(' ')}`);
-for (const b of use) {
-  const cells = kinds.map(t => { const j = cols.findIndex(c => c.band === b && c.kind === t); return (w[j] * 0.01).toFixed(0).padStart(7); });
-  console.log(`  ${bandName(b).padEnd(7)} ${cells.join(' ')}`);
-}
+for (let i = 0; i < use.length; i++)
+  console.log(`  ${bandName(use[i]).padEnd(7)} ${kinds.map((t, j) => (weight(j, i) * 0.01).toFixed(0).padStart(7)).join(' ')}`);
+console.log(`  ${'k'.padEnd(7)} ${kinds.map((t, j) => bestKs[j].toFixed(2).padStart(7)).join(' ')}`);
+for (let j = 0; j < kinds.length; j++)
+  if (bestKs[j] <= K_LO || bestKs[j] >= K_HI) console.log(`  note: ${kinds[j]} k is at the grid bound [${K_LO}, ${K_HI}]`);
