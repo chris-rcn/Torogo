@@ -117,8 +117,9 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     critic's one-ply argmax (mover's view) instead of the actor's
 //                     sample; needs a critic                              (default 0)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
-//                     sampling — the softmax sample is the exploration; flat
-//                     0.5-0.9 at 100 ms, 0.8 best at 30 ms, 1 slightly worse (default 0.7)
+//                     sampling — the softmax sample is the exploration.  300 ms on
+//                     1000 positions: 0 -> 0.0149, 0.1 -> 0.0127, 0.2 -> 0.0132,
+//                     0.4 -> 0.0135: an occasional critic pick, not the default ply (default 0.1)
 //   TD_SIM_SEARCH_WIDTH  a searched ply values only the actor's top K legal points
 //                     (score incl. the prior); 0 = every legal point.  200 ms on 1000
 //                     positions: 4 -> 0.0169, 8 -> 0.0164, 16 -> 0.0150, 0 -> 0.0155;
@@ -167,7 +168,7 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
   const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
-  const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.7);
+  const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
   const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
