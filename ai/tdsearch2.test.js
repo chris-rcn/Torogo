@@ -292,7 +292,7 @@ function playRandom(g, rng, changed) {
 // ── Sim one-ply search: the pick is the argmax of the exact one-ply critic value ──
 {
   const N = 9, rng = makeRng(171);
-  const a = agent({ TD_SIM_SEARCH_MOVES: '2', TD_CRITIC_LAYERS: '1,4,9' });   // default priors on: nontrivial values
+  const a = agent({ TD_SIM_SEARCH_PLIES: '2', TD_CRITIC_LAYERS: '1,4,9' });   // default priors on: nontrivial values
   // A position with at least one capturing candidate, so both value paths run.
   let g = null;
   for (let attempt = 0; attempt < 50 && !g; attempt++) {

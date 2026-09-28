@@ -113,7 +113,7 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     the rest is the final result minus V             (default 0.8)
 //   TD_BASELINE       EMA decay of the return baseline, critic off only (default 0.9)
 //   TD_SIMS           cap on simulations per move; 0 = time budget only (default 0)
-//   TD_SIM_SEARCH_MOVES  on each of a sim's first N actor plies, the move may be the
+//   TD_SIM_SEARCH_PLIES  on each of a sim's first N actor plies, the move may be the
 //                     critic's one-ply argmax (mover's view) instead of the actor's
 //                     sample; needs a critic                              (default 0)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
@@ -161,14 +161,14 @@ function create(cfg) {
   const ADV_RATIO = cfg.float('TD_ADV_RATIO', 0.8);
   const BASE_EMA = cfg.float('TD_BASELINE', 0.9);
   const SIMS_CAP = cfg.int('TD_SIMS', 0);
-  const SEARCH_MOVES = cfg.int('TD_SIM_SEARCH_MOVES', 0);
+  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
   const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 1);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`tdsearch2: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
   const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
   if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('tdsearch2: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
-  if (SEARCH_MOVES > 0 && !CRITIC) throw new Error('tdsearch2: TD_SIM_SEARCH_MOVES needs a critic (TD_CRITIC_LAYERS)');
+  if (SEARCH_PLIES > 0 && !CRITIC) throw new Error('tdsearch2: TD_SIM_SEARCH_PLIES needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 4);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.5);
@@ -498,7 +498,7 @@ function create(cfg) {
       }
       let move;
       if (actorOn) {
-        move = (t < SEARCH_MOVES && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) ? searchMove(g, m, rng) : sample(g, m, rng);
+        move = (t < SEARCH_PLIES && (SEARCH_RATIO >= 1 || rng.random() < SEARCH_RATIO)) ? searchMove(g, m, rng) : sample(g, m, rng);
         exs.set(ex[m], o);
         if (act5) k5s.set(k5a, o);
         if (act9) k9s.set(k9a, o);
