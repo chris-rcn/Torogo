@@ -100,8 +100,8 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
-//   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
-//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
+//   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 999)
+//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 999)
 //   TD_ACTOR_TD_LR    actor step size on the TD term, V two plies on minus V (default 0.04)
 //   TD_ACTOR_TERM_LR  actor step size on the terminal term, the return minus V;
 //                     the only term with the critic off.  From-scratch ladder at
@@ -159,8 +159,8 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 35);
-  const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
-  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
+  const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 999);
+  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 999);
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
