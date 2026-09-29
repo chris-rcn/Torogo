@@ -11,6 +11,8 @@ const { BLACK, EMPTY, PASS } = Util.load('./game2.js', 'Game2');
 const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 const PPat = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
+const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
+const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 
 // dt-reinforce — decision-time REINFORCE: a policy learned during think time.
 //
@@ -93,6 +95,12 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     1 = ppat off, no model loaded                       (default 1)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
+//   FPOL_WEIGHT       root move influence: featurepol's logit times this is added
+//                     to the actor's score in the root argmax (offline knowledge
+//                     at the root only; the sims are untouched); 0 = off, no
+//                     model loaded                                        (default 0)
+//   FPOL_DATA         the featurepol model, loaded only when FPOL_WEIGHT != 0
+//                                                    (default ref/ref-fp2-data.js)
 //   LR                actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
@@ -163,6 +171,31 @@ function create(cfg) {
     ppatModel.ppatMinPhase = PPAT_MIN_PHASE;
   }
   let ppatState = null;
+
+  // Root move influence: featurepol's logit, weighted, added to the actor's
+  // score in the root argmax.  Offline knowledge at the root only; the sims
+  // and their learning are untouched.
+  const FPOL_WEIGHT = cfg.float('FPOL_WEIGHT', 0);
+  let fpWeights = null, fpState = null, fpScores = null, fpPt = null;
+  if (FPOL_WEIGHT !== 0) {
+    const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) : undefined;
+    fpWeights = FeaturePol.loadModel({ name: 'dt-reinforce', path: fpPath }).weights;
+  }
+  // Per-point featurepol logit at the root (0 where featurepol lists no
+  // move, i.e. illegal or true-eye points), or null when the influence is off.
+  function fpRootLogits(game) {
+    if (!fpWeights) return null;
+    if (!fpState || fpState.N !== game.N) {
+      fpState = { N: game.N, state: FeaturePol.createState(game.N, fpWeights.spec) };
+      fpScores = new Float64Array(area + 1); fpPt = new Float64Array(area);
+    }
+    const { state } = fpState;
+    FeaturePol.extractFeatures(game, state, fpWeights, fpWeights.spec.needsLadder ? game3FromGame2(game) : undefined);
+    const n = FeaturePol.scoreAll(state, fpWeights, fpScores);
+    fpPt.fill(0);
+    for (let i = 0; i < n; i++) fpPt[state.moves[i]] = fpScores[i];
+    return fpPt;
+  }
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
@@ -524,9 +557,11 @@ function create(cfg) {
     const rng = options.rng || makeRng();
     const { sims, longest, totalSteps } = runSims(game, budgetMs, rng);
 
-    // Play the actor's argmax over legal non-eye points.
+    // Play the argmax over legal non-eye points of the actor's score plus the
+    // weighted featurepol logit when the influence is on.
     const cells = game.cells;
     const m = game.current === BLACK ? 0 : 1;
+    const fp = fpRootLogits(game);
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(game) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // the root sees no last move
@@ -534,10 +569,10 @@ function create(cfg) {
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
       if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
-      const s = sc[m][p] + rng.random() * 1e-9;
+      const s = sc[m][p] + (fp ? FPOL_WEIGHT * fp[p] : 0) + rng.random() * 1e-9;
       if (s > bestS) { bestS = s; best = p; }
     }
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${FPOL_WEIGHT}` : ''}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
