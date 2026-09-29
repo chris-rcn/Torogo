@@ -27,7 +27,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 // the colourblind table are keyed by the side to move as well as the point.
 //
 // Actor: score(p) for an empty point p is the sum of up to two base tables,
-//   mover       (mover, p)                          ACTOR_MOVER_LAYER (default on)
+//   colour      (mover, p)                          ACTOR_COLOR_LAYER (default on)
 //   colourblind (p), shared by both sides: "my best move is my opponent's
 //               best move"; it learns from both sides' plies, twice the
 //               samples                             ACTOR_COLORBLIND_LAYER
@@ -122,7 +122,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     if each root were a new game (what evalmovedetails measures,
 //                     since its positions are never two plies apart); 0 = carry
 //                     them from move to move within a game               (default 0)
-//   ACTOR_MOVER_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
+//   ACTOR_COLOR_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
 //   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
 //                     least one of the two base tables must be on        (default 0)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
@@ -153,9 +153,9 @@ function create(cfg) {
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
   const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 0) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
-  const USE_M    = cfg.int('ACTOR_MOVER_LAYER', 1) !== 0;   // (mover, point) base table
+  const USE_M    = cfg.int('ACTOR_COLOR_LAYER', 1) !== 0;   // (mover, point) base table
   const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 0) !== 0;   // (point) base table, both sides
-  if (!USE_M && !USE_C) throw new Error('dt-reinforce: ACTOR_MOVER_LAYER and ACTOR_COLORBLIND_LAYER are both off');
+  if (!USE_M && !USE_C) throw new Error('dt-reinforce: ACTOR_COLOR_LAYER and ACTOR_COLORBLIND_LAYER are both off');
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TEMP', 1);
   const BASE_EMA = cfg.float('ACTOR_RETURN_EMA', 0.9);
