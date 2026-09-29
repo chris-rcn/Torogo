@@ -29,9 +29,14 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // it and learn the same gradient:
 //   phase   (mover, p, phase bucket of the sim's board)  TD_ACTOR_PHASE_BUCKETS
 //   root    (mover, p) on ply 0 of a sim only            TD_ACTOR_ROOT_LAYER
+//   local   (mover, p, p within one cell of the last SIM move)  TD_ACTOR_LOCAL_LAYER
+//           — sim moves only: ply 0 and the root argmax see no last move, so
+//           the root decision never depends on the game's last move, and at
+//           ply 0 the key would be the same in every sim anyway
 // and the policy is a softmax over the empty points.  A slice's key can
 // change mid-sim (a bucket edge crossed; ply 1 leaves the root), and then
-// every score is refreshed once.  The root slice can be zeroed at the start
+// every score is refreshed once; the local key moves with each sim move and
+// only the old and new last move's neighbours are recomputed.  The root slice can be zeroed at the start
 // of every getMove (TD_ACTOR_ROOT_RESET), so it holds only what this move's
 // sims say about this root.  (Pattern layers
 // over the 4 orthogonal neighbours and the 8 surrounding cells were tried and
@@ -86,6 +91,8 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
 //                     (and by the root argmax)                            (default 0)
 //   TD_ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
+//   TD_ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
+//                     move" (none at ply 0 and the root)                    (default 0)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
@@ -105,6 +112,7 @@ function create(cfg) {
   const PB       = cfg.int('TD_ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('TD_ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('TD_ACTOR_ROOT_RESET', 1) !== 0;
+  const USE_L    = cfg.int('TD_ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TD_TEMP', 1);
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
@@ -143,8 +151,10 @@ function create(cfg) {
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
   let w1 = null;                                // actor weights: [mover][p]
-  let wP = null, wR = null;                     // slice weights: phase [mover][p][bucket], root [mover][p]
-  let bs = null;                                // per-step phase bucket, for the update
+  let wP = null, wR = null, wL = null;          // slice weights: phase [mover][p][bucket], root [mover][p], local [mover][p][0|1]
+  let bs = null, lastAt = null;                 // per-step phase bucket and sim last move, for the update
+  let loc = null, curLast = PASS;               // local slice: per-point key (1 = within one cell of curLast), the sim's last move
+  let locMark = null;                           // scratch: the local points of one recorded step
   let sc = null, ex = null;                     // per-mover score / exp(score/T) over points
   const S = [0, 0];                             // per-mover Σ ex over allowed points
   let tree = null, TOP = 0;                     // per-mover Fenwick tree over ex (1-based); TOP = largest power of 2 <= area
@@ -163,6 +173,8 @@ function create(cfg) {
     w1 = new Float32Array(2 * area);
     wP = new Float32Array(PB > 0 ? 2 * area * PB : 0);
     wR = new Float32Array(USE_R ? 2 * area : 0);
+    wL = new Float32Array(USE_L ? 2 * area * 2 : 0);
+    loc = new Uint8Array(area); locMark = new Uint8Array(area);
     sc = [new Float64Array(area), new Float64Array(area)];
     ex = [new Float64Array(area), new Float64Array(area)];
     tree = [new Float64Array(area + 1), new Float64Array(area + 1)];
@@ -177,11 +189,12 @@ function create(cfg) {
     chosen = new Int32Array(maxSteps);
     fromActor = new Uint8Array(maxSteps);
     bs = new Uint8Array(maxSteps);
+    lastAt = new Int32Array(maxSteps);
     ppatState = ppatModel ? PPat.createState(N) : null;
   }
 
   function reset() {
-    w1.fill(0); wP.fill(0); wR.fill(0);
+    w1.fill(0); wP.fill(0); wR.fill(0); wL.fill(0);
     base[0] = base[1] = 0.5;
   }
 
@@ -194,7 +207,27 @@ function create(cfg) {
     let s = w1[mp];
     if (PB > 0) s += wP[mp * PB + curB];
     if (USE_R && atRoot) s += wR[mp];
+    if (USE_L) s += wL[mp * 2 + loc[p]];
     return s;
+  }
+
+  // Local slice: make `move` the sim's last move.  The old last move's 8
+  // neighbours lose the key, the new one's gain it, and those points are
+  // recomputed (deduped; PASS has no neighbours).
+  function setLast(cells, nbr, dnbr, move) {
+    let n = 0;
+    for (const q of [curLast, move]) {
+      if (q === PASS) continue;
+      const b = q * 4, v = q === move ? 1 : 0;
+      for (let d = 0; d < 4; d++) {
+        const a = nbr[b + d], c = dnbr[b + d];
+        loc[a] = v; loc[c] = v;
+        if (!mark[a]) { mark[a] = 1; list[n++] = a; }
+        if (!mark[c]) { mark[c] = 1; list[n++] = c; }
+      }
+    }
+    curLast = move;
+    for (let i = 0; i < n; i++) { const p = list[i]; mark[p] = 0; recompute(cells, p); }
   }
 
   // ── Fenwick tree over ex[m] ──
@@ -333,7 +366,10 @@ function create(cfg) {
     const cells = g.cells;
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(g) : 0;
+    if (USE_L) { loc.fill(0); curLast = PASS; }   // ply 0: no last move
     recomputeAll(cells);
+    const nbr = g._nbr, dnbr = g._dnbr;
+    nbrT = nbr; dnbrT = dnbr;
     let t = 0, actorSteps = 0;
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
@@ -350,7 +386,7 @@ function create(cfg) {
         move = sample(g, m, rng);
         exs.set(ex[m], o);
         Ss[t] = S[m];
-        bs[t] = curB;
+        bs[t] = curB; lastAt[t] = curLast;
         actorSteps++;
       } else {
         move = truncActive || !ppatModel ? g.randomLegalMove(rng) : PPat.ppatMove(g, ppatState, ppatModel, rng);
@@ -369,6 +405,7 @@ function create(cfg) {
       // A ko point turns legal again once any other move is played; its
       // neighbourhood did not change, so lift its exclusion explicitly.
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, prevKo);
+      if (USE_L) setLast(cells, nbr, dnbr, move);
       t++;
     }
     lastActorSteps = actorSteps;
@@ -393,6 +430,9 @@ function create(cfg) {
     const invS = 1 / Ss[t];
     const k = TERM_LR * adv / TEMP;
     const b = bs[t], root = USE_R && t === 0;
+    // The local key at this step: the 8 neighbours of the step's last move.
+    const L = USE_L ? lastAt[t] : PASS;
+    if (L !== PASS) { const bb = L * 4; for (let d = 0; d < 4; d++) { locMark[nbrT[bb + d]] = 1; locMark[dnbrT[bb + d]] = 1; } }
     for (let p = 0; p < area; p++) {
       const v = e[p];
       if (v <= 0) continue;
@@ -401,13 +441,16 @@ function create(cfg) {
       w1[mp] += k * gr;
       if (PB > 0) wP[mp * PB + b] += k * gr;
       if (root) wR[mp] += k * gr;
+      if (USE_L) wL[mp * 2 + locMark[p]] += k * gr;
     }
+    if (L !== PASS) { const bb = L * 4; for (let d = 0; d < 4; d++) { locMark[nbrT[bb + d]] = 0; locMark[dnbrT[bb + d]] = 0; } }
   }
 
   // Actor update over the sim's records, in step order.  z = the return,
   // P(BLACK wins); the mover's view is z for BLACK and 1 − z for WHITE, and
   // the advantage is that minus the mover's baseline as it stood before this
   // sim (the baseline then moves toward the return).
+  let nbrT = null, dnbrT = null;                // the board's neighbour tables, kept for the update
   function update(steps, z) {
     const adv = [z - base[0], (1 - z) - base[1]];
     base[0] += (1 - BASE_EMA) * (z - base[0]);
@@ -464,6 +507,7 @@ function create(cfg) {
     const m = game.current === BLACK ? 0 : 1;
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(game) : 0;
+    if (USE_L) { loc.fill(0); curLast = PASS; }   // the root sees no last move
     recomputeAll(cells);                  // root scores
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
@@ -480,7 +524,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             sc, ex, S, base, w1, wP, wR, area };
+             setLast, chosen: () => chosen, sc, ex, S, base, w1, wP, wR, wL, loc, area };
   }
 
   return { getMove, valueB, _internals };
