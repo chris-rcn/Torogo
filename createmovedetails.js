@@ -3,13 +3,15 @@
 
 // Generate per-position move-value data by self-play.
 //
-// Each self-play game is played to completion by the POSITION agent,
-// recording its rootWinRatio at every position.  One eligible position — win ratio within
-// [0.3, 0.7] and board fullness (phase) below 0.8 — is then revisited for
-// deep analysis.  Phase bands (--phase-buckets N equal-width bands of [0,1])
-// are kept level: the game's eligible positions are grouped by band, the
-// band with the fewest samples so far in this run is taken (ties at random),
-// and one of its positions is drawn at random.  Then every legal move
+// Each self-play game is played to completion by the POSITION agent, which
+// only has to return moves.  One position with board fullness (phase) below
+// 0.8 is then drawn for deep analysis and checked for contestedness by the
+// VALUE agent: its win ratio must be within [0.3, 0.7], else the position is
+// discarded and another drawn (a few tries per game).  Phase bands
+// (--phase-buckets N equal-width bands of [0,1]) are kept level: the game's
+// positions are grouped by band, the band with the fewest samples so far in
+// this run is taken (ties at random), and one of its positions is drawn at
+// random.  Then every legal move
 // is enumerated, the game is cloned, the move is made, then the VALUE
 // agent's getMove is called with the full budget.  The rootWinRatio is flipped to the
 // original player's perspective and recorded as kwr (× 1000).  One position
@@ -40,8 +42,9 @@ const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['position-agent', 
 if (opts.help || !opts['position-agent'] || !opts['value-agent']) {
   console.log(`Usage: node createmovedetails.js --position-agent <name> --value-agent <name> [--budget <ms>] [--size <n>] [--phase-buckets <n>] > out.md
   --position-agent  ai/<name>.js that plays the self-play games the positions come from (required)
-  --value-agent     ai/<name>.js that labels every legal move of a chosen position (required)
-Both must return rootWinRatio.  A fixed-playout agent ignores --budget; PLAYOUTS in the env applies to both.`);
+  --value-agent     ai/<name>.js that judges a drawn position's contestedness and labels
+                    every legal move of it; must return rootWinRatio (required)
+A fixed-playout agent ignores --budget; PLAYOUTS in the env applies to both.`);
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -117,36 +120,44 @@ while (true) {
   const N = boardSize;
 
   // Play a full self-play game, recording each move and which positions
-  // (identified by the number of moves played before them) were eligible.
+  // (identified by the number of moves played before them) fall in each band.
   const game     = new Game2(boardSize, true);
   const moves    = [];
-  const eligible = Array.from({ length: phaseBuckets }, () => []);   // per band: eligible move counts
+  const inBand = Array.from({ length: phaseBuckets }, () => []);   // per band: move counts of its positions
 
   while (!game.gameOver) {
     const advancingMove = posAgent(game, budget);
-    if (advancingMove.rootWinRatio === undefined) {
-      console.error('position agent did not return rootWinRatio');
-      process.exit(1);
-    }
     const phase = 1 - game.emptyCount / (N * N);
-    if (Math.abs(advancingMove.rootWinRatio - 0.5) <= WR_DEV && phase < PHASE_MAX) {
-      eligible[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
-    }
+    if (phase < PHASE_MAX) inBand[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
     moves.push(advancingMove.move);
     game.play(advancingMove.move);
   }
 
-  // The band with the fewest samples so far among those this game offers
-  // (ties at random), then one of its positions at random.
-  let band = -1, fewest = Infinity, ties = 0;
-  for (let b = 0; b < phaseBuckets; b++) {
-    if (eligible[b].length === 0) continue;
-    if (bandCount[b] < fewest) { fewest = bandCount[b]; band = b; ties = 1; }
-    else if (bandCount[b] === fewest && Math.random() * ++ties < 1) band = b;
+  // Draw: the band with the fewest samples so far among those this game
+  // still offers (ties at random), then one of its positions at random, and
+  // keep it only if the value agent finds it contested; otherwise drop it
+  // from the pool and draw again, up to DRAW_TRIES per game.
+  const DRAW_TRIES = 5;
+  let k = -1, band = -1;
+  for (let attempt = 0; attempt < DRAW_TRIES && k < 0; attempt++) {
+    let fewest = Infinity, ties = 0; band = -1;
+    for (let b = 0; b < phaseBuckets; b++) {
+      if (inBand[b].length === 0) continue;
+      if (bandCount[b] < fewest) { fewest = bandCount[b]; band = b; ties = 1; }
+      else if (bandCount[b] === fewest && Math.random() * ++ties < 1) band = b;
+    }
+    if (band < 0) break;
+    const i = Math.floor(Math.random() * inBand[band].length);
+    const cand = inBand[band][i];
+    inBand[band].splice(i, 1);
+    const probe = new Game2(boardSize, true);
+    for (let j = 0; j < cand; j++) probe.play(moves[j]);
+    const v = valAgent(probe, budget);
+    if (v.rootWinRatio === undefined) { console.error('value agent did not return rootWinRatio'); process.exit(1); }
+    if (Math.abs(v.rootWinRatio - 0.5) <= WR_DEV) k = cand;
   }
-  if (band < 0) continue;
+  if (k < 0) continue;
   bandCount[band]++;
-  const k = eligible[band][Math.floor(Math.random() * eligible[band].length)];
   const position = new Game2(boardSize, true);
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
