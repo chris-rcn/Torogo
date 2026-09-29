@@ -107,7 +107,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     phase 1, linear in the root's fullness between; equal
 //                     values give a flat weight; both 0 = off, no model
 //                     loaded                                        (defaults 0, 0)
-//   FPOL_DATA         the featurepol model, loaded only when a weight is non-zero
+//   FPOL_TOP_K        root move filter: the root argmax is taken over featurepol's
+//                     top K moves only (the sims are untouched); 0 = off (default 0)
+//   FPOL_DATA         the featurepol model, loaded only when a weight or FPOL_TOP_K
+//                     is non-zero
 //                                              (default ref/ref-fp-heavy-data.js)
 //   FPOL_RANK_TOPN    the model's vpat<n> ranking term is computed over its top N
 //                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
@@ -198,8 +201,9 @@ function create(cfg) {
   // and their learning are untouched.
   const FPOL_W0 = cfg.float('FPOL_WEIGHT_0', 0), FPOL_W1 = cfg.float('FPOL_WEIGHT_1', 0);
   const fpolWeight = (phase) => FPOL_W0 + (FPOL_W1 - FPOL_W0) * phase;
-  let fpWeights = null, fpState = null, fpScores = null, fpPt = null;
-  if (FPOL_W0 !== 0 || FPOL_W1 !== 0) {
+  const FPOL_TOP_K = cfg.int('FPOL_TOP_K', 0);
+  let fpWeights = null, fpState = null, fpScores = null, fpPt = null, fpAllow = null;
+  if (FPOL_W0 !== 0 || FPOL_W1 !== 0 || FPOL_TOP_K > 0) {
     const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
     fpWeights = FeaturePol.loadModel({ name: 'dt-reinforce', path: fpPath }).weights;
     const rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
@@ -207,17 +211,24 @@ function create(cfg) {
   }
   // Per-point featurepol logit at the root (0 where featurepol lists no
   // move, i.e. illegal or true-eye points), or null when the influence is off.
+  // With FPOL_TOP_K, fpAllow marks featurepol's top K points (the root
+  // argmax's candidates).
   function fpRootLogits(game) {
     if (!fpWeights) return null;
     if (!fpState || fpState.N !== game.N) {
       fpState = { N: game.N, state: FeaturePol.createState(game.N, fpWeights.spec) };
-      fpScores = new Float64Array(area + 1); fpPt = new Float64Array(area);
+      fpScores = new Float64Array(area + 1); fpPt = new Float64Array(area); fpAllow = new Uint8Array(area);
     }
     const { state } = fpState;
     FeaturePol.extractFeatures(game, state, fpWeights, fpWeights.spec.needsLadder ? game3FromGame2(game) : undefined);
     const n = FeaturePol.scoreAll(state, fpWeights, fpScores);
     fpPt.fill(0);
     for (let i = 0; i < n; i++) fpPt[state.moves[i]] = fpScores[i];
+    if (FPOL_TOP_K > 0) {
+      const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => fpScores[b] - fpScores[a]);
+      fpAllow.fill(0);
+      for (let j = 0; j < Math.min(FPOL_TOP_K, n); j++) fpAllow[state.moves[order[j]]] = 1;
+    }
     return fpPt;
   }
 
@@ -623,11 +634,12 @@ function create(cfg) {
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
       if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
+      if (FPOL_TOP_K > 0 && !fpAllow[p]) continue;
       const s = sc[m][p] + (fp ? fpW * fp[p] : 0) + rng.random() * 1e-9;
       if (s > bestS) { bestS = s; best = p; }
     }
     recordAfter(game, best);
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${fpW.toFixed(3)}` : ''}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${fpW.toFixed(3)}` : ''}${FPOL_TOP_K > 0 ? ` fpK=${FPOL_TOP_K}` : ''}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
