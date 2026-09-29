@@ -67,7 +67,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // while the actor depth and delta are swept.
 //
 // ── Factory ──
-// create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
+// create(cfg) -> { getMove, valueB }.  cfg is a Util.makeCfg reader (P1_/P2_
+// prefixes in selfplay).  valueB(game, options) -> P(BLACK wins) is the mean
+// return of the same sims getMove would run from the position (the actor
+// learning as it goes; truncation, playouts and budget per the settings),
+// the value oracle gen-agent-evals labels with.
 //
 // Config:
 //   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the playout tail (default 999)
@@ -411,28 +415,49 @@ function create(cfg) {
     for (let t = 0; t < steps; t++) actorUpdate(t, movers[t], adv[movers[t]]);
   }
 
-  function getMove(game, budgetMs = 1000, options = {}) {
-    if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
-      return { move: PASS, info: 'end the game; ahead' };
-    }
+  // Prepare for a decision at `game` (new-game detection, the root slice's
+  // reset, this move's truncation) and run its sims: PLAYOUTS of them, or as
+  // many as budgetMs allows.  Returns the sims' count, step totals and the
+  // sum of their returns.
+  function runSims(game, budgetMs, rng) {
     if (area !== game.N * game.N) { setup(game.N); reset(); }
     const d = game.moveCount - lastMoveCount;
     if (d < 0 || d > 2) reset();           // a new game (or an unexpected jump)
     lastMoveCount = game.moveCount;
-
-    const rng = options.rng || makeRng();
     if (USE_R && ROOT_RESET) wR.fill(0);   // the root slice holds only this move's sims
     truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
     truncActive = TRUNC_DELTA > 0 && game.phase() + truncPly / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
-    let sims = 0, longest = 0, totalSteps = 0;
+    let sims = 0, longest = 0, totalSteps = 0, sumZ = 0;
     while (true) {
       if (PLAYOUTS_CAP > 0 ? sims >= PLAYOUTS_CAP : Date.now() - tStart >= budgetMs) break;
       const steps = simulate(game, rng);
       if (steps > longest) longest = steps;
       totalSteps += steps;
+      sumZ += lastReturn;
       sims++;
     }
+    return { sims, longest, totalSteps, sumZ };
+  }
+
+  // Value oracle: P(BLACK wins) as the mean return of this position's sims,
+  // under whatever truncation the settings give this position.  A terminal
+  // position is scored exactly.
+  function valueB(game, options = {}) {
+    const g = game.cells ? game : game.toGame2();
+    if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
+    const budgetMs = options.budgetMs > 0 ? options.budgetMs : 1000;
+    const { sims, sumZ } = runSims(g, budgetMs, options.rng || makeRng());
+    if (sims === 0) throw new Error('dt-reinforce: valueB ran no sims (budget too small)');
+    return sumZ / sims;
+  }
+
+  function getMove(game, budgetMs = 1000, options = {}) {
+    if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
+      return { move: PASS, info: 'end the game; ahead' };
+    }
+    const rng = options.rng || makeRng();
+    const { sims, longest, totalSteps } = runSims(game, budgetMs, rng);
 
     // Play the actor's argmax over legal non-eye points.
     const cells = game.cells;
@@ -458,12 +483,12 @@ function create(cfg) {
              sc, ex, S, base, w1, wP, wR, area };
   }
 
-  return { getMove, _internals };
+  return { getMove, valueB, _internals };
 }
 
 let _default = null;
 function _def() { return _default || (_default = create(Util.makeCfg())); }
-if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
-else window.getMove = (g, b, o) => _def().getMove(g, b, o);
+if (typeof module !== 'undefined') module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), valueB: (g, o) => _def().valueB(g, o) };
+else { window.getMove = (g, b, o) => _def().getMove(g, b, o); window.valueB = (g, o) => _def().valueB(g, o); }
 
 })();
