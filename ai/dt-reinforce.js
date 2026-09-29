@@ -37,7 +37,9 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // Everything is maintained incrementally: a changed cell alters only its own
 // score, and its 8 neighbours only their legality or eye status.
 // Sampling rejects illegal and true-eye points lazily (their weight is zeroed
-// until their neighbourhood changes).
+// until their neighbourhood changes).  Each mover's weights also live in a
+// Fenwick (binary indexed) tree of prefix sums, so a draw walks log2(area)
+// nodes instead of scanning the board, and a weight change updates as many.
 //
 // Learning: REINFORCE at sim end (it needs the return), in step order over the
 // plies the actor played (playout-tail moves carry no gradient), with the step
@@ -114,6 +116,7 @@ function create(cfg) {
   let w1 = null;                                // actor weights: [mover][p]
   let sc = null, ex = null;                     // per-mover score / exp(score/T) over points
   const S = [0, 0];                             // per-mover Σ ex over allowed points
+  let tree = null, TOP = 0;                     // per-mover Fenwick tree over ex (1-based); TOP = largest power of 2 <= area
   let mark = null, list = null;                 // dedup scratch for affected points
   let changed = null;                           // cells altered by a move (stone + captures)
   // Per-step records for the actor's update at sim end.
@@ -129,6 +132,8 @@ function create(cfg) {
     w1 = new Float32Array(2 * area);
     sc = [new Float64Array(area), new Float64Array(area)];
     ex = [new Float64Array(area), new Float64Array(area)];
+    tree = [new Float64Array(area + 1), new Float64Array(area + 1)];
+    TOP = 1; while (TOP * 2 <= area) TOP *= 2;
     mark = new Uint8Array(area);
     list = new Int32Array(area);
     changed = new Int32Array(area + 1);
@@ -149,24 +154,71 @@ function create(cfg) {
   // Actor score for mover m at p.
   function score(m, p) { return w1[m * area + p]; }
 
-  // Recompute p: both movers' actor score/ex (S kept in step; skipped in the
-  // playout tail, where the scores are unused).
+  // ── Fenwick tree over ex[m] ──
+  // Add d to point p's weight in mover m's tree.
+  function treeAdd(m, p, d) {
+    const t = tree[m];
+    for (let i = p + 1; i <= area; i += i & -i) t[i] += d;
+  }
+  // Build mover m's tree from ex[m] in O(area).
+  function treeBuild(m) {
+    const t = tree[m], e = ex[m];
+    for (let i = 1; i <= area; i++) t[i] = e[i - 1];
+    for (let i = 1; i <= area; i++) { const j = i + (i & -i); if (j <= area) t[j] += t[i]; }
+  }
+  // Total weight in mover m's tree (its own arithmetic, so a draw with u
+  // below it lands inside the tree).
+  function treeTotal(m) {
+    const t = tree[m];
+    let s = 0;
+    for (let i = area; i > 0; i -= i & -i) s += t[i];
+    return s;
+  }
+  // The point whose prefix range holds u: the largest 0-based p with
+  // prefix(p) <= u, i.e. prefix(p) <= u < prefix(p + 1).
+  function treeDraw(m, u) {
+    const t = tree[m];
+    let pos = 0;
+    for (let bit = TOP; bit > 0; bit >>= 1) {
+      const nxt = pos + bit;
+      if (nxt <= area && t[nxt] <= u) { pos = nxt; u -= t[nxt]; }
+    }
+    return pos;
+  }
+
+  // Set point p's weight for mover m, keeping S and the tree in step.
+  function setWeight(m, p, e) {
+    const old = ex[m][p];
+    if (e === old) return;
+    ex[m][p] = e;
+    S[m] += e - old;
+    treeAdd(m, p, e - old);
+  }
+
+  // Recompute p: both movers' actor score/ex (S and the trees kept in step;
+  // skipped in the playout tail, where the scores are unused).
   function recompute(cells, p) {
     const v = cells[p];
     if (actorOn) {
       for (let m = 0; m < 2; m++) {
-        const old = ex[m][p];
         let e = 0;
         if (v === EMPTY) { const s = score(m, p); sc[m][p] = s; e = Math.exp(s / TEMP); }
-        ex[m][p] = e;
-        S[m] += e - old;
+        setWeight(m, p, e);
       }
     }
   }
 
   function recomputeAll(cells) {
-    ex[0].fill(0); ex[1].fill(0); S[0] = S[1] = 0;
-    for (let p = 0; p < area; p++) recompute(cells, p);
+    S[0] = S[1] = 0;
+    for (let m = 0; m < 2; m++) {
+      const e = ex[m], scm = sc[m];
+      for (let p = 0; p < area; p++) {
+        let v = 0;
+        if (cells[p] === EMPTY) { const s = score(m, p); scm[p] = s; v = Math.exp(s / TEMP); }
+        e[p] = v; S[m] += v;
+      }
+      treeBuild(m);
+    }
   }
 
   // Lift a lazy exclusion at p (sample() zeroes illegal and true-eye points)
@@ -176,8 +228,7 @@ function create(cfg) {
     if (!actorOn || cells[p] !== EMPTY) return;
     for (let m = 0; m < 2; m++) {
       if (ex[m][p] > 0) continue;
-      const e = Math.exp(sc[m][p] / TEMP);
-      ex[m][p] = e; S[m] += e;
+      setWeight(m, p, Math.exp(sc[m][p] / TEMP));
     }
   }
 
@@ -205,16 +256,23 @@ function create(cfg) {
     }
   }
 
-  // Sample a point for mover m from ex[m] (softmax), rejecting illegal and
-  // true-eye points by zeroing them.  PASS when nothing is left.
+  // Sample a point for mover m from ex[m] (softmax) through its tree,
+  // rejecting illegal and true-eye points by zeroing them.  PASS when nothing
+  // is left.  A draw can land on a zero-weight point only through rounding in
+  // the tree's node sums; the next positive weight is taken.
   function sample(g, m, rng) {
     const e = ex[m];
     while (S[m] > 1e-300) {
-      let u = rng.random() * S[m], p = -1;
-      for (let i = 0; i < area; i++) { const v = e[i]; if (v > 0) { p = i; u -= v; if (u < 0) break; } }
-      if (p < 0) break;
+      const total = treeTotal(m);
+      if (!(total > 0)) break;
+      let p = treeDraw(m, rng.random() * total);
+      if (e[p] <= 0) {
+        let q = p + 1; while (q < area && e[q] <= 0) q++;
+        if (q >= area) { q = 0; while (q < p && e[q] <= 0) q++; if (q >= p) break; }
+        p = q;
+      }
       if (g.isLegal(p) && !g.isTrueEye(p)) return p;
-      S[m] -= e[p]; e[p] = 0;
+      setWeight(m, p, 0);
     }
     S[m] = 0;
     return PASS;
