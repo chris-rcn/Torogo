@@ -57,7 +57,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //
 // Learning: REINFORCE at sim end (it needs the return), in step order over the
 // plies the actor played (playout-tail moves carry no gradient), with the step
-// TD_ACTOR_TERM_LR·(R − b_m) in the mover's view, where R is the sim's return
+// TD_LR·(R − b_m) in the mover's view, where R is the sim's return
 // and b_m a per-mover EMA of returns as baseline.  Its per-step records are the
 // sampled-from distribution and the point codes.
 //
@@ -90,7 +90,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     1 = ppat off, no model loaded                       (default 1)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
-//   TD_ACTOR_TERM_LR  actor step size on the return minus the baseline.  Ladder at
+//   TD_LR             actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   TD_ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
 //                     many equal-width buckets of [0,1]; 0 = off           (default 0)
@@ -119,7 +119,7 @@ function create(cfg) {
 
   const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 999);
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
-  const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.002);
+  const TERM_LR  = cfg.float('TD_LR', 0.002);
   const PB       = cfg.int('TD_ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('TD_ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('TD_ACTOR_ROOT_RESET', 1) !== 0;
