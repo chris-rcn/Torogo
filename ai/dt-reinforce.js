@@ -107,10 +107,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     phase 1, linear in the root's fullness between; equal
 //                     values give a flat weight; both 0 = off, no model
 //                     loaded                                        (defaults 0, 0)
-//   FPOL_TOP_K        root move filter: the root argmax is taken over featurepol's
-//                     top K moves only (the sims are untouched); 0 = off (default 0)
-//   FPOL_DATA         the featurepol model, loaded only when a weight or FPOL_TOP_K
-//                     is non-zero
+//   ROOT_MOVE_FILTER  K: the root argmax is taken over featurepol's top K moves
+//                     only (the sims are untouched); 0 = off           (default 0)
+//   FPOL_DATA         the featurepol model, loaded only when a weight or
+//                     ROOT_MOVE_FILTER is non-zero
 //                                              (default ref/ref-fp-heavy-data.js)
 //   FPOL_RANK_TOPN    the model's vpat<n> ranking term is computed over its top N
 //                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
@@ -201,7 +201,7 @@ function create(cfg) {
   // and their learning are untouched.
   const FPOL_W0 = cfg.float('FPOL_WEIGHT_0', 0), FPOL_W1 = cfg.float('FPOL_WEIGHT_1', 0);
   const fpolWeight = (phase) => FPOL_W0 + (FPOL_W1 - FPOL_W0) * phase;
-  const FPOL_TOP_K = cfg.int('FPOL_TOP_K', 0);
+  const FPOL_TOP_K = cfg.int('ROOT_MOVE_FILTER', 0);
   let fpWeights = null, fpState = null, fpScores = null, fpPt = null, fpAllow = null;
   if (FPOL_W0 !== 0 || FPOL_W1 !== 0 || FPOL_TOP_K > 0) {
     const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
@@ -211,7 +211,7 @@ function create(cfg) {
   }
   // Per-point featurepol logit at the root (0 where featurepol lists no
   // move, i.e. illegal or true-eye points), or null when the influence is off.
-  // With FPOL_TOP_K, fpAllow marks featurepol's top K points (the root
+  // With ROOT_MOVE_FILTER, fpAllow marks featurepol's top K points (the root
   // argmax's candidates).
   function fpRootLogits(game) {
     if (!fpWeights) return null;
