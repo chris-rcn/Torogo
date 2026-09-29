@@ -3,15 +3,15 @@
 
 // Generate per-position move-value data by self-play.
 //
-// Each self-play game is played to completion, recording the agent's
-// rootWinRatio at every position.  One eligible position — win ratio within
+// Each self-play game is played to completion by the POSITION agent,
+// recording its rootWinRatio at every position.  One eligible position — win ratio within
 // [0.3, 0.7] and board fullness (phase) below 0.8 — is then revisited for
 // deep analysis.  Phase bands (--phase-buckets N equal-width bands of [0,1])
 // are kept level: the game's eligible positions are grouped by band, the
 // band with the fewest samples so far in this run is taken (ties at random),
 // and one of its positions is drawn at random.  Then every legal move
-// is enumerated, the game is cloned, the move is made, then the agent's
-// getMove is called with the full budget.  The rootWinRatio is flipped to the
+// is enumerated, the game is cloned, the move is made, then the VALUE
+// agent's getMove is called with the full budget.  The rootWinRatio is flipped to the
 // original player's perspective and recorded as kwr (× 1000).  One position
 // per game keeps the samples independent.  Games with no eligible position
 // emit nothing.
@@ -23,7 +23,8 @@
 // once, each to its own file; the files concatenate.
 //
 // Usage:
-//   node createmovedetails.js [--agent prod] [--budget 2000] [--size 13]
+//   node createmovedetails.js --position-agent <name> --value-agent <name>
+//                             [--budget 2000] [--size 13]
 //                             [--phase-buckets 10] > out/movedetails-<name>.md
 //
 //   --phase-buckets  equal-width phase bands kept level (default 10)
@@ -34,14 +35,17 @@ const { Game2, PASS, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'size', 'phase-buckets']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['position-agent', 'value-agent', 'budget', 'size', 'phase-buckets']);
 
-if (opts.help) {
-  console.log('Usage: node createmovedetails.js [--agent <name>] [--budget <ms>] [--size <n>] [--phase-buckets <n>] > out.md');
-  process.exit(0);
+if (opts.help || !opts['position-agent'] || !opts['value-agent']) {
+  console.log(`Usage: node createmovedetails.js --position-agent <name> --value-agent <name> [--budget <ms>] [--size <n>] [--phase-buckets <n>] > out.md
+  --position-agent  ai/<name>.js that plays the self-play games the positions come from (required)
+  --value-agent     ai/<name>.js that labels every legal move of a chosen position (required)
+Both must return rootWinRatio.  A fixed-playout agent ignores --budget; PLAYOUTS in the env applies to both.`);
+  process.exit(opts.help ? 0 : 1);
 }
 
-const agentName = opts.agent || 'prod';
+const posAgentName = opts['position-agent'], valAgentName = opts['value-agent'];
 const budget    = parseInt(opts.budget || '1', 10);
 const boardSize = parseInt(opts.size   || '13',   10);
 const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, if set (overrides budget)
@@ -54,11 +58,14 @@ if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); p
 // stdout is the data stream.  Agents print their load banners with
 // console.log, so from here on console.log goes to stderr with the status.
 console.log = console.error;
-const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
 // create(cfg)-style agents (phase-mux, the puct family) instantiate with a
 // plain env reader; bare { getMove } modules are used directly.
-const agent = (typeof _agentMod.create === 'function'
-    ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
+function loadAgent(name) {
+  const mod = require(path.join(__dirname, 'ai', name + '.js'));
+  return (typeof mod.create === 'function' ? mod.create(Util.makeCfg(null)) : mod).getMove;
+}
+const posAgent = loadAgent(posAgentName);
+const valAgent = posAgentName === valAgentName ? posAgent : loadAgent(valAgentName);
 
 // A position is eligible for analysis only when |win ratio − 0.5| is within
 // this, keeping only contested positions in the dataset.
@@ -79,9 +86,9 @@ function legalMoves(game2) {
   return moves;
 }
 
-process.stdout.write(`# createmovedetails.js  agent=${agentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  phase-buckets=${phaseBuckets}\n`);
+process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  phase-buckets=${phaseBuckets}\n`);
 
-console.error(`agent=${agentName}  size=${boardSize}  budget=${budget}ms`);
+console.error(`position-agent=${posAgentName}  value-agent=${valAgentName}  size=${boardSize}  budget=${budget}ms`);
 console.error();
 console.error([
   'pos'    .padStart(5),
@@ -116,9 +123,9 @@ while (true) {
   const eligible = Array.from({ length: phaseBuckets }, () => []);   // per band: eligible move counts
 
   while (!game.gameOver) {
-    const advancingMove = agent(game, budget);
+    const advancingMove = posAgent(game, budget);
     if (advancingMove.rootWinRatio === undefined) {
-      console.error('agent did not return rootWinRatio');
+      console.error('position agent did not return rootWinRatio');
       process.exit(1);
     }
     const phase = 1 - game.emptyCount / (N * N);
@@ -154,9 +161,9 @@ while (true) {
       continue;
     }
 
-    const oppResponseMove = agent(clone, budget);
+    const oppResponseMove = valAgent(clone, budget);
     if (oppResponseMove.rootWinRatio === undefined) {
-      console.error('agent did not return rootWinRatio');
+      console.error('value agent did not return rootWinRatio');
       process.exit(1);
     }
     const wr = 1 - oppResponseMove.rootWinRatio;
