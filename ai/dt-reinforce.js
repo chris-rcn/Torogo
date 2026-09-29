@@ -27,12 +27,13 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // Actor: score(p) for an empty point p is one weight per (mover, p), and the
 // policy is a softmax over the empty points.  (Pattern layers over the 4
 // orthogonal neighbours and the 8 surrounding cells were tried and removed:
-// paired runs at 2 s showed no gain from either.)  The actor plays only
-// the first TD_ACTOR_DEPTH plies of a sim; the rest is the standard playout
-// (uniform below PPAT_MIN_PHASE, the ppat policy above it).  Silver et al.
-// switch to a default policy after ~6 plies, but here the actor's own moves
-// are its training data: mdMae improved monotonically out to ~50 plies and
-// plateaued 50-100, with unlimited slightly worse (2026-09-27).
+// paired runs at 2 s showed no gain from either.)  The actor plays the whole
+// sim by default (TD_ACTOR_DEPTH 999); with a smaller depth the rest is a
+// playout tail, uniform random below PPAT_MIN_PHASE and the ppat policy
+// above it, and PPAT_MIN_PHASE defaults to 1 (ppat off: at 100 ms on 776
+// positions it made no difference, 2026-09-28).  Silver et al. switch to a
+// default policy after ~6 plies, but here the actor's own moves are its
+// training data.
 //
 // Everything is maintained incrementally: a changed cell alters only its own
 // score, and its 8 neighbours only their legality or eye status.
@@ -61,10 +62,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the standard playout (default 35)
-//   PPAT_DATA         ppat weight file for the playout tail
+//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the playout tail (default 999)
+//   PPAT_MIN_PHASE    tail moves are uniform below this board fullness, ppat above;
+//                     1 = ppat off, no model loaded                       (default 1)
+//   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
-//   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_ACTOR_TERM_LR  actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
@@ -80,7 +82,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 35);
+  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 999);
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.002);
   const TEMP     = cfg.float('TD_TEMP', 1);
@@ -101,14 +103,20 @@ function create(cfg) {
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
 
-  // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
-  const ppatPath = _isNode
-    ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
-    : null;
-  const ppatModel = _isNode ? PPat.loadWeights(ppatPath)
-                            : PPat.loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
-  if (!ppatModel) throw new Error(`dt-reinforce: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
-  ppatModel.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  // Playout tail: uniform random below PPAT_MIN_PHASE, the ppat policy above.
+  // The ppat model is loaded only if it can ever play (min phase < 1), and
+  // then its absence is a hard failure, not a fallback.
+  const PPAT_MIN_PHASE = cfg.float('PPAT_MIN_PHASE', 1);
+  let ppatModel = null;
+  if (PPAT_MIN_PHASE < 1) {
+    const ppatPath = _isNode
+      ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
+      : null;
+    ppatModel = _isNode ? PPat.loadWeights(ppatPath)
+                        : PPat.loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
+    if (!ppatModel) throw new Error(`dt-reinforce: cannot load ppat weights from ${_isNode ? ppatPath : 'window.PPATWeights'}`);
+    ppatModel.ppatMinPhase = PPAT_MIN_PHASE;
+  }
   let ppatState = null;
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
@@ -143,7 +151,7 @@ function create(cfg) {
     movers = new Uint8Array(maxSteps);
     chosen = new Int32Array(maxSteps);
     fromActor = new Uint8Array(maxSteps);
-    ppatState = PPat.createState(N);
+    ppatState = ppatModel ? PPat.createState(N) : null;
   }
 
   function reset() {
@@ -303,7 +311,7 @@ function create(cfg) {
         Ss[t] = S[m];
         actorSteps++;
       } else {
-        move = truncActive ? g.randomLegalMove(rng) : PPat.ppatMove(g, ppatState, ppatModel, rng);
+        move = truncActive || !ppatModel ? g.randomLegalMove(rng) : PPat.ppatMove(g, ppatState, ppatModel, rng);
       }
       fromActor[t] = actorOn ? 1 : 0;
       movers[t] = m; chosen[t] = move;
