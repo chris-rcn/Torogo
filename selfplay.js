@@ -249,7 +249,6 @@ console.log([
   'tP1mv'   .padStart(5),
   'tP2Mv'   .padStart(5),
   'P2WR'    .padStart(4),
-  'P2Better'.padStart(8),
 ].join('  '));
 
 let printPeriodMs  = 1000;
@@ -271,7 +270,6 @@ function printStats(gamesPlayed) {
     avgMs(stats.p1),
     avgMs(stats.p2),
     Util.fmtRatio4(tally.p2 / gamesPlayed)                 .padStart(4),
-    Util.fmtRatio4(probPlayerBetter(tally.p2, gamesPlayed)).padStart(8),
   ].join('  '));
   // Adjudication margin stats: diagnostic only (close-call fraction flags a
   // margin-compressed matchup); VERBOSE to keep routine output to the table.
