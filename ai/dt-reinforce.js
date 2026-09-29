@@ -40,12 +40,13 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // of every getMove (ACTOR_ROOT_RESET), so it holds only what this move's
 // sims say about this root.  (Pattern layers
 // over the 4 orthogonal neighbours and the 8 surrounding cells were tried and
-// removed: paired runs at 2 s showed no gain from either.)  The actor plays the whole
-// sim by default (ACTOR_DEPTH 999); with a smaller depth the rest is a
-// playout tail, uniform random below PPAT_MIN_PHASE and the ppat policy
-// above it, and PPAT_MIN_PHASE defaults to 1 (ppat off: at 100 ms on 776
-// positions it made no difference, 2026-09-28).  Silver et al. switch to a
-// default policy after ~6 plies, but here the actor's own moves are its
+// removed: paired runs at 2 s showed no gain from either.)  The actor plays
+// the first ACTOR_DEPTH plies of a sim (default 30); the rest is a playout
+// tail, uniform random below PPAT_MIN_PHASE and the ppat policy above it,
+// and PPAT_MIN_PHASE defaults to 1 (ppat off: at 100 ms on 776 positions it
+// made no difference, 2026-09-28).  Unlimited depth lost 0.0047 mae to depth
+// 30 on the untruncated roots at 2 s (2026-09-29).  Silver et al. switch to
+// a default policy after ~6 plies, but here the actor's own moves are its
 // training data.
 //
 // Everything is maintained incrementally: a changed cell alters only its own
@@ -85,7 +86,9 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // the value oracle gen-agent-evals labels with.
 //
 // Config:
-//   ACTOR_DEPTH       plies of a sim the actor plays; the rest is the playout tail (default 999)
+//   ACTOR_DEPTH       plies of a sim the actor plays; the rest is the playout tail.
+//                     2 s ladder on roots 0.42-0.8: 20 -> 0.0084, 30 -> 0.0080,
+//                     40 -> 0.0092, unlimited -> 0.0127                (default 30)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness, ppat above;
 //                     1 = ppat off, no model loaded                       (default 1)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
@@ -117,7 +120,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const ACTOR_DEPTH = cfg.int('ACTOR_DEPTH', 999);
+  const ACTOR_DEPTH = cfg.int('ACTOR_DEPTH', 30);
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const TERM_LR  = cfg.float('LR', 0.002);
   const PB       = cfg.int('ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
