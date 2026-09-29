@@ -95,11 +95,14 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     1 = ppat off, no model loaded                       (default 1)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
-//   FPOL_WEIGHT       root move influence: featurepol's logit times this is added
-//                     to the actor's score in the root argmax (offline knowledge
-//                     at the root only; the sims are untouched); 0 = off, no
-//                     model loaded                                        (default 0)
-//   FPOL_DATA         the featurepol model, loaded only when FPOL_WEIGHT != 0
+//   FPOL_WEIGHT_0     root move influence: featurepol's logit times a weight is
+//   FPOL_WEIGHT_1     added to the actor's score in the root argmax (offline
+//                     knowledge at the root only; the sims are untouched).  The
+//                     weight is FPOL_WEIGHT_0 at phase 0 and FPOL_WEIGHT_1 at
+//                     phase 1, linear in the root's fullness between; equal
+//                     values give a flat weight; both 0 = off, no model
+//                     loaded                                        (defaults 0, 0)
+//   FPOL_DATA         the featurepol model, loaded only when a weight is non-zero
 //                                              (default ref/ref-fp-heavy-data.js)
 //   FPOL_RANK_TOPN    the model's vpat<n> ranking term is computed over its top N
 //                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
@@ -177,9 +180,10 @@ function create(cfg) {
   // Root move influence: featurepol's logit, weighted, added to the actor's
   // score in the root argmax.  Offline knowledge at the root only; the sims
   // and their learning are untouched.
-  const FPOL_WEIGHT = cfg.float('FPOL_WEIGHT', 0);
+  const FPOL_W0 = cfg.float('FPOL_WEIGHT_0', 0), FPOL_W1 = cfg.float('FPOL_WEIGHT_1', 0);
+  const fpolWeight = (phase) => FPOL_W0 + (FPOL_W1 - FPOL_W0) * phase;
   let fpWeights = null, fpState = null, fpScores = null, fpPt = null;
-  if (FPOL_WEIGHT !== 0) {
+  if (FPOL_W0 !== 0 || FPOL_W1 !== 0) {
     const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
     fpWeights = FeaturePol.loadModel({ name: 'dt-reinforce', path: fpPath }).weights;
     const rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
@@ -566,6 +570,7 @@ function create(cfg) {
     const cells = game.cells;
     const m = game.current === BLACK ? 0 : 1;
     const fp = fpRootLogits(game);
+    const fpW = fp ? fpolWeight(game.phase()) : 0;
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(game) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // the root sees no last move
@@ -573,10 +578,10 @@ function create(cfg) {
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
       if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
-      const s = sc[m][p] + (fp ? FPOL_WEIGHT * fp[p] : 0) + rng.random() * 1e-9;
+      const s = sc[m][p] + (fp ? fpW * fp[p] : 0) + rng.random() * 1e-9;
       if (s > bestS) { bestS = s; best = p; }
     }
-    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${FPOL_WEIGHT}` : ''}` };
+    return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${fpW.toFixed(3)}` : ''}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
