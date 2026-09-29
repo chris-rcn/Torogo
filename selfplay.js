@@ -71,7 +71,7 @@ const Util = require('./util.js');
 const VERBOSE = Util.envInt('VERBOSE', 0);
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'rand-mirror-pairs', 'stop-tol', 'stop-min',
+  ['p1', 'p2', 'size', 'budget', 'limit', 'rand-moves', 'rand-mirror-pairs',
    'min-phase', 'max-phase', 'fallback', 'adjudication-playouts']);
 
 if (opts.help) {
@@ -111,9 +111,6 @@ alternate between games; per-agent env config uses the P1_/P2_ prefixes
                     votes.  The pre-min-phase opening still uses the
                     --fallback agent.  (default 0 = play out)
 
-  --stop-tol A      early stop once P(p2 truly better than 50%) reaches 1-A
-                    (confidently better) or A (confidently worse)
-  --stop-min N      minimum games before --stop-tol can trigger (default 0)
   --help            show this message
 
   env VERBOSE=1     print the board and agent info after every move`);
@@ -156,13 +153,6 @@ if (minPhase < 0 || maxPhase > 1 || minPhase > maxPhase) {
   console.error('--min-phase/--max-phase must satisfy 0 <= min <= max <= 1');
   process.exit(1);
 }
-
-// Early-stop (SPRT-style): stop once the decision is confident either way.
-// --stop-tol a → stop when P(p2 truly better than 50%) reaches 1-a (p2/candidate
-//                confidently better) or falls to a (confidently worse).  Symmetric.
-// --stop-min n → minimum games before the bound can trigger (avoids tiny-sample stops).
-const stopTol = opts['stop-tol'] !== undefined ? parseFloat(opts['stop-tol']) : null;
-const stopMin = opts['stop-min'] !== undefined ? parseInt(opts['stop-min'], 10) : 0;
 
 if (!Number.isInteger(boardSize)) {
   console.error('--size must be an odd integer between 7 and 19');
@@ -291,105 +281,6 @@ function maybePrint(gamesPlayed) {
   lastPrintGames = gamesPlayed;
   printStats(gamesPlayed);
   printPeriodMs = Math.round(printPeriodMs * 1.5);
-}
-
-// Probability that true win rate p > 0.5 given w wins out of n games
-// Uses a Beta(w+1, n-w+1) posterior with uniform prior
-
-function probPlayerBetter(w, n) {
-  if (w < 0 || n <= 0 || w > n) {
-    throw new Error("Invalid inputs");
-  }
-
-  const a = w + 1;
-  const b = n - w + 1;
-
-  return 1 - regularizedIncompleteBeta(0.5, a, b);
-}
-
-/*
- * Regularized incomplete beta function Ix(a,b)
- * Implementation via continued fraction (Numerical Recipes style)
- */
-
-function regularizedIncompleteBeta(x, a, b) {
-  if (x <= 0) return 0;
-  if (x >= 1) return 1;
-
-  const bt =
-    Math.exp(
-      logGamma(a + b) -
-      logGamma(a) -
-      logGamma(b) +
-      a * Math.log(x) +
-      b * Math.log(1 - x)
-    );
-
-  if (x < (a + 1) / (a + b + 2)) {
-    return (bt * betaCF(x, a, b)) / a;
-  } else {
-    return 1 - (bt * betaCF(1 - x, b, a)) / b;
-  }
-}
-
-function betaCF(x, a, b) {
-  const MAX_ITER = 100;
-  const EPS = 1e-12;
-
-  let am = 1;
-  let bm = 1;
-  let az = 1;
-  let qab = a + b;
-  let qap = a + 1;
-  let qam = a - 1;
-  let bz = 1 - qab * x / qap;
-
-  for (let m = 1; m <= MAX_ITER; m++) {
-    let em = m;
-    let tem = em + em;
-
-    let d = em * (b - em) * x / ((qam + tem) * (a + tem));
-    let ap = az + d * am;
-    let bp = bz + d * bm;
-
-    d = -(a + em) * (qab + em) * x / ((a + tem) * (qap + tem));
-    let app = ap + d * az;
-    let bpp = bp + d * bz;
-
-    let aold = az;
-    am = ap / bpp;
-    bm = bp / bpp;
-    az = app / bpp;
-    bz = 1;
-
-    if (Math.abs(az - aold) < EPS * Math.abs(az)) {
-      return az;
-    }
-  }
-
-  return az;
-}
-
-// Lanczos approximation for log gamma
-function logGamma(z) {
-  const cof = [
-    76.18009172947146, -86.50532032941677,
-    24.01409824083091, -1.231739572450155,
-    0.001208650973866179, -0.000005395239384953
-  ];
-
-  let x = z;
-  let y = z;
-  let tmp = x + 5.5;
-  tmp -= (x + 0.5) * Math.log(tmp);
-
-  let ser = 1.000000000190015;
-  for (let j = 0; j < cof.length; j++) {
-    y += 1;
-    ser += cof[j] / y;
-  }
-
-  return -tmp + Math.log(2.5066282746310005 * ser / x);
 }
 
 // Play one game from a given starting position with assigned colors.
@@ -523,8 +414,7 @@ function playMirrorPair(game) {
 
 // Each opening is played twice with swapped colors.
 let gamesPlayed = 0;
-let decided = false;
-while (gamesPlayed < gameLimit && !decided) {
+while (gamesPlayed < gameLimit) {
   // Generate a random opening position.
   // Any randomised opening starts from an EMPTY board.  Game2's free centre stone
   // is only a time-saver — the torus is vertex-transitive, so black's first move
@@ -564,12 +454,6 @@ while (gamesPlayed < gameLimit && !decided) {
     playGame(opening, swap === 0, seatSeeds);
     gamesPlayed++;
     maybePrint(gamesPlayed);
-
-    // SPRT-style early stop: bail once the result is confident either way.
-    if (stopTol !== null && gamesPlayed >= stopMin) {
-      const pb = probPlayerBetter(tally.p2, gamesPlayed);
-      if (pb >= 1 - stopTol || pb <= stopTol) { decided = true; break; }
-    }
   }
 }
 
