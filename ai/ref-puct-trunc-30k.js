@@ -2,7 +2,7 @@
 
 // ref-puct-trunc-30k — frozen fixed-compute reference: ai/puct-ppat-fp-trunc.js
 // at PLAYOUTS=30000, every other knob at its 2026-09-28 default, with the
-// model files frozen as ref/ref-puct-trunc-10k-vpat.js (out/vpat-1j9ad1fk.js),
+// model files (shared with the 10k rung) frozen as ref/ref-puct-trunc-10k-vpat.js (out/vpat-1j9ad1fk.js),
 // ref/ref-puct-trunc-10k-ppat.js (out/ppat-data-233162-best-ref-candidate.js)
 // and ref/ref-fp2-data.js (already the featurepol default).  The move budget
 // is ignored: 30000 playouts per move, whatever the clock.
@@ -101,7 +101,7 @@ function create() {
     ? require(VPAT_PATH)
     : (typeof window !== 'undefined' && window.truncVpatModel) || null;
   if (!_vpatRaw) {
-    throw new Error(`ref-puct-trunc-10k: cannot load vpatterns evaluator from ` +
+    throw new Error(`ref-puct-trunc-30k: cannot load vpatterns evaluator from ` +
       (_isNode ? VPAT_PATH : 'window.truncVpatModel'));
   }
   // Expand-cost coefficients, auto-calibrated below for the loaded models.
@@ -126,7 +126,7 @@ function create() {
     ? loadWeights(PPAT_PATH)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
   if (!_model) {
-    throw new Error(`ref-puct-trunc-10k: cannot load ppat weights from ` +
+    throw new Error(`ref-puct-trunc-30k: cannot load ppat weights from ` +
       (_isNode ? PPAT_PATH : 'window.PPATWeights'));
   }
   const _ppatName = _isNode ? require('path').basename(PPAT_PATH) : 'window.PPATWeights';
@@ -174,10 +174,10 @@ function create() {
   }
 
   // featurepol policy model (priors + top-K pruning); browser: window.featurepolModel.
-  const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-trunc-10k', path: FPOL_PATH });
+  const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-trunc-30k', path: FPOL_PATH });
   const fpWeights   = fpModel.weights;
   if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
-  console.error(`ref-puct-trunc-10k: puct-ppat-fp-trunc at ${PLAYOUTS} playouts/move (budget ignored), ` +
+  console.error(`ref-puct-trunc-30k: puct-ppat-fp-trunc at ${PLAYOUTS} playouts/move (budget ignored), ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-root-phase: ${TRUNC_ROOT_PHASE}, ` +
