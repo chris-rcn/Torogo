@@ -119,9 +119,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     (and by the root argmax)                            (default 0)
 //   ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
 //   RESET_EACH_MOVE   1 = start every move from zero actor weights and baseline, as
-//                     if each root were a new game (what evalmovedetails measures,
-//                     since its positions are never two plies apart); 0 = carry
-//                     them from move to move within a game               (default 0)
+//                     if each root were a new game (what evalmovedetails measures);
+//                     0 = carry them from move to move within a game.  2 s matches
+//                     vs fp-heavy: carried won 1 of 18, reset 8 of 13  (default 1)
 //   ACTOR_COLOR_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
 //   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
 //                     least one of the two base tables must be on        (default 0)
@@ -151,7 +151,7 @@ function create(cfg) {
   const PB       = cfg.int('ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
-  const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 0) !== 0;
+  const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 1) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   const USE_M    = cfg.int('ACTOR_COLOR_LAYER', 1) !== 0;   // (mover, point) base table
   const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 0) !== 0;   // (point) base table, both sides
