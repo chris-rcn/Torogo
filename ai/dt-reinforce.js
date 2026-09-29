@@ -100,7 +100,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     at the root only; the sims are untouched); 0 = off, no
 //                     model loaded                                        (default 0)
 //   FPOL_DATA         the featurepol model, loaded only when FPOL_WEIGHT != 0
-//                                                    (default ref/ref-fp2-data.js)
+//                                              (default ref/ref-fp-heavy-data.js)
+//   FPOL_RANK_TOPN    the model's vpat<n> ranking term is computed over its top N
+//                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
 //   LR                actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
@@ -178,8 +180,10 @@ function create(cfg) {
   const FPOL_WEIGHT = cfg.float('FPOL_WEIGHT', 0);
   let fpWeights = null, fpState = null, fpScores = null, fpPt = null;
   if (FPOL_WEIGHT !== 0) {
-    const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) : undefined;
+    const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
     fpWeights = FeaturePol.loadModel({ name: 'dt-reinforce', path: fpPath }).weights;
+    const rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
+    if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = rankTopN;
   }
   // Per-point featurepol logit at the root (0 where featurepol lists no
   // move, i.e. illegal or true-eye points), or null when the influence is off.
