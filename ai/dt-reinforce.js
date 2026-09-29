@@ -71,7 +71,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //
 // Truncation (TRUNC_MAX_PHASE > 0): a sim plays TRUNC_ACTOR_DEPTH actor
 // plies, then a buffer of UNIFORM random plies — the fielded trunc agent's
-// rule, here so the actor cannot steer into the leaf model's defects — and
+// rule, here so the actor cannot steer into the truncation model's defects — and
 // stops; the vpat model's value of the truncation point stands in for the
 // outcome everywhere the outcome is used.  The model is the anchor; no
 // grounding schedule.  The truncation point's phase (root phase + truncation
@@ -136,15 +136,15 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   TRUNC_PHASE_DELTA  the random buffer after the actor plies, as a fraction of
 //                     the area, for roots that fit it under TRUNC_MAX_PHASE;
-//                     0 = the leaf right after the actor plies            (default 0.12)
+//                     0 = truncation right after the actor plies          (default 0.12)
 //   TRUNC_PHASE_DELTA_MIN  the shortest buffer a root may truncate with: roots
 //                     nearer the band's edge get the longest buffer that still
 //                     fits, down to this; below it they run full sims
 //                                                                  (default 0.09)
 //   TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 10)
 //   TRUNC_MAX_PHASE     truncate only when the TRUNCATION POINT's phase would be
-//                     below this; 0 = truncation off, no leaf model loaded (default 0.57)
-//   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
+//                     below this; 0 = truncation off, no model loaded     (default 0.57)
+//   TRUNC_VPAT_DATA   the truncation model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -494,7 +494,7 @@ function create(cfg) {
       t++;
     }
     lastActorSteps = actorSteps;
-    // The return: the outcome, or at the truncation point the vpat leaf value.
+    // The return: the outcome, or at the truncation point the vpat model's value.
     const z = g.gameOver ? (g.calcWinner() === BLACK ? 1 : 0)
             : (truncActive && t >= truncPly) ? vpatValueB(g)
             : (g.calcWinner() === BLACK ? 1 : 0);
