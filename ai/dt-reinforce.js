@@ -27,9 +27,9 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // Actor: score(p) for an empty point p is one weight per (mover, p), plus
 // optional stacked slices keyed by a per-ply integer, whose weights add to
 // it and learn the same gradient:
-//   phase   (mover, p, phase bucket of the sim's board)  TD_ACTOR_PHASE_BUCKETS
-//   root    (mover, p) on ply 0 of a sim only            TD_ACTOR_ROOT_LAYER
-//   local   (mover, p, p within one cell of the last SIM move)  TD_ACTOR_LOCAL_LAYER
+//   phase   (mover, p, phase bucket of the sim's board)  ACTOR_PHASE_BUCKETS
+//   root    (mover, p) on ply 0 of a sim only            ACTOR_ROOT_LAYER
+//   local   (mover, p, p within one cell of the last SIM move)  ACTOR_LOCAL_LAYER
 //           — sim moves only: ply 0 and the root argmax see no last move, so
 //           the root decision never depends on the game's last move, and at
 //           ply 0 the key would be the same in every sim anyway
@@ -37,11 +37,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // change mid-sim (a bucket edge crossed; ply 1 leaves the root), and then
 // every score is refreshed once; the local key moves with each sim move and
 // only the old and new last move's neighbours are recomputed.  The root slice can be zeroed at the start
-// of every getMove (TD_ACTOR_ROOT_RESET), so it holds only what this move's
+// of every getMove (ACTOR_ROOT_RESET), so it holds only what this move's
 // sims say about this root.  (Pattern layers
 // over the 4 orthogonal neighbours and the 8 surrounding cells were tried and
 // removed: paired runs at 2 s showed no gain from either.)  The actor plays the whole
-// sim by default (TD_ACTOR_DEPTH 999); with a smaller depth the rest is a
+// sim by default (ACTOR_DEPTH 999); with a smaller depth the rest is a
 // playout tail, uniform random below PPAT_MIN_PHASE and the ppat policy
 // above it, and PPAT_MIN_PHASE defaults to 1 (ppat off: at 100 ms on 776
 // positions it made no difference, 2026-09-28).  Silver et al. switch to a
@@ -57,20 +57,20 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //
 // Learning: REINFORCE at sim end (it needs the return), in step order over the
 // plies the actor played (playout-tail moves carry no gradient), with the step
-// TD_LR·(R − b_m) in the mover's view, where R is the sim's return
+// LR·(R − b_m) in the mover's view, where R is the sim's return
 // and b_m a per-mover EMA of returns as baseline.  Its per-step records are the
 // sampled-from distribution and the point codes.
 //
-// Truncation (TD_TRUNC_MAX_PHASE > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
+// Truncation (TRUNC_MAX_PHASE > 0): a sim plays TRUNC_ACTOR_DEPTH actor
 // plies, then a buffer of UNIFORM random plies — the fielded trunc agent's
 // rule, here so the actor cannot steer into the leaf model's defects — and
 // stops; the vpat model's value of the truncation point stands in for the
 // outcome everywhere the outcome is used.  The model is the anchor; no
 // grounding schedule.  The truncation point's phase (root phase + truncation
-// ply / area, captures ignored) must stay below TD_TRUNC_MAX_PHASE, the
-// model's trusted band.  The buffer is ceil(TD_TRUNC_PHASE_DELTA * area)
+// ply / area, captures ignored) must stay below TRUNC_MAX_PHASE, the
+// model's trusted band.  The buffer is ceil(TRUNC_PHASE_DELTA * area)
 // plies when the root allows it, and shortened for roots nearer the band's
-// edge as far as ceil(TD_TRUNC_PHASE_DELTA_MIN * area) plies; a root that
+// edge as far as ceil(TRUNC_PHASE_DELTA_MIN * area) plies; a root that
 // cannot fit even the minimum buffer under the edge runs full sims.  With
 // min = max a root either takes the full buffer or does not truncate.
 // Defaults 0.12 / 0.09 from the 2 s ladders of 2026-09-29: the buffer's
@@ -85,54 +85,54 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // the value oracle gen-agent-evals labels with.
 //
 // Config:
-//   TD_ACTOR_DEPTH    plies of a sim the actor plays; the rest is the playout tail (default 999)
+//   ACTOR_DEPTH       plies of a sim the actor plays; the rest is the playout tail (default 999)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness, ppat above;
 //                     1 = ppat off, no model loaded                       (default 1)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
-//   TD_LR             actor step size on the return minus the baseline.  Ladder at
+//   LR                actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
-//   TD_ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
+//   ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
 //                     many equal-width buckets of [0,1]; 0 = off           (default 0)
-//   TD_ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
+//   ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
 //                     (and by the root argmax)                            (default 0)
-//   TD_ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
-//   TD_ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
+//   ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
+//   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
 //                     move" (none at ply 0 and the root)                    (default 0)
-//   TD_TEMP           softmax temperature for the simulations          (default 1)
-//   TD_ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
+//   TEMP              softmax temperature for the simulations          (default 1)
+//   ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
-//   TD_TRUNC_PHASE_DELTA  the random buffer after the actor plies, as a fraction of
-//                     the area, for roots that fit it under TD_TRUNC_MAX_PHASE;
+//   TRUNC_PHASE_DELTA  the random buffer after the actor plies, as a fraction of
+//                     the area, for roots that fit it under TRUNC_MAX_PHASE;
 //                     0 = the leaf right after the actor plies            (default 0.12)
-//   TD_TRUNC_PHASE_DELTA_MIN  the shortest buffer a root may truncate with: roots
+//   TRUNC_PHASE_DELTA_MIN  the shortest buffer a root may truncate with: roots
 //                     nearer the band's edge get the longest buffer that still
 //                     fits, down to this; below it they run full sims
 //                                                                  (default 0.09)
-//   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 10)
-//   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
+//   TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 10)
+//   TRUNC_MAX_PHASE     truncate only when the TRUNCATION POINT's phase would be
 //                     below this; 0 = truncation off, no leaf model loaded (default 0.57)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 999);
+  const ACTOR_DEPTH = cfg.int('ACTOR_DEPTH', 999);
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
-  const TERM_LR  = cfg.float('TD_LR', 0.002);
-  const PB       = cfg.int('TD_ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
-  const USE_R    = cfg.int('TD_ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
-  const ROOT_RESET = cfg.int('TD_ACTOR_ROOT_RESET', 1) !== 0;
-  const USE_L    = cfg.int('TD_ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
+  const TERM_LR  = cfg.float('LR', 0.002);
+  const PB       = cfg.int('ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
+  const USE_R    = cfg.int('ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
+  const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
+  const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
-  const TEMP     = cfg.float('TD_TEMP', 1);
-  const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
+  const TEMP     = cfg.float('TEMP', 1);
+  const BASE_EMA = cfg.float('ACTOR_RETURN_EMA', 0.9);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
-  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.12);
-  const TRUNC_DELTA_MIN   = cfg.float('TD_TRUNC_PHASE_DELTA_MIN', 0.09);
-  if (TRUNC_DELTA_MIN > TRUNC_DELTA) throw new Error(`dt-reinforce: TD_TRUNC_PHASE_DELTA_MIN ${TRUNC_DELTA_MIN} exceeds TD_TRUNC_PHASE_DELTA ${TRUNC_DELTA}`);
-  const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 10);
-  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.57);
+  const TRUNC_DELTA       = cfg.float('TRUNC_PHASE_DELTA', 0.12);
+  const TRUNC_DELTA_MIN   = cfg.float('TRUNC_PHASE_DELTA_MIN', 0.09);
+  if (TRUNC_DELTA_MIN > TRUNC_DELTA) throw new Error(`dt-reinforce: TRUNC_PHASE_DELTA_MIN ${TRUNC_DELTA_MIN} exceeds TRUNC_PHASE_DELTA ${TRUNC_DELTA}`);
+  const TRUNC_ACTOR_DEPTH = cfg.int('TRUNC_ACTOR_DEPTH', 10);
+  const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 0.57);
   let vpatModel = null;
   if (TRUNC_MAX_PHASE > 0) {
     const vpatPath = _isNode
