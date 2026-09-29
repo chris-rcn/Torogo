@@ -108,7 +108,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     values give a flat weight; both 0 = off, no model
 //                     loaded                                        (defaults 0, 0)
 //   ROOT_MOVE_FILTER  K: the root argmax is taken over featurepol's top K moves
-//                     only (the sims are untouched); 0 = off           (default 0)
+//                     only (the sims are untouched); 0 = off.  Match at 500 ms on
+//                     12x12, K=20 vs off: 36 of 47 won (2026-09-29); the MD file
+//                     scored it the other way, its labeller underrates
+//                     featurepol choices                                (default 20)
 //   FPOL_DATA         the featurepol model, loaded only when a weight or
 //                     ROOT_MOVE_FILTER is non-zero
 //                                              (default ref/ref-fp-heavy-data.js)
@@ -201,7 +204,7 @@ function create(cfg) {
   // and their learning are untouched.
   const FPOL_W0 = cfg.float('FPOL_WEIGHT_0', 0), FPOL_W1 = cfg.float('FPOL_WEIGHT_1', 0);
   const fpolWeight = (phase) => FPOL_W0 + (FPOL_W1 - FPOL_W0) * phase;
-  const FPOL_TOP_K = cfg.int('ROOT_MOVE_FILTER', 0);
+  const FPOL_TOP_K = cfg.int('ROOT_MOVE_FILTER', 20);
   let fpWeights = null, fpState = null, fpScores = null, fpPt = null, fpAllow = null;
   if (FPOL_W0 !== 0 || FPOL_W1 !== 0 || FPOL_TOP_K > 0) {
     const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
