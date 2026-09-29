@@ -23,10 +23,15 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 // critic, no priors, no search: the actor-only case of dt-actor-critic.
 //
 // Features are LOCATION-DEPENDENT by design — no symmetry, the board is in
-// the orientation it is in — and indexed combinatorially, no hashing.  All are
-// keyed by the side to move as well as the point.
+// the orientation it is in — and indexed combinatorially, no hashing.  All but
+// the colourblind table are keyed by the side to move as well as the point.
 //
-// Actor: score(p) for an empty point p is one weight per (mover, p), plus
+// Actor: score(p) for an empty point p is the sum of up to two base tables,
+//   mover       (mover, p)                          ACTOR_MOVER_LAYER (default on)
+//   colourblind (p), shared by both sides: "my best move is my opponent's
+//               best move"; it learns from both sides' plies, twice the
+//               samples                             ACTOR_COLORBLIND_LAYER
+// plus
 // optional stacked slices keyed by a per-ply integer, whose weights add to
 // it and learn the same gradient:
 //   phase   (mover, p, phase bucket of the sim's board)  ACTOR_PHASE_BUCKETS
@@ -117,6 +122,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     if each root were a new game (what evalmovedetails measures,
 //                     since its positions are never two plies apart); 0 = carry
 //                     them from move to move within a game               (default 0)
+//   ACTOR_MOVER_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
+//   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
+//                     least one of the two base tables must be on        (default 0)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
 //                     move" (none at ply 0 and the root)                    (default 0)
 //   TEMP              softmax temperature for the simulations          (default 1)
@@ -145,6 +153,9 @@ function create(cfg) {
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
   const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 0) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
+  const USE_M    = cfg.int('ACTOR_MOVER_LAYER', 1) !== 0;   // (mover, point) base table
+  const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 0) !== 0;   // (point) base table, both sides
+  if (!USE_M && !USE_C) throw new Error('dt-reinforce: ACTOR_MOVER_LAYER and ACTOR_COLORBLIND_LAYER are both off');
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TEMP', 1);
   const BASE_EMA = cfg.float('ACTOR_RETURN_EMA', 0.9);
@@ -212,7 +223,7 @@ function create(cfg) {
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
-  let w1 = null;                                // actor weights: [mover][p]
+  let w1 = null, wC = null;                     // actor base weights: mover [mover][p], colourblind [p]
   let wP = null, wR = null, wL = null;          // slice weights: phase [mover][p][bucket], root [mover][p], local [mover][p][0|1]
   let bs = null, lastAt = null;                 // per-step phase bucket and sim last move, for the update
   let loc = null, curLast = PASS;               // local slice: per-point key (1 = within one cell of curLast), the sim's last move
@@ -231,7 +242,8 @@ function create(cfg) {
 
   function setup(N) {
     area = N * N;
-    w1 = new Float32Array(2 * area);
+    w1 = new Float32Array(USE_M ? 2 * area : 0);
+    wC = new Float32Array(USE_C ? area : 0);
     wP = new Float32Array(PB > 0 ? 2 * area * PB : 0);
     wR = new Float32Array(USE_R ? 2 * area : 0);
     wL = new Float32Array(USE_L ? 2 * area * 2 : 0);
@@ -255,7 +267,7 @@ function create(cfg) {
   }
 
   function reset() {
-    w1.fill(0); wP.fill(0); wR.fill(0); wL.fill(0);
+    w1.fill(0); wC.fill(0); wP.fill(0); wR.fill(0); wL.fill(0);
     base[0] = base[1] = 0.5;
   }
 
@@ -265,7 +277,8 @@ function create(cfg) {
   // Actor score for mover m at p under the slices' current keys.
   function score(m, p) {
     const mp = m * area + p;
-    let s = w1[mp];
+    let s = USE_M ? w1[mp] : 0;
+    if (USE_C) s += wC[p];
     if (PB > 0) s += wP[mp * PB + curB];
     if (USE_R && atRoot) s += wR[mp];
     if (USE_L) s += wL[mp * 2 + loc[p]];
@@ -499,7 +512,8 @@ function create(cfg) {
       if (v <= 0) continue;
       const gr = (p === move ? 1 : 0) - v * invS;
       const mp = m * area + p;
-      w1[mp] += k * gr;
+      if (USE_M) w1[mp] += k * gr;
+      if (USE_C) wC[p] += k * gr;
       if (PB > 0) wP[mp * PB + b] += k * gr;
       if (root) wR[mp] += k * gr;
       if (USE_L) wL[mp * 2 + locMark[p]] += k * gr;
@@ -622,7 +636,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             setLast, chosen: () => chosen, sc, ex, S, base, w1, wP, wR, wL, loc, area };
+             setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, loc, area };
   }
 
   return { getMove, valueB, _internals };
