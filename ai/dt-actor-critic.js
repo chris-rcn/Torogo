@@ -245,7 +245,6 @@ function create(cfg) {
   let i1r = null, i4r = null, i9r = null, nActR = null;
   let maxSteps = 0;
   const base = [0.5, 0.5];                      // per-mover return baseline (critic off)
-  let lastMoveCount = -1;
 
   function setup(N) {
     area = N * N;
@@ -666,14 +665,40 @@ function create(cfg) {
     return pts.length > AB_WIDTH ? pts.slice(0, AB_WIDTH) : pts;
   }
 
+  // Game continuity: the board as it stood after this agent's last move.  The
+  // next root continues the same game only if it is that board plus one
+  // opponent move (a stone, with any of this agent's stones it captured, or a
+  // pass) one ply later; anything else is a new game and the tables reset.
+  let afterCells = null, afterCount = -1, afterMover = 0;
+  function isContinuation(game) {
+    const n = game.N * game.N;
+    if (afterCount < 0 || afterCells.length !== n || game.moveCount !== afterCount + 1 || game.current !== afterMover) return false;
+    const cells = game.cells, opp = -afterMover;
+    let placed = 0, captured = 0;
+    for (let p = 0; p < n; p++) {
+      const a = afterCells[p], c = cells[p];
+      if (a === c) continue;
+      if (a === EMPTY && c === opp) placed++;
+      else if (a === afterMover && c === EMPTY) captured++;
+      else return false;
+    }
+    return placed === 1 || (placed === 0 && captured === 0);
+  }
+  function recordAfter(game, move) {
+    const g = game.clone(), n = game.N * game.N;
+    g.play(move);
+    if (!afterCells || afterCells.length !== n) afterCells = new Int8Array(n);
+    for (let p = 0; p < n; p++) afterCells[p] = g.cells[p];
+    afterCount = g.moveCount; afterMover = game.current;
+  }
+
   function getMove(game, budgetMs = 1000, options = {}) {
     if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
+      recordAfter(game, PASS);
       return { move: PASS, info: 'end the game; ahead' };
     }
     if (area !== game.N * game.N) { setup(game.N); reset(); }
-    const d = game.moveCount - lastMoveCount;
-    if (d < 0 || d > 2) reset();           // a new game (or an unexpected jump)
-    lastMoveCount = game.moveCount;
+    if (!isContinuation(game)) reset();    // a new game
 
     const rng = options.rng || makeRng();
     truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
@@ -724,12 +749,13 @@ function create(cfg) {
     }
     const val = CRITIC ? sigmoid(Z[m]) : base[m];
     const how = ROOT_SELECT === 'ab' ? ` ab=d${AB_DEPTH}w${AB_WIDTH}` : ROOT_SELECT === 'visits' ? ` visits=${bestV}` : ROOT_SELECT === 'softmax' ? ' softmax' : '';
+    recordAfter(game, best);
     return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} V=${val.toFixed(3)} score=${bestS.toFixed(3)}${how}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
   function _internals() {
-    return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid,
+    return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update, sigmoid, isContinuation, recordAfter,
              setActive: (a5, a9) => { act5 = a5; act9 = a9; },
              searchMove,
              get lastActorSteps() { return lastActorSteps; },

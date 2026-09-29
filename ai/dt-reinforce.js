@@ -228,7 +228,6 @@ function create(cfg) {
   let lastActorSteps = 0, lastReturn = 0;
   let maxSteps = 0;
   const base = [0.5, 0.5];                      // per-mover return baseline
-  let lastMoveCount = -1;
 
   function setup(N) {
     area = N * N;
@@ -520,15 +519,40 @@ function create(cfg) {
     for (let t = 0; t < steps; t++) actorUpdate(t, movers[t], adv[movers[t]]);
   }
 
+  // Game continuity: the board as it stood after this agent's last move.  The
+  // next root continues the same game only if it is that board plus one
+  // opponent move (a stone, with any of this agent's stones it captured, or a
+  // pass) one ply later; anything else is a new game and the tables reset.
+  let afterCells = null, afterCount = -1, afterMover = 0;
+  function isContinuation(game) {
+    const n = game.N * game.N;
+    if (afterCount < 0 || afterCells.length !== n || game.moveCount !== afterCount + 1 || game.current !== afterMover) return false;
+    const cells = game.cells, opp = -afterMover;
+    let placed = 0, captured = 0;
+    for (let p = 0; p < n; p++) {
+      const a = afterCells[p], c = cells[p];
+      if (a === c) continue;
+      if (a === EMPTY && c === opp) placed++;
+      else if (a === afterMover && c === EMPTY) captured++;
+      else return false;
+    }
+    return placed === 1 || (placed === 0 && captured === 0);
+  }
+  function recordAfter(game, move) {
+    const g = game.clone(), n = game.N * game.N;
+    g.play(move);
+    if (!afterCells || afterCells.length !== n) afterCells = new Int8Array(n);
+    for (let p = 0; p < n; p++) afterCells[p] = g.cells[p];
+    afterCount = g.moveCount; afterMover = game.current;
+  }
+
   // Prepare for a decision at `game` (new-game detection, the root slice's
   // reset, this move's truncation) and run its sims: PLAYOUTS of them, or as
   // many as budgetMs allows.  Returns the sims' count, step totals and the
   // sum of their returns.
   function runSims(game, budgetMs, rng) {
     if (area !== game.N * game.N) { setup(game.N); reset(); }
-    const d = game.moveCount - lastMoveCount;
-    if (RESET_EACH_MOVE || d < 0 || d > 2) reset();   // a new game (or an unexpected jump), or every move
-    lastMoveCount = game.moveCount;
+    if (RESET_EACH_MOVE || !isContinuation(game)) reset();   // a new game, or every move
     if (USE_R && ROOT_RESET) wR.fill(0);   // the root slice holds only this move's sims
     // The buffer: the full one if its truncation point stays under the band's
     // edge, else the longest that does; the root truncates if that is at least
@@ -559,12 +583,14 @@ function create(cfg) {
     if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
     const budgetMs = options.budgetMs > 0 ? options.budgetMs : 1000;
     const { sims, sumZ } = runSims(g, budgetMs, options.rng || makeRng());
+    afterCount = -1;                       // no move was played: the next call is a new game
     if (sims === 0) throw new Error('dt-reinforce: valueB ran no sims (budget too small)');
     return sumZ / sims;
   }
 
   function getMove(game, budgetMs = 1000, options = {}) {
     if (game.consecutivePasses > 0 && game.calcWinner() === game.current) {
+      recordAfter(game, PASS);
       return { move: PASS, info: 'end the game; ahead' };
     }
     const rng = options.rng || makeRng();
@@ -586,12 +612,13 @@ function create(cfg) {
       const s = sc[m][p] + (fp ? fpW * fp[p] : 0) + rng.random() * 1e-9;
       if (s > bestS) { bestS = s; best = p; }
     }
+    recordAfter(game, best);
     return { move: best, info: `sims=${sims} steps=${totalSteps} longest=${longest}${truncActive ? ` trunc=${truncPly}` : ''} base=${base[m].toFixed(3)} score=${bestS.toFixed(3)}${fp ? ` fpW=${fpW.toFixed(3)}` : ''}` };
   }
 
   // Test hook: live views of the internals (state arrays are created by setup).
   function _internals() {
-    return { setup, reset, recomputeAll, recomputeAround, score, sample, simulate, update,
+    return { setup, reset, recomputeAll, recomputeAround, score, sample, simulate, update, isContinuation, recordAfter,
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },

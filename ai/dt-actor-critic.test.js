@@ -228,16 +228,22 @@ function playRandom(g, rng, changed) {
 {
   const N = 7;
   const a = agent({ TD_ROOT_SELECT: 'softmax', PLAYOUTS: '1' });
-  const g = new Game2(N, true);
   a._internals().setup(N);
   const st = a._internals();
   const rng = makeRng(111);
+  // The root continues a game (so getMove keeps the injected weight): this
+  // agent passed at g0, the opponent answered at q.
+  const g0 = new Game2(N, true);
+  const q = g0.cells.findIndex((v, p) => p < N * N && v === EMPTY && g0.isLegal(p));
+  const g = g0.clone(); g.play(PASS); g.play(q);
   // A huge layer-1 weight on one point for the mover: the sample lands there almost always.
   let pt = -1; for (let p = 0; p < N * N; p++) if (g.cells[p] === EMPTY && g.isLegal(p)) { pt = p; break; }
   const m = g.current === BLACK ? 0 : 1;
   const counts = new Map();
   for (let i = 0; i < 20; i++) {
     st.reset(); st.w1[m * N * N + pt] = 30;
+    st.recordAfter(g0, PASS);
+    check(st.isContinuation(g), 'the root should continue the recorded game');
     const r = a.getMove(g, 1000, { rng });
     check(g.isLegal(r.move) && r.move !== PASS, `softmax root returned ${r.move}`);
     check(/ softmax$/.test(r.info), `info should say softmax: ${r.info}`);
