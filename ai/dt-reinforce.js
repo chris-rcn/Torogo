@@ -33,7 +33,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // change mid-sim (a bucket edge crossed; ply 1 leaves the root), and then
 // every score is refreshed once.  The root slice can be zeroed at the start
 // of every getMove (TD_ACTOR_ROOT_RESET), so it holds only what this move's
-// sims say about this root, and it has its own step size.  (Pattern layers
+// sims say about this root.  (Pattern layers
 // over the 4 orthogonal neighbours and the 8 surrounding cells were tried and
 // removed: paired runs at 2 s showed no gain from either.)  The actor plays the whole
 // sim by default (TD_ACTOR_DEPTH 999); with a smaller depth the rest is a
@@ -82,7 +82,6 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
 //                     (and by the root argmax)                            (default 0)
 //   TD_ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
-//   TD_ACTOR_ROOT_LR  step size of the root slice                (default TD_ACTOR_TERM_LR)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
@@ -102,7 +101,6 @@ function create(cfg) {
   const PB       = cfg.int('TD_ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('TD_ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('TD_ACTOR_ROOT_RESET', 1) !== 0;
-  const ROOT_LR  = cfg.float('TD_ACTOR_ROOT_LR', TERM_LR);
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TD_TEMP', 1);
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
@@ -382,14 +380,14 @@ function create(cfg) {
   // Actor policy-gradient step for the record at t with advantage adv
   // (mover's view): for every point a in the sampled-from distribution,
   // Δw(a) = lr·adv/T · ([a = chosen] − π(a)) on the weight for (m, a) and on
-  // each active slice's weight, the root slice at its own step size.
+  // each active slice's weight.
   function actorUpdate(t, m, adv) {
     const move = chosen[t];
     if (!fromActor[t] || move === PASS) return;   // tail moves and PASS are outside the softmax
     const o = t * area;
     const e = exs.subarray(o, o + area);
     const invS = 1 / Ss[t];
-    const k = TERM_LR * adv / TEMP, kR = ROOT_LR * adv / TEMP;
+    const k = TERM_LR * adv / TEMP;
     const b = bs[t], root = USE_R && t === 0;
     for (let p = 0; p < area; p++) {
       const v = e[p];
@@ -398,7 +396,7 @@ function create(cfg) {
       const mp = m * area + p;
       w1[mp] += k * gr;
       if (PB > 0) wP[mp * PB + b] += k * gr;
-      if (root) wR[mp] += kR * gr;
+      if (root) wR[mp] += k * gr;
     }
   }
 
