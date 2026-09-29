@@ -112,7 +112,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                                                                  (default 0.09)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 10)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
-//                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
+//                     below this; 0 = truncation off, no leaf model loaded (default 0.57)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -132,7 +132,7 @@ function create(cfg) {
   const TRUNC_DELTA_MIN   = cfg.float('TD_TRUNC_PHASE_DELTA_MIN', 0.09);
   if (TRUNC_DELTA_MIN > TRUNC_DELTA) throw new Error(`dt-reinforce: TD_TRUNC_PHASE_DELTA_MIN ${TRUNC_DELTA_MIN} exceeds TD_TRUNC_PHASE_DELTA ${TRUNC_DELTA}`);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 10);
-  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
+  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.57);
   let vpatModel = null;
   if (TRUNC_MAX_PHASE > 0) {
     const vpatPath = _isNode
