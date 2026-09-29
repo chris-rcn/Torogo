@@ -72,8 +72,10 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // plies when the root allows it, and shortened for roots nearer the band's
 // edge as far as ceil(TD_TRUNC_PHASE_DELTA_MIN * area) plies; a root that
 // cannot fit even the minimum buffer under the edge runs full sims.  With
-// min = max (the default) a root either takes the full buffer or does not
-// truncate.
+// min = max a root either takes the full buffer or does not truncate.
+// Defaults 0.12 / 0.09 from the 2 s ladders of 2026-09-29: the buffer's
+// own effect flattened by 0.12 on roots below 0.28, and minimums down to
+// 0.06 were level with the max on the roots the minimum acts on.
 //
 // ── Factory ──
 // create(cfg) -> { getMove, valueB }.  cfg is a Util.makeCfg reader (P1_/P2_
@@ -103,11 +105,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   TD_TRUNC_PHASE_DELTA  the random buffer after the actor plies, as a fraction of
 //                     the area, for roots that fit it under TD_TRUNC_MAX_PHASE;
-//                     0 = the leaf right after the actor plies             (default 0.2)
+//                     0 = the leaf right after the actor plies            (default 0.12)
 //   TD_TRUNC_PHASE_DELTA_MIN  the shortest buffer a root may truncate with: roots
 //                     nearer the band's edge get the longest buffer that still
 //                     fits, down to this; below it they run full sims
-//                                                     (default TD_TRUNC_PHASE_DELTA)
+//                                                                  (default 0.09)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 5)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
@@ -126,8 +128,8 @@ function create(cfg) {
   const TEMP     = cfg.float('TD_TEMP', 1);
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
-  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
-  const TRUNC_DELTA_MIN   = cfg.float('TD_TRUNC_PHASE_DELTA_MIN', TRUNC_DELTA);
+  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.12);
+  const TRUNC_DELTA_MIN   = cfg.float('TD_TRUNC_PHASE_DELTA_MIN', 0.09);
   if (TRUNC_DELTA_MIN > TRUNC_DELTA) throw new Error(`dt-reinforce: TD_TRUNC_PHASE_DELTA_MIN ${TRUNC_DELTA_MIN} exceeds TD_TRUNC_PHASE_DELTA ${TRUNC_DELTA}`);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
