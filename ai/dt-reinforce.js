@@ -61,7 +61,7 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // and b_m a per-mover EMA of returns as baseline.  Its per-step records are the
 // sampled-from distribution and the point codes.
 //
-// Truncation (TD_TRUNC_PHASE_DELTA > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
+// Truncation (TD_TRUNC_MAX_PHASE > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
 // plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
 // agent's rule, here a buffer so the actor cannot steer into the leaf
 // model's defects — and stops; the vpat model's value of the truncation point
@@ -98,10 +98,11 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     this is its decay                                  (default 0.9)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
-//                     fraction of the area; 0 = no truncation            (default 0.2)
+//                     fraction of the area; 0 = the leaf right after the actor
+//                     plies                                            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 5)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
-//                     below this                                       (default 0.52)
+//                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -121,7 +122,7 @@ function create(cfg) {
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
   let vpatModel = null;
-  if (TRUNC_DELTA > 0) {
+  if (TRUNC_MAX_PHASE > 0) {
     const vpatPath = _isNode
       ? cfg.str('TRUNC_VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-1j9ad1fk.js'))
       : null;
@@ -469,7 +470,7 @@ function create(cfg) {
     lastMoveCount = game.moveCount;
     if (USE_R && ROOT_RESET) wR.fill(0);   // the root slice holds only this move's sims
     truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
-    truncActive = TRUNC_DELTA > 0 && game.phase() + truncPly / area < TRUNC_MAX_PHASE;
+    truncActive = game.phase() + truncPly / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0, sumZ = 0;
     while (true) {
