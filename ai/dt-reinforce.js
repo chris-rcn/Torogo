@@ -27,22 +27,22 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // Actor: score(p) for an empty point p is the sum of the layers
 //   1: the point itself                    (mover, p)               always on
 //   5: its 4 orthogonal neighbours          (mover, p, base-3 code of 4 cells)
-//   9: those plus the 4 diagonals           (mover, p, base-3 code of 8 cells)
-// and the policy is a softmax over the empty points.  The actor plays only
+// and the policy is a softmax over the empty points.  (A layer 9, the 4
+// diagonals added, was tried and removed: paired runs at 2 s showed no gain.)  The actor plays only
 // the first TD_ACTOR_DEPTH plies of a sim; the rest is the standard playout
 // (uniform below PPAT_MIN_PHASE, the ppat policy above it).  Silver et al.
 // switch to a default policy after ~6 plies, but here the actor's own moves
 // are its training data: mdMae improved monotonically out to ~50 plies and
-// plateaued 50-100, with unlimited slightly worse (2026-09-27).  Layers 5 and 9 are each
-// active only for the first N plies of a sim (their depth knob; 0 = off): deep
+// plateaued 50-100, with unlimited slightly worse (2026-09-27).  Layer 5 is
+// active only for the first N plies of a sim (its depth knob; 0 = off): deep
 // in a sim the board has diverged from the root, so updates to those exact
 // local patterns land where no root will read them, while the first plies
-// serve this root and the next move's.  At the ply a layer switches off, the
-// scores are refreshed once without it.
+// serve this root and the next move's.  At the ply the layer switches off,
+// the scores are refreshed once without it.
 //
-// Everything is maintained incrementally: a move only changes points within
-// one cell of the placed or captured stones, and one pass over those points
-// refreshes both movers' actor scores.
+// Everything is maintained incrementally: a changed cell alters only its own
+// score and the layer-5 codes of its four orthogonal neighbours, and one pass
+// over those points refreshes both movers' actor scores.
 // Sampling rejects illegal and true-eye points lazily (their weight is zeroed
 // until their neighbourhood changes).
 //
@@ -71,7 +71,6 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 999)
-//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 999)
 //   TD_ACTOR_TERM_LR  actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
@@ -89,9 +88,8 @@ function create(cfg) {
 
   const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 35);
   const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 999);
-  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 999);
-  const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
-  let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
+  const USE5 = D5 > 0;                       // layer 5 ever used (tables, snapshots)
+  let act5 = USE5;                           // layer 5 active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.002);
   const TEMP     = cfg.float('TD_TEMP', 1);
@@ -112,8 +110,6 @@ function create(cfg) {
   }
   let truncActive = false, truncPly = 0;    // per move: truncate this move's sims; the ply the sim stops at
 
-  const need9    = USE9;                   // the 8-cell code is needed
-
   // Playout tail: the standard ppat playout.  A hard failure, not a fallback.
   const ppatPath = _isNode
     ? cfg.str('PPAT_DATA', require('path').join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'))
@@ -126,14 +122,14 @@ function create(cfg) {
 
   // ── Per-instance state (sized on first use; rebuilt if the board size changes) ──
   let area = 0;
-  let w1 = null, w5 = null, w9 = null;          // actor weights: [mover][p](code)
+  let w1 = null, w5 = null;                     // actor weights: [mover][p](code)
   let sc = null, ex = null;                     // per-mover score / exp(score/T) over points
   const S = [0, 0];                             // per-mover Σ ex over allowed points
-  let k5a = null, k9a = null;                   // per-point current window codes
+  let k5a = null;                               // per-point current 4-cell code
   let mark = null, list = null;                 // dedup scratch for affected points
   let changed = null;                           // cells altered by a move (stone + captures)
   // Per-step records for the actor's update at sim end.
-  let exs = null, Ss = null, movers = null, chosen = null, k5s = null, k9s = null;
+  let exs = null, Ss = null, movers = null, chosen = null, k5s = null;
   let fromActor = null;                         // step sampled from the actor (else the tail)
   let lastActorSteps = 0, lastReturn = 0;
   let maxSteps = 0;
@@ -144,10 +140,9 @@ function create(cfg) {
     area = N * N;
     w1 = new Float32Array(2 * area);
     w5 = new Float32Array(USE5 ? 2 * area * 81 : 0);
-    w9 = new Float32Array(USE9 ? 2 * area * 6561 : 0);
     sc = [new Float64Array(area), new Float64Array(area)];
     ex = [new Float64Array(area), new Float64Array(area)];
-    k5a = new Int32Array(area); k9a = new Int32Array(area);
+    k5a = new Int32Array(area);
     mark = new Uint8Array(area);
     list = new Int32Array(area);
     changed = new Int32Array(area + 1);
@@ -159,50 +154,45 @@ function create(cfg) {
     fromActor = new Uint8Array(maxSteps);
     ppatState = PPat.createState(N);
     k5s = new Int32Array(USE5 ? maxSteps * area : 0);
-    k9s = new Int32Array(USE9 ? maxSteps * area : 0);
   }
 
   function reset() {
-    w1.fill(0); w5.fill(0); w9.fill(0);
+    w1.fill(0); w5.fill(0);
     base[0] = base[1] = 0.5;
   }
 
-  // Actor score for mover m at p from precomputed codes (active layers only).
-  function scoreFrom(m, p, k5, k9) {
+  // Actor score for mover m at p from the precomputed code (active layers only).
+  function scoreFrom(m, p, k5) {
     const mp = m * area + p;
     let s = w1[mp];
     if (act5) s += w5[mp * 81 + k5];
-    if (act9) s += w9[mp * 6561 + k9];
     return s;
   }
-  function score(cells, nbr, dnbr, m, p) {
-    const k5 = (USE5 || need9) ? code5(cells, nbr, p) : 0;
-    const k9 = need9 ? code9(cells, dnbr, p, k5) : 0;
-    return scoreFrom(m, p, k5, k9);
+  function score(cells, nbr, m, p) {
+    return scoreFrom(m, p, USE5 ? code5(cells, nbr, p) : 0);
   }
 
   // Recompute everything anchored at p: both movers' actor score/ex (S kept
   // in step; skipped in the playout tail, where the scores are unused).  Kept
   // small so V8 inlines the code and score helpers into it (the hot function).
-  function recompute(cells, nbr, dnbr, p) {
-    const k5 = (USE5 || need9) ? code5(cells, nbr, p) : 0;
-    const k9 = need9 ? code9(cells, dnbr, p, k5) : 0;
-    k5a[p] = k5; k9a[p] = k9;
+  function recompute(cells, nbr, p) {
+    const k5 = USE5 ? code5(cells, nbr, p) : 0;
+    k5a[p] = k5;
     const v  = cells[p];
     if (actorOn) {
       for (let m = 0; m < 2; m++) {
         const old = ex[m][p];
         let e = 0;
-        if (v === EMPTY) { const s = scoreFrom(m, p, k5, k9); sc[m][p] = s; e = Math.exp(s / TEMP); }
+        if (v === EMPTY) { const s = scoreFrom(m, p, k5); sc[m][p] = s; e = Math.exp(s / TEMP); }
         ex[m][p] = e;
         S[m] += e - old;
       }
     }
   }
 
-  function recomputeAll(cells, nbr, dnbr) {
+  function recomputeAll(cells, nbr) {
     ex[0].fill(0); ex[1].fill(0); S[0] = S[1] = 0;
-    for (let p = 0; p < area; p++) recompute(cells, nbr, dnbr, p);
+    for (let p = 0; p < area; p++) recompute(cells, nbr, p);
   }
 
   // Refresh only the actor scores from the stored codes, after the active
@@ -212,16 +202,30 @@ function create(cfg) {
     for (let p = 0; p < area; p++) {
       for (let m = 0; m < 2; m++) {
         let e = 0;
-        if (cells[p] === EMPTY) { const s = scoreFrom(m, p, k5a[p], k9a[p]); sc[m][p] = s; e = Math.exp(s / TEMP); }
+        if (cells[p] === EMPTY) { const s = scoreFrom(m, p, k5a[p]); sc[m][p] = s; e = Math.exp(s / TEMP); }
         ex[m][p] = e;
         S[m] += e;
       }
     }
   }
 
-  // After stone changes at the cells in `changed`, recompute every point
-  // whose 3×3 neighbourhood contains one of them (the cell and its 8
-  // neighbours).  That covers every actor feature that can move.
+  // Lift a lazy exclusion at p (sample() zeroes illegal and true-eye points)
+  // without recomputing its score: the score is current, only its legality or
+  // eye status may have changed.
+  function relift(cells, p) {
+    if (!actorOn || cells[p] !== EMPTY) return;
+    for (let m = 0; m < 2; m++) {
+      if (ex[m][p] > 0) continue;
+      const e = Math.exp(sc[m][p] / TEMP);
+      ex[m][p] = e; S[m] += e;
+    }
+  }
+
+  // After stone changes at the cells in `changed`: recompute every point
+  // whose score can move — each changed cell and its 4 orthogonal neighbours
+  // (the points whose layer-5 code contains it) — and lift exclusions on the
+  // 4 diagonal neighbours, whose true-eye status can change but whose score
+  // cannot.
   function recomputeAround(g, changed, nChanged) {
     const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr;
     let n = 0;
@@ -230,10 +234,13 @@ function create(cfg) {
       if (!mark[q]) { mark[q] = 1; list[n++] = q; }
       for (let d = 0; d < 4; d++) {
         const a = nbr[b + d];  if (!mark[a]) { mark[a] = 1; list[n++] = a; }
-        const c = dnbr[b + d]; if (!mark[c]) { mark[c] = 1; list[n++] = c; }
       }
     }
-    for (let i = 0; i < n; i++) { const p = list[i]; mark[p] = 0; recompute(cells, nbr, dnbr, p); }
+    for (let i = 0; i < n; i++) { const p = list[i]; mark[p] = 0; recompute(cells, nbr, p); }
+    for (let i = 0; i < nChanged; i++) {
+      const b = changed[i] * 4;
+      for (let d = 0; d < 4; d++) relift(cells, dnbr[b + d]);
+    }
   }
 
   // Sample a point for mover m from ex[m] (softmax), rejecting illegal and
@@ -261,10 +268,10 @@ function create(cfg) {
   // the update.
   function simulate(game, rng) {
     const g = game.clone();
-    const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
-    act5 = USE5; act9 = USE9;              // ply 0: every enabled layer is on
+    const nbr = g._nbr, cells = g.cells;
+    act5 = USE5;                           // ply 0: the layer is on if enabled
     actorOn = true;
-    recomputeAll(cells, nbr, dnbr);
+    recomputeAll(cells, nbr);
     let t = 0, actorSteps = 0;
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
@@ -272,15 +279,14 @@ function create(cfg) {
       const o = t * area;
       actorOn = t < actorDepth;
       if (actorOn) {
-        const a5 = t < D5, a9 = t < D9;
-        if (a5 !== act5 || a9 !== act9) { act5 = a5; act9 = a9; refreshScores(cells); }
+        const a5 = t < D5;
+        if (a5 !== act5) { act5 = a5; refreshScores(cells); }
       }
       let move;
       if (actorOn) {
         move = sample(g, m, rng);
         exs.set(ex[m], o);
         if (act5) k5s.set(k5a, o);
-        if (act9) k9s.set(k9a, o);
         Ss[t] = S[m];
         actorSteps++;
       } else {
@@ -299,7 +305,7 @@ function create(cfg) {
       if (nChanged > 0) recomputeAround(g, changed, nChanged);
       // A ko point turns legal again once any other move is played; its
       // neighbourhood did not change, so lift its exclusion explicitly.
-      if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, dnbr, prevKo);
+      if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, nbr, prevKo);
       t++;
     }
     lastActorSteps = actorSteps;
@@ -321,8 +327,8 @@ function create(cfg) {
     if (!fromActor[t] || move === PASS) return;   // tail moves and PASS are outside the softmax
     const o = t * area;
     const e = exs.subarray(o, o + area);
-    const k5 = k5s.subarray(o, o + area), k9 = k9s.subarray(o, o + area);
-    const u5 = t < D5, u9 = t < D9;        // layers that were active at this ply
+    const k5 = k5s.subarray(o, o + area);
+    const u5 = t < D5;                     // layer 5 was active at this ply
     const invS = 1 / Ss[t];
     const k = g / TEMP;
     for (let p = 0; p < area; p++) {
@@ -332,7 +338,6 @@ function create(cfg) {
       const mp = m * area + p;
       w1[mp] += gr;
       if (u5) w5[mp * 81 + k5[p]] += gr;
-      if (u9) w9[mp * 6561 + k9[p]] += gr;
     }
   }
 
@@ -370,11 +375,11 @@ function create(cfg) {
     }
 
     // Play the actor's argmax over legal non-eye points.
-    const cells = game.cells, nbr = game._nbr, dnbr = game._dnbr;
+    const cells = game.cells, nbr = game._nbr;
     const m = game.current === BLACK ? 0 : 1;
-    act5 = USE5; act9 = USE9;             // the root is ply 0
+    act5 = USE5;                          // the root is ply 0
     actorOn = true;
-    recomputeAll(cells, nbr, dnbr);       // root scores
+    recomputeAll(cells, nbr);             // root scores
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
       if (cells[p] !== EMPTY || !game.isLegal(p) || game.isTrueEye(p)) continue;
@@ -387,30 +392,21 @@ function create(cfg) {
   // Test hook: live views of the internals (state arrays are created by setup).
   function _internals() {
     return { setup, reset, recomputeAll, recomputeAround, refreshScores, score, sample, simulate, update,
-             setActive: (a5, a9) => { act5 = a5; act9 = a9; },
+             setActive: (a5) => { act5 = a5; },
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             sc, ex, S, k5a, k9a, base, w1, w5, w9, area };
+             sc, ex, S, k5a, base, w1, w5, area };
   }
 
   return { getMove, _internals };
 }
 
-// ── Feature keys ──────────────────────────────────────────────────────────────
-// Window codes at p from a cell array (base 3, cell + 1 per digit).
+// ── Feature key ───────────────────────────────────────────────────────────────
+// The 4-neighbour code at p from a cell array (base 3, cell + 1 per digit).
 function code5(cells, nbr, p) {
   const b = p * 4;
   return (cells[nbr[b]] + 1) + 3 * (cells[nbr[b + 1]] + 1) + 9 * (cells[nbr[b + 2]] + 1) + 27 * (cells[nbr[b + 3]] + 1);
-}
-function code9(cells, dnbr, p, c5) {
-  const b = p * 4;
-  return c5 + 81 * ((cells[dnbr[b]] + 1) + 3 * (cells[dnbr[b + 1]] + 1) + 9 * (cells[dnbr[b + 2]] + 1) + 27 * (cells[dnbr[b + 3]] + 1));
-}
-// 2×2 window anchored at p: p, right, down, down-right (nbr 3, nbr 1, dnbr 3).
-function code4(cells, nbr, dnbr, p) {
-  const b = p * 4;
-  return (cells[p] + 1) + 3 * (cells[nbr[b + 3]] + 1) + 9 * (cells[nbr[b + 1]] + 1) + 27 * (cells[dnbr[b + 3]] + 1);
 }
 
 let _default = null;
