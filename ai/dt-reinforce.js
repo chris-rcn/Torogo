@@ -50,8 +50,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 // removed: paired runs at 2 s showed no gain from either.)  The actor plays
 // the first ACTOR_DEPTH plies of a sim (default 30); the rest is a playout
 // tail, uniform random below PPAT_MIN_PHASE and the ppat policy above it,
-// and PPAT_MIN_PHASE defaults to 1 (ppat off: at 100 ms on 776 positions it
-// made no difference, 2026-09-28).  Unlimited depth lost 0.0047 mae to depth
+// and PPAT_MIN_PHASE defaults to 0.6 (in a match from phase 0.5 at 500 ms on
+// 12x12 the ppat tail won 62 of 96 against the uniform one, 2026-09-29; the
+// MD file had scored it the other way).  Unlimited depth lost 0.0047 mae to depth
 // 30 on the untruncated roots at 2 s (2026-09-29).  Silver et al. switch to
 // a default policy after ~6 plies, but here the actor's own moves are its
 // training data.
@@ -97,7 +98,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     2 s ladder on roots 0.42-0.8: 20 -> 0.0084, 30 -> 0.0080,
 //                     40 -> 0.0092, unlimited -> 0.0127                (default 30)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness, ppat above;
-//                     1 = ppat off, no model loaded                       (default 1)
+//                     1 = ppat off, no model loaded                     (default 0.6)
 //   PPAT_DATA         ppat weight file for the tail, loaded only when PPAT_MIN_PHASE < 1
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   FPOL_WEIGHT_0     root move influence: featurepol's logit times a weight is
@@ -186,7 +187,7 @@ function create(cfg) {
   // Playout tail: uniform random below PPAT_MIN_PHASE, the ppat policy above.
   // The ppat model is loaded only if it can ever play (min phase < 1), and
   // then its absence is a hard failure, not a fallback.
-  const PPAT_MIN_PHASE = cfg.float('PPAT_MIN_PHASE', 1);
+  const PPAT_MIN_PHASE = cfg.float('PPAT_MIN_PHASE', 0.6);
   let ppatModel = null;
   if (PPAT_MIN_PHASE < 1) {
     const ppatPath = _isNode
