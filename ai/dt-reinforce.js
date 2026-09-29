@@ -62,14 +62,18 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 // sampled-from distribution and the point codes.
 //
 // Truncation (TD_TRUNC_MAX_PHASE > 0): a sim plays TD_TRUNC_ACTOR_DEPTH actor
-// plies, then ceil(delta * area) UNIFORM random plies — the fielded trunc
-// agent's rule, here a buffer so the actor cannot steer into the leaf
-// model's defects — and stops; the vpat model's value of the truncation point
-// stands in for the outcome everywhere the outcome is used.  The model is the
-// anchor; no grounding schedule.  Truncation is used only when the truncation
-// point's phase (root phase + truncation ply / area, captures ignored) is below
-// TD_TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
-// while the actor depth and delta are swept.
+// plies, then a buffer of UNIFORM random plies — the fielded trunc agent's
+// rule, here so the actor cannot steer into the leaf model's defects — and
+// stops; the vpat model's value of the truncation point stands in for the
+// outcome everywhere the outcome is used.  The model is the anchor; no
+// grounding schedule.  The truncation point's phase (root phase + truncation
+// ply / area, captures ignored) must stay below TD_TRUNC_MAX_PHASE, the
+// model's trusted band.  The buffer is ceil(TD_TRUNC_PHASE_DELTA * area)
+// plies when the root allows it, and shortened for roots nearer the band's
+// edge as far as ceil(TD_TRUNC_PHASE_DELTA_MIN * area) plies; a root that
+// cannot fit even the minimum buffer under the edge runs full sims.  With
+// min = max (the default) a root either takes the full buffer or does not
+// truncate.
 //
 // ── Factory ──
 // create(cfg) -> { getMove, valueB }.  cfg is a Util.makeCfg reader (P1_/P2_
@@ -97,9 +101,13 @@ const VPat = Util.load('./vpatterns.js', 'VPatterns');
 //   TD_ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
-//   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
-//                     fraction of the area; 0 = the leaf right after the actor
-//                     plies                                            (default 0.2)
+//   TD_TRUNC_PHASE_DELTA  the random buffer after the actor plies, as a fraction of
+//                     the area, for roots that fit it under TD_TRUNC_MAX_PHASE;
+//                     0 = the leaf right after the actor plies             (default 0.2)
+//   TD_TRUNC_PHASE_DELTA_MIN  the shortest buffer a root may truncate with: roots
+//                     nearer the band's edge get the longest buffer that still
+//                     fits, down to this; below it they run full sims
+//                                                     (default TD_TRUNC_PHASE_DELTA)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 5)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
 //                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
@@ -119,6 +127,8 @@ function create(cfg) {
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
+  const TRUNC_DELTA_MIN   = cfg.float('TD_TRUNC_PHASE_DELTA_MIN', TRUNC_DELTA);
+  if (TRUNC_DELTA_MIN > TRUNC_DELTA) throw new Error(`dt-reinforce: TD_TRUNC_PHASE_DELTA_MIN ${TRUNC_DELTA_MIN} exceeds TD_TRUNC_PHASE_DELTA ${TRUNC_DELTA}`);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
   const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
   let vpatModel = null;
@@ -469,8 +479,14 @@ function create(cfg) {
     if (d < 0 || d > 2) reset();           // a new game (or an unexpected jump)
     lastMoveCount = game.moveCount;
     if (USE_R && ROOT_RESET) wR.fill(0);   // the root slice holds only this move's sims
-    truncPly = TRUNC_ACTOR_DEPTH + Math.ceil(TRUNC_DELTA * area);       // actor plies + buffer plies
-    truncActive = game.phase() + truncPly / area < TRUNC_MAX_PHASE;
+    // The buffer: the full one if its truncation point stays under the band's
+    // edge, else the longest that does; the root truncates if that is at least
+    // the minimum buffer.
+    const phase = game.phase();
+    let buffer = Math.ceil(TRUNC_DELTA * area);
+    while (buffer > 0 && !(phase + (TRUNC_ACTOR_DEPTH + buffer) / area < TRUNC_MAX_PHASE)) buffer--;
+    truncPly = TRUNC_ACTOR_DEPTH + buffer;
+    truncActive = buffer >= Math.ceil(TRUNC_DELTA_MIN * area) && phase + truncPly / area < TRUNC_MAX_PHASE;
     const tStart = Date.now();
     let sims = 0, longest = 0, totalSteps = 0, sumZ = 0;
     while (true) {
