@@ -113,6 +113,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //   ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
 //                     (and by the root argmax)                            (default 0)
 //   ACTOR_ROOT_RESET  1 = zero the root slice at the start of every getMove (default 1)
+//   RESET_EACH_MOVE   1 = start every move from zero actor weights and baseline, as
+//                     if each root were a new game (what evalmovedetails measures,
+//                     since its positions are never two plies apart); 0 = carry
+//                     them from move to move within a game               (default 0)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
 //                     move" (none at ply 0 and the root)                    (default 0)
 //   TEMP              softmax temperature for the simulations          (default 1)
@@ -139,6 +143,7 @@ function create(cfg) {
   const PB       = cfg.int('ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
+  const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 0) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TEMP', 1);
@@ -522,7 +527,7 @@ function create(cfg) {
   function runSims(game, budgetMs, rng) {
     if (area !== game.N * game.N) { setup(game.N); reset(); }
     const d = game.moveCount - lastMoveCount;
-    if (d < 0 || d > 2) reset();           // a new game (or an unexpected jump)
+    if (RESET_EACH_MOVE || d < 0 || d > 2) reset();   // a new game (or an unexpected jump), or every move
     lastMoveCount = game.moveCount;
     if (USE_R && ROOT_RESET) wR.fill(0);   // the root slice holds only this move's sims
     // The buffer: the full one if its truncation point stays under the band's
