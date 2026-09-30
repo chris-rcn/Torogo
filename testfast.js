@@ -1722,8 +1722,8 @@ section('RAVE vs passer: game ends quickly');
 {
   // Passer always passes; after passer's first pass RAVE sees consecutivePasses=1
   // and the obvious-pass check fires immediately (already winning), so the game
-  // ends in just a few moves. Uses 9×9 because KOMI(9)=3.5 keeps BLACK ahead
-  // with only the centre stone, while KOMI(7)=48.5 does not.
+  // ends in just a few moves. Uses 9×9, where KOMI(9)=3.5 keeps BLACK ahead
+  // with only the centre stone.
   const { getMove: raveAgent } = require('./ai/rave.js');
   const { getMove: passerAgent } = require('./ai/passer.js');
   const N = 9;

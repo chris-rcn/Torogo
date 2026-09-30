@@ -39,7 +39,7 @@ float g2_komi(int N) {
     switch (N) {
         case 5: return 24.5f;
         case 6: return 35.5f;
-        case 7: return 48.5f;
+        case 7: return 3.5f;
         default: return 3.5f;
     }
 }
