@@ -23,16 +23,12 @@ static double arg_num(int argc, char **argv, const char *flag, double def) {
 static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
 /* ppat.h keeps one active encoding, so two ppat sides must share it. */
-typedef struct { int adj_lib, phases, t12, atari, xa, cap, cs; } PpatEnc;
-static PpatEnc ppat_enc(void) {
-    return (PpatEnc){ ppat_adj_lib, ppat_phase_count, ppat_twelvecell, ppat_atari_n, ppat_xa_n, ppat_capture_n, ppat_cs_n };
-}
 
 static void load_side(PuctCfg *c, const char *path, double min_phase, const char *who) {
     *c = puct_default_cfg();
     c->ppat_min_phase = min_phase;
     if (!path) return;                              /* uniform playouts */
-    c->ppat_w = ppat_load_weights(path, &c->early_pass, &c->pass_weight);
+    c->ppat_w = ppat_load_model(path, &c->early_pass, &c->pass_weight);   /* the file defines its features */
     if (!c->ppat_w) { fprintf(stderr, "ppat_match: cannot load %s ppat model %s\n", who, path); exit(1); }
 }
 
@@ -69,10 +65,10 @@ int main(int argc, char **argv) {
 
     fpol_load(fpol_path);
     load_side(&cfg.side[0], p1_path, arg_num(argc, argv, "--p1-ppat-min-phase", 0.6), "P1");
-    const PpatEnc e1 = ppat_enc();
+    const PpatEncoding e1 = ppat_get_encoding();
     load_side(&cfg.side[1], p2_path, arg_num(argc, argv, "--p2-ppat-min-phase", 0.6), "P2");
     if (p1_path) {
-        const PpatEnc e2 = ppat_enc();
+        const PpatEncoding e2 = ppat_get_encoding();
         if (memcmp(&e1, &e2, sizeof e1)) { fprintf(stderr, "ppat_match: P1 and P2 ppat models use different encodings\n"); return 1; }
     }
     printf("p1: %s  p2: %s  fpol: %s\n", p1_path ? p1_path : "uniform playouts", p2_path, fpol_path);

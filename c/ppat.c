@@ -17,7 +17,7 @@ const int32_t *ppat_canon_id = NULL;
  * usual lossy shortcut: the feature fires only when the inner ninecell is
  * all-empty, and that inner pattern is fixed by every element of D4, so any
  * transform that canonicalises the arms is a symmetry of the whole twelvecell. */
-int ppat_self_atari = 1;
+int ppat_self_atari = 0;              /* --self-atari; off by default */
 int ppat_file_self_atari = 0;          /* set by ppat_load_weights from the file */
 int ppat_atari_n = 0;
 int ppat_file_atari = 0;               /* set by ppat_load_weights from the file */
@@ -644,9 +644,12 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             }
         }
 
-        /* Computed once; feeds the graded feature AND the save-slot split. */
-        const int sa = ppat_self_atari ? self_atari_size(g, idx, b4, cur) : 0;
-        if (sa > 0)
+        /* Computed once; feeds the graded feature (when on), the save-slot
+         * split and the two interaction grids, so it is needed whenever any of
+         * them can fire (ppat-lib.js: selfAtari || hasPrev). */
+        const int sa = (ppat_self_atari || has_prev || ppat_xa_n || ppat_cs_n)
+                     ? self_atari_size(g, idx, b4, cur) : 0;
+        if (ppat_self_atari && sa > 0)
             st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
 
         /* Gives-atari: the largest adjacent enemy chain this move reduces to
@@ -837,6 +840,8 @@ void ppat_save_weights(const char *path, const float *weights, int total,
     fclose(f);
 }
 
+static int load_adopt_features = 0;    /* set only inside ppat_load_model */
+
 float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass_weight) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "ppat_load_weights: cannot open %s\n", path); return NULL; }
@@ -912,6 +917,14 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
         ppat_file_capture = cp ? atoi(cp + 9) : 0;
         const char *cs = strstr(buf, "captureBySelfAtari: ");
         ppat_file_cs = cs ? atoi(cs + 20) : 0;
+    }
+    if (load_adopt_features) {             /* ppat_load_model: the file defines the model */
+        ppat_twelvecell = ppat_file_twelvecell;
+        ppat_self_atari = ppat_file_self_atari;
+        ppat_atari_n    = ppat_file_atari;
+        ppat_xa_n       = ppat_file_xa;
+        ppat_capture_n  = ppat_file_capture;
+        ppat_cs_n       = ppat_file_cs;
     }
     /* Block-aware load.  The weight vector is a sequence of block-major blocks
      * (each spans all phases contiguously): pattern, 7 local, twelvecell,
@@ -996,3 +1009,26 @@ float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass
     return weights;
 }
 
+
+float *ppat_load_model(const char *path, bool *out_early_pass, float *out_pass_weight) {
+    load_adopt_features = 1;
+    float *w = ppat_load_weights(path, out_early_pass, out_pass_weight);
+    load_adopt_features = 0;
+    return w;
+}
+
+PpatEncoding ppat_get_encoding(void) {
+    return (PpatEncoding){ ppat_adj_lib, ppat_phase_count, ppat_twelvecell, ppat_self_atari,
+                           ppat_atari_n, ppat_xa_n, ppat_capture_n, ppat_cs_n };
+}
+
+void ppat_set_encoding(const PpatEncoding *e) {
+    ppat_init(e->adj_lib);
+    ppat_phase_count = e->phases;
+    ppat_twelvecell  = e->twelvecell;
+    ppat_self_atari  = e->self_atari;
+    ppat_atari_n     = e->atari;
+    ppat_xa_n        = e->xa;
+    ppat_capture_n   = e->capture;
+    ppat_cs_n        = e->cs;
+}

@@ -77,13 +77,15 @@ void     ppat_init(int adj_lib);
  * the ninecell key and its block is APPENDED after the pattern and local
  * blocks, so every pre-extension weight index keeps its meaning and an old
  * model fine-tunes into the extension with its weights untouched. */
-/* Graded self-atari: when a LEGAL candidate would leave its own group in
- * atari, one gated feature fires, one-hot on min(group size, PPAT_SA_N) —
- * size-1 self-atari (throw-ins, snapbacks) is often correct while large is
- * almost always a blunder, so the grades let training find the sign flip.
+/* Graded self-atari (--self-atari, 0 = off): when a LEGAL candidate would
+ * leave its own group in atari, one gated feature fires, one-hot on
+ * min(group size, PPAT_SA_N) — size-1 self-atari (throw-ins, snapbacks) is
+ * often correct while large is almost always a blunder, so the grades let
+ * training find the sign flip.  It was once judged a keeper and made
+ * unconditional; that verdict is no longer trusted, so it is opt-in again.
  * Appended after the twelvecell block, so existing models fine-tune in. */
 #define PPAT_SA_N 4
-extern int ppat_self_atari;            /* always 1 — the feature proved out and is unconditional */
+extern int ppat_self_atari;            /* the run's setting, 0 = off */
 extern int ppat_file_self_atari;       /* what the last loaded file carried */
 
 /* Graded gives-atari (--atari N, 0 = off): when a candidate reduces an
@@ -174,5 +176,20 @@ void  ppat_save_weights(const char *path, const float *weights, int total,
 /* out_early_pass / out_pass_weight (both nullable) receive the file's earlyPass
  * declaration and its learned pass logit. */
 float *ppat_load_weights(const char *path, bool *out_early_pass, float *out_pass_weight);
+
+/* As ppat_load_weights, but the FILE defines the optional features: twelvecell,
+ * self-atari, atari, atari-by-self-atari, capture and capture-by-self-atari
+ * are set from its header before the layout is built (ppat-lib.js's rule).
+ * For callers that play a model rather than train one; the trainer's own
+ * --load keeps ppat_load_weights, so its flags govern a fine-tune. */
+float *ppat_load_model(const char *path, bool *out_early_pass, float *out_pass_weight);
+
+/* The active encoding: everything extraction reads from ppat.h's globals.
+ * Two models with different encodings take turns by swapping it. */
+typedef struct {
+    int adj_lib, phases, twelvecell, self_atari, atari, xa, capture, cs;
+} PpatEncoding;
+PpatEncoding ppat_get_encoding(void);
+void         ppat_set_encoding(const PpatEncoding *e);   /* ppat_init(adj_lib) included */
 
 #endif /* PPAT_H */

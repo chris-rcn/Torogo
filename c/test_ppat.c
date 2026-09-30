@@ -36,7 +36,8 @@ static int get_mask(const Game2 *g, int32_t cell) {
         int mask = 0;
         for (int fi = st.feat_start[i]; fi < st.feat_start[i + 1]; fi++) {
             int key = st.feat[fi];
-            if (key >= prev_base) mask |= 1 << ((key - prev_base) % 7);
+            /* the 7 local slots only: later blocks (self-atari, ...) are not bits */
+            if (key >= prev_base && key < prev_base + 7 * ppat_phase_count) mask |= 1 << ((key - prev_base) % 7);
         }
         return mask;
     }

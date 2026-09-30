@@ -100,6 +100,10 @@
  *                           The block is APPENDED, so --load of a model without
  *                           it fine-tunes (old weights keep their indices, the
  *                           new ones start at zero).
+ *     --self-atari          graded self-atari feature (default off): a gated
+ *                           key when the candidate leaves its own chain in
+ *                           atari, one-hot on min(chain size, 4).  Appended
+ *                           block; fine-tunes in
  *     --atari <n>           graded gives-atari feature (default 0 = off): a
  *                           gated key when the candidate reduces an adjacent
  *                           enemy chain to one liberty, one-hot on
@@ -1466,14 +1470,14 @@ static float *ref_theta = NULL;        /* reference weights, NULL = column off *
 static int    match_truncated;         /* set when a match stopped at MATCH_MAX_S */
 static double match_se;                /* standard error of the last match's win rate, from its pair scores */
 
-/* The reference may be built at a different adjLib / phase count than the run.
- * The canon table is cached per cap (ppat.h), so a match just swaps the active
- * encoding between moves — the two models never need to agree. */
-static int    ref_adj_lib, ref_phases;
-static int    run_adj_lib, run_phases;
+/* The reference may be built at a different encoding than the run (adjLib,
+ * phase count, optional features — its own file defines them).  The canon
+ * table is cached per cap (ppat.h), so a match just swaps the active encoding
+ * between moves — the two models never need to agree. */
+static PpatEncoding ref_enc, run_enc;
 
-static void use_run_model(void) { ppat_init(run_adj_lib); ppat_phase_count = run_phases; }
-static void use_ref_model(void) { ppat_init(ref_adj_lib); ppat_phase_count = ref_phases; }
+static void use_run_model(void) { ppat_set_encoding(&run_enc); }
+static void use_ref_model(void) { ppat_set_encoding(&ref_enc); }
 
 /* Play `games` policy-vs-policy games, alternating colours, and return the
  * CURRENT model's win rate.  A fixed seed each call, so a change in the column
@@ -1665,12 +1669,12 @@ static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
 
 
 
-/* Optional-feature summary for the model banner line (empty when all default;
- * self-atari is always on, so it is not listed). */
+/* Optional-feature summary for the model banner line (empty when all off). */
 static void banner_features(char *buf, size_t n) {
     buf[0] = 0;
     size_t o = 0;
     #define ADD(...) do { o += snprintf(buf + o, o < n ? n - o : 0, __VA_ARGS__); } while (0)
+    if (ppat_self_atari)      ADD("%sself-atari", o ? ", " : "");
     if (ppat_twelvecell == 1) ADD("%stwelvecell", o ? ", " : "");
     if (ppat_twelvecell == 2) ADD("%stwelvecell2", o ? ", " : "");
     if (ppat_atari_n)   ADD("%satari %d", o ? ", " : "", ppat_atari_n);
@@ -2033,6 +2037,8 @@ static void print_help(FILE *out, const char *prog) {
 "  --twelvecell               2nd key on an all-empty ninecell (dist-2 orthogonals)\n"
 "  --twelvecell2              same key, looser trigger (adjacent points empty);\n"
 "                             mutually exclusive with --twelvecell\n"
+"  --self-atari               graded self-atari feature, one-hot on own chain size 1..4\n"
+"                             (default off)\n"
 "  --atari N                  graded gives-atari feature, one-hot on chain size (default 0 = off)\n"
 "  --capture N                graded capture-size feature (default 0 = off)\n"
 "  --atari-by-self-atari N    mutual-atari interaction grid, NxN (default 0 = off)\n"
@@ -2261,6 +2267,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
     ppat_twelvecell = t12_2 ? 2 : t12_1 ? 1 : 0;
+    ppat_self_atari = has_flag(argc, argv, "--self-atari");
     ppat_atari_n = get_int_arg(argc, argv, "--atari", 0);
     if (ppat_atari_n < 0 || ppat_atari_n > PPAT_ATARI_MAX) {
         fprintf(stderr, "error: --atari must be 0..%d\n", PPAT_ATARI_MAX);
@@ -2304,21 +2311,19 @@ int main(int argc, char **argv) {
 
 
     /* Reference model for the directWR column.  Loaded AFTER the run's own weights,
-     * because ppat_load_weights rebuilds the global canon table for the file's
-     * adjLib — so we capture the run's cap/phases first, load the reference,
-     * then verify nothing moved.  A mismatch disables the column loudly rather
-     * than comparing models built on different tables. */
-    run_adj_lib = ppat_adj_lib;
-    run_phases  = ppat_phase_count;
+     * because loading sets the global encoding from the file (ppat_load_model:
+     * the reference is played as its file defines it, whatever this run's
+     * feature flags) — so we capture the run's encoding first, load the
+     * reference, keep its encoding, and restore the run's. */
+    run_enc = ppat_get_encoding();
     if (cfg_ref_weights) {
         const int run_total = TOTAL;
-        ref_theta = ppat_load_weights(cfg_ref_weights, &ref_early_pass, &ref_pass_weight);
+        ref_theta = ppat_load_model(cfg_ref_weights, &ref_early_pass, &ref_pass_weight);
         if (!ref_theta) {
             fprintf(stderr, "WARNING: --ref-weights %s could not be loaded"
                             " — directWR and WR columns disabled\n", cfg_ref_weights);
         } else {
-            ref_adj_lib = ppat_adj_lib;
-            ref_phases  = ppat_phase_count;
+            ref_enc = ppat_get_encoding();
         }
         use_run_model();                        /* put the run's encoding back */
         TOTAL = run_total;

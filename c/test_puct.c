@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     PuctSearch *sp = NULL;
     if (argc == 4) {
         PuctCfg pc = puct_default_cfg();
-        pc.ppat_w = ppat_load_weights(argv[3], &pc.early_pass, &pc.pass_weight);
+        pc.ppat_w = ppat_load_model(argv[3], &pc.early_pass, &pc.pass_weight);
         if (!pc.ppat_w) { fprintf(stderr, "cannot load ppat model %s\n", argv[3]); return 1; }
         sp = puct_new(&pc);
     }
