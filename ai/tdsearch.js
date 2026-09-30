@@ -70,8 +70,8 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
-//   CRITIC_LAYERS     critic layers, comma list from 1,4                (default 1,4)
-//   CRITIC_LR         critic step size, per active feature             (default 0.3)
+//   LAYERS            critic layers, comma list from 1,4                (default 1,4)
+//   LR                critic step size, per active feature             (default 0.3)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   AB_DEPTH          root alpha-beta depth over the critic's value, every legal
 //                     point a candidate at every node; 1 = the one-ply search (default 1)
@@ -86,11 +86,11 @@ function create(cfg) {
 
   const SEARCH_PLIES = cfg.int('SIM_SEARCH_PLIES', 6);
   const SEARCH_EPSILON = cfg.float('SIM_SEARCH_EPSILON', 0.1);
-  const cStr     = cfg.str('CRITIC_LAYERS', '1,4');
+  const cStr     = cfg.str('LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4);
-  if (!(C1 || C4) || cList.some(l => l !== 1 && l !== 4)) throw new Error(`tdsearch: CRITIC_LAYERS must be a non-empty subset of 1,4, got '${cStr}'`);
-  const CLR      = cfg.float('CRITIC_LR', 0.3);
+  if (!(C1 || C4) || cList.some(l => l !== 1 && l !== 4)) throw new Error(`tdsearch: LAYERS must be a non-empty subset of 1,4, got '${cStr}'`);
+  const CLR      = cfg.float('LR', 0.3);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
   const AB_DEPTH = cfg.int('AB_DEPTH', 1);
   if (AB_DEPTH < 1) throw new Error(`tdsearch: AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
