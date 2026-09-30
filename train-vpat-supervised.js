@@ -17,6 +17,9 @@
 //
 // Runs indefinitely (Ctrl-C to stop) unless --epochs is given.  Weights are
 // saved at every print; a new best teMSE also writes the -best checkpoint.
+// Each checkpoint's header records its provenance: git state, resolved
+// settings, every input with its own header (chaining through --load), and
+// the progress and metrics of the row that wrote it.
 
 const path = require('path');
 const fs   = require('fs');
@@ -287,8 +290,10 @@ function tdUpdate(features, target, lr) {
 function loadRecords(filePath) {
   const recs = [];
   let malformed = 0, outsideBand = 0;
+  const headers = new Map();   // distinct '#' header line -> count, for provenance
   const processLine = (line) => {
-    if (!line || line[0] === '#') return;
+    if (line && line[0] === '#') { headers.set(line, (headers.get(line) || 0) + 1); return; }
+    if (!line) return;
     const p = line.split(/\s+/);
     if (p.length !== 4) { malformed++; return; }
     const size  = parseInt(p[0], 10);
@@ -325,6 +330,7 @@ function loadRecords(filePath) {
   if (rem) processLine(rem);
   recs.outsideBand = outsideBand;
   recs.malformed = malformed;
+  recs.headers = headers;
   if (recs.length === 0) { console.error(`data '${filePath}' contains no valid records`); process.exit(1); }
   return recs;
 }
@@ -377,6 +383,7 @@ function replayRecord(rec) {
 const BIAS_FILE = opts['bias-file'] || null;
 let biasPairs = null;
 let biasInfo = null;   // { dropped, secs, ppat, minPhase, source } for the startup banner
+let biasHeaders = [];  // the artifact's '#' lines, for provenance
 // Called AFTER --load has resolved the final specs/prepSpecs: the cached
 // features must be extracted under the spec the weights are keyed by.  The
 // artifact is rescored at --delta: each recorded prefix is truncated to
@@ -387,6 +394,7 @@ function loadBiasPairs() {
   if (!BIAS_FILE) return;
   const lines = fs.readFileSync(BIAS_FILE, 'utf8').split('\n');
   const header = lines.find(l => l.startsWith('# bias-pairs:')) || '';
+  biasHeaders = lines.filter(l => l[0] === '#');
   const field = (k) => { const m = header.match(new RegExp(`${k}:\\s*(\\S+)`)); return m ? m[1] : null; };
   const maxDelta = field('delta') !== null ? parseFloat(field('delta')) : null;
   if (maxDelta !== null && DELTA > maxDelta + 1e-9) {
@@ -489,10 +497,13 @@ const evalGetMove = EVAL_AGENT
   ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove
   : null;
 
+let loadHeaders = null, loadWeightCount = 0;   // the resumed checkpoint's own header, for provenance
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     const cliSpecs = opts.spec ? specs : null;
     const loaded = loadWeights(LOAD_PATH, HEALTH_PATH);
+    loadHeaders = fs.readFileSync(LOAD_PATH, 'utf8').split('\n', 200).filter(l => l.startsWith('//'));
+    loadWeightCount = loaded.weights.size;
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
     if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
       console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
@@ -709,6 +720,79 @@ function evalVsReference(N, refGetMove, nGames) {
   return { results };
 }
 
+// ── Provenance header ────────────────────────────────────────────────────────
+// Every checkpoint records how it was made: code state, resolved settings
+// (defaults included), each input's size and its own '#' / '//' header (so
+// provenance chains through --load), and the progress + metrics of the row
+// that wrote it.
+
+const START_ISO = new Date().toISOString();
+const GIT_STATE = (() => {
+  const cp = require('child_process');
+  const git = (a) => cp.execFileSync('git', a, { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  try {
+    const head = git(['rev-parse', '--short', 'HEAD']).trim();
+    // porcelain lines are 'XY path'; the status columns may be blank, so no trim
+    const dirty = git(['status', '--porcelain', '--untracked-files=no']).split('\n').filter(Boolean).map(l => l.slice(3));
+    return dirty.length ? `${head}, modified: ${dirty.join(' ')}` : `${head}, clean`;
+  } catch (e) { return `unavailable (${e.message.split('\n')[0]})`; }
+})();
+const PROV_MAX_HEADERS = 40;   // distinct header lines kept per input
+function headerLines(lines, indent) {
+  const out = [];
+  let n = 0;
+  for (const [line, count] of lines) {
+    if (n++ === PROV_MAX_HEADERS) { out.push(`${indent}... ${lines.length - PROV_MAX_HEADERS} more distinct header lines`); break; }
+    out.push(`${indent}${line}${count > 1 ? `  (x${count})` : ''}`);
+  }
+  return out;
+}
+const PROV_STATIC = [
+  `started: ${START_ISO}`,
+  `git: ${GIT_STATE}`,
+  `host: ${require('os').hostname()}  node: ${process.version}  cwd: ${process.cwd()}`,
+  ...(HEALTH_PATH ? [`env: HEALTH_DATA=${HEALTH_PATH}`] : []),
+  `spec: ${specString(specs)}` +
+    (FROZEN.size > 0 ? `  frozen: ${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}` : ''),
+  `settings: lr: ${LR}  lr-decay: ${LR_DECAY}  smooth-weights: ${EMA_ALPHA}` +
+    `  max-weights: ${MAX_WEIGHTS || 'unlimited'}  epochs: ${EPOCHS || 'unlimited'}` +
+    `  band: [${MIN_PHASE}, ${MAX_PHASE}]  delta: ${DELTA !== null ? DELTA : 'none'}` +
+    `  no-add: ${NO_ADD}  cache-features: ${CACHE_FEATURES}`,
+  `data: ${DATA_PATH}  train: ${trainRecs.length}` +
+    (Number.isFinite(TRAIN_POS_RAW) ? ` (train-pos ${TRAIN_POS_RAW})` : '') +
+    `  of ${records.length} in band  malformed: ${records.malformed}  out-of-band: ${records.outsideBand}`,
+  ...headerLines([...records.headers], '  '),
+  ...(TEST_FILE ? [
+    `test: ${TEST_FILE}  records: ${testRecs.length}` +
+      (Number.isFinite(TEST_POS_RAW) ? ` (test-pos ${TEST_POS_RAW})` : '') +
+      `  of ${_testAll.length} in band  malformed: ${_testAll.malformed}  out-of-band: ${_testAll.outsideBand}`,
+    ...headerLines([..._testAll.headers], '  '),
+  ] : ['test: none']),
+  ...(biasPairs ? [
+    `bias: ${BIAS_FILE}  pairs: ${biasPairs.length}  out-of-band: ${biasInfo.dropped}`,
+    ...headerLines(biasHeaders.map(l => [l, 1]), '  '),
+  ] : []),
+  ...(LOAD_PATH ? [
+    `load: ${LOAD_PATH}  ${loadHeaders ? `weights: ${loadWeightCount}` : 'NOT FOUND (fresh start)'}`,
+    ...(loadHeaders || []).map(l => `  ${l}`),
+  ] : ['load: none (fresh start)']),
+];
+const fmtM = (v, d) => v !== null && v !== undefined ? v.toFixed(d) : 'none';
+function provenance(row) {
+  return [
+    `written: ${new Date().toISOString()}  elapsed: ${Util.fmtMs(Date.now() - t0).trim()}`,
+    `progress: epoch: ${epoch}  positions: ${nPos}  lr-now: ${LR}  weights: ${weights.size}`,
+    `metrics: trMSE: ${fmtM(row.trMSE, 5)}  teMSE: ${fmtM(row.teMSE, 5)}` +
+      (row.varB !== null ? `  b2: ${fmtM(row.b2, 6)}  lean: ${fmtM(row.lean, 4)}  varB: ${fmtM(row.varB, 6)}` : '') +
+      (row.ladr !== null ? `  ladr: ${fmtM(row.ladr, 4)}` : '') +
+      (row.mdRms !== null ? `  mdRms: ${fmtM(row.mdRms, 4)}` : '') +
+      (row.winRatio !== null ? `  winRatio vs ${EVAL_AGENT}: ${fmtM(row.winRatio, 4)} (${row.games} games)` : '') +
+      `  best-so-far: ${fmtM(bestMetric === Infinity ? null : bestMetric, 6)} (by ${biasPairs ? 'varB' : 'teMSE'})` +
+      (row.isBest ? '  this row set it' : ''),
+    ...PROV_STATIC,
+  ];
+}
+
 // ── Columns ───────────────────────────────────────────────────────────────────
 
 const COLS = ['T', 'pos', 'epoch', 'LR', 'tPos', 'nWts', 'avgW', 'trMSE', 'teMSE',
@@ -828,7 +912,10 @@ function statusPrint() {
 
   // Bake the deployment delta (--delta) into the checkpoint so consumers read
   // it as a default.
-  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META });
+  saveWeights(SAVE_PATH, { weights: saveEvalW(), specs, preparedSpecs: prepSpecs, trunc: TRUNC_META },
+    provenance({ trMSE, teMSE, b2: bs ? bs.b2 : null, lean: bs ? bs.lean : null, varB,
+                 ladr: ladrRatio, mdRms, winRatio: evalGetMove ? latestWR : null,
+                 games: batch ? batch.length : 0, isBest }));
   // The best checkpoint is byte-identical to the one just written, so copy the
   // file instead of re-serializing the whole (possibly huge) weight table.
   if (isBest) fs.copyFileSync(SAVE_PATH, BEST_PATH);
