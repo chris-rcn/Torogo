@@ -1,7 +1,7 @@
 'use strict';
 
 // Softmax-sampling featurepol policy with hardcoded weights file and
-// temperature: ref/ref-fp-fast.js (stone8AdjLib3) sampled at temperature 1.5,
+// temperature: ref/ref-fp-fast.js (stone8AdjLib3) sampled at temperature 1,
 // so its games vary — a stochastic reference, mirroring
 // ai/ref-featurepol-softmax.js.
 //
