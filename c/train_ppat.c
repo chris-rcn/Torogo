@@ -330,13 +330,20 @@ static float ref_pass_weight = 0;      /* and its own learned pass logit.  Used 
  * did not, which is not evidence that it stopped as early as it could have.  So
  * the two directions carry different weight — see PASS_STEP. */
 
-static float run_pass_weight = 0;
+/* Where the pass weight starts when there is none to load (a fresh run, or a
+ * file without an early-pass model): just beyond where trained runs settle
+ * (-10.3 to -10.9 in recent files), so the model starts out rarely passing
+ * early.  Too negative is the safe side: playing on costs little, passing early
+ * gives points away.  From 0 the controller needed ~100k unresolved stops to
+ * walk down there. */
+#define PASS_WEIGHT_INIT  (-11.0f)
+static float run_pass_weight = PASS_WEIGHT_INIT;
 /* Polyak average of the pass weight, on the same window as theta_ema.  The
  * saved threshold has to be consistent with the saved board weights: it
  * competes against their log-sum-exp, so pairing averaged patterns with a raw
  * scalar caught at an excursion gives the file a stopping point neither
  * iterate had. */
-static float run_pass_weight_ema = 0;
+static float run_pass_weight_ema = PASS_WEIGHT_INIT;
 /* The two directions are not the same kind of evidence.  Unfinished business on
  * the final board is a KNOWN error — the rollout stopped with points or captures
  * still on the table — so it moves 10x.  A clean board proves nothing: it is consistent
@@ -2214,9 +2221,11 @@ int main(int argc, char **argv) {
     if (cfg_load) {
         /* A loaded model's own pass weight carries over — fine-tuning continues
          * the controller rather than restarting it.  An unflagged file has none,
-         * so conversion starts from 0. */
-        float *loaded = ppat_load_weights(cfg_load, NULL, &run_pass_weight);
+         * so conversion starts from PASS_WEIGHT_INIT. */
+        bool loaded_ep = false;
+        float *loaded = ppat_load_weights(cfg_load, &loaded_ep, &run_pass_weight);
         if (!loaded) { fprintf(stderr, "failed to load weights\n"); exit(1); }
+        if (!loaded_ep) run_pass_weight = PASS_WEIGHT_INIT;
         TOTAL = ppat_total_weights();
         free(theta);
         theta = loaded;
