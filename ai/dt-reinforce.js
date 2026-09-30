@@ -142,7 +142,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     vs fp-heavy: carried won 1 of 18, reset 8 of 13  (default 1)
 //   ACTOR_COLOR_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
 //   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
-//                     least one of the two base tables must be on        (default 0)
+//                     least one of the two base tables must be on.  MD ladder on
+//                     md-trunc30k roots >= 0.6, root filter off: better at every
+//                     rung 16-4096 sims (4096: mae 0.0777 vs 0.1006), worth
+//                     ~4-8x the sims (2026-09-30)                        (default 1)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "one of the 8 points around the
 //                     last sim move" (none at ply 0 and the root)           (default 0)
 //   ACTOR_CHAIN_LAYER  1 = add the chain layer: one weight per state of each chain
@@ -177,7 +180,7 @@ function create(cfg) {
   const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 1) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   const USE_M    = cfg.int('ACTOR_COLOR_LAYER', 1) !== 0;   // (mover, point) base table
-  const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 0) !== 0;   // (point) base table, both sides
+  const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 1) !== 0;   // (point) base table, both sides
   const USE_K    = cfg.int('ACTOR_CHAIN_LAYER', 0) !== 0;        // chain-state layer
   if (!USE_M && !USE_C) throw new Error('dt-reinforce: ACTOR_COLOR_LAYER and ACTOR_COLORBLIND_LAYER are both off');
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
