@@ -288,9 +288,12 @@ function maybePrint(gamesPlayed) {
 // seatSeeds [blackSeed, whiteSeed]: per opening pair, each SEAT gets its own
 // seeded RNG stream, recreated identically for the colour-swapped replay — so
 // both agents experience the same randomness in the same seat (common random
-// numbers).  The seat stream is installed as Math.random for the duration of
-// each move, so all agent-internal randomness (dither, playout sampling,
-// tie-breaks) draws from it.  Identical agents therefore mirror exactly
+// numbers).  The seat stream is passed as the move's options.rng (the agents'
+// own generator, which otherwise seeds from the clock every move) AND
+// installed as Math.random for its duration, so all agent-internal
+// randomness (dither, playout sampling, tie-breaks) draws from it.  Agents
+// that build one generator per instance ignore both, and stay unpaired.
+// Identical agents therefore mirror exactly
 // across a pair when moves are deterministic given the stream (e.g. fixed
 // playouts); time budgets reintroduce divergence via playout-count jitter.
 function playGame(startGame, p1IsBlack, seatSeeds) {
@@ -323,8 +326,9 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
         if (VERBOSE) console.log(`adjudicated at phase ${phaseOf(game).toFixed(3)}: P(BLACK) = ${adjP.toFixed(3)}`);
         break;
       }
-      Math.random = (isBlackTurn ? seatRng[0] : seatRng[1]).random;
-      const fm = fallback(game, fallbackBudget);
+      const rng = isBlackTurn ? seatRng[0] : seatRng[1];
+      Math.random = rng.random;
+      const fm = fallback(game, fallbackBudget, { rng });
       Math.random = origRandom;
       if (!game.play(fm.move)) {
         console.error(`Illegal fallback move: ${JSON.stringify(fm)}`);
@@ -337,8 +341,9 @@ function playGame(startGame, p1IsBlack, seatSeeds) {
     const mover  = (isBlackTurn === p1IsBlack) ? 'p1' : 'p2';
     const budget = mover === 'p1' ? p1Budget : p2Budget;
     const t0 = performance.now();
-    Math.random = (isBlackTurn ? seatRng[0] : seatRng[1]).random;
-    const move = policy(game, budget);
+    const rng = isBlackTurn ? seatRng[0] : seatRng[1];
+    Math.random = rng.random;
+    const move = policy(game, budget, { rng });
     Math.random = origRandom;
     stats[mover].ms    += performance.now() - t0;
     stats[mover].moves += 1;
