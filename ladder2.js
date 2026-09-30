@@ -342,6 +342,10 @@ function getLadderStatus(game, stoneIdx) {
   const moverMoves = _shuffle(defending ? [...new Set([...libs, ..._defenderCaptureMoves(game, stoneIdx)])] : [...libs]);
   for (const moveIdx of moverMoves) {
     if (!defending && atari) {
+      // Capturing on the last liberty: a capture is never suicide, so ko is
+      // the only way it can be illegal (a ko recapture), and then it is no
+      // move for the mover now.
+      if (moveIdx === game.ko) continue;
       escape = false;
     } else {
       if (!_cyclePlay(game, moveIdx)) {
