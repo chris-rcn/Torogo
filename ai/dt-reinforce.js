@@ -142,10 +142,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     vs fp-heavy: carried won 1 of 18, reset 8 of 13  (default 1)
 //   ACTOR_COLOR_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
 //   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
-//                     least one of the two base tables must be on.  MD ladder on
-//                     md-trunc30k roots >= 0.6, root filter off: better at every
-//                     rung 16-4096 sims (4096: mae 0.0777 vs 0.1006), worth
-//                     ~4-8x the sims (2026-09-30)                        (default 1)
+//                     least one of the two base tables must be on        (default 1)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "one of the 8 points around the
 //                     last sim move" (none at ply 0 and the root)           (default 0)
 //   ACTOR_CHAIN_LAYER  1 = add the chain layer: one weight per state of each chain
