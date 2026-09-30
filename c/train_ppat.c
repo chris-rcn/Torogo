@@ -1625,9 +1625,8 @@ static void match_cols(char *dw, size_t dwn) {
  * PUCT_MATCH_SEED + i every row, so rows replay the same openings and seat
  * streams and consecutive rows pair.  The game count grows MATCH_GROWTH per
  * row, as directWR's does.  Monitor-only: -best does not read it.
- * pSimUs is P2's wall time per search simulation in microseconds — the cost
- * side of the metric (wall clock, so it reads high while workers load the
- * machine). */
+ * ppatUs, the cost side of the metric, is measured apart from both matches:
+ * see policy_cost_us. */
 static int cfg_puct_match;                  /* --do-puct-match */
 #define PUCT_FPOL       "ref/ref-fp-fast.js"   /* prior / top-K / rff model */
 #define PUCT_GAMES      50                     /* first row's games */
@@ -1635,6 +1634,42 @@ static int cfg_puct_match;                  /* --do-puct-match */
 #define PUCT_MIN_PHASE  0.5                    /* rff plays both sides below it */
 #define PUCT_MATCH_SEED 0x9c7a11L
 static double puct_scale = 1.0;
+
+/* The model's playout-policy cost: COST_GAMES self-play games of the model
+ * against itself on the deployment board, uniform below the deployment gate
+ * as in a playout, and only the ppat moves at or past it timed.  Returns
+ * microseconds of THREAD CPU time per ppat move, so machine load (parallel
+ * workers) inflates it less than wall clock would.  Fixed seed per game. */
+#define COST_GAMES 100
+static double policy_cost_us(void) {
+    use_run_model();
+    const float gate = ppat_uniform_below_phase;
+    ppat_uniform_below_phase = 0.0f;           /* the gate is applied here, untimed side */
+    g2_init_topology(DEPLOY_BOARD_SIZE);
+    static PpatState st;
+    Rng rng;
+    double cpu_s = 0;
+    long moves = 0;
+    for (int gi = 0; gi < COST_GAMES; gi++) {
+        rng_seed(&rng, 0xc057L + gi);
+        Game2 game;
+        g2_new(&game, DEPLOY_BOARD_SIZE);
+        while (!game.game_over) {
+            const float ph = (float)(game.cap - game.empty_count) / game.cap;   /* ppat.c's fullness */
+            if (ph < gate) { g2_play(&game, g2_random_legal_move(&game, &rng)); continue; }
+            struct timespec a, b;
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &a);
+            const int32_t mv = ppat_policy_move(&game, &st, theta, RUN_EARLY_PASS, run_pass_weight, &rng);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &b);
+            cpu_s += (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) * 1e-9;
+            moves++;
+            g2_play(&game, mv);
+        }
+    }
+    ppat_uniform_below_phase = gate;
+    g2_init_topology(topo_size);
+    return moves ? 1e6 * cpu_s / moves : 0.0;
+}
 
 static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
     static double best_p = -1e9;
@@ -1661,7 +1696,7 @@ static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
     g2_init_topology(topo_size);
     const double lcb = 100.0 * (match_p2_ratio(&st) - 2.0 * match_p2_se(&st));
     peak_col(lcb, &best_p, "%.1f", pw, pwn);
-    snprintf(cw, cwn, "%.0f", st.moves[1] ? 1000.0 * st.ms[1] / ((double)st.moves[1] * PUCT_PLAYOUTS) : 0.0);
+    snprintf(cw, cwn, "%.2f", policy_cost_us());
     if (!truncated) puct_scale *= MATCH_GROWTH;
 }
 
@@ -1749,7 +1784,7 @@ static void run_monitor(void) {
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "dWR-2se");
-    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "pSimUs");
+    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "ppatUs");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
@@ -2076,7 +2111,8 @@ static void print_help(FILE *out, const char *prog) {
 "  --do-puct-match            play it every row: 50 games growing 1.1x per row, 100\n"
 "                             playouts, rff to phase 0.5, fpol ref/ref-fp-fast.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
-"                             pSimUs = P2's wall time per simulation (us).\n"
+"                             ppatUs = this model's CPU us per ppat move in 100\n"
+"                             self-play games (moves past the uniform gate).\n"
 "                             Monitor-only: -best does not read it\n"
 "\n"
 "Gradient shaping\n"
@@ -2377,7 +2413,7 @@ int main(int argc, char **argv) {
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "dWR-2se");
-    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "pSimUs");
+    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "ppatUs");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
