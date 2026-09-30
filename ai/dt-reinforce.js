@@ -36,7 +36,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 // it and learn the same gradient:
 //   phase   (mover, p, phase bucket of the sim's board)  ACTOR_PHASE_BUCKETS
 //   root    (mover, p) on ply 0 of a sim only            ACTOR_ROOT_LAYER
-//   local   (mover, p, p within one cell of the last SIM move)  ACTOR_LOCAL_LAYER
+//   local   (mover, p, p one of the 8 points around the last SIM move)  ACTOR_LOCAL_LAYER
 //           — sim moves only: ply 0 and the root argmax see no last move, so
 //           the root decision never depends on the game's last move, and at
 //           ply 0 the key would be the same in every sim anyway
@@ -132,8 +132,8 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //   ACTOR_COLOR_LAYER  1 = the (mover, point) table; 0 = drop it     (default 1)
 //   ACTOR_COLORBLIND_LAYER  1 = add a (point) table shared by both sides; at
 //                     least one of the two base tables must be on        (default 0)
-//   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "within one cell of the last sim
-//                     move" (none at ply 0 and the root)                    (default 0)
+//   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "one of the 8 points around the
+//                     last sim move" (none at ply 0 and the root)           (default 0)
 //   TEMP              softmax temperature for the simulations          (default 1)
 //   ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
@@ -241,7 +241,7 @@ function create(cfg) {
   let w1 = null, wC = null;                     // actor base weights: mover [mover][p], colourblind [p]
   let wP = null, wR = null, wL = null;          // slice weights: phase [mover][p][bucket], root [mover][p], local [mover][p][0|1]
   let bs = null, lastAt = null;                 // per-step phase bucket and sim last move, for the update
-  let loc = null, curLast = PASS;               // local slice: per-point key (1 = within one cell of curLast), the sim's last move
+  let loc = null, curLast = PASS;               // local slice: per-point key (1 = one of the 8 points around curLast), the sim's last move
   let locMark = null;                           // scratch: the local points of one recorded step
   let sc = null, ex = null;                     // per-mover score / exp(score/T) over points
   const S = [0, 0];                             // per-mover Σ ex over allowed points
