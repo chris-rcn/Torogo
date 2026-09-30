@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 #include "fpol.h"
 
 /* ── Hashing: featurepol-lib.js's _mix32 / _hashCombine / _hashStr ─────────── */
@@ -146,11 +147,15 @@ static uint32_t canon8adjlib(const int *c) {
     return best;
 }
 
+/* Not vectorised: under -ffast-math GCC would call glibc's vector exp
+ * (libmvec), which is off by an ulp from the scalar exp and V8's Math.exp,
+ * and that ulp flips float32 priors often enough to fork a search from JS. */
+__attribute__((optimize("no-tree-vectorize")))
 int fpol_eval(const Game2 *g, FpolState *st, double temperature) {
     ensure_near(g->N);
     const int8_t cur = g->current;
     int n = 0;
-    double maxL = -INFINITY; int maxI = 0;
+    double maxL = -DBL_MAX; int maxI = 0;
     for (int ei = 0; ei < g->empty_count; ei++) {
         const int idx = g->empty_cells[ei];
         if (!g2_is_legal(g, idx) || g2_is_true_eye_at(g, idx)) continue;
