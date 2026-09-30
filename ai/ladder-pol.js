@@ -7,8 +7,8 @@
 // 1-2 liberties, and the opponent's 3-liberty chains) — the moves that save a
 // chain of its own that would otherwise be captured in a ladder, or capture an
 // opponent chain that would otherwise escape.  With no urgent move, the
-// candidates are the moves featurepol ranks highest (ref-featurepol's model):
-// QUIET_MOVES_ROOT of them at the root, QUIET_MOVES below it.  Leaves are
+// candidates are the moves featurepol ranks highest (ref-fp-heavy's model and
+// ranking): QUIET_MOVES_ROOT of them at the root, QUIET_MOVES below it.  Leaves are
 // valued by a vpat model; a finished game by its winner.
 //
 // Config:
@@ -16,8 +16,9 @@
 //   QUIET_MOVES_ROOT  candidates at the root when no move is urgent there:
 //               featurepol's top this many                              (default 2)
 //   QUIET_MOVES candidates at any other node with no urgent move          (default 1)
-//   FPOL_DATA   featurepol model for the no-urgent-move fallback
-//                                                (default featurepol-cbk7wa32.js)
+//   FPOL_DATA   featurepol model for the quiet moves (default
+//               ref/ref-fp-heavy-data.js, ref-fp-heavy's; its vpat<n> ranking
+//               term over the top FP_RANK_TOPN (14) candidates, as ref-fp-heavy)
 //   VPAT_DATA   leaf evaluator (default ref/ref-ab-fp-vpat-data.js, the
 //               ladder-aware model ref-ab2-fp4-vpat searches with)
 
@@ -32,6 +33,7 @@ const VPat       = Util.load('./vpatterns.js', 'VPatterns');
 const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+const FP_RANK_TOPN = 14;   // ref-fp-heavy's vpat<n> ranking width
 
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -42,12 +44,13 @@ function create(cfg) {
   if (!(QUIET_MOVES_ROOT >= 1)) throw new Error(`ladder-pol: QUIET_MOVES_ROOT must be at least 1, got ${QUIET_MOVES_ROOT}`);
   if (!(QUIET_MOVES >= 1)) throw new Error(`ladder-pol: QUIET_MOVES must be at least 1, got ${QUIET_MOVES}`);
 
-  const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
+  const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
   const { weights: fpWeights, modelName } = FeaturePol.loadModel({ name: 'ladder-pol', path: fpPath });
+  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FP_RANK_TOPN;
   const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')) : null;
   const vpatModel = _isNode ? VPat.loadWeights(vpatPath) : VPat.modelFromRaw(window.vpatternsModel);
   console.error(`ladder-pol[${cfg.slot != null ? cfg.slot : '-'}]: depth ${AB_DEPTH}, quiet moves: featurepol top ${QUIET_MOVES_ROOT} at the root, ${QUIET_MOVES} below ` +
-    `(${modelName}), leaves ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} ` +
+    `(${modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}), leaves ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} ` +
     `(${VPat.specString(vpatModel.specs)})`);
 
   let fpState = null, fpScores = null;
