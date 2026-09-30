@@ -100,15 +100,15 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
-//   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 999)
-//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 999)
-//   TD_ACTOR_TD_LR    actor step size on the TD term, V two plies on minus V (default 0.04)
+//   TD_ACTOR_LAYER5_DEPTH  plies of a sim for which actor layer 5 is on; 0 = off (default 0)
+//   TD_ACTOR_LAYER9_DEPTH  plies of a sim for which actor layer 9 is on; 0 = off (default 0)
+//   TD_ACTOR_TD_LR    actor step size on the TD term, V two plies on minus V (default 0)
 //   TD_ACTOR_TERM_LR  actor step size on the terminal term, the return minus V;
 //                     the only term with the critic off.  From-scratch ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
 //   TD_TEMP           softmax temperature for the simulations          (default 1)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4,9; none = off (default 1,4)
-//   TD_CRITIC_LR      critic step size, per active feature             (default 0.5)
+//   TD_CRITIC_LR      critic step size, per active feature             (default 0.3)
 //   TD_CRITIC_TAIL    1 = the critic is maintained and learns through the playout
 //                     tail; 0 = it stops at the actor depth, the tail only
 //                     delivers the outcome.  Silver et al. leave this open;
@@ -121,32 +121,33 @@ const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 //                     argmax or a searched pick), the move may be the critic's
 //                     one-ply argmax (mover's view) instead of the actor's sample;
 //                     the first sampled deviation ends searching for that sim.
-//                     Needs a critic.                                     (default 1)
+//                     Needs a critic.                                     (default 0)
 //   TD_SIM_SEARCH_RATIO  probability, per such ply, of searching rather than
 //                     sampling — the softmax sample is the exploration.  300 ms on
 //                     1000 positions: 0 -> 0.0149, 0.1 -> 0.0127, 0.2 -> 0.0132,
-//                     0.4 -> 0.0135: an occasional critic pick, not the default ply (default 0.1)
+//                     0.4 -> 0.0135                                        (default 1)
 //   TD_SIM_SEARCH_EPSILON  on a ply the search would play, probability of a UNIFORM
 //                     random legal move instead (Silver et al.'s epsilon-greedy);
 //                     exploration that needs no actor                    (default 0.1)
 //   TD_SIM_SEARCH_WIDTH  a searched ply values only the actor's top K legal points
 //                     (score incl. the prior); 0 = every legal point.  200 ms on 1000
 //                     positions: 4 -> 0.0169, 8 -> 0.0164, 16 -> 0.0150, 0 -> 0.0155;
-//                     300 ms: 15 -> 0.0141, 25-40 -> 0.0137, 60 -> 0.0143  (default 30)
+//                     300 ms: 15 -> 0.0141, 25-40 -> 0.0137, 60 -> 0.0143  (default 0)
 //   TD_ROOT_SELECT    actor = play the actor's argmax; softmax = sample the actor's
 //                     softmax at TD_TEMP (self-play diversity, e.g. for training);
 //                     visits = play the point most often sampled as a sim's first
 //                     ply, ties by actor score; ab = alpha-beta over the critic's
 //                     value with the actor's top-TD_AB_WIDTH points as candidates
 //                     at every node                                    (default actor)
-//   TD_AB_DEPTH       ab: search depth in plies                        (default 2)
-//   TD_AB_WIDTH       ab: candidates per node, the actor's top points   (default 5)
+//   TD_AB_DEPTH       ab: search depth in plies; 1 = the one-ply search, each
+//                     candidate valued by the critic's local delta     (default 1)
+//   TD_AB_WIDTH       ab: candidates per node, the actor's top points   (default 999)
 //   TD_TRUNC_PHASE_DELTA  length of the random buffer after the actor plies, as a
 //                     fraction of the area; 0 = the leaf right after the actor
 //                     plies                                            (default 0.2)
 //   TD_TRUNC_ACTOR_DEPTH  actor plies in a truncated sim before the random buffer (default 5)
 //   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
-//                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
+//                     below this; 0 = truncation off, no leaf model loaded (default 0)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 //   TD_PRIOR_FPOL_DATA  featurepol model whose stones8 space becomes the actor prior;
 //                     '' = none                  (default out/featurepol-yp81nwj8.js)
@@ -160,36 +161,36 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const ACTOR_DEPTH = cfg.int('TD_ACTOR_DEPTH', 35);
-  const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 999);
-  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 999);
+  const D5 = cfg.int('TD_ACTOR_LAYER5_DEPTH', 0);
+  const D9 = cfg.int('TD_ACTOR_LAYER9_DEPTH', 0);
   const USE5 = D5 > 0, USE9 = D9 > 0;        // layer ever used (tables, snapshots)
   let act5 = USE5, act9 = USE9;              // layer active at the current sim ply
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
-  const TD_LR    = cfg.float('TD_ACTOR_TD_LR', 0.04);
+  const TD_LR    = cfg.float('TD_ACTOR_TD_LR', 0.0);
   const TERM_LR  = cfg.float('TD_ACTOR_TERM_LR', 0.002);
   const TEMP     = cfg.float('TD_TEMP', 1);
   const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4), C9 = cList.includes(9);
   const CRITIC   = C1 || C4 || C9;
-  const CLR      = cfg.float('TD_CRITIC_LR', 0.5);
+  const CLR      = cfg.float('TD_CRITIC_LR', 0.3);
   const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
   let criticOn = CRITIC;                   // the critic is maintained at the current sim ply
   const BASE_EMA = cfg.float('TD_ACTOR_RETURN_EMA', 0.9);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
-  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 1);
-  const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 0.1);
-  const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 30);
+  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 0);
+  const SEARCH_RATIO = cfg.float('TD_SIM_SEARCH_RATIO', 1.0);
+  const SEARCH_WIDTH = cfg.int('TD_SIM_SEARCH_WIDTH', 0);
   const SEARCH_EPSILON = cfg.float('TD_SIM_SEARCH_EPSILON', 0.1);
   const ROOT_SELECT = cfg.str('TD_ROOT_SELECT', 'actor');
   if (!['actor', 'softmax', 'visits', 'ab'].includes(ROOT_SELECT)) throw new Error(`dt-actor-critic: TD_ROOT_SELECT must be actor, softmax, visits or ab, got ${ROOT_SELECT}`);
-  const AB_DEPTH = cfg.int('TD_AB_DEPTH', 2);
-  const AB_WIDTH = cfg.int('TD_AB_WIDTH', 5);
+  const AB_DEPTH = cfg.int('TD_AB_DEPTH', 1);
+  const AB_WIDTH = cfg.int('TD_AB_WIDTH', 999);
   if (ROOT_SELECT === 'ab' && !CRITIC) throw new Error('dt-actor-critic: TD_ROOT_SELECT ab needs a critic (TD_CRITIC_LAYERS)');
   if (SEARCH_PLIES > 0 && !CRITIC) throw new Error('dt-actor-critic: TD_SIM_SEARCH_PLIES needs a critic (TD_CRITIC_LAYERS)');
   const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
   const TRUNC_ACTOR_DEPTH = cfg.int('TD_TRUNC_ACTOR_DEPTH', 5);
-  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
+  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.0);
   let vpatModel = null;
   if (TRUNC_MAX_PHASE > 0) {
     const vpatPath = _isNode
@@ -433,13 +434,14 @@ function create(cfg) {
   function critVal9(m, i) { return i < 0 ? 0 : (C9 ? c9[m * area * 19683 + i] : 0) + pc9[m * 19683 + i % 19683]; }
   function critVal4(m, i) { return i < 0 || !C4 ? 0 : c4[m * area * 81 + i]; }
   function critVal1(m, i) { return i < 0 || !C1 ? 0 : c1[m * area * 3 + i]; }
-  function searchMove(g, m, rng) {
-    if (!srchVal) { srchVal = new Float64Array(area); srchKind = new Int8Array(area); srchTop = new Int32Array(area); }
+  // width: candidates are the actor's top `width` legal points (<= 0 = all).
+  function searchMove(g, m, rng, width = SEARCH_WIDTH) {
+    if (!srchVal || srchVal.length !== area) { srchVal = new Float64Array(area); srchKind = new Int8Array(area); srchTop = new Int32Array(area); }
     const cells = g.cells, nbr = g._nbr, dnbr = g._dnbr, colour = m === 0 ? BLACK : -BLACK, o = 1 - m;
     // Pass 1: legality (excluding as sample() does).  Candidates: every legal
     // point, or with a width the top K by actor score (a small insertion list).
     let nCand = 0;
-    const K = SEARCH_WIDTH, scm = sc[m];
+    const K = width, scm = sc[m];
     for (let p = 0; p < area; p++) {
       srchKind[p] = 0;
       if (cells[p] !== EMPTY) continue;
@@ -722,7 +724,13 @@ function create(cfg) {
     act5 = USE5; act9 = USE9;             // the root is ply 0
     actorOn = true; criticOn = CRITIC;
     let best = PASS, bestS = -Infinity, bestV = -1;
-    if (ROOT_SELECT === 'ab') {
+    if (ROOT_SELECT === 'ab' && AB_DEPTH === 1) {
+      // Depth 1 is the one-ply search: each candidate valued by the critic's
+      // local delta on the root board, no clones and no full recomputes.
+      recomputeAll(cells, nbr, dnbr);     // root scores and logits
+      best = searchMove(game, m, rng, AB_WIDTH >= area ? 0 : AB_WIDTH);
+      if (best !== PASS) bestS = sc[m][best];
+    } else if (ROOT_SELECT === 'ab') {
       best = ABSearch.search(game, AB_DEPTH, abEvaluate, 1e-9, { getCandidates: abCandidates, rng });
       recomputeAll(cells, nbr, dnbr);     // back to the root's scores and logits
       if (best !== PASS) bestS = sc[m][best];
