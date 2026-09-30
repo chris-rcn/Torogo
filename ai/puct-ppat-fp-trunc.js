@@ -173,7 +173,7 @@ function create(cfg) {
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
-  console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
@@ -249,7 +249,7 @@ function create(cfg) {
     if (_autoUniformWt)  UNIFORM_WEIGHT   = cUniform / cPpat;
     if (_autoTruncOvh)   TRUNC_OVERHEAD   = (oTrunc - oScore) / cPpat;
   }
-  console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `expand costs: playout ${PLAYOUT_OVERHEAD.toFixed(2)}${_autoPlayoutOvh ? '' : '(env)'}, ` +
     `uniform-move ${UNIFORM_WEIGHT.toFixed(2)}${_autoUniformWt ? '' : '(env)'}, ` +
     `trunc ${TRUNC_OVERHEAD.toFixed(2)}${_autoTruncOvh ? '' : '(env)'}`);
@@ -266,7 +266,7 @@ function create(cfg) {
   // No-op for specs without vpat<n>.
   const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 0);
   if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
-  console.log(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
+  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
