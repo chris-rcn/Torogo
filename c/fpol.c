@@ -195,7 +195,7 @@ int fpol_eval(const Game2 *g, FpolState *st, double temperature) {
 int32_t fpol_sample(const FpolState *st, Rng *rng) {
     if (st->n == 0) return PASS;
     double u = rng_random(rng);
-    for (int i = 0; i < st->n; i++) { u -= st->probs[i]; if (u < 0) return st->moves[i]; }
+    for (int i = 0; i < st->n; i++) { u -= st->probs[i]; if (u <= 0) return st->moves[i]; }   /* as policyMove */
     return st->moves[st->n - 1];           /* rounding: the last candidate */
 }
 

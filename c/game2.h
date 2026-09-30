@@ -91,6 +91,8 @@ bool  g2_is_true_eye(int friend_count, int empty_count, int same_group, int enem
 bool  g2_is_eyelike(int friend_count, int empty_count, int same_group, int enemy_diag);
 bool  g2_is_capture(const Game2 *g, int32_t idx);
 int32_t g2_random_legal_move(Game2 *g, Rng *rng);   /* returns idx or PASS */
+/* game2.js randomLegalMove's draw, floor(rng_random * (end + 1)), for bit parity with JS. */
+int32_t g2_random_legal_move_js(Game2 *g, Rng *rng);
 
 /* Scoring */
 typedef struct { float black; float white; } Score;

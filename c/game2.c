@@ -611,6 +611,18 @@ int32_t g2_random_legal_move(Game2 *g, Rng *rng) {
     return PASS;
 }
 
+int32_t g2_random_legal_move_js(Game2 *g, Rng *rng) {
+    for (int end = g->empty_count - 1; end >= 0; end--) {
+        const int ri = (int)(rng_random(rng) * (end + 1));
+        const int32_t idx = g->empty_cells[ri];
+        if (!g2_is_true_eye_at(g, idx) && g2_is_legal(g, idx)) return idx;
+        const int32_t t = g->empty_cells[end];
+        g->empty_cells[ri] = t;   g->empty_cells[end] = idx;
+        g->empty_slot[t] = ri;    g->empty_slot[idx] = end;
+    }
+    return PASS;
+}
+
 /* ── Scoring ───────────────────────────────────────────────────────────────── */
 
 Score g2_estimate_score(const Game2 *g) {

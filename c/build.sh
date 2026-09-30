@@ -18,5 +18,7 @@ $CC $CFLAGS -o find_ppat_features.bin   game2.c ppat.c find_ppat_features.c -lm
 $CC $CFLAGS -o test_vpat.bin            game2.c vpat.c test_vpat.c -lm
 $CC $CFLAGS -o test_fpol.bin            game2.c fpol.c test_fpol.c -lm
 $CC $CFLAGS -o test_puct.bin            game2.c fpol.c ppat.c puct.c test_puct.c -lm
+$CC $CFLAGS -o ppat_match.bin          game2.c fpol.c ppat.c puct.c match.c ppat_match.c -lm
+$CC $CFLAGS -o test_match.bin          game2.c fpol.c ppat.c puct.c test_match.c -lm
 
-echo "built 14 binaries"
+echo "built 16 binaries"

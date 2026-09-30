@@ -59,26 +59,13 @@ void puct_free(PuctSearch *s) {
     free(s->nodes); free(s->path); free(s);
 }
 
-/* game2.js randomLegalMove: floor(random() * (end + 1)), not rng_below's modulo. */
-static int32_t js_random_legal_move(Game2 *g, Rng *rng) {
-    for (int end = g->empty_count - 1; end >= 0; end--) {
-        const int ri = (int)(rng_random(rng) * (end + 1));
-        const int32_t idx = g->empty_cells[ri];
-        if (!g2_is_true_eye_at(g, idx) && g2_is_legal(g, idx)) return idx;
-        const int32_t t = g->empty_cells[end];
-        g->empty_cells[ri] = t;   g->empty_cells[end] = idx;
-        g->empty_slot[t] = ri;    g->empty_slot[idx] = end;
-    }
-    return PASS;
-}
-
 static double phase_of(const Game2 *g) { return 1.0 - (double)g->empty_count / (g->N * g->N); }
 
 /* ppatMove with the agent's PPAT_MIN_PHASE gate; ppat.h's own gate held off. */
 static int32_t playout_move(PuctSearch *s, Game2 *g, Rng *rng) {
     const PuctCfg *c = &s->cfg;
     if (!c->ppat_w || (c->ppat_min_phase > 0 && phase_of(g) < c->ppat_min_phase))
-        return js_random_legal_move(g, rng);
+        return g2_random_legal_move_js(g, rng);
     return ppat_policy_move(g, &s->pp, c->ppat_w, c->early_pass, c->pass_weight, rng);
 }
 
