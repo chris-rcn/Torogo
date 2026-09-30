@@ -900,8 +900,9 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
     }
 
     /* Pass-weight control loop.  Only rollouts the policy played to the end and
-     * actually chose to stop are evidence. */
-    if (RUN_EARLY_PASS && passed_yet && !rejected_pass) {
+     * actually chose to stop are evidence.  Frozen with the weights at --lr 0,
+     * so a zero-learning-rate run leaves the whole model as loaded. */
+    if (RUN_EARLY_PASS && passed_yet && !rejected_pass && cfg_lr > 0) {
         /* Unfinished business on the final board, of either kind:
          *   - a chain in atari: an unresolved capture, so the score is unreliable
          *   - a DAME (empty point touching both colours): it counts for neither
