@@ -21,6 +21,9 @@
 //               Deep nodes are the many, and fp's ordering is most trustworthy
 //               about its top two, so narrowing with depth buys plies cheaply.
 //   FPOL_DATA   featurepol weights          (default featurepol-cbk7wa32.js)
+//   FPOL_RANK_TOPN  for a model with a vpat<n> ranking term (fp-heavy), rank
+//               over its top N candidates, as ref-fp-heavy does; 0 = off; no
+//               effect on a model without one                       (default 14)
 //   VPAT_DATA   leaf evaluator              (default ref/ref-ab-fp-vpat-data.js)
 //   DITHER      uniform noise on root values                    (default 0.001)
 //               Both DITHER and AB_TEMP scale by (1 - phase): full strength
@@ -73,6 +76,7 @@ function create(cfg) {
 
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
     path: cfg.str('FPOL_DATA', path.join(__dirname, '..', 'featurepol-cbk7wa32.js')) }).weights;
+  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
   const vpatModel = VPat.loadWeights(cfg.str('VPAT_DATA',
     path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')));
 
@@ -81,7 +85,7 @@ function create(cfg) {
               (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
               (FP_SOFTMAX_RATIO > 0 ? ` fp-softmax-ratio=${FP_SOFTMAX_RATIO}` : '') +
               (ROOT_SYMMETRY ? '' : ` root-symmetry=off`) + `  ` +
-              `fp=${fpWeights.map.size}w  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${VPat.specString(vpatModel.specs)})`);
+              `fp=${fpWeights.map.size}w${fpWeights.rankTopN > 0 ? ` rank-topn=${fpWeights.rankTopN}` : ''}  vpats=${Util.fmt4i(vpatModel.weights.size).trim()} (${VPat.specString(vpatModel.specs)})`);
 
   const rng = makeRng();
   let fpState = null, fpScores = null;
