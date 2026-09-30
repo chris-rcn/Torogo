@@ -1640,7 +1640,7 @@ static double puct_scale = 1.0;
  * as in a playout, and only the ppat moves at or past it timed.  Returns
  * microseconds of THREAD CPU time per ppat move, so machine load (parallel
  * workers) inflates it less than wall clock would.  Fixed seed per game. */
-#define COST_GAMES 100
+#define COST_GAMES 1000
 static double policy_cost_us(void) {
     use_run_model();
     const float gate = ppat_uniform_below_phase;
@@ -1783,8 +1783,9 @@ static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
+    if (cfg_puct_match) printf("  %6s", "ppatUs");
     if (ref_theta) printf("  %8s", "dWR-2se");
-    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "ppatUs");
+    if (cfg_puct_match) printf("  %8s", "pWR-2se");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
@@ -1813,8 +1814,9 @@ static void run_monitor(void) {
         if (loaded) {
             printf("%9d  %7s", 0, "-");
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
+            if (cfg_puct_match) printf("  %6s", pcbuf);
             if (ref_theta) printf("  %8s", dwbuf);
-            if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
+            if (cfg_puct_match) printf("  %8s", pwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s", eb, "-");
@@ -1822,8 +1824,9 @@ static void run_monitor(void) {
         } else {
             printf("%9d  %7s", 0, "-");
             printf("  %6s  %7s  %6s", "-", "-", "-");
+            if (cfg_puct_match) printf("  %6s", pcbuf);
             if (ref_theta) printf("  %8s", dwbuf);
-            if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
+            if (cfg_puct_match) printf("  %8s", pwbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s\n", eb, "-");
@@ -1921,8 +1924,9 @@ static void run_monitor(void) {
         printf("%9ld  %7s", agg, trcbuf);
         printf("  %6d  %7.4f  %6.3f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor));
+        if (cfg_puct_match) printf("  %6s", pcbuf);
         if (ref_theta) printf("  %8s", dwbuf);
-        if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
+        if (cfg_puct_match) printf("  %8s", pwbuf);
         if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
         if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);   /* testM: cumulative teMSE-eval + match cost (minutes) */
         printf("  %8s  %7.1f", eb, posps);
@@ -2008,8 +2012,9 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     printf("%9ld  %7s", (long)cfg_workers * total_positions, trcbuf);
     printf("  %6d  %7.4f  %6.3f", live_weights(), avg_abs_weight(),
            avg_first_pass_phase());
+    if (cfg_puct_match) printf("  %6s", pcbuf);
     if (ref_theta) printf("  %8s", dwbuf);
-    if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
+    if (cfg_puct_match) printf("  %8s", pwbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
     if (n_test > 0) printf("  %6.1f", cumulative_test_s / 60.0);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
@@ -2111,7 +2116,7 @@ static void print_help(FILE *out, const char *prog) {
 "  --do-puct-match            play it every row: 50 games growing 1.1x per row, 100\n"
 "                             playouts, rff to phase 0.5, fpol ref/ref-fp-fast.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
-"                             ppatUs = this model's CPU us per ppat move in 100\n"
+"                             ppatUs = this model's CPU us per ppat move in 1000\n"
 "                             self-play games (moves past the uniform gate).\n"
 "                             Monitor-only: -best does not read it\n"
 "\n"
@@ -2412,8 +2417,9 @@ int main(int argc, char **argv) {
     print_banner(false, weights_file, best_file);
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
+    if (cfg_puct_match) printf("  %6s", "ppatUs");
     if (ref_theta) printf("  %8s", "dWR-2se");
-    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "ppatUs");
+    if (cfg_puct_match) printf("  %8s", "pWR-2se");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
