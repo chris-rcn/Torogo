@@ -136,15 +136,13 @@
  *                           runtime cost but a larger pattern table; the cap is
  *                           written into the weights file as adjLib.  Ignored
  *                           with --load (the file's own cap wins).
- *     --no-local            freeze the 7 previous-move ("local") features at 0 —
+ *     --local-features      train the 7 previous-move ("local") features —
  *                           contiguous, save-atari by capture/extension (+self-atari
- *                           variants), ko, 2-point semeai.  Their gradient is masked
- *                           out, so they stay at their initial 0 and contribute
- *                           nothing to the logit: the model behaves exactly as if
- *                           they did not exist, while the weight layout is
- *                           unchanged (7 zeros per phase).  An ablation of what the
- *                           local features are worth, alongside --adj-lib 1, which
- *                           ablates liberty information from the 3x3 pattern.
+ *                           variants), ko, 2-point semeai.  Without it their
+ *                           gradient is masked out, so they keep their initial
+ *                           value (0 on a fresh run) and a fresh model behaves
+ *                           exactly as if they did not exist, while the weight
+ *                           layout is unchanged (7 zeros per phase).
  *     --ref-weights <path>  reference model for the directWR column (default
  *                           out/ppat-data-233162-best-ref-candidate.js, the
  *                           pat-only adj-lib-2 model; "none" disables the
@@ -208,7 +206,7 @@ static float  cfg_no_extreme;
 static int    cfg_iter_limit;          /* 0 = infinite */
 static int    cfg_overfit;
 static int    cfg_phase;               /* -1 = all phases; >= 0 = train/test only this phase */
-static int    cfg_no_local;            /* 1 = freeze the 7 previous-move ("local") features at 0 */
+static int    cfg_local_features;      /* --local-features: train the 7 previous-move ("local") features; else frozen */
 /* Board size of the training positions; global because topology is (g2_init_topology). */
 static int    topo_size = 0;        /* board size of the TRAIN file — training's topology */
 static int    test_board_size = 0;  /* board size of --test-file (== topo_size when unset) */
@@ -949,9 +947,10 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
  * prev-move slices so the other phases stay frozen at their loaded/init value.
  * Rollouts still traverse later phases for move selection, but only phase P's
  * weights are updated — exact coordinate-restricted SB gradient descent. */
-/* Zero the gradient for the 7 previous-move ("local") features of every phase,
- * so they never leave their initial 0.  A weight of 0 adds nothing to the logit,
- * so this is a true ablation, not merely a frozen parameter. */
+/* Zero the gradient for the 7 previous-move ("local") features of every phase
+ * (the default; --local-features lifts it), so they never leave their initial
+ * value.  On a fresh run that is 0, which adds nothing to the logit — the
+ * features are then truly absent, not merely frozen. */
 static void mask_local(float *v) {
     /* Only the 7 prev-move slots — the twelvecell/self-atari/atari blocks
      * live past them and must keep their gradient (this used to zero
@@ -1006,7 +1005,7 @@ static void update_theta(const Game2 *game, float v_star) {
         }
     }
     if (cfg_phase >= 0) mask_to_phase(g_buf);
-    if (cfg_no_local)   mask_local(g_buf);
+    if (!cfg_local_features) mask_local(g_buf);
 
     /* Gradient uses the un-normalised [-1,1] bias (the SB paper's faster-learning
      * -1/1 regime).  The MSE byproduct normalises v* and V to win-probability
@@ -1702,7 +1701,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
                cfg_test_total_playouts, n_test, cfg_test_playouts);
     printf("model     adjLib %d%s%s%s\n",
            ppat_adj_lib,
-           cfg_no_local ? ", no-local" : "",
+           cfg_local_features ? ", local-features" : "",
            feats[0] ? " | " : "", feats);
 
     /* The train line describes the run regardless of who prints it, so the
@@ -2043,7 +2042,8 @@ static void print_help(FILE *out, const char *prog) {
 "  --capture N                graded capture-size feature (default 0 = off)\n"
 "  --atari-by-self-atari N    mutual-atari interaction grid, NxN (default 0 = off)\n"
 "  --capture-by-self-atari N  ko-take / snapback interaction grid (default 0 = off)\n"
-"  --no-local                 freeze the 7 previous-move local features at 0 (ablation)\n"
+"  --local-features           train the 7 previous-move local features (default: frozen\n"
+"                             at their initial value, 0 on a fresh run)\n"
 "\n"
 "Phases\n"
 "  --phases N                 phase-conditioned weight slices (default 1)\n"
@@ -2142,7 +2142,7 @@ int main(int argc, char **argv) {
      * uniform-random below this board fullness.  Default 0.6, matching the fielded
      * playout. */
     ppat_uniform_below_phase = get_float_arg(argc, argv, "--uniform-below-phase", 0.6f);
-    cfg_no_local       = has_flag(argc, argv, "--no-local");
+    cfg_local_features = has_flag(argc, argv, "--local-features");
     cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "out/ppat-data-233162-best-ref-candidate.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;
     /* --no-direct: disable the directWR match entirely (and hide its column).
