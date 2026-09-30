@@ -1454,6 +1454,7 @@ static int live_weights(void) {
  * the column is disabled at startup rather than silently comparing nonsense. */
 static float *ref_theta = NULL;        /* reference weights, NULL = column off */
 static int    match_truncated;         /* set when a match stopped at MATCH_MAX_S */
+static double match_se;                /* standard error of the last match's win rate, from its pair scores */
 
 /* The reference may be built at a different adjLib / phase count than the run.
  * The canon table is cached per cap (ppat.h), so a match just swaps the active
@@ -1485,6 +1486,10 @@ static float direct_match_wr(int games) {
     Rng rng;
     const double t0 = wall_now();
     int wins = 0, played = 0;
+    /* Pair scores (0, 0.5, 1) of the completed colour-swapped pairs: the pairs,
+     * not the games, are the independent samples, so the standard error comes
+     * from their spread (identical weights score exactly 0.5 per pair: SE 0). */
+    double pair_sum = 0, pair_sq = 0; int pairs = 0, pair_wins = 0;
     for (int g = 0; g < games; g++) {
         if (wall_now() - t0 >= MATCH_MAX_S) { match_truncated = 1; break; }
         /* Reseed PER PAIR (g >> 1), not per game and not once per match.
@@ -1529,9 +1534,15 @@ static float direct_match_wr(int games) {
             const float pw = (w == theta) ? run_pass_weight : 0.0f;
             g2_play(&game, ppat_policy_move(&game, &st, w, ep, pw, &rng));
         }
-        if ((g2_estimate_winner(&game) == BLACK) == cur_is_black) wins++;
+        const int won = (g2_estimate_winner(&game) == BLACK) == cur_is_black;
+        wins += won; pair_wins += won;
         played++;
+        if (g & 1) { const double ps = pair_wins / 2.0; pair_sum += ps; pair_sq += ps * ps; pairs++; pair_wins = 0; }
     }
+    if (pairs > 1) {
+        const double mean = pair_sum / pairs, var = (pair_sq - pairs * mean * mean) / (pairs - 1);
+        match_se = var > 0 ? sqrt(var / pairs) : 0.0;
+    } else match_se = 0.0;
     use_run_model();
     ppat_uniform_below_phase = saved_ubp;
     g2_init_topology(topo_size);
@@ -1558,7 +1569,11 @@ static int peak_col(double v, double *best, const char *fmt, char *buf, size_t n
     return is_peak;
 }
 
-/* Last row's directWR and whether it set a new high — what -best keys on.
+/* Last row's directWR lower bound (win rate minus two standard errors of that
+ * row's match, in points) and whether it set a new high — what -best keys on.
+ * The match grows 1.1x per row, so early rows are the noisiest; keying on the
+ * bound stops a lucky early row from holding a high that later, more precise
+ * rows cannot beat.
  * directWR is the one indicator that cannot be gamed by anything except playing
  * better (no oracle, no estimator layer, out-of-sample by construction) and it
  * sided with live play every time another metric disagreed.  Its retired
@@ -1581,8 +1596,9 @@ static void match_cols(char *dw, size_t dwn) {
         return;
     }
     const double d = 100.0 * direct_match_wr(match_games(DIRECT_GAMES));
-    match_score      = d;
-    match_score_peak = peak_col(d, &best_d, "%.1f", dw, dwn);
+    const double lcb = d - 2.0 * 100.0 * match_se;   /* directWR minus two standard errors */
+    match_score      = lcb;
+    match_score_peak = peak_col(lcb, &best_d, "%.1f", dw, dwn);
     /* Once the match is being cut short at MATCH_MAX_S, raising the effort only
      * grows a game count that will never be reached — so stop growing. */
     if (!match_truncated) match_scale *= MATCH_GROWTH;
@@ -1667,7 +1683,7 @@ static void run_monitor(void) {
     print_banner(true, cfg_monitor, NULL);
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
-    if (ref_theta) printf("  %8s", "directWR");
+    if (ref_theta) printf("  %8s", "dWR-2se");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
@@ -1807,7 +1823,7 @@ static void run_monitor(void) {
         printf("\n");
         if (is_best) {
             char bc[256];
-            if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %ld", match_score, agg);
+            if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR-2SE: %.2f, positions: %ld", match_score, agg);
             else           snprintf(bc, sizeof bc, "Best by teMSE_c: %.6f, positions: %ld", tr.mse_c, agg);
             save_best(cfg_monitor, bc);
         }
@@ -1902,7 +1918,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
      * one. */
     if (is_best) {
         char bc[256];
-        if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR: %.2f, positions: %d", match_score, total_positions);
+        if (ref_theta) snprintf(bc, sizeof bc, "Best by directWR-2SE: %.2f, positions: %d", match_score, total_positions);
         else           snprintf(bc, sizeof bc, "Best by teMSE_c: %.6f, positions: %d", mse_c, total_positions);
         save_best(weights_file, bc);
     }
@@ -1975,6 +1991,8 @@ static void print_help(FILE *out, const char *prog) {
 "                             out/ppat-data-233162-best-ref-candidate.js; \"none\" off;\n"
 "                             must share this run's adjLib and phase count)\n"
 "  --no-direct                disable the directWR match and hide the column\n"
+"                             (the dWR-2se column is the win rate minus two standard\n"
+"                             errors of that row's paired match; -best keys on it)\n"
 "  --match-phases A,B         in-band each side plays its own weights, out-of-band\n"
 "                             both play the reference (default 0.6,1)\n"
 "\n"
@@ -2272,7 +2290,7 @@ int main(int argc, char **argv) {
     print_banner(false, weights_file, best_file);
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
-    if (ref_theta) printf("  %8s", "directWR");
+    if (ref_theta) printf("  %8s", "dWR-2se");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
