@@ -7,14 +7,15 @@
 // 1-2 liberties, and the opponent's 3-liberty chains) — the moves that save a
 // chain of its own that would otherwise be captured in a ladder, or capture an
 // opponent chain that would otherwise escape.  With no urgent move, the
-// candidates are the QUIET_MOVES featurepol ranks highest (ref-featurepol's
-// model).  Leaves are
+// candidates are the moves featurepol ranks highest (ref-featurepol's model):
+// QUIET_MOVES_ROOT of them at the root, QUIET_MOVES below it.  Leaves are
 // valued by a vpat model; a finished game by its winner.
 //
 // Config:
 //   AB_DEPTH    search depth in plies                                   (default 2)
-//   QUIET_MOVES candidates at a node with no urgent move: featurepol's top
-//               this many                                               (default 1)
+//   QUIET_MOVES_ROOT  candidates at the root when no move is urgent there:
+//               featurepol's top this many                              (default 2)
+//   QUIET_MOVES candidates at any other node with no urgent move          (default 1)
 //   FPOL_DATA   featurepol model for the no-urgent-move fallback
 //                                                (default featurepol-cbk7wa32.js)
 //   VPAT_DATA   leaf evaluator (default ref/ref-ab-fp-vpat-data.js, the
@@ -36,33 +37,35 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
   const AB_DEPTH = cfg.int('AB_DEPTH', 2);
   if (!(AB_DEPTH >= 1)) throw new Error(`ladder-pol: AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
+  const QUIET_MOVES_ROOT = cfg.int('QUIET_MOVES_ROOT', 2);
   const QUIET_MOVES = cfg.int('QUIET_MOVES', 1);
+  if (!(QUIET_MOVES_ROOT >= 1)) throw new Error(`ladder-pol: QUIET_MOVES_ROOT must be at least 1, got ${QUIET_MOVES_ROOT}`);
   if (!(QUIET_MOVES >= 1)) throw new Error(`ladder-pol: QUIET_MOVES must be at least 1, got ${QUIET_MOVES}`);
 
   const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
   const { weights: fpWeights, modelName } = FeaturePol.loadModel({ name: 'ladder-pol', path: fpPath });
   const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')) : null;
   const vpatModel = _isNode ? VPat.loadWeights(vpatPath) : VPat.modelFromRaw(window.vpatternsModel);
-  console.error(`ladder-pol[${cfg.slot != null ? cfg.slot : '-'}]: depth ${AB_DEPTH}, quiet moves: featurepol top ${QUIET_MOVES} ` +
+  console.error(`ladder-pol[${cfg.slot != null ? cfg.slot : '-'}]: depth ${AB_DEPTH}, quiet moves: featurepol top ${QUIET_MOVES_ROOT} at the root, ${QUIET_MOVES} below ` +
     `(${modelName}), leaves ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} ` +
     `(${VPat.specString(vpatModel.specs)})`);
 
   let fpState = null, fpScores = null;
 
   // The side to move's urgent moves (deduped, in read order), else
-  // featurepol's top QUIET_MOVES; `.urgent` says which.
-  function candidates(g, g3) {
+  // featurepol's top `quiet`; `.urgent` says which.
+  function candidates(g, g3, quiet) {
     const urgent = [];
     for (const { status } of Ladder2.getAllLadderStatuses(g3)) {
       if (!status) continue;
       for (const m of status.urgentLibs) if (!urgent.includes(m)) urgent.push(m);
     }
-    const c = urgent.length > 0 ? urgent : fpTop(g, g3);
+    const c = urgent.length > 0 ? urgent : fpTop(g, g3, quiet);
     c.urgent = urgent.length > 0;
     return c;
   }
 
-  function fpTop(g, g3) {
+  function fpTop(g, g3, quiet) {
     const N = g.N;
     if (!fpState || fpState.moves.length < N * N) {
       fpState = FeaturePol.createState(N, fpWeights.spec);
@@ -71,7 +74,7 @@ function create(cfg) {
     FeaturePol.extractFeatures(g, fpState, fpWeights, g3);
     const n = FeaturePol.scoreAll(fpState, fpWeights, fpScores);
     const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => fpScores[b] - fpScores[a]);
-    return order.slice(0, QUIET_MOVES).map(i => fpState.moves[i]);
+    return order.slice(0, quiet).map(i => fpState.moves[i]);
   }
 
   // P(BLACK wins) of a leaf.
@@ -84,7 +87,7 @@ function create(cfg) {
   // recursing, undo after) for the ladder reads, featurepol and the evaluator.
   function ab(g, depth, alpha, beta, g3) {
     if (g.gameOver || depth === 0) return evaluate(g, g3);
-    const cand = candidates(g, g3);
+    const cand = candidates(g, g3, QUIET_MOVES);
     if (cand.length === 0) return evaluate(g, g3);
     const maxing = g.current === BLACK;
     let best = maxing ? -Infinity : Infinity;
@@ -105,7 +108,7 @@ function create(cfg) {
     if (game.consecutivePasses > 0 && game.calcWinner() === game.current) return { move: PASS, info: 'end the game; ahead' };
     const rng = options.rng || makeRng();
     const g3 = game3FromGame2(game);
-    const cand = candidates(game, g3);
+    const cand = candidates(game, g3, QUIET_MOVES_ROOT);
     if (cand.length === 0) return { move: PASS };
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
