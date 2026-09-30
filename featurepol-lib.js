@@ -691,10 +691,6 @@ function _vpatPrepare(ctx) {
   const model = ctx.vpatModel;
   if (!model) throw new Error('featurepol: the vpat<n> feature needs a vpat model, but none is ' +
     'attached to the weights — the featurepol file has no embedded vpat model.');
-  if (model.preparedSpecs.hasLadder && !model._ladderNoticed) {
-    model._ladderNoticed = true;
-    console.error('featurepol vpat<n>: ladder-coded model — ranking non-incrementally (full extraction per candidate)');
-  }
   _rankBlank(cap);                   // (re)size + zero the shared rank arrays
   const black = ctx.cur === BLACK;   // vpat z is the BLACK-wins logit
 
@@ -1954,17 +1950,7 @@ function loadModel({ name = 'featurepol', path: pathOverride } = {}) {
   // the ranking reads it through ctx without any process-global or env var.  A
   // spec with vpat<n> but no embedded model errors at first ranking (in
   // _vpatPrepare), not silently.
-  if (raw.vpat) {
-    weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined);
-    // A ladder-coded vpat model ranks non-incrementally (a full extraction per
-    // candidate).  Note it HERE at load — in the startup block, beside the model
-    // banner — rather than lazily on the first ranking, where it would split a
-    // trainer's header from its first data row; suppress the lazy notice.
-    if (weights.vpatModel.preparedSpecs.hasLadder) {
-      weights.vpatModel._ladderNoticed = true;
-      console.error(`${modelName}: ladder-coded vpat<n> model — ranking non-incrementally (full extraction per candidate)`);
-    }
-  }
+  if (raw.vpat) weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined);
   return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0,
            komi: raw.komi === undefined ? null : raw.komi };
 }
