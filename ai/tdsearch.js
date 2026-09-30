@@ -72,9 +72,6 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
 //   TD_CRITIC_LAYERS  critic layers, comma list from 1,4                (default 1,4)
 //   TD_CRITIC_LR      critic step size, per active feature             (default 0.3)
-//   TD_CRITIC_TAIL    1 = the critic is maintained and learns through the playout
-//                     tail; 0 = it stops at the searched plies, the tail only
-//                     delivers the outcome                               (default 0)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
 //   TD_AB_DEPTH       root alpha-beta depth over the critic's value, every legal
 //                     point a candidate at every node; 1 = the one-ply search (default 1)
@@ -94,8 +91,6 @@ function create(cfg) {
   const C1 = cList.includes(1), C4 = cList.includes(4);
   if (!(C1 || C4) || cList.some(l => l !== 1 && l !== 4)) throw new Error(`tdsearch: TD_CRITIC_LAYERS must be a non-empty subset of 1,4, got '${cStr}'`);
   const CLR      = cfg.float('TD_CRITIC_LR', 0.3);
-  const CRITIC_TAIL = cfg.int('TD_CRITIC_TAIL', 0) !== 0;
-  let criticOn = true;                     // the critic is maintained at the current sim ply
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
   const AB_DEPTH = cfg.int('TD_AB_DEPTH', 1);
   if (AB_DEPTH < 1) throw new Error(`tdsearch: TD_AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
@@ -279,14 +274,12 @@ function create(cfg) {
   function simulate(game, rng) {
     const g = game.clone();
     const nbr = g._nbr, dnbr = g._dnbr, cells = g.cells;
-    criticOn = true;
     recomputeAll(cells, nbr, dnbr);
     let t = 0, criticSteps = 0, searched = 0, randomPlies = 0;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
       const m = g.current === BLACK ? 0 : 1;
       const searchOn = t < SEARCH_PLIES;
-      criticOn = searchOn || CRITIC_TAIL;
-      if (criticOn) {
+      if (searchOn) {                    // the critic learns on the searched plies; the tail only delivers the outcome
         criticSteps = t + 1;
         Vs[t] = sigmoid(Z[m]);
         const slot = t % 3, so = slot * area;
@@ -405,7 +398,6 @@ function create(cfg) {
 
     // Root selection: alpha-beta over the critic at AB_DEPTH.
     const m = game.current === BLACK ? 0 : 1;
-    criticOn = true;
     let best;
     if (AB_DEPTH > 1) {
       best = ABSearch.search(game, AB_DEPTH, abEvaluate, 1e-9, { getCandidates: abCandidates, rng });
