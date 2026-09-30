@@ -143,7 +143,7 @@ queryConnected().then(connected => {
     games: gamesOf.get(p.name) || 0,
     elo: String(Math.round(p.rating)),
     prov: p.K > 16 ? '?' : ' ',   // provisional marker in its own column, digits stay aligned
-    msMove: p.total_moves > 0 ? Util.fmt4(p.total_move_ms / p.total_moves) : '-',
+    msMove: p.total_moves > 0 ? (p.total_move_ms / p.total_moves).toFixed(0).padStart(4) : '-',   // %4.0f
     conn: house.has(p.name) ? '🏠' : (connected && connected.has(p.name) ? '🔗' : '  '),
     anchor: anchors.has(p.name) ? '⚓' : '',
   }));
