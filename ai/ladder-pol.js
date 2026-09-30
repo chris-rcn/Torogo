@@ -14,7 +14,7 @@
 // Config:
 //   AB_DEPTH    search depth in plies                                   (default 2)
 //   QUIET_MOVES candidates at a node with no urgent move: featurepol's top
-//               this many                                               (default 2)
+//               this many                                               (default 1)
 //   FPOL_DATA   featurepol model for the no-urgent-move fallback
 //                                                (default featurepol-cbk7wa32.js)
 //   VPAT_DATA   leaf evaluator (default ref/ref-ab-fp-vpat-data.js, the
@@ -36,7 +36,7 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
   const AB_DEPTH = cfg.int('AB_DEPTH', 2);
   if (!(AB_DEPTH >= 1)) throw new Error(`ladder-pol: AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
-  const QUIET_MOVES = cfg.int('QUIET_MOVES', 2);
+  const QUIET_MOVES = cfg.int('QUIET_MOVES', 1);
   if (!(QUIET_MOVES >= 1)) throw new Error(`ladder-pol: QUIET_MOVES must be at least 1, got ${QUIET_MOVES}`);
 
   const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
