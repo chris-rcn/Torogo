@@ -46,7 +46,7 @@ function create(cfg) {
               : (_ppatPath ? require('path').basename(_ppatPath) : '(none — uniform playouts)')));
 
   // Use uniform-random playout moves while board fullness < this fraction [0,1] (0 = off).
-  if (_model) _model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0);
+  if (_model) _model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
