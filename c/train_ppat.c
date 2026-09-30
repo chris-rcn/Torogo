@@ -170,6 +170,8 @@
  */
 #include "game2.h"
 #include "ppat.h"
+#include "fpol.h"
+#include "match.h"
 #include "vpat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1612,6 +1614,54 @@ static void match_cols(char *dw, size_t dwn) {
     if (!match_truncated) match_scale *= MATCH_GROWTH;
 }
 
+/* ── PUCT match (--do-puct-match) ─────────────────────────────────────────────
+ * The ppat match metric (c/match.h): puct-ppat-fp with uniform playouts (P1)
+ * against puct-ppat-fp with THIS model's playouts (P2), rff up to
+ * PUCT_MIN_PHASE, on the deployment board.  The column is P2's win
+ * ratio minus two standard errors of its pair scores.  Pair i is seeded
+ * PUCT_MATCH_SEED + i every row, so rows replay the same openings and seat
+ * streams and consecutive rows pair.  The game count grows MATCH_GROWTH per
+ * row, as directWR's does.  Monitor-only: -best does not read it.
+ * pSimUs is P2's wall time per search simulation in microseconds — the cost
+ * side of the metric (wall clock, so it reads high while workers load the
+ * machine). */
+static int cfg_puct_match;                  /* --do-puct-match */
+#define PUCT_FPOL       "ref/ref-fp-fast.js"   /* prior / top-K / rff model */
+#define PUCT_GAMES      50                     /* first row's games */
+#define PUCT_PLAYOUTS   100                    /* simulations per move, both sides */
+#define PUCT_MIN_PHASE  0.5                    /* rff plays both sides below it */
+#define PUCT_MATCH_SEED 0x9c7a11L
+static double puct_scale = 1.0;
+
+static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
+    static double best_p = -1e9;
+    use_run_model();
+    MatchCfg mc = { .size = DEPLOY_BOARD_SIZE, .mirror_pairs = 3,
+                    .min_phase = PUCT_MIN_PHASE, .playouts = PUCT_PLAYOUTS };
+    mc.side[0] = puct_default_cfg();                       /* P1: uniform playouts */
+    mc.side[1] = puct_default_cfg();                       /* P2: the model under training */
+    mc.side[1].ppat_w         = theta;
+    mc.side[1].early_pass     = RUN_EARLY_PASS;
+    mc.side[1].pass_weight    = run_pass_weight;
+    mc.side[1].ppat_min_phase = ppat_uniform_below_phase;  /* the deployment gate */
+    Match *m = match_new(&mc);
+    MatchStats st = {0};
+    int pairs = (int)(PUCT_GAMES * puct_scale / 2 + 0.5);
+    if (pairs < 1) pairs = 1;
+    const double t0 = wall_now();
+    int truncated = 0;
+    for (int p = 0; p < pairs; p++) {
+        if (wall_now() - t0 >= MATCH_MAX_S) { truncated = 1; break; }
+        match_play_pair(m, (uint64_t)(PUCT_MATCH_SEED + p), &st);
+    }
+    match_free(m);
+    g2_init_topology(topo_size);
+    const double lcb = 100.0 * (match_p2_ratio(&st) - 2.0 * match_p2_se(&st));
+    peak_col(lcb, &best_p, "%.1f", pw, pwn);
+    snprintf(cw, cwn, "%.0f", st.moves[1] ? 1000.0 * st.ms[1] / ((double)st.moves[1] * PUCT_PLAYOUTS) : 0.0);
+    if (!truncated) puct_scale *= MATCH_GROWTH;
+}
+
 
 
 
@@ -1670,6 +1720,10 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
                cfg_trunc_delta_from_model ? " (model)" : "",
                (double)cfg_trunc_max_phase);
 
+    if (cfg_puct_match)
+        printf("puct      %d games first row (x%.2g per row), %d playouts, rff to phase %g, fpol %s\n",
+               PUCT_GAMES, MATCH_GROWTH, PUCT_PLAYOUTS, PUCT_MIN_PHASE, PUCT_FPOL);
+
     /* The run line carries the only mode-specific facts: worker count, plus the
      * seed (solo, replayable) or a monitor tag (parallel). */
     if (monitor)
@@ -1692,6 +1746,7 @@ static void run_monitor(void) {
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "dWR-2se");
+    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "pSimUs");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %8s  %7s", "elapsedM", "pos/s");
@@ -1709,8 +1764,9 @@ static void run_monitor(void) {
         double bl_t0 = wall_now();
         TestResult tr = measure_test(loaded ? 0 : 1, n_test);
         char tecbuf[16];
-        char dwbuf[16];
+        char dwbuf[16], pwbuf[16] = "-", pcbuf[16] = "-";
         match_cols(dwbuf, sizeof dwbuf);
+        if (cfg_puct_match) puct_match_cols(pwbuf, sizeof pwbuf, pcbuf, sizeof pcbuf);
         mon_cumulative_test_s += wall_now() - bl_t0;   /* baseline testM: eval + match cost */
         /* elapsed AFTER the match columns, as every later row does — otherwise
          * the baseline row under-reports its own cost by the match time. */
@@ -1720,6 +1776,7 @@ static void run_monitor(void) {
             printf("%9d  %7s", 0, "-");
             printf("  %6d  %7s  %6s", live_weights(), "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
+            if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s", eb, "-");
@@ -1728,6 +1785,7 @@ static void run_monitor(void) {
             printf("%9d  %7s", 0, "-");
             printf("  %6s  %7s  %6s", "-", "-", "-");
             if (ref_theta) printf("  %8s", dwbuf);
+            if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
             if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
             if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);
             printf("  %8s  %7s\n", eb, "-");
@@ -1800,8 +1858,9 @@ static void run_monitor(void) {
         double test_t0 = wall_now();
         double row_el = test_t0 - wall_start;
         TestResult tr = measure_test(0, n_test);     /* policy (full) test */
-        char dwbuf[16];
+        char dwbuf[16], pwbuf[16] = "-", pcbuf[16] = "-";
         match_cols(dwbuf, sizeof dwbuf);
+        if (cfg_puct_match) puct_match_cols(pwbuf, sizeof pwbuf, pcbuf, sizeof pcbuf);
         mon_last_test_s = wall_now() - test_t0;
         mon_cumulative_test_s += mon_last_test_s;
 
@@ -1825,6 +1884,7 @@ static void run_monitor(void) {
         printf("  %6d  %7.4f  %6.3f", live_weights(), MON_AVGW(cfg_monitor),
                MON_PASS1(cfg_monitor));
         if (ref_theta) printf("  %8s", dwbuf);
+        if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
         if (n_test > 0) printf("  %7s", temse_col(tr.mse_c, &mon_best_te_c, tecbuf, sizeof tecbuf));
         if (n_test > 0) printf("  %6.1f", mon_cumulative_test_s / 60.0);   /* testM: cumulative teMSE-eval + match cost (minutes) */
         printf("  %8s  %7.1f", eb, posps);
@@ -1871,12 +1931,13 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
      * whole run and the switch-on point is visible. */
     clock_t test_t0 = clock();
     TestResult tr = (TestResult){0, 0, 0};
-    char dwbuf[16] = "-";
+    char dwbuf[16] = "-", pwbuf[16] = "-", pcbuf[16] = "-";
     if (run_tests) {
         tr = measure_test(use_uniform, test_n);
         /* Inside the test window: the match is part of the per-row cost, so testM
          * and the switch-on threshold both account for it. */
         match_cols(dwbuf, sizeof dwbuf);
+        if (cfg_puct_match) puct_match_cols(pwbuf, sizeof pwbuf, pcbuf, sizeof pcbuf);
         last_print_test_s = (double)(clock() - test_t0) / CLOCKS_PER_SEC;
         cumulative_test_s += last_print_test_s;
     }
@@ -1910,6 +1971,7 @@ static void print_stats(int iterations, int total_positions, int use_uniform,
     printf("  %6d  %7.4f  %6.3f", live_weights(), avg_abs_weight(),
            avg_first_pass_phase());
     if (ref_theta) printf("  %8s", dwbuf);
+    if (cfg_puct_match) printf("  %8s  %6s", pwbuf, pcbuf);
     if (n_test > 0) printf("  %7s", run_tests ? temse_col(mse_c, &best_te_c, tecbuf, sizeof tecbuf) : "-");
     if (n_test > 0) printf("  %6.1f", cumulative_test_s / 60.0);
     printf("  %6.1f  %8s  %6.1f  %7.1f",
@@ -2004,6 +2066,13 @@ static void print_help(FILE *out, const char *prog) {
 "  --match-phases A,B         in-band each side plays its own weights, out-of-band\n"
 "                             both play the reference (default 0.6,1)\n"
 "\n"
+"PUCT match (the ppat match metric: puct-ppat-fp, uniform vs this model's playouts)\n"
+"  --do-puct-match            play it every row: 50 games growing 1.1x per row, 100\n"
+"                             playouts, rff to phase 0.5, fpol ref/ref-fp-fast.js.\n"
+"                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
+"                             pSimUs = P2's wall time per simulation (us).\n"
+"                             Monitor-only: -best does not read it\n"
+"\n"
 "Gradient shaping\n"
 "  --phase-compensation-buckets N\n"
 "                             make applied gradient pressure uniform by phase\n"
@@ -2073,6 +2142,8 @@ int main(int argc, char **argv) {
     /* --no-direct: disable the directWR match entirely (and hide its column).
      * Forcing ref_theta off is enough — every directWR path is gated on it. */
     if (has_flag(argc, argv, "--no-direct")) cfg_ref_weights = NULL;
+    cfg_puct_match     = has_flag(argc, argv, "--do-puct-match");
+    if (cfg_puct_match) fpol_load(PUCT_FPOL);   /* exits loudly on a missing file or other spec */
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
@@ -2301,6 +2372,7 @@ int main(int argc, char **argv) {
     printf("%9s  %7s", "positions", "trMSE_c");
     printf("  %6s  %7s  %6s", "nWts", "avgW", "pass1");
     if (ref_theta) printf("  %8s", "dWR-2se");
+    if (cfg_puct_match) printf("  %8s  %6s", "pWR-2se", "pSimUs");
     if (n_test > 0) printf("  %7s", "teMSE_c");
     if (n_test > 0) printf("  %6s", "testM");
     printf("  %6s  %8s  %6s  %7s", "syncS", "elapsedM", "posMs", "pos/s");
