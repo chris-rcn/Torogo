@@ -74,7 +74,7 @@ module.exports = { loadCases, evalCases };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'oversample', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'limit', 'oversample', 'verbose']);
   if (opts.help || !opts.file) {
     console.log(`Usage: node evalladders2.js --file <cases.txt> [options]
 
@@ -85,6 +85,7 @@ come from a file rather than being hardcoded.
   --file FILE       case file to run                            (required)
   --agent NAME      ai/<name>.js to evaluate                    (default random)
   --budget MS       time budget per move, milliseconds          (default 1)
+  --limit N         run only the first N cases                  (default: all)
   --oversample N    evaluations per case; >1 is worth it for a
                     stochastic agent, whose answer varies       (default 1)
   --verbose         print each case's agent move alongside the requirement
@@ -97,6 +98,8 @@ print: loadCases(file) then evalCases(cases, getMove, { budgetMs, oversample })`
   const agentName  = opts.agent || 'random';
   const budgetMs   = parseInt(opts.budget || '1', 10);
   const oversample = parseInt(opts.oversample || '1', 10);
+  const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
+  if (!(limit >= 1)) { console.error('--limit must be a positive integer'); process.exit(1); }
   const verbose    = opts.verbose !== undefined;
   const _agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
 // create(cfg)-style agents (phase-mux, the puct family) instantiate with a
@@ -104,8 +107,9 @@ print: loadCases(file) then evalCases(cases, getMove, { budgetMs, oversample })`
 const agent = (typeof _agentMod.create === 'function'
     ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
 
-  const cases = loadCases(opts.file);
-  console.log(`file: ${opts.file}  cases: ${cases.length}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
+  const all   = loadCases(opts.file);
+  const cases = all.slice(0, limit);
+  console.log(`file: ${opts.file}  cases: ${cases.length}${cases.length < all.length ? `/${all.length}` : ''}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
   const t0 = performance.now();
   const { passed, total, byType } = evalCases(cases, agent, { budgetMs, oversample, verbose });
   for (const [type, a] of byType) {
