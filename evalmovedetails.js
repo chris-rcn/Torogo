@@ -58,6 +58,14 @@ function loadPositions(filePath) {
   return out;
 }
 
+// Identity of a movedetails file's position SET, independent of row order (so a
+// shuffled copy matches): sha256 of its sorted position rows, first 16 hex.
+// The elo map records the fingerprint of the file it was fitted on.
+function mdFingerprint(filePath) {
+  const rows = fs.readFileSync(filePath, 'utf8').split('\n').filter(l => MD.parseRow(l)).sort();
+  return require('crypto').createHash('sha256').update(rows.join('\n')).digest('hex').slice(0, 16);
+}
+
 // Board fullness (1 − empty/area) of a position, from replaying its history —
 // the same phase evalPosition reports, computed up front for band filtering.
 function positionPhase(position) {
@@ -138,9 +146,11 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   --phase-buckets N equal-width phase bands for the table, the same knob
                     filter-movedetails uses (default 10)
   --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
-                    md-phase-fit.js --save wrote (its bucket count applies; a
-                    mapped band with no results gives elo=-); elo= joins
-                    SUMMARY (default out/elo-map.json)
+                    md-phase-fit.js --save wrote (its bucket count applies);
+                    elo= joins SUMMARY (default out/elo-map.json).  Only for
+                    the map's own MD file (any row order), unfiltered: with
+                    another file, --min/--max-phase, --limit or --index,
+                    elo=- and stderr says why
   --verbose         per-position comparison table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -211,7 +221,7 @@ const agent = (typeof _agentMod.create === 'function'
   // the per-index seed set above (so --seed with --index starts exactly at N).
   if (seed !== null) agentSeed = seed;
 
-  console.log(`agent=${agentName}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}  seed=${agentSeed}` +
+  console.log(`agent=${agentName}  file=${opts.file}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}  seed=${agentSeed}` +
     (bandActive ? `  band=[${minPhase}, ${maxPhase}]` : ''));
   console.log();
   console.log([
@@ -350,9 +360,20 @@ const agent = (typeof _agentMod.create === 'function'
   // over the map's bands, x = the band's mae or mse.
   // A mapped band with no results leaves the estimate undefined: elo=- and
   // a note on stderr, the rest of the summary as usual.
+  // The map is only valid on the positions it was fitted on: its own file,
+  // every position of it.
+  const eloBlock =
+      !eloMap.mdFingerprint                         ? `the map records no MD file (refit it with md-phase-fit.js --save)`
+    : mdFingerprint(opts.file) !== eloMap.mdFingerprint ? `${opts.file} is not the map's MD file (${eloMap.mdFile})`
+    : bandActive                                    ? `phase-filtered (--min-phase/--max-phase)`
+    : positions.length < pool.length                ? `not every position (${index !== null ? '--index' : '--limit'})`
+    : null;
   const empty = eloMap.bands.filter(({ lo, hi }) => phaseBandN[phaseBandOf((lo + hi) / 2)] === 0);
   let elo = eloMap.intercept;
-  if (empty.length) {
+  if (eloBlock) {
+    console.error(`--elo-map: elo not estimated: ${eloBlock}`);
+    elo = NaN;
+  } else if (empty.length) {
     console.error(`--elo-map: no results in band${empty.length > 1 ? 's' : ''} ${empty.map(({ lo, hi }) => `${lo.toFixed(2)}-${hi.toFixed(2)}`).join(', ')}; elo not estimated`);
     elo = NaN;
   } else {
@@ -374,4 +395,4 @@ const agent = (typeof _agentMod.create === 'function'
     `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)} elo=${(isNaN(elo) ? '-' : elo.toFixed(0)).padStart(5)}`);
 }
 
-module.exports = { loadPositions, evalPositions, evalPositionsSample };
+module.exports = { loadPositions, evalPositions, evalPositionsSample, mdFingerprint };
