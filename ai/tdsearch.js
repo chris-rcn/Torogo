@@ -17,8 +17,8 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 // during think time, with simulations played by search over it.
 //
 // Each move, self-play simulations run from the current position.  Each of
-// a sim's first TD_SIM_SEARCH_PLIES plies is the critic's one-ply argmax
-// (mover's view) or, with probability TD_SIM_SEARCH_EPSILON, a uniform random
+// a sim's first SIM_SEARCH_PLIES plies is the critic's one-ply argmax
+// (mover's view) or, with probability SIM_SEARCH_EPSILON, a uniform random
 // legal move; the rest of the sim is the standard playout (uniform below
 // PPAT_MIN_PHASE, the ppat policy above it).  The critic is updated by TD
 // during the sim; the root move is alpha-beta over the learned critic, depth
@@ -49,53 +49,53 @@ const ABSearch = Util.load('./ab-search.js', 'ABSearch');
 // features; the live logit is corrected for the features the two positions
 // share.
 //
-// Truncation (TD_TRUNC_MAX_PHASE > 0): a sim plays its TD_SIM_SEARCH_PLIES
+// Truncation (TRUNC_MAX_PHASE > 0): a sim plays its SIM_SEARCH_PLIES
 // searched plies, then ceil(delta * area) UNIFORM random plies — the fielded
 // trunc agent's rule, here a buffer so the search cannot steer into the leaf
 // model's defects — and stops; the vpat model's value of the truncation point
 // stands in for the outcome everywhere the outcome is used.  The model is the
 // anchor; no grounding schedule.  Truncation is used only when the truncation
 // point's phase (root phase + truncation ply / area, captures ignored) is below
-// TD_TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
+// TRUNC_MAX_PHASE — a property of the model's trusted band, so it stays put
 // while the search depth and delta are swept.
 //
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (P1_/P2_ prefixes in selfplay).
 //
 // Config:
-//   TD_SIM_SEARCH_PLIES  plies of a sim played by the critic's one-ply search; the
+//   SIM_SEARCH_PLIES  plies of a sim played by the critic's one-ply search; the
 //                     rest is the standard playout                       (default 6)
-//   TD_SIM_SEARCH_EPSILON  on a searched ply, probability of a UNIFORM random legal
+//   SIM_SEARCH_EPSILON  on a searched ply, probability of a UNIFORM random legal
 //                     move instead (Silver et al.'s epsilon-greedy)      (default 0.1)
 //   PPAT_DATA         ppat weight file for the playout tail
 //                     (default out/ppat-data-233162-best-ref-candidate.js)
 //   PPAT_MIN_PHASE    tail moves are uniform below this board fullness      (default 0.6)
-//   TD_CRITIC_LAYERS  critic layers, comma list from 1,4                (default 1,4)
-//   TD_CRITIC_LR      critic step size, per active feature             (default 0.3)
+//   CRITIC_LAYERS     critic layers, comma list from 1,4                (default 1,4)
+//   CRITIC_LR         critic step size, per active feature             (default 0.3)
 //   PLAYOUTS          cap on simulations per move; 0 = time budget only (default 0)
-//   TD_AB_DEPTH       root alpha-beta depth over the critic's value, every legal
+//   AB_DEPTH          root alpha-beta depth over the critic's value, every legal
 //                     point a candidate at every node; 1 = the one-ply search (default 1)
-//   TD_TRUNC_PHASE_DELTA  length of the random buffer after the searched plies, as a
+//   TRUNC_PHASE_DELTA  length of the random buffer after the searched plies, as a
 //                     fraction of the area; 0 = the leaf right after the searched
 //                     plies                                            (default 0.2)
-//   TD_TRUNC_MAX_PHASE  truncate only when the TRUNCATION POINT's phase would be
+//   TRUNC_MAX_PHASE   truncate only when the TRUNCATION POINT's phase would be
 //                     below this; 0 = truncation off, no leaf model loaded (default 0.52)
 //   TRUNC_VPAT_DATA   the leaf model (default out/vpat-1j9ad1fk.js, the fielded one)
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const SEARCH_PLIES = cfg.int('TD_SIM_SEARCH_PLIES', 6);
-  const SEARCH_EPSILON = cfg.float('TD_SIM_SEARCH_EPSILON', 0.1);
-  const cStr     = cfg.str('TD_CRITIC_LAYERS', '1,4');
+  const SEARCH_PLIES = cfg.int('SIM_SEARCH_PLIES', 6);
+  const SEARCH_EPSILON = cfg.float('SIM_SEARCH_EPSILON', 0.1);
+  const cStr     = cfg.str('CRITIC_LAYERS', '1,4');
   const cList    = (cStr === '' || cStr === 'none') ? [] : cStr.split(',').map(s => parseInt(s, 10));
   const C1 = cList.includes(1), C4 = cList.includes(4);
-  if (!(C1 || C4) || cList.some(l => l !== 1 && l !== 4)) throw new Error(`tdsearch: TD_CRITIC_LAYERS must be a non-empty subset of 1,4, got '${cStr}'`);
-  const CLR      = cfg.float('TD_CRITIC_LR', 0.3);
+  if (!(C1 || C4) || cList.some(l => l !== 1 && l !== 4)) throw new Error(`tdsearch: CRITIC_LAYERS must be a non-empty subset of 1,4, got '${cStr}'`);
+  const CLR      = cfg.float('CRITIC_LR', 0.3);
   const PLAYOUTS_CAP = cfg.int('PLAYOUTS', 0);
-  const AB_DEPTH = cfg.int('TD_AB_DEPTH', 1);
-  if (AB_DEPTH < 1) throw new Error(`tdsearch: TD_AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
-  const TRUNC_DELTA       = cfg.float('TD_TRUNC_PHASE_DELTA', 0.2);
-  const TRUNC_MAX_PHASE   = cfg.float('TD_TRUNC_MAX_PHASE', 0.52);
+  const AB_DEPTH = cfg.int('AB_DEPTH', 1);
+  if (AB_DEPTH < 1) throw new Error(`tdsearch: AB_DEPTH must be at least 1, got ${AB_DEPTH}`);
+  const TRUNC_DELTA       = cfg.float('TRUNC_PHASE_DELTA', 0.2);
+  const TRUNC_MAX_PHASE   = cfg.float('TRUNC_MAX_PHASE', 0.52);
   let vpatModel = null;
   if (TRUNC_MAX_PHASE > 0) {
     const vpatPath = _isNode
