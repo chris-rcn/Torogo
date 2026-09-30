@@ -17,7 +17,7 @@ const Util = require('./util.js');
  *   --help             Show this help message
  *
  * Also used as a library (record-npats.js runs it as a per-checkpoint gate):
- *   evalLadders(agent, { budgetMs, oversample }) → { passed, total, rows }
+ *   evalLadders(agent, { budgetMs, oversample, only }) → { passed, total, rows }  (only: one 1-based position)
  */
 
 // ── Coordinate helpers ─────────────────────────────────────────────────────
@@ -396,10 +396,13 @@ const POSITIONS = [
 
 // Run every position `oversample` times against `agent` (getMove-style function).
 // Returns { passed, total, rows: [{ comment, passed, oversample }] }.
-function evalLadders(agent, { budgetMs = 1, oversample = 10 } = {}) {
+// only: optional 1-based position number to run alone (default: all).
+function evalLadders(agent, { budgetMs = 1, oversample = 10, only = null } = {}) {
   const rows = [];
   let passed = 0, total = 0;
-  for (const pos of POSITIONS) {
+  for (let pi = 0; pi < POSITIONS.length; pi++) {
+    if (only !== null && pi + 1 !== only) continue;
+    const pos = POSITIONS[pi];
     let posPassed = 0;
     for (let t = 0; t < oversample; t++) {
       const game = buildPosition(pos);
@@ -414,7 +417,7 @@ function evalLadders(agent, { budgetMs = 1, oversample = 10 } = {}) {
       }
       if (ok) posPassed++;
     }
-    rows.push({ comment: pos.comment, passed: posPassed, oversample });
+    rows.push({ num: pi + 1, comment: pos.comment, passed: posPassed, oversample });
     passed += posPassed;
     total += oversample;
   }
@@ -427,7 +430,7 @@ module.exports = { POSITIONS, evalLadders };
 
 if (require.main === module) {
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'oversample']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'budget', 'case', 'oversample']);
 
 if (opts.help) {
   console.log(`Usage: node evalladders.js [options]
@@ -439,10 +442,11 @@ reports, per position, how often the agent played one of the required moves.
   --budget MS       time budget per move, milliseconds          (default 1)
   --oversample N    evaluations per position; >1 is worth it for
                     a stochastic agent, whose answer varies      (default 10)
+  --case N          run only position N (the # column)       (default: all)
   --help            show this message
 
 Also usable as a library — record-npats.js runs it as a per-checkpoint gate:
-  evalLadders(agent, { budgetMs, oversample }) -> { passed, total, rows }`);
+  evalLadders(agent, { budgetMs, oversample, only }) -> { passed, total, rows }`);
   process.exit(0);
 }
 
@@ -452,23 +456,26 @@ const oversample = parseInt(opts.oversample || '10',  10);
 
 if (isNaN(budgetMs)   || budgetMs   < 1) { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
+const only = opts.case !== undefined ? parseInt(opts.case, 10) : null;
+if (only !== null && !(only >= 1 && only <= POSITIONS.length)) { console.error(`--case must be 1..${POSITIONS.length}`); process.exit(1); }
 
 const { getMove: agent } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
 const NW = Math.max('position'.length, ...POSITIONS.map(p => p.comment.length));
+const IW = String(POSITIONS.length).length;
 const TW = 2 * String(oversample).length + 1;   // e.g. "10/10"
 const RW = '100.0%'.length;
 
 const startTime = performance.now();
 console.log(`Agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
-console.log(` ${'position'.padEnd(NW)}  ${'pass'.padStart(TW)}  ${'ratio'.padStart(RW)}`);
-console.log(` ${'-'.repeat(NW)}  ${'-'.repeat(TW)}  ------`);
+console.log(` ${'#'.padStart(IW)}  ${'position'.padEnd(NW)}  ${'pass'.padStart(TW)}  ${'ratio'.padStart(RW)}`);
+console.log(` ${'-'.repeat(IW)}  ${'-'.repeat(NW)}  ${'-'.repeat(TW)}  ------`);
 
-const { passed, total, rows } = evalLadders(agent, { budgetMs, oversample });
+const { passed, total, rows } = evalLadders(agent, { budgetMs, oversample, only });
 for (const row of rows) {
   const pct = (100 * row.passed / row.oversample).toFixed(1) + '%';
   const frac = `${row.passed}/${row.oversample}`;
-  console.log(` ${row.comment.padEnd(NW)}  ${frac.padStart(TW)}  ${pct.padStart(RW)}`);
+  console.log(` ${String(row.num).padStart(IW)}  ${row.comment.padEnd(NW)}  ${frac.padStart(TW)}  ${pct.padStart(RW)}`);
 }
 
 const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
