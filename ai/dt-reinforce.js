@@ -40,6 +40,17 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //           — sim moves only: ply 0 and the root argmax see no last move, so
 //           the root decision never depends on the game's last move, and at
 //           ply 0 the key would be the same in every sim anyway
+// plus the chain layer (ACTOR_CHAIN_LAYER): one weight per chain STATE,
+// keyed by (the chain's lowest-index stone, its stone count, its liberty
+// count) for chains of either colour with at most CHAIN_MAX_LIBS (3)
+// liberties.  A point's score adds the weight of each such chain it is
+// adjacent to, once per chain.  Attacking and extending a chain are one
+// weight (colourblind: the point that attacks a chain for one side extends it
+// for the other).  Any stone played on or next to a chain changes its stone
+// or liberty count, so its key: each tactical state learns on its own.  The
+// table is indexed exactly (3 * area * area weights), no hashing.  After each
+// move, the liberties of the chains it touched (and of those next to its
+// captures) are recomputed when the chain qualified before or after.
 // and the policy is a softmax over the empty points.  A slice's key can
 // change mid-sim (a bucket edge crossed; ply 1 leaves the root), and then
 // every score is refreshed once; the local key moves with each sim move and
@@ -134,6 +145,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     least one of the two base tables must be on        (default 0)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "one of the 8 points around the
 //                     last sim move" (none at ply 0 and the root)           (default 0)
+//   ACTOR_CHAIN_LAYER  1 = add the chain layer: one weight per state of each chain
+//                     with at most 3 liberties, added to its adjacent points'
+//                     scores, shared by both sides                       (default 0)
 //   TEMP              softmax temperature for the simulations          (default 1)
 //   ACTOR_RETURN_EMA  the actor's baseline is a per-mover EMA of sim returns;
 //                     this is its decay                                  (default 0.9)
@@ -149,6 +163,8 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //   TRUNC_MAX_PHASE     truncate only when the TRUNCATION POINT's phase would be
 //                     below this; 0 = truncation off, no model loaded     (default 0.57)
 //   TRUNC_VPAT_DATA   the truncation model (default out/vpat-1j9ad1fk.js, the fielded one)
+const CHAIN_MAX_LIBS = 3;   // the chain layer keys chains with at most this many liberties
+
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
@@ -162,6 +178,7 @@ function create(cfg) {
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
   const USE_M    = cfg.int('ACTOR_COLOR_LAYER', 1) !== 0;   // (mover, point) base table
   const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 0) !== 0;   // (point) base table, both sides
+  const USE_K    = cfg.int('ACTOR_CHAIN_LAYER', 0) !== 0;        // chain-state layer
   if (!USE_M && !USE_C) throw new Error('dt-reinforce: ACTOR_COLOR_LAYER and ACTOR_COLORBLIND_LAYER are both off');
   let curB = 0, atRoot = false;              // the slices' current keys (sim state)
   const TEMP     = cfg.float('TEMP', 1);
@@ -243,6 +260,15 @@ function create(cfg) {
   let bs = null, lastAt = null;                 // per-step phase bucket and sim last move, for the update
   let loc = null, curLast = PASS;               // local slice: per-point key (1 = one of the 8 points around curLast), the sim's last move
   let locMark = null;                           // scratch: the local points of one recorded step
+  // Chain layer: wK[key] over chain states; kSum[p] = Σ wK over the qualifying
+  // chains adjacent to empty p (both movers' scores share it); gK = the board
+  // being scored.  Per actor step, each qualifying chain's key, its liberties'
+  // Σ ex (the sampled-from mass) and whether the chosen move touched it, for
+  // the update: kOff[t] .. kOff[t + 1] index kKey / kMass / kHit.
+  let wK = null, kSum = null, gK = null;
+  let kStamp = null, kStampN = 0;               // per-gid visit stamps (freed gids are not cleared)
+  let kOff = null, kKey = null, kMass = null, kHit = null;
+  let kEnt = null, kEntQ = null;                // scratch: chains a move affects (a stone of each, qualified before)
   let sc = null, ex = null;                     // per-mover score / exp(score/T) over points
   const S = [0, 0];                             // per-mover Σ ex over allowed points
   let tree = null, TOP = 0;                     // per-mover Fenwick tree over ex (1-based); TOP = largest power of 2 <= area
@@ -262,6 +288,12 @@ function create(cfg) {
     wP = new Float32Array(PB > 0 ? 2 * area * PB : 0);
     wR = new Float32Array(USE_R ? 2 * area : 0);
     wL = new Float32Array(USE_L ? 2 * area * 2 : 0);
+    wK = new Float32Array(USE_K ? CHAIN_MAX_LIBS * area * area : 0);
+    kSum = new Float64Array(area);
+    kStamp = new Int32Array(area + 4); kStampN = 0;
+    kOff = new Int32Array(3 * area + 22);
+    kKey = new Int32Array(USE_K ? 1024 : 0); kMass = new Float64Array(USE_K ? 1024 : 0); kHit = new Uint8Array(USE_K ? 1024 : 0);
+    kEnt = new Int32Array(4 * area + 8); kEntQ = new Uint8Array(4 * area + 8);
     loc = new Uint8Array(area); locMark = new Uint8Array(area);
     sc = [new Float64Array(area), new Float64Array(area)];
     ex = [new Float64Array(area), new Float64Array(area)];
@@ -282,7 +314,7 @@ function create(cfg) {
   }
 
   function reset() {
-    w1.fill(0); wC.fill(0); wP.fill(0); wR.fill(0); wL.fill(0);
+    w1.fill(0); wC.fill(0); wP.fill(0); wR.fill(0); wL.fill(0); wK.fill(0);
     base[0] = base[1] = 0.5;
   }
 
@@ -297,7 +329,119 @@ function create(cfg) {
     if (PB > 0) s += wP[mp * PB + curB];
     if (USE_R && atRoot) s += wR[mp];
     if (USE_L) s += wL[mp * 2 + loc[p]];
+    if (USE_K) s += kSum[p];
     return s;
+  }
+
+  // ── Chain layer ──
+  // Key of chain gid on board g: (lowest-index stone, stone count, liberty
+  // count), an exact index into wK.  Only for liberty counts 1..CHAIN_MAX_LIBS.
+  function chainKey(g, gid) {
+    const W = g._W, sw = g._sw, b = gid * W;
+    let rep = 0;
+    for (let wi = 0; wi < W; wi++) {
+      const w = sw[b + wi];
+      if (w !== 0) { rep = wi * 32 + 31 - Math.clz32(w & -w); break; }
+    }
+    return (rep * area + g._ss[gid] - 1) * CHAIN_MAX_LIBS + g._ls[gid] - 1;
+  }
+  // Σ wK over the distinct qualifying chains adjacent to empty point p.
+  function chainSum(g, p) {
+    const nbr = g._nbr, gidArr = g._gid, ls = g._ls, cells = g.cells, b = p * 4;
+    let s = 0, g0 = -1, g1 = -1, g2 = -1;
+    for (let d = 0; d < 4; d++) {
+      const a = nbr[b + d];
+      if (cells[a] === EMPTY) continue;
+      const gid = gidArr[a];
+      if (gid === g0 || gid === g1 || gid === g2) continue;
+      if (d === 0) g0 = gid; else if (d === 1) g1 = gid; else g2 = gid;
+      if (ls[gid] <= CHAIN_MAX_LIBS) s += wK[chainKey(g, gid)];
+    }
+    return s;
+  }
+  // Recompute every liberty of chain gid (deduped across calls by mark 3).
+  function recomputeLibs(g, gid, touched) {
+    const W = g._W, lw = g._lw, b = gid * W, cells = g.cells;
+    let n = touched.n;
+    for (let wi = 0; wi < W; wi++) {
+      let w = lw[b + wi];
+      while (w) {
+        const p = wi * 32 + 31 - Math.clz32(w & -w);
+        w &= w - 1;
+        if (mark[p] !== 3) { mark[p] = 3; list[n++] = p; recompute(cells, p); }
+      }
+    }
+    touched.n = n;
+  }
+  const kTouched = { n: 0 };
+  // Before playing `move` (colour `color`) with captures caps: note the chains
+  // it will change — its neighbours', and the mover's chains next to each
+  // captured stone — by one stone each, with whether each qualified.
+  function chainsBefore(g, move, caps, color) {
+    const nbr = g._nbr, cells = g.cells, gidArr = g._gid, ls = g._ls;
+    let n = 0;
+    for (let d = 0; d < 4; d++) {
+      const a = nbr[move * 4 + d];
+      if (cells[a] !== EMPTY) { kEnt[n] = a; kEntQ[n++] = ls[gidArr[a]] <= CHAIN_MAX_LIBS ? 1 : 0; }
+    }
+    for (let i = 0; i < caps.length; i++) {
+      const c = caps[i];
+      for (let d = 0; d < 4; d++) {
+        const a = nbr[c * 4 + d];
+        if (cells[a] === color) { kEnt[n] = a; kEntQ[n++] = ls[gidArr[a]] <= CHAIN_MAX_LIBS ? 1 : 0; }
+      }
+    }
+    kEnt[n] = move; kEntQ[n++] = 0;       // the mover's (merged or new) chain
+    return n;
+  }
+  // After the move: recompute the liberties of each surviving affected chain
+  // that qualified before or qualifies now (a chain's key reaches exactly its
+  // liberties' scores).
+  function chainsAfter(g, nEnt) {
+    const cells = g.cells, gidArr = g._gid, ls = g._ls;
+    kStampN++;
+    kTouched.n = 0;
+    for (let i = 0; i < nEnt; i++) {
+      const a = kEnt[i];
+      if (cells[a] === EMPTY) continue;             // captured
+      const gid = gidArr[a];
+      let q = kEntQ[i];
+      for (let j = i + 1; j < nEnt; j++) if (cells[kEnt[j]] !== EMPTY && gidArr[kEnt[j]] === gid) q |= kEntQ[j];
+      if (kStamp[gid] === kStampN) continue;        // done for this gid
+      kStamp[gid] = kStampN;
+      if (q || ls[gid] <= CHAIN_MAX_LIBS) recomputeLibs(g, gid, kTouched);
+    }
+    for (let i = 0; i < kTouched.n; i++) mark[list[i]] = 0;
+  }
+  // Record step t's qualifying chains for the update: key, the Σ ex[m] over
+  // its liberties, and whether `move` is one of them.
+  function chainRecord(g, t, m, move) {
+    const cells = g.cells, gidArr = g._gid, ls = g._ls, lw = g._lw, W = g._W, e = ex[m];
+    let n = kOff[t];
+    kStampN++;
+    for (let p = 0; p < area; p++) {
+      if (cells[p] === EMPTY) continue;
+      const gid = gidArr[p];
+      if (kStamp[gid] === kStampN) continue;
+      kStamp[gid] = kStampN;
+      if (ls[gid] > CHAIN_MAX_LIBS) continue;
+      if (n === kKey.length) {                      // grow the step records
+        const k2 = new Int32Array(2 * n); k2.set(kKey); kKey = k2;
+        const m2 = new Float64Array(2 * n); m2.set(kMass); kMass = m2;
+        const h2 = new Uint8Array(2 * n); h2.set(kHit); kHit = h2;
+      }
+      const b = gid * W;
+      let mass = 0;
+      for (let wi = 0; wi < W; wi++) {
+        let w = lw[b + wi];
+        while (w) { const q = wi * 32 + 31 - Math.clz32(w & -w); w &= w - 1; mass += e[q]; }
+      }
+      kKey[n] = chainKey(g, gid);
+      kMass[n] = mass;
+      kHit[n] = move !== PASS && (lw[b + (move >> 5)] & (1 << (move & 31))) !== 0 ? 1 : 0;
+      n++;
+    }
+    kOff[t + 1] = n;
   }
 
   // Local slice: make `move` the sim's last move.  The old last move's 8
@@ -365,6 +509,7 @@ function create(cfg) {
   function recompute(cells, p) {
     const v = cells[p];
     if (actorOn) {
+      if (USE_K && v === EMPTY) kSum[p] = chainSum(gK, p);
       for (let m = 0; m < 2; m++) {
         let e = 0;
         if (v === EMPTY) { const s = score(m, p); sc[m][p] = s; e = Math.exp(s / TEMP); }
@@ -375,6 +520,7 @@ function create(cfg) {
 
   function recomputeAll(cells) {
     S[0] = S[1] = 0;
+    if (USE_K) for (let p = 0; p < area; p++) if (cells[p] === EMPTY) kSum[p] = chainSum(gK, p);
     for (let m = 0; m < 2; m++) {
       const e = ex[m], scm = sc[m];
       for (let p = 0; p < area; p++) {
@@ -453,6 +599,7 @@ function create(cfg) {
   function simulate(game, rng) {
     const g = game.clone();
     const cells = g.cells;
+    gK = g;
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(g) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // ply 0: no last move
@@ -460,6 +607,7 @@ function create(cfg) {
     const nbr = g._nbr, dnbr = g._dnbr;
     nbrT = nbr; dnbrT = dnbr;
     let t = 0, actorSteps = 0;
+    if (USE_K) kOff[0] = 0;
     const actorDepth = truncActive ? TRUNC_ACTOR_DEPTH : ACTOR_DEPTH;
     while (!g.gameOver && t < maxSteps - 1 && !(truncActive && t >= truncPly)) {
       const m = g.current === BLACK ? 0 : 1;
@@ -476,21 +624,25 @@ function create(cfg) {
         exs.set(ex[m], o);
         Ss[t] = S[m];
         bs[t] = curB; lastAt[t] = curLast;
+        if (USE_K) chainRecord(g, t, m, move);
         actorSteps++;
       } else {
         move = truncActive || !ppatModel ? g.randomLegalMove(rng) : PPat.ppatMove(g, ppatState, ppatModel, rng);
+        if (USE_K) kOff[t + 1] = kOff[t];
       }
       fromActor[t] = actorOn ? 1 : 0;
       movers[t] = m; chosen[t] = move;
       const prevKo = g.ko;
-      let nChanged = 0;
+      let nChanged = 0, nEnt = 0;
       if (move !== PASS) {
         const caps = g.captureList(move);
         changed[nChanged++] = move;
         for (let i = 0; i < caps.length; i++) changed[nChanged++] = caps[i];
+        if (USE_K && actorOn) nEnt = chainsBefore(g, move, caps, g.current);
       }
       g.play(move);
       if (nChanged > 0) recomputeAround(g, changed, nChanged);
+      if (nEnt > 0) chainsAfter(g, nEnt);
       // A ko point turns legal again once any other move is played; its
       // neighbourhood did not change, so lift its exclusion explicitly.
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, prevKo);
@@ -534,6 +686,9 @@ function create(cfg) {
       if (USE_L) wL[mp * 2 + locMark[p]] += k * gr;
     }
     if (L !== PASS) { const bb = L * 4; for (let d = 0; d < 4; d++) { locMark[nbrT[bb + d]] = 0; locMark[dnbrT[bb + d]] = 0; } }
+    // Chain layer: Σ over a chain's liberties of ([a = chosen] − π(a)) is
+    // [chosen touches it] − its liberties' mass / S.
+    if (USE_K) for (let i = kOff[t]; i < kOff[t + 1]; i++) wK[kKey[i]] += k * (kHit[i] - kMass[i] * invS);
   }
 
   // Actor update over the sim's records, in step order.  z = the return,
@@ -634,6 +789,7 @@ function create(cfg) {
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(game) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // the root sees no last move
+    gK = game;
     recomputeAll(cells);                  // root scores
     let best = PASS, bestS = -Infinity;
     for (let p = 0; p < area; p++) {
@@ -652,7 +808,8 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, loc, area };
+             setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, loc, area,
+             wK, kSum, chainKey, chainSum, lastBoard: () => gK };
   }
 
   return { getMove, valueB, _internals };
