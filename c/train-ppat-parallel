@@ -12,6 +12,9 @@
 # checkpoint, runs the test, and prints the live |ΔV| table.  Because testing is
 # off the training critical path, the trainers never wait on it.
 #
+# The checkpoint goes to --save PATH when given (with its -best twin beside it),
+# else to out/ppat-data-<pid>.js.
+#
 # Example (10 trainers, sync every 2000 positions):
 #   ./train-ppat-parallel 10 out/evals-s9-500k.txt --value-playouts 100 --gradient-playouts 100 --lr 5 \
 #       --train-pos 24000 --test-pos 2000 --sync-every 2000
@@ -37,7 +40,18 @@ fi
 K="$1"; DATA="$2"; shift 2
 RUN="$$"
 SYNC_DIR="out/ppat-sync-$RUN"
-CKPT="out/ppat-data-$RUN.js"
+# Honour an explicit --save (the trainer reads the FIRST --save it is given, so
+# the wrapper must not add one of its own ahead of the user's).
+SAVE=""; prev=""
+for a in "$@"; do
+    [ "$prev" = "--save" ] && { SAVE="$a"; break; }
+    prev="$a"
+done
+if [ -n "$SAVE" ]; then
+    CKPT="$SAVE"; SAVE_ARGS=""                     # already in "$@"
+else
+    CKPT="out/ppat-data-$RUN.js"; SAVE_ARGS="--save $CKPT"
+fi
 
 # The trainers' stdout goes to /dev/null (the monitor owns the terminal), so a
 # seed chosen inside train-ppat would never be seen.  Choose it here instead, so
@@ -65,7 +79,7 @@ rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 PIDS=""
 i=0
 while [ "$i" -lt "$K" ]; do
-    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" --save "$CKPT" $SEED_ARGS "$@" >/dev/null 2>&1 &
+    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" $SAVE_ARGS $SEED_ARGS "$@" >/dev/null 2>&1 &
     PIDS="$PIDS $!"
     i=$((i + 1))
 done
