@@ -21,7 +21,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 'max-weights', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -83,6 +83,9 @@ if (opts.help || (!opts.spec && !opts.load)) {
                     default: the --load model's value, else 1 (every chain)
   --t3-min-chain N  smallest chain the tactics3 terms (t3Status) read.  Saved
                     with the model; default: the --load model's value, else 1
+  --t3-limits D,N   tactics3 depth limit D and node limit N for t3Status.
+                    Saved with the model; default: the --load model's
+                    values, else tactics3's defaults (7,1000)
   --max-weights N   stop interning NEW keys once the table holds N;
                     existing weights keep training (0 = unlimited, default).
                     The soft form of --no-add for huge shapes (stones20/24)
@@ -166,6 +169,14 @@ if (!(LADDER_MIN_CHAIN >= 1)) { console.error('Error: --ladder-min-chain must be
 const T3_MIN_CHAIN = opts['t3-min-chain'] !== undefined ? parseInt(opts['t3-min-chain'], 10)
                    : (loaded ? loaded.weights.t3MinChain : 1);
 if (!(T3_MIN_CHAIN >= 1)) { console.error('Error: --t3-min-chain must be a positive integer'); process.exit(1); }
+let T3_DEPTH_LIMIT, T3_NODE_LIMIT;
+if (opts['t3-limits'] !== undefined) {
+  const m = /^(\d+),(\d+)$/.exec(String(opts['t3-limits']));
+  if (!m || !(+m[2] >= 1)) { console.error('Error: --t3-limits must be <depth>,<nodes> (integers, nodes >= 1)'); process.exit(1); }
+  T3_DEPTH_LIMIT = +m[1]; T3_NODE_LIMIT = +m[2];
+} else if (loaded) {
+  T3_DEPTH_LIMIT = loaded.weights.t3DepthLimit; T3_NODE_LIMIT = loaded.weights.t3NodeLimit;
+}
 if (!SPEC) {
   console.error('Error: --spec is required unless --load points to an existing model.');
   process.exit(1);
@@ -175,7 +186,8 @@ if (!SPEC) {
 // at the CLI boundary turn that into a clean stderr message + non-zero exit.
 let weights;
 try {
-  weights = FeaturePol.createWeights({ spec: SPEC, ladderMinChain: LADDER_MIN_CHAIN, t3MinChain: T3_MIN_CHAIN });
+  weights = FeaturePol.createWeights({ spec: SPEC, ladderMinChain: LADDER_MIN_CHAIN, t3MinChain: T3_MIN_CHAIN,
+                                        t3DepthLimit: T3_DEPTH_LIMIT, t3NodeLimit: T3_NODE_LIMIT });
 } catch (e) {
   console.error(`Error: ${e.message}`);
   process.exit(1);
@@ -448,7 +460,7 @@ function evalVsReference(N, nGames) {
 
 console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}` +
             (weights.spec.needsLadder ? `  ladderMinChain=${weights.ladderMinChain}` : '') +
-            (weights.spec.needsT3 ? `  t3MinChain=${weights.t3MinChain}` : ''));
+            (weights.spec.needsT3 ? `  t3MinChain=${weights.t3MinChain}  t3Limits=${weights.t3DepthLimit},${weights.t3NodeLimit}` : ''));
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
