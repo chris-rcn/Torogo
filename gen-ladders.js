@@ -15,7 +15,7 @@ const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirming-agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'size']);
 if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
@@ -28,8 +28,10 @@ case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
   --size N         board size                                   (default 13)
   --examples N     cases per (chain size, type)                 (default 1)
   --max-stones N   largest chain size                           (default 10)
-  --agent NAME     confirming agent in ai/, a fixed-compute one: it runs
-                   at its own playout count, no time budget  (default ref-puct-trunc-10k)
+  --confirming-agent NAME
+                   agent in ai/ that must get each case right; a fixed-compute
+                   one: it runs at its own playout count, no time budget
+                                                     (default ref-puct-trunc-10k)
   --min-depth N    reject ladder reads shallower than this      (default 10)
   --min-nodes N    reject ladder reads of fewer nodes than this (default 50)
   --help           show this message`);
@@ -40,7 +42,7 @@ const N          = parseInt(opts.examples   || '1',    10);   // examples per (c
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
-const AGENT      = opts.agent || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
+const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
 // Positions come from ref-fp-heavy self-play (its softmax sampling varies the
 // games), so cases arise in game-like positions rather than random-play ones.
