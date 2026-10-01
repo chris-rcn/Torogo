@@ -19,7 +19,7 @@ function _defenderMoves(game, idx, libs) {
 // Single source of truth for the search bounds.  Exported so callers can
 // (a) compare against them when deciding whether to persist non-default
 // values, and (b) re-export them as their own defaults if desired.
-const DEFAULT_NODE_LIMIT  = Infinity;
+const DEFAULT_NODE_LIMIT  = 1000;
 const DEFAULT_DEPTH_LIMIT = 7;
 
 // Period-6 move-cycle prune (ladder2's rule): game3 has no superko, so a
@@ -139,7 +139,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
 // searchChains(game, nodeLimit, depthLimit, minChainSize) — run searchChain on
 // every group with 1–3 liberties and return an array of { gid, color, status }
 // objects, one per group (groups with 0 or 4+ liberties are skipped).
-// nodeLimit: max nodes per sub-search per liberty in searchChain (default Infinity).
+// nodeLimit: node budget for each chain's read (see searchChain; default 1000).
 // depthLimit: maximum recursion depth for canReach4Libs (default 7).
 // minChainSize: skip groups smaller than this (default 1).
 function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT, minChainSize = 1) {
@@ -169,8 +169,9 @@ function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT
 //   false — mover fails
 //   null  — inconclusive (node budget exhausted before a definitive result)
 //
-// nodeLimit: fresh credit budget given to each canReach4Libs sub-search
-// (one per liberty). Default Infinity (unbounded).
+// nodeLimit: node budget for the whole read, split across its canReach4Libs
+// sub-searches (unspent budget returns to the pool); only nodes where the
+// chain has 3+ liberties spend it.  Default 1000.
 // depthLimit: maximum recursion depth for canReach4Libs. Default 7.
 // Logs a warning and returns null when the group has more than 3 liberties.
 function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT) {
