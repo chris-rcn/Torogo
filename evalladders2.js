@@ -9,20 +9,22 @@
 //     13 ○ · ● ...                          <- N rows of the position
 //      1 ...
 //   require=<coord>  → agent must play it;  prohibit=<c1,c2,...> → must avoid all.
+// A "result: ..." line (written by --verbose) is ignored, so verbose output
+// loads as a case file.
 //
 // Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1]
 
 const fs = require('fs');
 const path = require('path');
 const { performance } = require('perf_hooks');
-const { BLACK, WHITE, PASS, parseBoard, parseMove, coordStr } = require('./game2.js');
+const { BLACK, WHITE, parseBoard, parseMove, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 
 // Parse the text-block file into cases.
 function loadCases(file) {
   const cases = [];
   for (const block of fs.readFileSync(file, 'utf8').split(/\n\s*\n/)) {
-    const lines = block.split('\n');
+    const lines = block.split('\n').filter(l => !l.startsWith('result: '));
     const metaLine = lines.find(l => l.includes('='));
     if (!metaLine) continue;                     // blank / torn block
     const meta = {};
@@ -31,6 +33,7 @@ function loadCases(file) {
       if (eq > 0) meta[tok.slice(0, eq)] = tok.slice(eq + 1);
     }
     cases.push({
+      text:      lines.join('\n').replace(/^\n+|\n+$/g, ''),      // the block as read, for --verbose
       board:     lines.filter(l => l !== metaLine).join('\n'),   // parseBoard strips the labels
       toPlay:    meta.toPlay === 'B' ? BLACK : WHITE,
       require:   meta.require  ? meta.require.split(',')  : null,
@@ -47,21 +50,21 @@ function evalCases(cases, agent, { budgetMs, oversample, verbose = false }) {
   const byType = new Map();   // type -> { passed, total }
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];
-    let p = 0, lastGame = null, lastMove = PASS;
+    let p = 0;
+    const played = [];
     for (let t = 0; t < oversample; t++) {
       const game = parseBoard(c.board, c.toPlay);
       const mv = agent(game, budgetMs);
-      lastGame = game; lastMove = mv.move;
+      played.push(coordStr(mv.move, game.N));
       let ok = true;
       if (c.require)  ok = ok &&  c.require.some(s => mv.move === parseMove(s, game.N));
       if (c.prohibit) ok = ok && !c.prohibit.some(s => mv.move === parseMove(s, game.N));
       if (ok) p++;
     }
     if (verbose) {
-      const ans = c.require ? `require=${c.require.join(',')}` : `prohibit=${c.prohibit.join(',')}`;
+      // The case block as read, then one result line.
       const res = p === oversample ? 'PASS' : p === 0 ? 'FAIL' : `${p}/${oversample}`;
-      console.log(`\n#${i + 1} [${c.type} size${c.chainSize}] toPlay=${c.toPlay === BLACK ? 'B' : 'W'}  ${ans}  played=${coordStr(lastMove, lastGame.N)}  -> ${res}`);
-      console.log(lastGame.toString(lastMove, { labels: true }));   // board with the agent's move marked
+      console.log(`${c.text}\nresult: ${res}  played: ${played.join(',')}\n`);
     }
     passed += p; total += oversample;
     const agg = byType.get(c.type) || { passed: 0, total: 0 };
@@ -88,7 +91,8 @@ come from a file rather than being hardcoded.
   --limit N         run only the first N cases                  (default: all)
   --oversample N    evaluations per case; >1 is worth it for a
                     stochastic agent, whose answer varies       (default 1)
-  --verbose         print each case's agent move alongside the requirement
+  --verbose         reprint each case block as read, plus a line
+                    "result: PASS|FAIL|p/n  played: <moves>"
   --help            show this message
 
 Also usable as a library — the trainers' \`ladr\` column runs it per status
