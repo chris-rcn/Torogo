@@ -328,6 +328,35 @@ function needsGame3(prepSpecs) { return !!(prepSpecs && prepSpecs.hasLadder); }
 // written beside its key.  Null on the normal path: one null test per feature.
 let _anch = null;
 
+// Would ladder2's getAllLadderStatuses(game3, minChain) read any chain here?
+// Its rule, on the Game2's own chain tables: at least minChain stones and 1-2
+// liberties, or 3 when the chain belongs to the side NOT to move.  When none
+// qualifies the ladder codes are the plain cells and no Game3 is needed.
+const _rcSeen = new Int32Array(1024);
+let _rcStamp = 0;
+function _hasReadableChain(game, minChain) {
+  const cap = game.N * game.N, cells = game.cells, gid = game._gid, ss = game._ss, ls = game._ls;
+  if (++_rcStamp === 0x7fffffff) { _rcSeen.fill(0); _rcStamp = 1; }
+  for (let i = 0; i < cap; i++) {
+    const c = cells[i];
+    if (c === 0) continue;
+    const g = gid[i];
+    if (_rcSeen[g] === _rcStamp) continue;
+    _rcSeen[g] = _rcStamp;
+    if (ss[g] < minChain) continue;
+    const lc = ls[g];
+    if (lc === 0 || lc > 3) continue;
+    if (lc === 3 && c === game.current) continue;
+    return true;
+  }
+  return false;
+}
+function _plainLadderCodes(game) {
+  const cap = game.N * game.N, codes = new Int8Array(cap);
+  for (let i = 0; i < cap; i++) codes[i] = game.cells[i];
+  return codes;
+}
+
 function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, game3RebuildOk) {
   const cells = game.cells;
   const cap   = game.N * game.N;
@@ -421,13 +450,20 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
       // game3 tactical pass over the current cells.
       if (game3 && game3.emptyCount !== game.emptyCount)
         throw new Error('vpatterns.extractFeatures: supplied game3 does not match game');
+      const minChain = prepSpecs.ladderMinChain;
+      if (!game3 && !_hasReadableChain(game, minChain)) {
+        // No chain ladder2 would read: the codes are the plain cells, exactly
+        // what computeLadderCodes returns then, without building a Game3.
+        raw = _plainLadderCodes(game);
+      } else {
       if (!game3 && !game3RebuildOk && !_warnedLadderRebuild) {
         _warnedLadderRebuild = true;
         console.error('vpatterns.extractFeatures: no game3 supplied — building one for the ladder pass ' +
           '(slow path; pass a synced game3 to reuse it).  First occurrence:\n' +
           (new Error().stack || '').split('\n').slice(2, 7).join('\n'));
       }
-      raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), { ladderMinChain: prepSpecs.ladderMinChain });
+      raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), { ladderMinChain: minChain });
+      }
     } else if (isHealth) {
       // One survival probability per chain, bucketed to 1..hb and signed by
       // colour — the same alphabet shape as liberty counts, but the levels
