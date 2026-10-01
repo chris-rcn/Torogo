@@ -15,7 +15,7 @@ const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirming-agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'position-agent', 'size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirmations', 'confirming-agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'position-agent', 'size']);
 if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
@@ -33,6 +33,8 @@ no time limit.  Cases go to stdout, a summary to stderr.
                    agent in ai/ that must get each case right; a fixed-compute
                    one: it runs at its own playout count, no time budget
                                                      (default ref-puct-trunc-10k)
+  --confirmations N  runs the confirming agent must all get right (stops at the
+                   first miss); the contested check uses the first run (default 2)
   --position-agent NAME
                    agent in ai/ whose self-play games supply the positions; a
                    sampling one, so games vary; no time budget (default ref-fp-heavy)
@@ -46,7 +48,9 @@ const N          = parseInt(opts.examples   || '1',    10);   // examples per (c
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
-const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
+const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';
+const CONFIRMATIONS = parseInt(opts.confirmations || '2', 10);   // runs that must all get the case right
+if (!(CONFIRMATIONS >= 1)) { console.error('--confirmations must be a positive integer'); process.exit(1); }         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
 // Positions come from the position agent's self-play (ref-fp-heavy's softmax
 // sampling varies the games), so cases arise in game-like positions rather
@@ -108,6 +112,17 @@ function decided(r) {
   return r.rootWinRatio !== undefined && !(Math.abs(r.rootWinRatio - 0.5) < 0.2);
 }
 
+// Run the confirming agent up to CONFIRMATIONS times; 'decided' when the first
+// run finds the position uncontested, else whether every run's move passes ok.
+function confirm(game, ok) {
+  for (let i = 0; i < CONFIRMATIONS; i++) {
+    const r = confirmAgent.getMove(game, 0);
+    if (i === 0 && decided(r)) return 'decided';
+    if (!ok(r.move)) return false;
+  }
+  return true;
+}
+
 // scan ONE position for an agent-confirmed case of (chain, type); return hit or null
 function scanPos(game, chain, type) {
   for (const stoneIdx of chainGroups(game, chain)) {
@@ -126,9 +141,9 @@ function scanPos(game, chain, type) {
       if (type.wantDef && moveCaptures(game, st.urgentLibs[0])) continue;
       // reject if a random legal non-eye move hits the answer (too easy to guess) — before the agent
       if (game.randomLegalMove() === st.urgentLibs[0]) continue;
-      const r = confirmAgent.getMove(game, 0);
-      if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
-      if (r.move === st.urgentLibs[0]) return { stoneIdx, color: game.cells[stoneIdx], require: st.urgentLibs[0] };
+      const c = confirm(game, mv => mv === st.urgentLibs[0]);
+      if (c === 'decided') return null;   // skip won/lost positions; keep only contested ones
+      if (c) return { stoneIdx, color: game.cells[stoneIdx], require: st.urgentLibs[0] };
     } else {
       if (st.moverSucceeds) continue;   // mover can't succeed → futile
       // moves-to-avoid: keep only legal non-eye liberties; the set must be non-empty
@@ -136,9 +151,9 @@ function scanPos(game, chain, type) {
       if (prohibit.length === 0) continue;
       // futile-extend: reject self-atari extends (trivial, not a ladder) — before the agent
       if (type.wantDef && extendSelfAtari(game, stoneIdx, prohibit)) continue;
-      const r = confirmAgent.getMove(game, 0);
-      if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
-      if (!prohibit.includes(r.move)) return { stoneIdx, color: game.cells[stoneIdx], prohibit };
+      const c = confirm(game, mv => !prohibit.includes(mv));
+      if (c === 'decided') return null;   // skip won/lost positions; keep only contested ones
+      if (c) return { stoneIdx, color: game.cells[stoneIdx], prohibit };
     }
   }
   return null;
@@ -208,7 +223,7 @@ function emit(res, type, chain) {
   // required/avoid coordinates marked, blank-line separated.  id = hash of the
   // (recentered) position, giving each case a unique, stable handle.
   const id = hashStr(game.toString(PASS));
-  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=${AGENT} pos=${POSITION_AGENT}`;
+  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=${AGENT} conf=${CONFIRMATIONS} pos=${POSITION_AGENT}`;
   process.stdout.write(`${header}\n${game.toString(marks, { labels: true })}\n\n`);
 }
 
@@ -231,7 +246,7 @@ for (let i = 1; i <= N; i++) {
 const wall = (Date.now() - tStart) / 1000;
 let totCases = 0, totScanned = 0;
 process.stderr.write('\n=== gen-ladders summary ===\n');
-process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} agent=${AGENT} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES} positions=${POSITION_AGENT}\n`);
+process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} agent=${AGENT} confirmations=${CONFIRMATIONS} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES} positions=${POSITION_AGENT}\n`);
 for (const t of TYPES) {
   const s = stats.get(t.name);
   totCases += s.cases; totScanned += s.scanned;
