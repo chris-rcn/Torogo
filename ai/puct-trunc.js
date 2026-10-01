@@ -99,6 +99,11 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.25);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 800);
+  // Fraction of the grandparent's RAVE data (same side to move) a new node
+  // starts with, on top of its own prior.  0 = none (each node starts at the
+  // prior).  Unlike the rave agents' RAVE_INHERIT, the prior is kept and only
+  // the grandparent's accrued counts are scaled.
+  const RAVE_INHERIT = cfg.float('RAVE_INHERIT', 0);
   // Top-K kept move count, applied at EVERY node including the root (0 = full
   // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  Two
   // things were folded in here: the old separate ROOT_TOP_K (a sweep found the
@@ -178,6 +183,7 @@ function create(cfg) {
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
     `expand-work: ${EXPAND_WORK}, ` +
+    `rave-inherit: ${RAVE_INHERIT}, ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
@@ -375,6 +381,13 @@ function create(cfg) {
     const work       = new Float32Array(M);   // accrued playout work per edge (expansion gate)
     const raveWins   = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_WINS)   : null;
     const raveVisits = RAVE_K > 0 ? new Float32Array(area).fill(PRIOR_VISITS) : null;
+    if (RAVE_K > 0 && RAVE_INHERIT > 0 && parent !== null && parent.parent !== null) {
+      const gw = parent.parent.raveWins, gv = parent.parent.raveVisits;
+      for (let m = 0; m < area; m++) {
+        raveWins[m]   += RAVE_INHERIT * (gw[m] - PRIOR_WINS);
+        raveVisits[m] += RAVE_INHERIT * (gv[m] - PRIOR_VISITS);
+      }
+    }
 
     // PUCT priors per move (renormalised to sum to 1).  PASS gets a 1/area floor;
     // all other entries take the softmax probability directly; then renormalise.
