@@ -19,11 +19,12 @@ const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirming-
 if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
-Generates ladder test cases for evalladders2.js: for each chain size 1..max-stones
-and each type (kill, escape, futile-attack, futile-extend), searches the position
-agent's self-play positions for a ladder2-read case the confirming agent gets right, in
-a contested position (its root win ratio within 0.2 of 0.5).  Searches until each
-case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
+Generates ladder test cases for evalladders2.js: for each chain size
+1..max-stones and each type (kill, escape, futile-attack, futile-extend),
+searches the position agent's self-play positions for a ladder2-read case the
+confirming agent gets right, in a contested position (its root win ratio within
+0.2 of 0.5).  Searches until each case is found; there is no time limit.  Cases
+go to stdout, a summary to stderr.
 
   --size N         board size                                   (default 13)
   --examples N     cases per (chain size, type)                 (default 1)
