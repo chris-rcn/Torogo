@@ -74,17 +74,23 @@
 //   atari<n>    total enemy stones this move puts in atari, summed over chains
 //   selfAtari<n> stone count of the resulting self-atari'd group (own group → 1
 //               liberty); 0 if the move does not self-atari
+//   lib<n>      liberty count of the chain the move produces (captures counted),
+//               cumulative up to n; 0 (suicide) emits nothing
 //   ko          binary: 1 iff the move creates a ko (captures one lone stone
 //               into a ko shape), else 0
 //   anyKo       binary BOARD-CONTEXT flag: 1 iff a ko is currently active on the
 //               board (some point is ko-banned).  Same value for every candidate
 //               move, so only meaningful in conjunction (e.g. stones8+anyKo).
+//   joins       descriptor: the count of distinct friendly chains adjacent to
+//               the move, 0..4; 0 is its own key.  Takes no size.
 //   flags       6-bit descriptor combining tactical event flags for the move:
 //               self-atari(1) | capture(2) | atari(4) | ko(8) | join≥2(16) | local(32).
 //               Always emits one key (mask 0 = none, its own category).
 //   local       binary LOCALITY flag: 1 iff the move is in the 8-neighbourhood
 //               (Moore) of the previous move; 0 (incl. no previous move) emits
 //               nothing.  The one feature that conditions on the opponent's move.
+//   localAlways two-valued sibling of local: the non-local value 0 is its own key,
+//               so a conjoined space splits each pattern into local and non-local
 //   koSolve     binary (ppat Feature 6): 1 iff the move captures an atari'd enemy
 //               group adjacent to my own ko-stone (game.koStone[cur+1]) — resolving
 //               a ko I just made by capturing the threat rather than fighting it.
