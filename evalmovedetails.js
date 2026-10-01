@@ -11,11 +11,11 @@
 // Status is printed at an exponentially increasing interval (× 1.5 each time).
 //
 // Usage:
-//   node evalmovedetails.js --agent <name> --file <path> [--budget <ms>]
+//   node evalmovedetails.js --agent <name> [--file <path>] [--budget <ms>]
 //                           [--limit <n>] [--index <n>] [--oversample <n>] [--verbose]
 //
 //   --agent       ai agent name under ai/                   (required)
-//   --file        positions file from createmovedetails.js  (required)
+//   --file        positions file from createmovedetails.js  (default out/md-trunc30k-827.md)
 //   --budget      ms per move                               (default: 1000)
 //   --limit       evaluate only the first n positions       (default: all)
 //   --index       evaluate only the position at 0-based index n, with the
@@ -124,15 +124,16 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'elo-map', 'min-phase', 'max-phase', 'verbose']);
 
-  if (opts.help || !opts.file || !opts.agent) {
-    console.log(`Usage: node evalmovedetails.js --agent <name> --file <path> [options]
+  if (opts.help || !opts.agent) {
+    console.log(`Usage: node evalmovedetails.js --agent <name> [--file <path>] [options]
 
 Evaluate an agent against pre-computed move details (createmovedetails.js
 output): replay each position, ask the agent for a move, and charge it the
 win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
 
   --agent NAME      ai/<name>.js (required)
-  --file PATH       positions file from createmovedetails.js (required)
+  --file PATH       positions file from createmovedetails.js
+                    (default out/md-trunc30k-827.md)
   --budget MS       per-move budget (default 1000)
   --limit N         evaluate only the first N positions (default: all)
   --min-phase F     evaluate only positions at board fullness >= F (default 0)
@@ -157,6 +158,8 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   }
 
   const agentName  = opts.agent;
+  // The default positions file, shown relative to the cwd as a user would type it.
+  const mdFile     = opts.file || path.relative(process.cwd(), path.join(__dirname, 'out', 'md-trunc30k-827.md'));
   const budgetMs   = parseInt(opts.budget     || '1000', 10);
   const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
@@ -196,7 +199,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
 // plain env reader; bare { getMove } modules are used directly.
 const agent = (typeof _agentMod.create === 'function'
     ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
-  const pool      = loadPositions(opts.file);
+  const pool      = loadPositions(mdFile);
   // --index N evaluates only the position at 0-based index N, restoring the
   // agent rng seed it would have had in a full sweep so the result reproduces
   // that position exactly.
@@ -221,7 +224,7 @@ const agent = (typeof _agentMod.create === 'function'
   // the per-index seed set above (so --seed with --index starts exactly at N).
   if (seed !== null) agentSeed = seed;
 
-  console.log(`agent=${agentName}  file=${opts.file}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}  seed=${agentSeed}` +
+  console.log(`agent=${agentName}  file=${mdFile}  budget=${budgetMs}ms  oversample=${oversample}  positions=${positions.length}/${pool.length}  seed=${agentSeed}` +
     (bandActive ? `  band=[${minPhase}, ${maxPhase}]` : ''));
   console.log();
   console.log([
@@ -364,7 +367,7 @@ const agent = (typeof _agentMod.create === 'function'
   // every position of it.
   const eloBlock =
       !eloMap.mdFingerprint                         ? `the map records no MD file (refit it with md-phase-fit.js --save)`
-    : mdFingerprint(opts.file) !== eloMap.mdFingerprint ? `${opts.file} is not the map's MD file (${eloMap.mdFile})`
+    : mdFingerprint(mdFile) !== eloMap.mdFingerprint ? `${mdFile} is not the map's MD file (${eloMap.mdFile})`
     : bandActive                                    ? `phase-filtered (--min-phase/--max-phase)`
     : positions.length < pool.length                ? `not every position (${index !== null ? '--index' : '--limit'})`
     : null;
