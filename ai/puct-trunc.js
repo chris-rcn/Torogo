@@ -96,7 +96,7 @@ function create(cfg) {
   const _truncMeta = (_vpatRaw && _vpatRaw.trunc) || {};
 
   // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
-  const C_PUCT     = cfg.float('C_PUCT', 0.5);
+  const C_PUCT     = cfg.float('C_PUCT', 0.25);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 400);
   // Top-K kept move count, applied at EVERY node including the root (0 = full
