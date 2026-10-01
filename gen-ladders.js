@@ -32,7 +32,7 @@ no time limit.  Cases go to stdout, a summary to stderr.
   --confirming-agent NAME
                    agent in ai/ that must get each case right; a fixed-compute
                    one: it runs at its own playout count, no time budget
-                                                     (default ref-puct-trunc-10k)
+                                                     (default ref-puct-trunc-30k)
   --confirmations N  runs the confirming agent must all get right (stops at the
                    first miss); the contested check uses the first run (default 2)
   --position-agent NAME
@@ -49,7 +49,7 @@ const N          = parseInt(opts.examples   || '1',    10);   // examples per (c
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
-const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';
+const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-30k';
 const CONFIRMATIONS = parseInt(opts.confirmations || '2', 10);   // runs that must all get the case right
 if (!(CONFIRMATIONS >= 1)) { console.error('--confirmations must be a positive integer'); process.exit(1); }         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
