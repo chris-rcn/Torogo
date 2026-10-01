@@ -300,8 +300,8 @@ const agent = (typeof _agentMod.create === 'function'
 
       if (worst.length < WORST_N || gap > worst[worst.length - 1].gap) {
         const rec = { index: indexBase + i, gap, hist: positions[i].history.length,
-                      top: topCand.m, topKwr: topCand.kwr,
-                      agent: agentStr, agentKwr: agentCand.kwr, info: agentMove.info };
+                      top: topCand.m, topWR: topCand.winRatio,
+                      agent: agentStr, agentWR: agentCand.winRatio, info: agentMove.info };
         let pos = worst.length;
         while (pos > 0 && worst[pos - 1].gap < gap) pos--;
         worst.splice(pos, 0, rec);
@@ -311,8 +311,8 @@ const agent = (typeof _agentMod.create === 'function'
       if (verbose) console.log(
         `${String(indexBase + i).padStart(wIdx)}  ` +
         `${String(positions[i].history.length).padStart(4)}  ` +
-        `${topCand.m.padEnd(wMove)} ${(topCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
-        `${agentStr.padEnd(wMove)} ${(agentCand.kwr / 1000).toFixed(3).padStart(wWR)}  ` +
+        `${topCand.m.padEnd(wMove)} ${topCand.winRatio.toFixed(3).padStart(wWR)}  ` +
+        `${agentStr.padEnd(wMove)} ${agentCand.winRatio.toFixed(3).padStart(wWR)}  ` +
         `${gap.toFixed(3)}` + (agentMove.info ? `  ${agentMove.info}` : '')
       );
 
@@ -331,8 +331,8 @@ const agent = (typeof _agentMod.create === 'function'
     for (const w of worst) {
       console.log(
         `  idx=${w.index} gap=${w.gap.toFixed(3)} hist=${w.hist}  ` +
-        `top=${w.top} (${(w.topKwr / 1000).toFixed(3)})  ` +
-        `agent=${w.agent} (${(w.agentKwr / 1000).toFixed(3)})` + (w.info ? `  ${w.info}` : '')
+        `top=${w.top} (${w.topWR.toFixed(3)})  ` +
+        `agent=${w.agent} (${w.agentWR.toFixed(3)})` + (w.info ? `  ${w.info}` : '')
       );
     }
   }
