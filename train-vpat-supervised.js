@@ -35,7 +35,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help', 'no-cache-features'],
   ['data', 'test-file', 'test-pos', 'train-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
-   'ladder-file', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
+   'ladder-file', 'ladder-min-chain', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
 if (opts.help || !opts.data) {
   console.log(`Usage: node train-vpat-supervised.js --data <file> [options]
 
@@ -89,6 +89,9 @@ print, and each new best teMSE also writes the -best checkpoint.
 
   --load PATH       resume from a checkpoint.  --spec overrides its specs
                     (shared specs keep their weights; freeze with 'f')
+  --ladder-min-chain N  smallest chain the ladder-coded (size:L) specs read:
+                    2 skips single stones.  Saved with the model; default:
+                    the --load model's value, else 1 (every chain)
   --no-add          fine-tune ONLY the patterns already in the loaded model
   --no-cache-features  do NOT cache extracted features across epochs (replay +
                     re-extract every position every epoch).  Caching is on by
@@ -224,7 +227,10 @@ if (opts.spec) {
   process.exit(1);
 }
 // else: no --spec but --load given — the specs come from the checkpoint below.
-let prepSpecs = specs ? prepareSpecs(specs, { health: HEALTH_PATH }) : null;
+// --ladder-min-chain: given, it wins; else a --load model's own value (below), else 1.
+const LADDER_MIN_CHAIN_FLAG = opts['ladder-min-chain'] !== undefined ? parseInt(opts['ladder-min-chain'], 10) : null;
+if (LADDER_MIN_CHAIN_FLAG !== null && !(LADDER_MIN_CHAIN_FLAG >= 1)) { console.error('--ladder-min-chain must be a positive integer'); process.exit(1); }
+let prepSpecs = specs ? prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: LADDER_MIN_CHAIN_FLAG || 1 }) : null;
 // Every trainer extraction replays a Game2 only (replayRecord), so a ladder
 // spec must rebuild the Game3 for its tactical pass — expected here.  Acknowledge
 // it (game3RebuildOk=true) so extractFeatures' rebuild warning stays reserved
@@ -505,6 +511,7 @@ if (LOAD_PATH) {
     loadHeaders = fs.readFileSync(LOAD_PATH, 'utf8').split('\n', 200).filter(l => l.startsWith('//'));
     loadWeightCount = loaded.weights.size;
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
+    if (LADDER_MIN_CHAIN_FLAG !== null) prepSpecs.ladderMinChain = LADDER_MIN_CHAIN_FLAG;   // the flag overrides the file
     if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
       console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
       specs = cliSpecs;
@@ -682,6 +689,7 @@ if (biasPairs) bline('bias:', `${BIAS_FILE}  ${f4(biasPairs.length)} pairs, delt
 bline('model:', `${specString(specs)}` +
   (FROZEN.size > 0 ? `  frozen [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ``) +
   (NO_ADD ? `  no-add` : ``) +
+  (prepSpecs.hasLadder ? `  ladder-min-chain ${prepSpecs.ladderMinChain}` : ``) +
   (LOAD_PATH && weights.size > 0 ? `  (resumed ${f4(weights.size)} weights from ${LOAD_PATH})` : ``));
 bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
@@ -753,6 +761,7 @@ const PROV_STATIC = [
   `host: ${require('os').hostname()}  node: ${process.version}  cwd: ${process.cwd()}`,
   ...(HEALTH_PATH ? [`env: HEALTH_DATA=${HEALTH_PATH}`] : []),
   `spec: ${specString(specs)}` +
+    (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : '') +
     (FROZEN.size > 0 ? `  frozen: ${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}` : ''),
   `settings: lr: ${LR}  lr-decay: ${LR_DECAY}  smooth-weights: ${EMA_ALPHA}` +
     `  max-weights: ${MAX_WEIGHTS || 'unlimited'}  epochs: ${EPOCHS || 'unlimited'}` +
