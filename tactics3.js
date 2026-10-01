@@ -136,12 +136,13 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
   return [hasUnknown ? null : true, credits];
 }
 
-// searchChains(game, nodeLimit, depthLimit) — run searchChain on every group with 1–3
-// liberties and return an array of { gid, color, status } objects, one per
-// group (groups with 0 or 4+ liberties are skipped).
+// searchChains(game, nodeLimit, depthLimit, minChainSize) — run searchChain on
+// every group with 1–3 liberties and return an array of { gid, color, status }
+// objects, one per group (groups with 0 or 4+ liberties are skipped).
 // nodeLimit: max nodes per sub-search per liberty in searchChain (default Infinity).
 // depthLimit: maximum recursion depth for canReach4Libs (default 7).
-function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT) {
+// minChainSize: skip groups smaller than this (default 1).
+function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT_DEPTH_LIMIT, minChainSize = 1) {
   const cap  = game.N * game.N;
   const results = [];
   const visited = new Set();
@@ -150,6 +151,7 @@ function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT
     const gid = game._gid[i];
     if (visited.has(gid)) continue;
     visited.add(gid);
+    if (game.groupSize(gid) < minChainSize) continue;
     const lc = game.groupLibs(i).length;
     if (lc === 0 || lc > 3) continue;
     const status = searchChain(game, i, nodeLimit, depthLimit);
