@@ -22,25 +22,41 @@ function _defenderMoves(game, idx, libs) {
 const DEFAULT_NODE_LIMIT  = 1000;
 const DEFAULT_DEPTH_LIMIT = 7;
 
-// Period-6 move-cycle prune (ladder2's rule): game3 has no superko, so a
-// capture-recapture chase can repeat positions forever, and below 3
-// liberties the search has no depth limit.  A move whose last-6 move indexes
-// equal the 6 before them is an exact position repeat and is treated as
-// illegal.  The path is reset per searchChain.
+// Move-cycle prune: game3 has no superko, so a capture-recapture chase can
+// repeat positions forever.  When the last p moves (p even, so the same side
+// is to move) equal the p before them, undo p moves and compare the board; an
+// exact repeat makes the move illegal.  ladder2 checks period 6 only; tactics3
+// has also hit period 8 (out/fp-reinforce-exhaustion-924597-*.txt), so every
+// even period is checked.  The path is reset per searchChain.
 const _movePath = [];
+let _snap = new Int8Array(0);
+
+function _isRepeat(game, per) {
+  const p = _movePath, d = p.length, cap = game.N * game.N;
+  if (_snap.length < cap) _snap = new Int8Array(cap);
+  for (let i = 0; i < cap; i++) _snap[i] = game.cells[i];
+  for (let k = 0; k < per; k++) game.undo();
+  let same = true;
+  for (let i = 0; i < cap && same; i++) if (game.cells[i] !== _snap[i]) same = false;
+  for (let j = d - per; j < d; j++) {
+    if (!game.play(p[j])) throw new Error(`tactics3: replaying move ${p[j]} after the repeat check failed`);
+  }
+  return same;
+}
 
 function _cyclePlay(game, idx) {
   if (!game.play(idx)) return false;
   const p = _movePath;
   p.push(idx);
   const d = p.length;
-  if (d >= 12 &&
-      p[d - 1] === p[d - 7] && p[d - 2] === p[d - 8] &&
-      p[d - 3] === p[d - 9] && p[d - 4] === p[d - 10] &&
-      p[d - 5] === p[d - 11] && p[d - 6] === p[d - 12]) {
-    p.pop();
-    game.undo();
-    return false;
+  for (let per = 2; 2 * per <= d; per += 2) {
+    let k = 0;
+    while (k < per && p[d - 1 - k] === p[d - 1 - k - per]) k++;
+    if (k === per && _isRepeat(game, per)) {
+      p.pop();
+      game.undo();
+      return false;
+    }
   }
   return true;
 }
@@ -62,6 +78,9 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
   const lc = libs.length;
   if (lc >= 4) return [true,  credits];
   if (lc === 0) return [false, credits];
+  // Depth backstop at any liberty count (ladder2's 2x area): with the cycle
+  // prune it should not fire; if it does the read is inconclusive.
+  if (_movePath.length > 2 * game.N * game.N) return [null, credits];
 
   // Budget/depth limits only apply when the target chain currently has 3+
   // liberties (the new tactics3 territory).  At 1-2 libs we're inside a

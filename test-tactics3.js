@@ -5,7 +5,7 @@
 
 const { Game3, BLACK, WHITE, PASS } = require('./game3.js');
 const { searchChain, searchChains } = require('./tactics3.js');
-const { parseBoard, parseMove } = require('./game2.js');
+const { Game2, parseBoard, parseMove } = require('./game2.js');
 const { game3FromGame2 } = require('./game3.js');
 
 let pass = 0, fail = 0;
@@ -222,6 +222,20 @@ section('Defender saves by capturing an adjacent chain in atari');
   assert(st.moverSucceeds === true, `black saves d4, got ${st.moverSucceeds}`);
   assert(st.urgentLibs.length === 1 && st.urgentLibs[0] === d6, `the save is the capture at d6, urgentLibs ${st.urgentLibs}`);
   assert(!st.libs.includes(d6), 'd6 is not one of the chain liberties');
+}
+
+section('A period-8 capture cycle terminates');
+{
+  // A train-featurepol-reinforce game (out/fp-reinforce-exhaustion-924597-*):
+  // the 2-liberty chain at 20 read into an 8-move capture cycle until Game3's
+  // group ids ran out.
+  const g2 = new Game2(13, false);
+  for (const m of [84,119,138,18,7,67,76,37,133,9,59,92,30,26,48,157,130,131,143,144,156,1,117,159,105,106,91,79,19,31,5,17,29,44,78,65,12,49,62,35,47,90,77,52,102,103,104,116,89,115,114,128,13,127,14,126,112,113,101,100,87,99,125,98,110,97,96,83,71,70,34,95,109,21,82,94,57,69,56,68,154,43,42,55,58,20,33]) g2.play(m);
+  const g = game3FromGame2(g2);
+  let threw = null;
+  try { searchChains(g); } catch (e) { threw = e.message; }
+  assert(threw === null, `searchChains finishes, threw: ${threw}`);
+  assert(g.emptyCount === g2.emptyCount, 'the Game3 is restored');
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
