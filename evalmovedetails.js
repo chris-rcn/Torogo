@@ -24,7 +24,7 @@
 //   --oversample  evaluate each position this many times    (default: 1)
 //   --show-phases    at the end, print a table of phase-band → MAE and MSE over
 //                    --phase-buckets N equal-width bands (default 10),
-//   --elo-map PATH   map the per-band mae/mse to a CGOS Elo estimate with the
+//   --elo-map PATH   map the per-band mae to a CGOS Elo estimate with the
 //                    curves md-phase-fit.js --save wrote (default
 //                    out/elo-map-trunc30k-827.json); elo= joins SUMMARY,
 //                 binning every eval by game phase (board fullness, in [0,1])
@@ -146,7 +146,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     (phase = board fullness in [0,1])
   --phase-buckets N equal-width phase bands for the table, the same knob
                     filter-movedetails uses (default 10)
-  --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
+  --elo-map PATH    estimate CGOS Elo from the per-band mae with the mapping
                     md-phase-fit.js --save wrote (its bucket count applies);
                     elo= joins SUMMARY (default out/elo-map-trunc30k-827.json,
                     fitted on the default --file).  Only for the map's own MD
@@ -172,6 +172,10 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   if (opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
     console.error(`--phase-buckets ${opts['phase-buckets']} differs from the elo map's ${eloMap.phaseBuckets}`); process.exit(1);
   }
+  // Only mae curves are computed; a zero-weight curve of another kind adds
+  // nothing and is ignored, any other is an older map that needs a refit.
+  const badCurves = Object.entries(eloMap.curves).filter(([kind, { A }]) => kind !== 'mae' && A !== 0).map(([kind]) => kind);
+  if (badCurves.length) { console.error(`--elo-map ${eloMapPath} weights ${badCurves.join(', ')}, which evalmovedetails no longer computes; refit with md-phase-fit.js`); process.exit(1); }
   const phaseBuckets = eloMap.phaseBuckets;   // band count: the map's, always accumulated
   const printPhases  = !!opts['show-phases'];
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
@@ -237,10 +241,8 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Phase bands: partition phase ∈ [0,1] (board fullness) into the map's
   // equal-width bands and accumulate gap and gap² per band, for the Elo map
-  // and the --show-phases table (mae per band; gap² is kept only for an older
-  // map that carries an mse curve).
+  // and the --show-phases table (mae per band).
   const phaseBandSum   = new Float64Array(phaseBuckets);
-  const phaseBandSqSum = new Float64Array(phaseBuckets);
   const phaseBandN     = new Int32Array(phaseBuckets);
   function phaseBandOf(phase) {
     let b = Math.floor(phase * phaseBuckets);
@@ -251,7 +253,7 @@ const agent = (typeof _agentMod.create === 'function'
 
   const startTime = performance.now();
   let nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
-  let gapSum = 0, gapSqSum = 0;
+  let gapSum = 0;
 
   function printStats(count) {
     const elapsedMs = performance.now() - startTime;
@@ -290,12 +292,10 @@ const agent = (typeof _agentMod.create === 'function'
     for (let i = 0; i < positions.length; i++) {
       const { agentMove, agentStr, topCand, agentCand, phase, gap } = evalPosition(agent, positions[i], budgetMs);
       gapSum   += gap;
-      gapSqSum += gap * gap;
       evals++;
 
       const b = phaseBandOf(phase);
       phaseBandSum[b]   += gap;
-      phaseBandSqSum[b] += gap * gap;
       phaseBandN[b]++;
 
       if (worst.length < WORST_N || gap > worst[worst.length - 1].gap) {
@@ -357,8 +357,8 @@ const agent = (typeof _agentMod.create === 'function'
     }
   }
 
-  // --elo-map: elo = intercept - sum_kind A * sum_b exp(k * mid_b) * x_{b,kind}
-  // over the map's bands, x = the band's mae or mse.
+  // --elo-map: elo = intercept - A * sum_b exp(k * mid_b) * mae_b over the
+  // map's bands.
   // A mapped band with no results leaves the estimate undefined: elo=- and
   // a note on stderr, the rest of the summary as usual.
   // The map is only valid on the positions it was fitted on: its own file,
@@ -378,12 +378,10 @@ const agent = (typeof _agentMod.create === 'function'
     console.error(`--elo-map: no results in band${empty.length > 1 ? 's' : ''} ${empty.map(({ lo, hi }) => `${lo.toFixed(2)}-${hi.toFixed(2)}`).join(', ')}; elo not estimated`);
     elo = NaN;
   } else {
-    for (const [kind, { A, k }] of Object.entries(eloMap.curves)) {
-      for (const { lo, hi } of eloMap.bands) {
-        const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
-        const x = kind === 'mae' ? phaseBandSum[b] / n : phaseBandSqSum[b] / n;
-        elo -= A * Math.exp(k * (lo + hi) / 2) * x;
-      }
+    const { A, k } = eloMap.curves.mae;
+    for (const { lo, hi } of eloMap.bands) {
+      const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
+      elo -= A * Math.exp(k * (lo + hi) / 2) * (phaseBandSum[b] / n);
     }
   }
 
