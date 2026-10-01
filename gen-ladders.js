@@ -14,9 +14,27 @@ const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
-// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 10000] [--min-depth 10] [--min-nodes 50] [--agent ref-puct-trunc-10k]
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
 const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'playouts', 'size']);
+if (opts.help) {
+  console.log(`Usage: node gen-ladders.js [options] > cases.txt
+
+Generates ladder test cases for evalladders2.js: for each chain size 1..max-stones
+and each type (kill, escape, futile-attack, futile-extend), searches ref-fp-heavy
+self-play positions for a ladder2-read case the confirming agent gets right, in
+a contested position (its root win ratio within 0.2 of 0.5).  Searches until each
+case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
+
+  --size N         board size                                   (default 13)
+  --examples N     cases per (chain size, type)                 (default 1)
+  --max-stones N   largest chain size                           (default 10)
+  --agent NAME     confirming agent in ai/                      (default ref-puct-trunc-10k)
+  --playouts N     the confirming agent's playouts per move     (default 10000)
+  --min-depth N    reject ladder reads shallower than this      (default 10)
+  --min-nodes N    reject ladder reads of fewer nodes than this (default 50)
+  --help           show this message`);
+  process.exit(0);
+}
 const SIZE       = parseInt(opts.size       || '13',   10);
 const N          = parseInt(opts.examples   || '1',    10);   // examples per (chain, type) cell
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
