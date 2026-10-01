@@ -373,7 +373,7 @@ function _setCap(cap) {
   return prev;
 }
 
-const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs, _setCap };
+const _exports = { getLadderStatus, getAllLadderStatuses, _canReach3Libs, _setCap, defenderCaptureMoves: _defenderCaptureMoves };
 if (typeof module !== 'undefined') module.exports = _exports;
 else window.Ladder2 = _exports;
 

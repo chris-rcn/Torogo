@@ -6,6 +6,15 @@
 (function() {
 
 const { PASS } = typeof require === 'function' ? require('./game3.js') : window.Game3;
+const { defenderCaptureMoves } = typeof require === 'function' ? require('./ladder2.js') : window.Ladder2;
+
+// The defender's candidate moves: its liberties, plus the capturing move of
+// each adjacent enemy chain in atari (a capture frees liberties).
+function _defenderMoves(game, idx, libs) {
+  const moves = new Set(libs);
+  for (const m of defenderCaptureMoves(game, idx)) moves.add(m);
+  return [...moves];
+}
 
 // Single source of truth for the search bounds.  Exported so callers can
 // (a) compare against them when deciding whether to persist non-default
@@ -39,19 +48,21 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
   const defColor = game.cells[idx];
 
   if (game.current === defColor) {
-    // Defender's turn: succeed if any branch is definitely true; unknown if
-    // any branch is null and none is true; false only if all are false.
+    // Defender's turn: extend onto a liberty or capture an adjacent chain in
+    // atari.  Succeed if any branch is definitely true; unknown if any branch
+    // is null and none is true; false only if all are false.
     let hasUnknown = false;
-    for (let k = 0; k < lc; k++) {
-      const libIdx = libs[k];
+    const moves = _defenderMoves(game, idx, libs);
+    for (let k = 0; k < moves.length; k++) {
+      const libIdx = moves[k];
       if (!game.play(libIdx)) {
-        continue;      // suicide — skip, no undo needed (play failed)
+        continue;      // illegal (suicide or ko) — skip, no undo needed (play failed)
       }
       if (game.cells[idx] === 0) {
         game.undo();
         continue;    // captured — skip
       }
-      const budget = Math.floor(credits / (lc - k));
+      const budget = Math.floor(credits / (moves.length - k));
       credits -= budget;
       let result, unused;
       [result, unused] = canReach4Libs(game, idx, budget, depth + 1, depthLimit);
@@ -121,7 +132,9 @@ function searchChains(game, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit = DEFAULT
 
 // Examines the group containing the stone at stoneIdx (must have 1–3 liberties).
 //
-// Returns { libs, moverSucceeds, urgentLibs } where moverSucceeds is
+// Returns { libs, moverSucceeds, urgentLibs } where urgentLibs are the
+// mover's successful moves (when defending, possibly a capture off the
+// chain's liberties) and moverSucceeds is
 //   true  — mover achieves their goal (capture or escape)
 //   false — mover fails
 //   null  — inconclusive (node budget exhausted before a definitive result)
@@ -143,9 +156,13 @@ function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit 
   const defending = gColor === mover;
   const atari = lc === 1;
 
+  // The mover's candidates: the chain's liberties, plus (when defending)
+  // captures of adjacent enemy chains in atari.
+  const moverMoves = defending ? _defenderMoves(game, stoneIdx, libs) : libs;
+
   // Count canReach4Libs calls we will make, for credit division.
   const opponentCalls = (defending && atari) ? 0 : 1;
-  const moverCalls    = (!defending && atari) ? 0 : lc;
+  const moverCalls    = (!defending && atari) ? 0 : moverMoves.length;
   let callsLeft = opponentCalls + moverCalls;
   let credits   = nodeLimit;
 
@@ -173,24 +190,26 @@ function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit 
   let moverSucceeds = false;
   let hasUnknown = escape === null;  // propagate unknown from opponent-first
   let urgentLibs = [];
-  for (let k = 0; k < lc; k++) {
-    const libIdx = libs[k];
+  for (let k = 0; k < moverMoves.length; k++) {
+    const libIdx = moverMoves[k];
     if (!defending && atari) {
+      // Capturing on the last liberty: a capture is never suicide, so ko is
+      // the only way it can be illegal (a ko recapture), and then it is no
+      // move for the mover now.
+      if (libIdx === game.ko) continue;
       escape = false;
     } else {
       const budget = Math.floor(credits / callsLeft);
       credits -= budget;
       callsLeft--;
-      const played = game.play(libIdx);
-      if (played) {
-        let unused;
-        [escape, unused] = canReach4Libs(game, stoneIdx, budget, 0, depthLimit);
-        credits += unused;
-        game.undo();
-      } else {
-        escape = false;
-        credits += budget;  // return unspent budget to pool
+      if (!game.play(libIdx)) {
+        credits += budget;  // illegal (suicide or ko) — no move for the mover
+        continue;
       }
+      let unused;
+      [escape, unused] = canReach4Libs(game, stoneIdx, budget, 0, depthLimit);
+      credits += unused;
+      game.undo();
     }
     if (escape !== null && defending === escape) {
       moverSucceeds = true;

@@ -5,6 +5,8 @@
 
 const { Game3, BLACK, WHITE, PASS } = require('./game3.js');
 const { searchChain, searchChains } = require('./tactics3.js');
+const { parseBoard, parseMove } = require('./game2.js');
+const { game3FromGame2 } = require('./game3.js');
 
 let pass = 0, fail = 0;
 
@@ -181,6 +183,46 @@ section('searchChains — skips groups with 4+ libs');
   assert(statuses.length === 0, `single stone (4 libs) is skipped, got ${statuses.length}`);
 }
 
+section('Ko recapture is not an urgent capture');
+{
+  // Black d4 takes the ko at c4; white may not retake at c4 this move.
+  const board = `
+. . . . . . .
+. . . . . . .
+. . X O . . .
+. X O . O . .
+. . X O . . .
+. . . . . . .
+. . . . . . .`;
+  const g2 = parseBoard(board, BLACK);
+  const d4 = parseMove('d4', 7), c4 = parseMove('c4', 7);
+  g2.play(d4);
+  const g = game3FromGame2(g2);
+  assert(g.ko === c4, `ko point is c4, got ${g.ko}`);
+  const st = searchChain(g, d4);
+  assert(!st.urgentLibs.includes(c4), `ko point c4 is not an urgent kill, urgentLibs ${st.urgentLibs}`);
+  assert(st.moverSucceeds === false, `white cannot capture d4 now, got ${st.moverSucceeds}`);
+}
+
+section('Defender saves by capturing an adjacent chain in atari');
+{
+  // Black d4 is in atari; extending to d3 is suicide.  Capturing white d5 at
+  // d6 is the only save.
+  const board = `
+. . . . . . .
+. . . . . . .
+. . X O X . .
+. . O X O . .
+. . O . O . .
+. . . O . . .
+. . . . . . .`;
+  const g = game3FromGame2(parseBoard(board, BLACK));
+  const d4 = parseMove('d4', 7), d6 = parseMove('d6', 7);
+  const st = searchChain(g, d4);
+  assert(st.moverSucceeds === true, `black saves d4, got ${st.moverSucceeds}`);
+  assert(st.urgentLibs.length === 1 && st.urgentLibs[0] === d6, `the save is the capture at d6, urgentLibs ${st.urgentLibs}`);
+  assert(!st.libs.includes(d6), 'd6 is not one of the chain liberties');
+}
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
