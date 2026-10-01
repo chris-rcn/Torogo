@@ -9,8 +9,8 @@
 //     13 ○ · ● ...                          <- N rows of the position
 //      1 ...
 //   require=<coord>  → agent must play it;  prohibit=<c1,c2,...> → must avoid all.
-// A "result: ..." line (written by --verbose) is ignored, so verbose output
-// loads as a case file.
+// A result line (the problem line plus " result=... played=...", written by
+// --verbose) is ignored, so verbose output loads as a case file.
 //
 // Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1]
 
@@ -24,7 +24,7 @@ const Util = require('./util.js');
 function loadCases(file) {
   const cases = [];
   for (const block of fs.readFileSync(file, 'utf8').split(/\n\s*\n/)) {
-    const lines = block.split('\n').filter(l => !l.startsWith('result: '));
+    const lines = block.split('\n').filter(l => !/ result=/.test(l));
     const metaLine = lines.find(l => l.includes('='));
     if (!metaLine) continue;                     // blank / torn block
     const meta = {};
@@ -34,6 +34,7 @@ function loadCases(file) {
     }
     cases.push({
       text:      lines.join('\n').replace(/^\n+|\n+$/g, ''),      // the block as read, for --verbose
+      metaLine:  metaLine.trimEnd(),
       board:     lines.filter(l => l !== metaLine).join('\n'),   // parseBoard strips the labels
       toPlay:    meta.toPlay === 'B' ? BLACK : WHITE,
       require:   meta.require  ? meta.require.split(',')  : null,
@@ -62,9 +63,9 @@ function evalCases(cases, agent, { budgetMs, oversample, verbose = false }) {
       if (ok) p++;
     }
     if (verbose) {
-      // The case block as read, then one result line.
+      // The case block as read, then its problem line plus the result.
       const res = p === oversample ? 'PASS' : p === 0 ? 'FAIL' : `${p}/${oversample}`;
-      console.log(`${c.text}\nresult: ${res}  played: ${played.join(',')}\n`);
+      console.log(`${c.text}\n${c.metaLine} result=${res}  played=${played.join(',')}\n`);
     }
     passed += p; total += oversample;
     const agg = byType.get(c.type) || { passed: 0, total: 0 };
@@ -91,8 +92,8 @@ come from a file rather than being hardcoded.
   --limit N         run only the first N cases                  (default: all)
   --oversample N    evaluations per case; >1 is worth it for a
                     stochastic agent, whose answer varies       (default 1)
-  --verbose         reprint each case block as read, plus a line
-                    "result: PASS|FAIL|p/n  played: <moves>"
+  --verbose         reprint each case block as read, then its problem line
+                    plus " result=PASS|FAIL|p/n  played=<moves>"
   --help            show this message
 
 Also usable as a library — the trainers' \`ladr\` column runs it per status
