@@ -4,7 +4,7 @@
 //   for example 1..N:
 //     for chain size 1..MAX_STONES:
 //       for each of the 4 types (kill, escape, futile-attack, futile-extend):
-//         find a matching position (random legal play + ladder2 + agent confirm)
+//         find a matching position (ref-fp-heavy self-play + ladder2 + agent confirm)
 //         and display it, centered on and marking the critical move(s).
 
 process.env.DITHER = '0';   // deterministic confirmation-agent moves
@@ -14,7 +14,7 @@ const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
-// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 10000] [--min-depth 10] [--min-nodes 50] [--agent prod]
+// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 10000] [--min-depth 10] [--min-nodes 50] [--agent ref-puct-trunc-10k]
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
 const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'playouts', 'size']);
 const SIZE       = parseInt(opts.size       || '13',   10);
@@ -23,8 +23,12 @@ const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
 const PLAYOUTS   = parseInt(opts.playouts   || '10000', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
-const AGENT      = opts.agent || 'prod';                       // confirmation agent in ai/ that must pick the ladder move
+const AGENT      = opts.agent || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
+// Positions come from ref-fp-heavy self-play (its softmax sampling varies the
+// games), so cases arise in game-like positions rather than random-play ones.
+const POSITION_AGENT = 'ref-fp-heavy';
+const positionAgent = require(`./ai/${POSITION_AGENT}.js`);
 
 const TYPES = [
   { name: 'kill',          wantDef: false, fail: false },
@@ -116,7 +120,7 @@ function scanPos(game, chain, type) {
   return null;
 }
 
-// search random legal play until a case is found (or budget exhausted)
+// search ref-fp-heavy self-play games until a case is found
 function findCase(chain, type) {
   const t0 = Date.now();
   let scanned = 0;
@@ -128,7 +132,7 @@ function findCase(chain, type) {
       scanned++;
       const hit = scanPos(game, chain, type);
       if (hit) return { game, hit, scanned, ms: Date.now() - t0 };
-      const mv = game.randomLegalMove();
+      const mv = positionAgent.getMove(game).move;
       if (mv === PASS) game.play(PASS); else if (!game.play(mv)) break;
       moves++;
     }
@@ -180,7 +184,7 @@ function emit(res, type, chain) {
   // required/avoid coordinates marked, blank-line separated.  id = hash of the
   // (recentered) position, giving each case a unique, stable handle.
   const id = hashStr(game.toString(PASS));
-  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=${AGENT}`;
+  const header = `id=${id} type=${type.name} chainSize=${chain} toPlay=${toPlay} ${answer} by=${AGENT} pos=${POSITION_AGENT}`;
   process.stdout.write(`${header}\n${game.toString(marks, { labels: true })}\n\n`);
 }
 
@@ -203,7 +207,7 @@ for (let i = 1; i <= N; i++) {
 const wall = (Date.now() - tStart) / 1000;
 let totCases = 0, totScanned = 0;
 process.stderr.write('\n=== gen-ladders summary ===\n');
-process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} playouts=${PLAYOUTS} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES}\n`);
+process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} playouts=${PLAYOUTS} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES} positions=${POSITION_AGENT}\n`);
 for (const t of TYPES) {
   const s = stats.get(t.name);
   totCases += s.cases; totScanned += s.scanned;
