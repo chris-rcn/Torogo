@@ -100,6 +100,8 @@
 //               liberties and at least t3MinChain stones, read to 4 liberties
 //               within t3DepthLimit / t3NodeLimit);
 //               an inconclusive read sets no flag
+//   t3Kill<n> / t3Save<n> / t3WastedExtend<n> / t3WastedAttack<n>
+//               one tactics3 flag's summed chain stone-count (cumulative, up to n)
 //   vpat<n>     rank of the move under a fixed external vpatterns value model,
 //               mover-relative: 1 = that model's top choice, 2 = its second,
 //               up to n.  CUMULATIVE in rank quality: rank r contributes
@@ -1277,6 +1279,15 @@ function _makeTerm(str) {
       const flag = { urgentKill: URGENT_KILL, urgentSave: URGENT_SAVE,
                      wastedExtend: WASTED_EXTEND, wastedAttack: WASTED_ATTACK }[kind];
       cumulative = true; sizeFn = (ctx, idx) => ctx.ladderSizes[idx * 4 + flag];
+      break;
+    }
+    case 't3Kill': case 't3Save': case 't3WastedExtend': case 't3WastedAttack': {
+      // The same size variant over the tactics3 flags.
+      if (!param) throw new Error(`featurepol: ${kind}<n> needs a size, got "${str}"`);
+      needsT3 = true;
+      const flag = { t3Kill: URGENT_KILL, t3Save: URGENT_SAVE,
+                     t3WastedExtend: WASTED_EXTEND, t3WastedAttack: WASTED_ATTACK }[kind];
+      cumulative = true; sizeFn = (ctx, idx) => ctx.t3Sizes[idx * 4 + flag];
       break;
     }
     default:
