@@ -80,7 +80,8 @@ function search1(game, m, dither) {
     } else {
       // reuse the health model the caller already resolved onto m.preparedSpecs
       const fb = m._fbPrep || (m._fbPrep = prepareSpecs(m.specs,
-        { health: m.preparedSpecs && m.preparedSpecs.healthModel }));
+        { health: m.preparedSpecs && m.preparedSpecs.healthModel,
+          ladderMinChain: prep.ladderMinChain }));
       const g = game.clone();
       g.play(i);
       if (useG3) g3.play(i);

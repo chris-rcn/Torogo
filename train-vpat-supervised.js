@@ -508,7 +508,7 @@ if (LOAD_PATH) {
     if (cliSpecs !== null && specKey(cliSpecs) !== specKey(specs)) {
       console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
       specs = cliSpecs;
-      prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
+      prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: prepSpecs.ladderMinChain });
     }
     if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
       weightsEMA = weights.clone();

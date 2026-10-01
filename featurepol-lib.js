@@ -717,7 +717,8 @@ function _vpatPrepare(ctx) {
       if (z !== z) {
         // Capture: full extraction on a separate prepared spec (vpatsearch's rule).
         const fb = model._fbPrep || (model._fbPrep = VPatterns.prepareSpecs(model.specs,
-          { health: model.preparedSpecs && model.preparedSpecs.healthModel }));
+          { health: model.preparedSpecs && model.preparedSpecs.healthModel,
+            ladderMinChain: model.preparedSpecs && model.preparedSpecs.ladderMinChain }));
         const g = game.clone();
         g.play(idx);
         const ff = VPatterns.extractFeatures(g, fb);
