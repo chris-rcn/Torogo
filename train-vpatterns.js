@@ -630,7 +630,6 @@ console.log([
   'avgL'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
-  'tTurn'.padStart(5),
   // Test / eval columns (right).
   ...(evalGetMove ? ['mvPred'.padStart(6)] : []),
   // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
@@ -639,8 +638,8 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(mdPositions ? ['mdMae'.padStart(5)] : []),
-  // tTest = whole eval pass; the trailing turn = wall-clock per move of the
-  // reference MATCHES only (both sides' moves), vs the left turn = training.
+  // tTest = whole eval pass; tTurn = wall-clock per move of the reference
+  // MATCHES only (both sides' moves); training's per-move time is tMv.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
 ].join('  '));
 
@@ -648,10 +647,8 @@ const t0 = Date.now();
 const MAX_PRINT_INTERVAL_MS = 4 * 60 * 60 * 1000;  // cap status-print gap at 4 hours
 let nextPrintAt = t0 + 1000;
 let g = 0;
-let totalMoves = 0;
 let intervalGames = 0;
 let intervalMoves = 0;
-let moveElapsedMs = 0;
 let intervalTrainMs = 0;
 let refBudgetMs = BUDGET;
 const evalHistory = [];   // per-interval game results (1/0.5/0)
@@ -671,12 +668,9 @@ while (true) {
     }
   }
   if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
-  totalMoves += moves;
   intervalGames++;
   intervalMoves += moves;
-  moveElapsedMs += elapsedMs;
   intervalTrainMs += elapsedMs;
-  const timePerMoveMs = moveElapsedMs / totalMoves;
 
   // Force a final stats row when the game limit is reached.
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) nextPrintAt = 0;
@@ -747,7 +741,6 @@ while (true) {
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
-      Util.fmtMs(timePerMoveMs),
       // Test / eval columns (right).
       ...(evalGetMove ? [Util.fmtRatio4(evalPredN > 0 ? evalPredHit / evalPredN : 0).padStart(6)] : []),
       ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
