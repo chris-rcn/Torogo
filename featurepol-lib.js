@@ -96,6 +96,8 @@
 //               (urgent-kill/urgent-save/wasted-extend/wasted-attack)
 //   urgentKill<n> / urgentSave<n> / wastedExtend<n> / wastedAttack<n>
 //               one ladder flag's summed chain stone-count (cumulative, up to n)
+//   t3Status    ladderStatus's 4-bit mask from tactics3 instead (chains of 1-3
+//               liberties, read to 4 liberties); an inconclusive read sets no flag
 //   vpat<n>     rank of the move under a fixed external vpatterns value model,
 //               mover-relative: 1 = that model's top choice, 2 = its second,
 //               up to n.  CUMULATIVE in rank quality: rank r contributes
@@ -125,6 +127,7 @@ const Util = (typeof require === 'function') ? require('./util.js') : window.Uti
 const { PASS, BLACK }          = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 }       = Util.load('./game3.js', 'Game3');
 const { getAllLadderStatuses } = Util.load('./ladder2.js', 'Ladder2');
+const Tactics3                 = Util.load('./tactics3.js', 'Tactics3');
 const VPatterns                = Util.load('./vpatterns.js', 'VPatterns');
 const HealthLib                = Util.load('./health-lib.js', 'HealthLib');
 const { makeIntMap }           = Util.load('./int-map.js', 'IntMap');
@@ -225,6 +228,30 @@ function _buildLadderSizes(game, game3, out, minChain) {
     let flag, targets;
     if (urgentLibs.length > 0)  { flag = defending ? URGENT_SAVE : URGENT_KILL; targets = urgentLibs; }
     else if (!moverSucceeds)    { flag = defending ? WASTED_EXTEND : WASTED_ATTACK; targets = libs; }
+    else continue;
+    for (const lib of targets) out[lib * 4 + flag] += size;
+  }
+  return out;
+}
+
+// Per-cell tactics3 sizes: _buildLadderSizes's layout and flags, from
+// tactics3.searchChains at its default bounds.  An urgent flag needs a move
+// that definitely succeeds; a wasted flag needs a definite failure
+// (moverSucceeds === false), so an inconclusive read (null) sets nothing.
+function _buildT3Sizes(game, game3, out) {
+  out.fill(0);
+  const cap = game.N * game.N;
+  if (game.emptyCount === cap) return out;
+  const infos = Tactics3.searchChains(game3);
+  const cur = game.current;
+  for (const info of infos) {
+    if (!info.status) continue;
+    const { libs, moverSucceeds, urgentLibs } = info.status;
+    const defending = info.color === cur;
+    const size = game3.groupSize(info.gid);
+    let flag, targets;
+    if (urgentLibs.length > 0)        { flag = defending ? URGENT_SAVE : URGENT_KILL; targets = urgentLibs; }
+    else if (moverSucceeds === false) { flag = defending ? WASTED_EXTEND : WASTED_ATTACK; targets = libs; }
     else continue;
     for (const lib of targets) out[lib * 4 + flag] += size;
   }
@@ -866,7 +893,7 @@ function _makeTerm(str) {
   // terms set evalFn directly (one value → one key).
   // maxNear: how many of the nearest cells this term reads from the nearNbr table
   // (0 if it reads none).  parseSpec takes the max across the spec to size the table.
-  let evalFn = null, sizeFn = null, cumulative = false, oneHot = false, needsLadder = false, binary = false, maxNear = 0;
+  let evalFn = null, sizeFn = null, cumulative = false, oneHot = false, needsLadder = false, needsT3 = false, binary = false, maxNear = 0;
   let prepare = null, stacked = null;   // stacked: an additional weight space this keyword emits into (see parseSpec)
   let listFn = null;                    // list term: emits one key per value it writes into the shared buffer
   switch (kind) {
@@ -1229,6 +1256,15 @@ function _makeTerm(str) {
       };
       break;
     }
+    case 't3Status': {
+      // ladderStatus's mask over the tactics3 flags.
+      needsT3 = true;
+      evalFn = (ctx, idx) => {
+        const s = ctx.t3Sizes, b = idx * 4;
+        return (s[b] ? 1 : 0) | (s[b + 1] ? 2 : 0) | (s[b + 2] ? 4 : 0) | (s[b + 3] ? 8 : 0);
+      };
+      break;
+    }
     case 'urgentKill': case 'urgentSave': case 'wastedExtend': case 'wastedAttack': {
       // Size-bucketed variant of one ladder flag: the summed stone count of the
       // chains for which this move is that flag's liberty.
@@ -1242,7 +1278,7 @@ function _makeTerm(str) {
     default:
       throw new Error(`featurepol: unknown feature kind "${kind}" in "${str}"`);
   }
-  return { str, kind, param, salt, evalFn, sizeFn, cumulative, oneHot, maxLevel: param, needsLadder, binary, prepare, maxNear, stacked, listFn };
+  return { str, kind, param, salt, evalFn, sizeFn, cumulative, oneHot, maxLevel: param, needsLadder, needsT3, binary, prepare, maxNear, stacked, listFn };
 }
 
 // Parse a full spec string into a runtime spec.  Every feature space emits keys
@@ -1268,7 +1304,7 @@ function parseSpec(specStr) {
   const str = String(specStr || '').trim();
   if (!str) throw new Error('featurepol: empty --spec');
   const spaces = [];
-  let needsLadder = false;
+  let needsLadder = false, needsT3 = false;
   let nearMax = 0;            // widest nearNbr reach across all terms (sizes the table)
   const slotOf = new Map();   // term salt → memo slot
   const computers = [];       // computers[slot] = value fn (sizeFn for cumulative, else evalFn)
@@ -1293,6 +1329,7 @@ function parseSpec(specStr) {
       if (terms.length !== 1) throw new Error(`featurepol: "${spaceStr}" — a list term cannot be composed with '+'`);
       const t = terms[0];
       if (t.needsLadder) needsLadder = true;
+      if (t.needsT3) needsT3 = true;
       if (t.maxNear > nearMax) nearMax = t.maxNear;
       if (t.prepare && !prepares.includes(t.prepare)) prepares.push(t.prepare);
       if (t.stacked && !stackedTerms.some(x => x.salt === t.stacked.salt)) stackedTerms.push(t.stacked);
@@ -1304,6 +1341,7 @@ function parseSpec(specStr) {
     }
     for (const t of terms) {
       if (t.needsLadder) needsLadder = true;
+      if (t.needsT3) needsT3 = true;
       if (t.maxNear > nearMax) nearMax = t.maxNear;
       const slot = slotFor(t);
       if (t.prepare && !prepares.includes(t.prepare)) prepares.push(t.prepare);
@@ -1350,7 +1388,7 @@ function parseSpec(specStr) {
     for (const t of [...sp.baseTerms, ...sp.cumTerms]) if (!plainSlots.includes(t.slot)) plainSlots.push(t.slot);
   const rankMaxKeys = rankSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
   return { str, spaces, plainSpaces, rankSpaces, plainSlots, rankMaxKeys,
-           computers, numSlots: computers.length, prepares, maxKeysPerMove, boardMaxSpaces, needsLadder, nearMax };
+           computers, numSlots: computers.length, prepares, maxKeysPerMove, boardMaxSpaces, needsLadder, needsT3, nearMax };
 }
 
 // ── Weights store (hash → dense idx → Float32 weight) ─────────────────────────
@@ -1439,6 +1477,7 @@ function createState(N, spec, opts) {
     memo:     new Float64Array(spec.numSlots),  // per-move scratch: one value per distinct fixed-space term
     spaceOff: (opts && opts.components) ? new Int32Array(cap * spec.spaces.length) : null,   // see componentValues
     ladderSizes: new Uint16Array(cap * 4),
+    t3Sizes:  new Uint16Array(cap * 4),
     logits:   new Float64Array(cap),
     probs:    new Float64Array(cap),
     touched:  new Int32Array(maxK * (cap + 1)),
@@ -1576,13 +1615,14 @@ function extractFeatures(game, state, weights, game3) {
   const spec = weights.spec;
   const spaces = spec.spaces, nSpaces = spaces.length;
   const memo = state.memo;
-  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, memo, vpatModel: weights.vpatModel || null, game3: null };
-  // Build one Game3 (synced to `game`) if either featurepol's own ladder terms
-  // or the embedded vpat<n> ladder model needs one, and stash it on ctx so the
-  // vpat rank prepare can reuse it per candidate instead of rebuilding.
-  if (spec.needsLadder || (ctx.vpatModel && VPatterns.needsGame3(ctx.vpatModel.preparedSpecs))) {
+  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, t3Sizes: null, memo, vpatModel: weights.vpatModel || null, game3: null };
+  // Build one Game3 (synced to `game`) if featurepol's own ladder or tactics3
+  // terms or the embedded vpat<n> ladder model needs one, and stash it on ctx
+  // so the vpat rank prepare can reuse it per candidate instead of rebuilding.
+  if (spec.needsLadder || spec.needsT3 || (ctx.vpatModel && VPatterns.needsGame3(ctx.vpatModel.preparedSpecs))) {
     ctx.game3 = game3 || game3FromGame2(game);
     if (spec.needsLadder) ctx.ladderSizes = _buildLadderSizes(game, ctx.game3, state.ladderSizes, weights.ladderMinChain);
+    if (spec.needsT3) ctx.t3Sizes = _buildT3Sizes(game, ctx.game3, state.t3Sizes);
   }
   // Is the rank feature live for this position at all?
   const useRank = _rankPosRatio >= 1 || Math.random() < _rankPosRatio;
