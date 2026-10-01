@@ -1,13 +1,11 @@
 'use strict';
 
-// gen-ladder-grid.js — sweep the ladder-test-case grid.
+// gen-ladders.js — sweep the ladder-test-case grid.
 //   for example 1..N:
 //     for chain size 1..MAX_STONES:
 //       for each of the 4 types (kill, escape, futile-attack, futile-extend):
 //         find a matching position (random legal play + ladder2 + agent confirm)
 //         and display it, centered on and marking the critical move(s).
-//
-// Usage:  node gen-ladder-grid.js [boardSize=13] [N=1] [MAX_STONES=10]
 
 process.env.DITHER = '0';   // deterministic confirmation-agent moves
 
@@ -16,7 +14,7 @@ const { game3FromGame2 } = require('./game3.js');
 const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
-// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 4000] [--min-depth 10] [--min-nodes 0] [--agent prod]
+// Usage: node gen-ladders.js [--size 13] [--examples 1] [--max-stones 10] [--playouts 10000] [--min-depth 10] [--min-nodes 50] [--agent prod]
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
 const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'playouts', 'size']);
 const SIZE       = parseInt(opts.size       || '13',   10);
