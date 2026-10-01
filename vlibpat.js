@@ -73,6 +73,8 @@ const PERMS_3x3 = [
 //   tactics: 'ladder2' (default) | 'tactics3'
 //   nodeLimit, depthLimit: optional bounds for tactics3 (forwarded to
 //     searchChains; ignored by ladder2).
+//   ladderMinChain: the smallest chain ladder2 reads (default 1, every chain;
+//     2 skips single stones, which then keep the plain ±1 code).
 // ladderStatuses: optional precomputed getAllLadderStatuses result for this
 //   exact position (same player to move), shared with other extractors.
 //   Honoured only by the ladder2 backend; tactics3 always runs its own
@@ -93,7 +95,7 @@ function computeLadderCodes(game3, opts, ladderStatuses) {
   // moverSucceeds is always boolean.
   const infos = tactics === 'tactics3'
     ? searchChains(game3, opts?.nodeLimit, opts?.depthLimit)
-    : (ladderStatuses || getAllLadderStatuses(game3));
+    : (ladderStatuses || getAllLadderStatuses(game3, (opts && opts.ladderMinChain) || 1));
   if (infos.length === 0) return codes;
   const cur = game3.current;
   const codeByGid = new Map();

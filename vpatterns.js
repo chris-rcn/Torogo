@@ -296,7 +296,11 @@ function prepareSpecs(specs, opts) {
   return { byMaxLibs, sortedMaxLibs, healthModel,
            totalSizes: totalSizes + (hasTurn ? 1 : 0),
            hasLadder, hasHealth, patPhaseBins, hasPhasedPatterns,
-           hasTurn };
+           hasTurn,
+           // Smallest chain the ladder-coded family reads (ladder2's
+           // minChainSize); a property of the trained model, saved with it.
+           // 1 = every chain; 2 skips single stones.
+           ladderMinChain: (opts && opts.ladderMinChain) || 1 };
 }
 
 // and returns a flat array of { key, polarity } for all matching patterns.
@@ -423,7 +427,7 @@ function extractFeatures(game, prepSpecs, doSetNext, nextMove, reuse, game3, gam
           '(slow path; pass a synced game3 to reuse it).  First occurrence:\n' +
           (new Error().stack || '').split('\n').slice(2, 7).join('\n'));
       }
-      raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), null);
+      raw = VLibPat.computeLadderCodes(game3 || game3FromGame2(game), { ladderMinChain: prepSpecs.ladderMinChain });
     } else if (isHealth) {
       // One survival probability per chain, bucketed to 1..hb and signed by
       // colour — the same alphabet shape as liberty counts, but the levels
@@ -1140,7 +1144,8 @@ function modelFromRaw(raw, health) {
   // Prefer the health model embedded in the file (it travels with the vpat model
   // it was trained against, so loading needs no external HEALTH_DATA); fall back
   // to the caller-supplied one for older files that recorded only parameters.
-  const preparedSpecs = prepareSpecs(specs, { health: raw.healthModel || health });
+  const preparedSpecs = prepareSpecs(specs, { health: raw.healthModel || health,
+                                              ladderMinChain: raw.ladderMinChain || 1 });   // absent: every chain
   return { specs, preparedSpecs, weights, komi: raw.komi, trunc: raw.trunc };
 }
 
@@ -1170,7 +1175,10 @@ function modelLiteral(model) {
   // key looks up to 0 in every consumer), so writing them is pure file bloat.
   model.weights.forEach((k, v) => { const q = +v.toFixed(6); if (q !== 0) pairs.push(`[${k},${q}]`); });
   const weightsStr = '[' + pairs.join(',') + ']';
-  return `{ specs: ${specStr}${healthStr}${truncStr}, weights: new Map(${weightsStr})` +
+  // Ladder-coded models record the smallest chain their ladder codes read.
+  const lmcStr = model.specs.some(sp => sp.maxLibs === 0)
+    ? `, ladderMinChain: ${(model.preparedSpecs && model.preparedSpecs.ladderMinChain) || 1}` : '';
+  return `{ specs: ${specStr}${healthStr}${truncStr}${lmcStr}, weights: new Map(${weightsStr})` +
          (model.komi !== undefined ? `, komi: ${model.komi}` : '') + ` }`;
 }
 

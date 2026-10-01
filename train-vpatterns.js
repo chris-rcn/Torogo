@@ -46,7 +46,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -93,6 +93,9 @@ checkpoint is written at every print.
                     estimates before normal training; ignored with --load
 
   --load PATH       resume from a checkpoint
+  --ladder-min-chain N  smallest chain the ladder-coded (size:L) specs read:
+                    2 skips single stones (~57% of the ladder time).  Saved
+                    with the model; default: the --load model's value, else 1
   --no-add          fine-tune ONLY the keys already in the loaded model; never
                     intern new ones (requires --load)
   --save PATH       checkpoint path (default out/vpat-<random>.js)
@@ -245,7 +248,10 @@ if (opts.spec) {
     { size: 3, maxLibs: 6 },
   ];
 }
-let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
+// --ladder-min-chain: given, it wins; else a --load model's own value (below), else 1.
+const LADDER_MIN_CHAIN_FLAG = opts['ladder-min-chain'] !== undefined ? parseInt(opts['ladder-min-chain'], 10) : null;
+if (LADDER_MIN_CHAIN_FLAG !== null && !(LADDER_MIN_CHAIN_FLAG >= 1)) { console.error('--ladder-min-chain must be a positive integer'); process.exit(1); }
+let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: LADDER_MIN_CHAIN_FLAG || 1 });
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
@@ -529,7 +535,7 @@ function bestFiltered(game, cand, w) {
         z = zBase + d;
       } else {                               // capture: full extraction on a separate prep
         const g = game.clone(); g.play(c);
-        const ff = extractFeatures(g, _fbPrep || (_fbPrep = prepareSpecs(specs)));
+        const ff = extractFeatures(g, _fbPrep || (_fbPrep = prepareSpecs(specs, { ladderMinChain: prep.ladderMinChain })));
         evaluateFeatures(ff, w); z = ff.z;
       }
     } else {
@@ -563,6 +569,7 @@ if (LOAD_PATH) {
     const cliSpecs = opts.spec ? specs : null;
     const loaded = loadWeights(LOAD_PATH, HEALTH_PATH);
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
+    if (LADDER_MIN_CHAIN_FLAG !== null) prepSpecs.ladderMinChain = LADDER_MIN_CHAIN_FLAG;   // the flag overrides the file
     // Saved komi wins over any auto:<start> seed (auto mode only; the eval
     // komi stays pinned at EVAL_KOMI).
     if (AUTO_KOMI && loaded.komi !== undefined) setKomi(TRAIN_SIZE, loaded.komi);
@@ -574,7 +581,7 @@ if (LOAD_PATH) {
       // zero, and dropped specs' weights stay in the table, never extracted.
       console.warn(`WARNING: --spec overrides checkpoint specs (${specKey(specs)} -> ${specKey(cliSpecs)}); shared specs keep their weights.`);
       specs = cliSpecs;
-      prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH });
+      prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: prepSpecs.ladderMinChain });
     }
     if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
       weightsEMA = weights.clone();
@@ -590,7 +597,8 @@ if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weight
 
 console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
-console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}`);
+console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
+            (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
 console.log();
 
 // --bootstrap N: seed the value estimates with N fully-random (epsilon=1) games
