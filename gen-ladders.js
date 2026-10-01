@@ -4,7 +4,7 @@
 //   for example 1..N:
 //     for chain size 1..MAX_STONES:
 //       for each of the 4 types (kill, escape, futile-attack, futile-extend):
-//         find a matching position (ref-fp-heavy self-play + ladder2 + agent confirm)
+//         find a matching position (position-agent self-play + ladder2 + agent confirm)
 //         and display it, centered on and marking the critical move(s).
 
 process.env.DITHER = '0';   // deterministic confirmation-agent moves
@@ -15,13 +15,13 @@ const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirming-agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['confirming-agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'position-agent', 'size']);
 if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
 Generates ladder test cases for evalladders2.js: for each chain size 1..max-stones
-and each type (kill, escape, futile-attack, futile-extend), searches ref-fp-heavy
-self-play positions for a ladder2-read case the confirming agent gets right, in
+and each type (kill, escape, futile-attack, futile-extend), searches the position
+agent's self-play positions for a ladder2-read case the confirming agent gets right, in
 a contested position (its root win ratio within 0.2 of 0.5).  Searches until each
 case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
 
@@ -32,6 +32,9 @@ case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
                    agent in ai/ that must get each case right; a fixed-compute
                    one: it runs at its own playout count, no time budget
                                                      (default ref-puct-trunc-10k)
+  --position-agent NAME
+                   agent in ai/ whose self-play games supply the positions; a
+                   sampling one, so games vary; no time budget (default ref-fp-heavy)
   --min-depth N    reject ladder reads shallower than this      (default 10)
   --min-nodes N    reject ladder reads of fewer nodes than this (default 50)
   --help           show this message`);
@@ -44,9 +47,10 @@ const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders 
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
 const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
-// Positions come from ref-fp-heavy self-play (its softmax sampling varies the
-// games), so cases arise in game-like positions rather than random-play ones.
-const POSITION_AGENT = 'ref-fp-heavy';
+// Positions come from the position agent's self-play (ref-fp-heavy's softmax
+// sampling varies the games), so cases arise in game-like positions rather
+// than random-play ones.
+const POSITION_AGENT = opts['position-agent'] || 'ref-fp-heavy';
 const positionAgent = require(`./ai/${POSITION_AGENT}.js`);
 
 const TYPES = [
@@ -139,7 +143,7 @@ function scanPos(game, chain, type) {
   return null;
 }
 
-// search ref-fp-heavy self-play games until a case is found
+// search the position agent's self-play games until a case is found
 function findCase(chain, type) {
   const t0 = Date.now();
   let scanned = 0;
@@ -151,7 +155,7 @@ function findCase(chain, type) {
       scanned++;
       const hit = scanPos(game, chain, type);
       if (hit) return { game, hit, scanned, ms: Date.now() - t0 };
-      const mv = positionAgent.getMove(game).move;
+      const mv = positionAgent.getMove(game, 0).move;
       if (mv === PASS) game.play(PASS); else if (!game.play(mv)) break;
       moves++;
     }
