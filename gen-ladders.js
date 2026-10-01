@@ -15,7 +15,7 @@ const { getLadderStatus } = require('./ladder2.js');
 const Util = require('./util.js');
 
 // Writes text-block cases (consumed by evalladders2.js) to stdout; redirect as needed.
-const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'playouts', 'size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help'], ['agent', 'examples', 'max-stones', 'min-depth', 'min-nodes', 'size']);
 if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
@@ -28,8 +28,8 @@ case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
   --size N         board size                                   (default 13)
   --examples N     cases per (chain size, type)                 (default 1)
   --max-stones N   largest chain size                           (default 10)
-  --agent NAME     confirming agent in ai/                      (default ref-puct-trunc-10k)
-  --playouts N     the confirming agent's playouts per move     (default 10000)
+  --agent NAME     confirming agent in ai/, a fixed-compute one: it runs
+                   at its own playout count, no time budget  (default ref-puct-trunc-10k)
   --min-depth N    reject ladder reads shallower than this      (default 10)
   --min-nodes N    reject ladder reads of fewer nodes than this (default 50)
   --help           show this message`);
@@ -38,7 +38,6 @@ case is found; there is no time limit.  Cases go to stdout, a summary to stderr.
 const SIZE       = parseInt(opts.size       || '13',   10);
 const N          = parseInt(opts.examples   || '1',    10);   // examples per (chain, type) cell
 const MAX_STONES = parseInt(opts['max-stones'] || '10', 10);
-const PLAYOUTS   = parseInt(opts.playouts   || '10000', 10);
 const MIN_DEPTH  = parseInt(opts['min-depth'] || '10', 10);   // reject ladders read shallower than this
 const MIN_NODES  = parseInt(opts['min-nodes'] || '50',  10);   // reject ladders read in fewer nodes than this
 const AGENT      = opts.agent || 'ref-puct-trunc-10k';         // confirmation agent in ai/ that must pick the ladder move
@@ -120,7 +119,7 @@ function scanPos(game, chain, type) {
       if (type.wantDef && moveCaptures(game, st.urgentLibs[0])) continue;
       // reject if a random legal non-eye move hits the answer (too easy to guess) — before the agent
       if (game.randomLegalMove() === st.urgentLibs[0]) continue;
-      const r = confirmAgent.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      const r = confirmAgent.getMove(game, 0);
       if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
       if (r.move === st.urgentLibs[0]) return { stoneIdx, color: game.cells[stoneIdx], require: st.urgentLibs[0] };
     } else {
@@ -130,7 +129,7 @@ function scanPos(game, chain, type) {
       if (prohibit.length === 0) continue;
       // futile-extend: reject self-atari extends (trivial, not a ladder) — before the agent
       if (type.wantDef && extendSelfAtari(game, stoneIdx, prohibit)) continue;
-      const r = confirmAgent.getMove(game, 0, { playoutLimit: PLAYOUTS });
+      const r = confirmAgent.getMove(game, 0);
       if (decided(r)) return null;   // skip won/lost positions; keep only contested ones
       if (!prohibit.includes(r.move)) return { stoneIdx, color: game.cells[stoneIdx], prohibit };
     }
@@ -225,7 +224,7 @@ for (let i = 1; i <= N; i++) {
 const wall = (Date.now() - tStart) / 1000;
 let totCases = 0, totScanned = 0;
 process.stderr.write('\n=== gen-ladders summary ===\n');
-process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} playouts=${PLAYOUTS} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES} positions=${POSITION_AGENT}\n`);
+process.stderr.write(`board=${SIZE} examples=${N} maxStones=${MAX_STONES} agent=${AGENT} minDepth=${MIN_DEPTH} minNodes=${MIN_NODES} positions=${POSITION_AGENT}\n`);
 for (const t of TYPES) {
   const s = stats.get(t.name);
   totCases += s.cases; totScanned += s.scanned;
