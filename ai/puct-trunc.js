@@ -98,7 +98,7 @@ function create(cfg) {
   // PUCT exploration constant — weight of the prior P(s,a) relative to Q.
   const C_PUCT     = cfg.float('C_PUCT', 0.25);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
-  const RAVE_K     = cfg.float('RAVE_K', 400);
+  const RAVE_K     = cfg.float('RAVE_K', 800);
   // Top-K kept move count, applied at EVERY node including the root (0 = full
   // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  Two
   // things were folded in here: the old separate ROOT_TOP_K (a sweep found the
