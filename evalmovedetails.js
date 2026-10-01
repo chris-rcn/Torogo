@@ -26,7 +26,7 @@
 //                    --phase-buckets N equal-width bands (default 10),
 //   --elo-map PATH   map the per-band mae/mse to a CGOS Elo estimate with the
 //                    curves md-phase-fit.js --save wrote (default
-//                    out/elo-map.json); elo= joins SUMMARY,
+//                    out/elo-map-trunc30k-827.json); elo= joins SUMMARY,
 //                 binning every eval by game phase (board fullness, in [0,1])
 //   --verbose     print a per-position comparison table
 
@@ -148,10 +148,11 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     filter-movedetails uses (default 10)
   --elo-map PATH    estimate CGOS Elo from the per-band mae/mse with the mapping
                     md-phase-fit.js --save wrote (its bucket count applies);
-                    elo= joins SUMMARY (default out/elo-map.json).  Only for
-                    the map's own MD file (any row order), unfiltered: with
-                    another file, --min/--max-phase, --limit or --index,
-                    elo=- and stderr says why
+                    elo= joins SUMMARY (default out/elo-map-trunc30k-827.json,
+                    fitted on the default --file).  Only for the map's own MD
+                    file (any row order), unfiltered: with another file,
+                    --min/--max-phase, --limit or --index, elo=- and stderr
+                    says why
   --verbose         per-position comparison table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -165,7 +166,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index
   const seed       = opts.seed !== undefined ? parseInt(opts.seed, 10) : null;     // starting agent rng seed
   const oversample = parseInt(opts.oversample || '1',    10);
-  const eloMapPath   = opts['elo-map'] || path.join(__dirname, 'out', 'elo-map.json');
+  const eloMapPath   = opts['elo-map'] || path.join(__dirname, 'out', 'elo-map-trunc30k-827.json');
   if (!fs.existsSync(eloMapPath)) { console.error(`--elo-map ${eloMapPath} not found (write one with md-phase-fit.js --save)`); process.exit(1); }
   const eloMap       = JSON.parse(fs.readFileSync(eloMapPath, 'utf8'));
   if (opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
