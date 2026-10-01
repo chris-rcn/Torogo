@@ -22,6 +22,34 @@ function _defenderMoves(game, idx, libs) {
 const DEFAULT_NODE_LIMIT  = Infinity;
 const DEFAULT_DEPTH_LIMIT = 7;
 
+// Period-6 move-cycle prune (ladder2's rule): game3 has no superko, so a
+// capture-recapture chase can repeat positions forever, and below 3
+// liberties the search has no depth limit.  A move whose last-6 move indexes
+// equal the 6 before them is an exact position repeat and is treated as
+// illegal.  The path is reset per searchChain.
+const _movePath = [];
+
+function _cyclePlay(game, idx) {
+  if (!game.play(idx)) return false;
+  const p = _movePath;
+  p.push(idx);
+  const d = p.length;
+  if (d >= 12 &&
+      p[d - 1] === p[d - 7] && p[d - 2] === p[d - 8] &&
+      p[d - 3] === p[d - 9] && p[d - 4] === p[d - 10] &&
+      p[d - 5] === p[d - 11] && p[d - 6] === p[d - 12]) {
+    p.pop();
+    game.undo();
+    return false;
+  }
+  return true;
+}
+
+function _cycleUndo(game) {
+  _movePath.pop();
+  game.undo();
+}
+
 // Returns [result, remainingCredits] where result is:
 //   true  — defender can reach 4+ liberties despite best attacker play
 //   false — attacker can capture the chain
@@ -55,11 +83,11 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
     const moves = _defenderMoves(game, idx, libs);
     for (let k = 0; k < moves.length; k++) {
       const libIdx = moves[k];
-      if (!game.play(libIdx)) {
-        continue;      // illegal (suicide or ko) — skip, no undo needed (play failed)
+      if (!_cyclePlay(game, libIdx)) {
+        continue;      // illegal (suicide, ko or cycle) — skip, no undo needed (play failed)
       }
       if (game.cells[idx] === 0) {
-        game.undo();
+        _cycleUndo(game);
         continue;    // captured — skip
       }
       const budget = Math.floor(credits / (moves.length - k));
@@ -67,7 +95,7 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
       let result, unused;
       [result, unused] = canReach4Libs(game, idx, budget, depth + 1, depthLimit);
       credits += unused;
-      game.undo();
+      _cycleUndo(game);
       if (result === true)  return [true,    credits];
       if (result === null)  hasUnknown = true;
     }
@@ -79,16 +107,16 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
   let hasUnknown = false;
   for (let k = 0; k < lc; k++) {
     const libIdx = libs[k];
-    if (!game.play(libIdx)) {
-      continue;        // illegal for attacker — skip, no undo needed (play failed)
+    if (!_cyclePlay(game, libIdx)) {
+      continue;        // illegal or cycle for attacker — skip, no undo needed (play failed)
     }
     if (game.cells[idx] === 0) {
-      game.undo();
+      _cycleUndo(game);
       return [false, credits]; // captured immediately
     }
     const afterLc = game.groupLibs(idx).length;
     if (afterLc === 0) {
-      game.undo();
+      _cycleUndo(game);
       return [false, credits];
     }
     if (afterLc < 4) {
@@ -97,11 +125,11 @@ function canReach4Libs(game, idx, credits, depth = 0, depthLimit = DEFAULT_DEPTH
       let result, unused;
       [result, unused] = canReach4Libs(game, idx, budget, depth + 1, depthLimit);
       credits += unused;
-      game.undo();
+      _cycleUndo(game);
       if (result === false) return [false, credits];
       if (result === null)  hasUnknown = true;
     } else {
-      game.undo();
+      _cycleUndo(game);
     }
   }
 
@@ -151,6 +179,7 @@ function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit 
     console.warn(`searchChain: group at ${stoneIdx % N},${(stoneIdx / N) | 0} has ${lc} liberties (expected 1–3)`);
     return null;
   }
+  _movePath.length = 0;   // cycle-prune path: fresh per read
   const gColor = game.cells[stoneIdx];
   const mover = game.current;
   const defending = gColor === mover;
@@ -174,11 +203,11 @@ function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit 
     const budget = Math.floor(credits / callsLeft);
     credits -= budget;
     callsLeft--;
-    game.play(PASS);
+    _cyclePlay(game, PASS);
     let unused;
     [escape, unused] = canReach4Libs(game, stoneIdx, budget, 0, depthLimit);
     credits += unused;
-    game.undo();
+    _cycleUndo(game);
   }
   // escape===null means inconclusive; skip the early-return optimisation.
   if (escape !== null && defending === escape) {
@@ -202,14 +231,14 @@ function searchChain(game, stoneIdx, nodeLimit = DEFAULT_NODE_LIMIT, depthLimit 
       const budget = Math.floor(credits / callsLeft);
       credits -= budget;
       callsLeft--;
-      if (!game.play(libIdx)) {
+      if (!_cyclePlay(game, libIdx)) {
         credits += budget;  // illegal (suicide or ko) — no move for the mover
         continue;
       }
       let unused;
       [escape, unused] = canReach4Libs(game, stoneIdx, budget, 0, depthLimit);
       credits += unused;
-      game.undo();
+      _cycleUndo(game);
     }
     if (escape !== null && defending === escape) {
       moverSucceeds = true;
