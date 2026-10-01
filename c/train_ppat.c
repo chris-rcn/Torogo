@@ -15,7 +15,7 @@
  *   ./train_ppat <file> [options]
  *   Options:
  *     --lr <f>              learning rate (default 10)
- *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 100)
+ *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 500)
  *     --value-playouts <n>  rollouts for the V estimate (default --playouts)
  *     --gradient-playouts <n>  rollouts for the gradient (default --playouts)
  *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
@@ -2056,7 +2056,7 @@ static void print_help(FILE *out, const char *prog) {
     fputs(
 "Playouts\n"
 "  --lr F                     learning rate (default 10)\n"
-"  --playouts N               default for --value/--gradient-playouts (default 100)\n"
+"  --playouts N               default for --value/--gradient-playouts (default 500)\n"
 "  --value-playouts N         rollouts for the V estimate (default: --playouts)\n"
 "  --gradient-playouts N      rollouts for the gradient (default: --playouts)\n"
 "  --batch N                  positions per weight update (default 1)\n"
@@ -2164,7 +2164,7 @@ int main(int argc, char **argv) {
 
     cfg_file         = argv[1];
     cfg_lr           = get_float_arg(argc, argv, "--lr", 10.0f);
-    int playouts     = get_int_arg(argc, argv, "--playouts", 100);  /* default for M, N */
+    int playouts     = get_int_arg(argc, argv, "--playouts", 500);  /* default for M, N */
     cfg_value_po     = get_int_arg(argc, argv, "--value-playouts", playouts);
     cfg_gradient_po  = get_int_arg(argc, argv, "--gradient-playouts", playouts);
     cfg_batch        = get_int_arg(argc, argv, "--batch", 1);
