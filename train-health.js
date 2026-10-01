@@ -312,7 +312,7 @@ const SIZE = parseInt(opts.size || '13', 10);
 // every move: delta is expressed as a fullness fraction only so one number
 // carries across board sizes, and once the size is known the prefix should be
 // a constant length whatever it captures.  Matches the deployed agent
-// (ai/puct-ppat-fp-trunc.js) exactly.
+// (ai/puct-trunc.js) exactly.
 const PREFIX_LEN = Math.ceil(DELTA * SIZE * SIZE);
 
 const LR = parseFloat(opts.lr || '0.01');

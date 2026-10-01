@@ -830,7 +830,7 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
             const float area = (float)(sim.N * sim.N);
             const float ph = 1.0f - (float)sim.empty_count / area;
             if (ph <= cfg_trunc_max_phase) {
-                /* Evaluate here, exactly as deployment does (puct-ppat-fp-trunc):
+                /* Evaluate here, exactly as deployment does (puct-trunc):
                  * v = sigma(z), mapped to the rollout's [-1, 1] convention. */
                 float v = (float)(1.0 / (1.0 + exp(-vpat_evaluate_z(&sim))));
                 if (player != BLACK) v = 1.0f - v;

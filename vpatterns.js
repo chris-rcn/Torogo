@@ -1158,7 +1158,7 @@ function modelLiteral(model) {
   if (model.specs.some(sp => sp.maxLibs < 0)) {
     healthStr = `, healthModel: ${HL.modelLiteral(model.preparedSpecs.healthModel)}`;
   }
-  // Truncation default for consumers (puct-ppat-fp-trunc, mc-ppat): the delta
+  // Truncation default for consumers (puct-trunc, mc-ppat): the delta
   // the model was fitted for, so a model carries its own inference config
   // instead of it being passed alongside every time.  An env var still overrides.
   let truncStr = '';

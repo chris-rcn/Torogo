@@ -182,7 +182,7 @@ function create(cfg) {
     // Prefix length in MOVES, not a fullness check repeated per move: delta is
     // a fullness fraction only so one number carries across board sizes, and a
     // per-move check descends further whenever the prefix captures.  Matches
-    // ai/puct-ppat-fp-trunc.js and the offline prefix generators.
+    // ai/puct-trunc.js and the offline prefix generators.
     let prefixLen = -1;
     if (TRUNC_ON && (1 - game2.emptyCount / area) + TRUNC_DELTA <= TRUNC_MAX_PHASE) {
       prefixLen = Math.ceil(TRUNC_DELTA * area);   // 0 when delta == 0 → static eval at the leaf

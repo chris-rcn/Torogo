@@ -1,6 +1,6 @@
 'use strict';
 
-// puct-ppat-fp-trunc: puct-ppat-fp with TRUNCATED playouts.  Truncation is a
+// puct-trunc: puct-ppat-fp with TRUNCATED playouts.  Truncation is a
 // per-decision choice made at the root: when the root phase is below
 // TRUNC_ROOT_PHASE, every playout runs for the prefix length set by
 // TRUNC_PHASE_DELTA (a move count, or a fullness advance under
@@ -82,13 +82,13 @@ function create(cfg) {
         require('path').join(__dirname, '..', 'out', 'vpat-1j9ad1fk.js'))
     : null;
   if (_isNode && !_vpatPath) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
+    throw new Error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: TRUNC_VPAT_DATA is required`);
   }
   const _vpatRaw = _isNode
     ? require(require('path').resolve(_vpatPath))
     : (typeof window !== 'undefined' && window.truncVpatModel) || null;
   if (!_vpatRaw) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
+    throw new Error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load vpatterns evaluator from ` +
       (_isNode ? 'TRUNC_VPAT_DATA' : 'window.truncVpatModel'));
   }
   // Truncation default baked into the model file: { delta }.  An env var
@@ -173,7 +173,7 @@ function create(cfg) {
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
-  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
@@ -197,7 +197,7 @@ function create(cfg) {
     ? loadWeights(_ppatPath)
     : loadWeights((typeof window !== 'undefined' && window.PPATWeights) || null);
   if (!_model) {
-    throw new Error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load ppat weights from ` +
+    throw new Error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: cannot load ppat weights from ` +
       (_isNode ? _ppatPath : 'window.PPATWeights'));
   }
   // Name the ppat file in the banner: two slots (P1_/P2_PPAT_DATA) otherwise
@@ -249,7 +249,7 @@ function create(cfg) {
     if (_autoUniformWt)  UNIFORM_WEIGHT   = cUniform / cPpat;
     if (_autoTruncOvh)   TRUNC_OVERHEAD   = (oTrunc - oScore) / cPpat;
   }
-  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `expand costs: playout ${PLAYOUT_OVERHEAD.toFixed(2)}${_autoPlayoutOvh ? '' : '(env)'}, ` +
     `uniform-move ${UNIFORM_WEIGHT.toFixed(2)}${_autoUniformWt ? '' : '(env)'}, ` +
     `trunc ${TRUNC_OVERHEAD.toFixed(2)}${_autoTruncOvh ? '' : '(env)'}`);
@@ -257,7 +257,7 @@ function create(cfg) {
   // featurepol policy model (priors + top-K pruning).  FPOL_DATA overrides
   // the default checkpoint (browser: window.featurepolModel).
   const _isBrowser  = typeof window !== 'undefined';
-  const fpModel     = FeaturePol.loadModel({ name: 'puct-ppat-fp-trunc',
+  const fpModel     = FeaturePol.loadModel({ name: 'puct-trunc',
     path: _isBrowser ? undefined
                      : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) });
   const fpWeights   = fpModel.weights;
@@ -266,7 +266,7 @@ function create(cfg) {
   // No-op for specs without vpat<n>.
   const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 0);
   if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
-  console.error(`puct-ppat-fp-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {

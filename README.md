@@ -57,14 +57,14 @@ is empty.
 Agents live in `ai/` and expose `getMove(game, budgetMs, options)` (factory
 agents export `create(cfg)`). The currently *fielded* agent is **`ai/prod.js`**
 (a self-contained copy of `puct-ppat-fp`), but the **strongest** agent is
-`puct-ppat-fp-trunc` — described below. Other notable families: the `puct-*`
+`puct-trunc` — described below. Other notable families: the `puct-*`
 search agents, `mc-ppat` (a minimal playout-policy probe), `rave-*`, and the
 frozen `ref-*` reference agents used for rating. `ref-*` agents are immutable
 once fielded — any strength-affecting change gets a new name.
 
-### puct-ppat-fp-trunc (strongest)
+### puct-trunc (strongest)
 
-`ai/puct-ppat-fp-trunc.js` is where the whole model stack comes together in one
+`ai/puct-trunc.js` is where the whole model stack comes together in one
 search. It is a PUCT Monte-Carlo tree search whose every component is driven by a
 learned model:
 

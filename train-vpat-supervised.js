@@ -53,7 +53,7 @@ print, and each new best teMSE also writes the -best checkpoint.
                     stays teMSE-selected.  Requires --delta
   --delta D         deployment truncation delta: the bias is measured at it, and
                     it is baked into every saved checkpoint's 'trunc' block (so
-                    puct-ppat-fp-trunc / mc-ppat read it as a default).  The
+                    puct-trunc / mc-ppat read it as a default).  The
                     recorded prefixes are truncated to ceil(D*area) moves past
                     the start; the bias file's header delta is only its MAXIMUM,
                     D must not exceed it.  Required with --bias-file
@@ -468,7 +468,7 @@ function biasStats() {
 }
 
 // Truncation delta baked into every saved checkpoint's 'trunc' block (from
-// --delta), so consumers (puct-ppat-fp-trunc, mc-ppat) read it as a default.
+// --delta), so consumers (puct-trunc, mc-ppat) read it as a default.
 // undefined when --delta was not given.
 const TRUNC_META = DELTA !== null ? { delta: DELTA } : undefined;
 
