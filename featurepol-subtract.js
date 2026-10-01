@@ -47,7 +47,7 @@ const before = golden.weights.map.size;
 // int-map has no delete (open addressing): rebuild the survivors instead.
 const orphanKeys = new Set();
 orphans.weights.map.forEach((key) => orphanKeys.add(key));
-const rebuilt = FeaturePol.createWeights({ spec: golden.spec, initialCapacity: before });
+const rebuilt = FeaturePol.createWeights({ spec: golden.spec, initialCapacity: before, ladderMinChain: golden.weights.ladderMinChain });
 let removed = 0;
 golden.weights.map.forEach((key, idx) => {
   if (orphanKeys.has(key)) { removed++; return; }

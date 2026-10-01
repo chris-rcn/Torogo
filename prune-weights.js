@@ -71,7 +71,7 @@ if (isVpat) {
   let i = 0;
   weights.map.forEach((k, d) => { mags[i++] = Math.abs(weights.vals[d]); });
   const cut = floorForKeep(mags);
-  const out = FP.createWeights({ spec: weights.spec, initialCapacity: Math.max(1024, total) });
+  const out = FP.createWeights({ spec: weights.spec, initialCapacity: Math.max(1024, total), ladderMinChain: weights.ladderMinChain });
   let kept = 0, dropped = 0, maxDropped = 0;
   weights.map.forEach((key, d) => {
     const a = Math.abs(weights.vals[d]);

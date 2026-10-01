@@ -21,7 +21,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'max-weights', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 'max-weights', 'save']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -78,6 +78,9 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --md-file P       evalmovedetails positions scored each status print; greedy
                     move-quality mean gap to best (mdMae column)
   --load PATH       resume from saved weights
+  --ladder-min-chain N  smallest chain the ladder terms read: 2 skips single
+                    stones (~57% of the ladder time).  Saved with the model;
+                    default: the --load model's value, else 1 (every chain)
   --max-weights N   stop interning NEW keys once the table holds N;
                     existing weights keep training (0 = unlimited, default).
                     The soft form of --no-add for huge shapes (stones20/24)
@@ -155,6 +158,9 @@ const loaded = (LOAD_PATH && fs.existsSync(LOAD_PATH))
 if (LOAD_PATH && !loaded) console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
 
 const SPEC = opts.spec || (loaded && loaded.spec.str);
+const LADDER_MIN_CHAIN = opts['ladder-min-chain'] !== undefined ? parseInt(opts['ladder-min-chain'], 10)
+                       : (loaded ? loaded.weights.ladderMinChain : 1);
+if (!(LADDER_MIN_CHAIN >= 1)) { console.error('Error: --ladder-min-chain must be a positive integer'); process.exit(1); }
 if (!SPEC) {
   console.error('Error: --spec is required unless --load points to an existing model.');
   process.exit(1);
@@ -164,7 +170,7 @@ if (!SPEC) {
 // at the CLI boundary turn that into a clean stderr message + non-zero exit.
 let weights;
 try {
-  weights = FeaturePol.createWeights({ spec: SPEC });
+  weights = FeaturePol.createWeights({ spec: SPEC, ladderMinChain: LADDER_MIN_CHAIN });
 } catch (e) {
   console.error(`Error: ${e.message}`);
   process.exit(1);
@@ -435,7 +441,8 @@ function evalVsReference(N, nGames) {
   return wins;
 }
 
-console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}`);
+console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}` +
+            (weights.spec.needsLadder ? `  ladderMinChain=${weights.ladderMinChain}` : ''));
 console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);

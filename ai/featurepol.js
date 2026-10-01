@@ -30,6 +30,12 @@ function create(cfg) {
 
   const { weights, modelName } = FeaturePol.loadModel({ name: 'featurepol', path: FPOL_DATA });
   weights.rankTopN = FPOL_RANK_TOPN;
+  // The smallest chain the ladder terms read, overriding the model's own
+  // ladderMinChain (unset = the model's value; 2 skips single stones).
+  if (cfg.has('FPOL_LADDER_MIN_CHAIN')) {
+    weights.ladderMinChain = cfg.int('FPOL_LADDER_MIN_CHAIN', 1);
+    if (!(weights.ladderMinChain >= 1)) throw new Error(`featurepol: FPOL_LADDER_MIN_CHAIN must be at least 1, got ${weights.ladderMinChain}`);
+  }
   const _stateByN = new Map();
 
   function getMove(game, _budgetMs, opts) {
@@ -43,7 +49,8 @@ function create(cfg) {
   }
 
   console.error(`featurepol[${cfg.slot != null ? cfg.slot : '-'}]: loaded ${weights.size} weights from ` +
-                `${modelName}  spec='${weights.spec.str}'  temp=${FPOL_TEMP}`);
+                `${modelName}  spec='${weights.spec.str}'  temp=${FPOL_TEMP}` +
+                (weights.spec.needsLadder ? `  ladder-min-chain=${weights.ladderMinChain}` : ''));
   return { getMove };
 }
 
