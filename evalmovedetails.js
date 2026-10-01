@@ -237,8 +237,8 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Phase bands: partition phase ∈ [0,1] (board fullness) into the map's
   // equal-width bands and accumulate gap and gap² per band, for the Elo map
-  // and the --show-phases table (mae and mse per band; mse weights the
-  // blunders).
+  // and the --show-phases table (mae per band; gap² is kept only for an older
+  // map that carries an mse curve).
   const phaseBandSum   = new Float64Array(phaseBuckets);
   const phaseBandSqSum = new Float64Array(phaseBuckets);
   const phaseBandN     = new Int32Array(phaseBuckets);
@@ -343,19 +343,16 @@ const agent = (typeof _agentMod.create === 'function'
       'phase'.padStart(9),
       'n'    .padStart(5),
       'mae'  .padStart(5),
-      'mse'  .padStart(7),
     ].join('  '));
     for (let b = 0; b < phaseBuckets; b++) {
       const lo = b / phaseBuckets;
       const hi = (b + 1) / phaseBuckets;
       const n  = phaseBandN[b];
       const mae = n > 0 ? Util.fmtRatio4(phaseBandSum[b] / n) : '-';
-      const mse = n > 0 ? (phaseBandSqSum[b] / n).toFixed(5) : '-';
       console.log([
         `${lo.toFixed(2)}-${hi.toFixed(2)}`.padStart(9),
         Util.fmt4i(n).padStart(5),
         mae          .padStart(5),
-        mse          .padStart(7),
       ].join('  '));
     }
   }
@@ -392,11 +389,11 @@ const agent = (typeof _agentMod.create === 'function'
 
   // Single greppable summary line (grep for "SUMMARY").
   const elapsedMs = performance.now() - startTime;
-  // Fixed-width fields, the headline (mae) last but for mse; the band always
+  // Fixed-width fields, the headline (mae) last but for elo; the band always
   // prints as two decimals (0.00-1.00 when unbanded) so the columns line up.
   console.log(`SUMMARY band=${minPhase.toFixed(2)}-${maxPhase.toFixed(2)} ` +
     `evals=${String(evals).padStart(4)} tMv=${Util.fmtMs(elapsedMs / evals)} elapsed=${Util.fmtMs(elapsedMs)} ` +
-    `mae=${(gapSum / evals).toFixed(4)} mse=${(gapSqSum / evals).toFixed(5)} elo=${(isNaN(elo) ? '-' : elo.toFixed(0)).padStart(5)}`);
+    `mae=${(gapSum / evals).toFixed(4)} elo=${(isNaN(elo) ? '-' : elo.toFixed(0)).padStart(5)}`);
 }
 
 module.exports = { loadPositions, evalPositions, evalPositionsSample, mdFingerprint };

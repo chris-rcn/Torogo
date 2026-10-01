@@ -7,10 +7,10 @@
 //
 //   elo = a - sum_b w_b * x_b        with w_b = A * exp(k * phase_b), A >= 0
 //
-// where x_b is the band's mae, its mse, or both (--use), and each kind's band
-// weights lie on one log-linear curve over phase, w_b = A * exp(k * mid_b),
-// so neighbouring bands cannot take unrelated weights: two parameters per
-// kind plus the intercept.  Fit by a grid over k with a non-negative linear
+// where x_b is the band's mae, and the band weights lie on one log-linear
+// curve over phase, w_b = A * exp(k * mid_b), so neighbouring bands cannot
+// take unrelated weights: two parameters plus the intercept.  (An mse term was
+// dropped: the md-trunc30k-827 fit gave it zero weight.)  Fit by a grid over k with a non-negative linear
 // solve for A at each point.  Every agent evaluated the same positions, so
 // every file must carry the same per-band counts (a mismatch is a mixed sweep
 // and an error); every band with positions is used.  Prints the input table,
@@ -24,31 +24,28 @@
 // unfiltered.  The file comes from the outputs' file= header, or --md-file for
 // outputs that predate it.
 //
-// Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both] [--save PATH] [--md-file F]
+// Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md-file F]
 
 const fs   = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'use', 'save', 'md-file']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'save', 'md-file']);
 if (opts.help) {
-  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--use mae|mse|both] [--save PATH] [--md-file F]
+  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md-file F]
 
-Fit elo = a - sum_b w_b * x_b, with each kind's band weights on one
-log-linear curve w_b = A * exp(k * phase_b), over the agents whose
+Fit elo = a - sum_b w_b * mae_b, with the band weights on one log-linear
+curve w_b = A * exp(k * phase_b), over the agents whose
 md-phase/<agent>.txt is complete, then print the mapping.  All files must
 share one per-band position count (same positions for every agent).
   --dir    directory of md-phase-sweep.sh outputs (default md-phase)
-  --use    band regressors: mae, mse, or both (default both)
   --save   write the fitted mapping as JSON, for evalmovedetails --elo-map;
            it records the MD file the outputs were measured on
   --md-file  that MD file, for outputs whose header has no file= (older runs)`);
   process.exit(0);
 }
 const dir  = opts.dir || 'md-phase';
-const use_ = opts.use || 'both';
-if (!['mae', 'mse', 'both'].includes(use_)) { console.error('--use must be mae, mse or both'); process.exit(1); }
 
 // --- standings: name -> { elo, games }
 const standings = new Map();
@@ -67,13 +64,13 @@ for (const f of fs.readdirSync(dir).sort()) {
   const st = standings.get(name);
   if (!st) { console.error(`${name}: not in standings, skipped`); continue; }
   const bands = [];
-  for (const m of text.matchAll(/^(\d\.\d\d)-(\d\.\d\d)\s+(\d+)\s+(\d+|-)\s+([\d.]+|-)$/mg))
-    bands.push({ lo: +m[1], hi: +m[2], n: +m[3], mae: m[4] === '-' ? NaN : +m[4] / 10000, mse: m[5] === '-' ? NaN : +m[5] });
+  // band rows: phase, n, mae (x10^4); older outputs also carry an mse column
+  for (const m of text.matchAll(/^(\d\.\d\d)-(\d\.\d\d)\s+(\d+)\s+(\d+|-)(?:\s+(?:[\d.]+|-))?$/mg))
+    bands.push({ lo: +m[1], hi: +m[2], n: +m[3], mae: m[4] === '-' ? NaN : +m[4] / 10000 });
   const mae = +text.match(/mae=([\d.]+)/)[1];
-  const mse = +text.match(/mse=([\d.]+)/)[1];
   const fm = text.match(/^agent=\S+\s+file=(\S+)/m);
   const pm = text.match(/positions=(\d+)\/(\d+)/);
-  agents.push({ name, elo: st.elo, games: st.games, bands, mae, mse,
+  agents.push({ name, elo: st.elo, games: st.games, bands, mae,
                 file: fm ? fm[1] : null, positions: pm ? +pm[1] : NaN });
 }
 if (agents.length === 0) { console.error(`no finished files in ${dir}`); process.exit(1); }
@@ -93,7 +90,7 @@ for (let b = 0; b < nb; b++) if (agents[0].bands[b].n > 0) use.push(b);
 // model is linear in (a, A): grid over k per kind, and at each grid point
 // solve for the intercept and the non-negative amplitudes by coordinate
 // descent; keep the grid point with the smallest rms residual.
-const kinds = use_ === 'both' ? ['mae', 'mse'] : [use_];
+const kinds = ['mae'];
 const rows = agents.length;
 const mids = use.map(b => (agents[0].bands[b].lo + agents[0].bands[b].hi) / 2);
 const y = agents.map(a => a.elo);
@@ -135,7 +132,7 @@ const bandHdr = use.map(bandName);
 console.log(`agents: ${rows}  bands: ${use.length} of ${nb} (${agents[0].bands[use[0]].n} positions each)  curves: ${kinds.join(', ')}  parameters: ${1 + 2 * kinds.length}  intercept: ${a0.toFixed(0)}  rms residual: ${rms.toFixed(0)} Elo`);
 console.log('');
 for (const kind of kinds) {
-  const dp = kind === 'mae' ? 4 : 5;
+  const dp = 4;
   console.log(`${kind} per band:`);
   console.log(`${'agent'.padEnd(28)} ${'elo'.padStart(5)} ${'games'.padStart(5)}  ${bandHdr.map(h => h.padStart(7)).join(' ')}   ${'all'.padStart(7)} ${'fit'.padStart(5)} ${'resid'.padStart(5)}`);
   for (let i = 0; i < rows; i++) {
