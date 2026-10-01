@@ -2,7 +2,7 @@
 
 // gen-ladders.js — sweep the ladder-test-case grid.
 //   for example 1..N:
-//     for chain size 1..MAX_STONES:
+//     for chain size 2..MAX_STONES (single stones are skipped):
 //       for each of the 4 types (kill, escape, futile-attack, futile-extend):
 //         find a matching position (position-agent self-play + ladder2 + agent confirm)
 //         and display it, centered on and marking the critical move(s).
@@ -20,7 +20,7 @@ if (opts.help) {
   console.log(`Usage: node gen-ladders.js [options] > cases.txt
 
 Generates ladder test cases for evalladders2.js: for each chain size
-1..max-stones and each type (kill, escape, futile-attack, futile-extend),
+2..max-stones (no single stones) and each type (kill, escape, futile-attack, futile-extend),
 searches the position agent's self-play positions for a ladder2-read case the
 confirming agent gets right, in a contested position (its root win ratio within
 0.2 of 0.5).  Searches until each case is found; there is no time limit.  Cases
@@ -217,7 +217,7 @@ const stats = new Map(TYPES.map(t => [t.name, { cases: 0, scanned: 0, ms: 0 }]))
 const tStart = Date.now();
 
 for (let i = 1; i <= N; i++) {
-  for (let chain = 1; chain <= MAX_STONES; chain++) {
+  for (let chain = 2; chain <= MAX_STONES; chain++) {   // a single stone is rarely worth a move
     for (const type of TYPES) {
       const res = findCase(chain, type);
       const s = stats.get(type.name);
