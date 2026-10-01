@@ -37,7 +37,8 @@ no time limit.  Cases go to stdout, a summary to stderr.
                    first miss); the contested check uses the first run (default 2)
   --position-agent NAME
                    agent in ai/ whose self-play games supply the positions; a
-                   sampling one, so games vary; no time budget (default ref-fp-heavy)
+                   sampling one, so games vary; no time budget
+                                                 (default ref-featurepol-softmax)
   --min-depth N    reject ladder reads shallower than this      (default 10)
   --min-nodes N    reject ladder reads of fewer nodes than this (default 50)
   --help           show this message`);
@@ -52,10 +53,10 @@ const AGENT      = opts['confirming-agent'] || 'ref-puct-trunc-10k';
 const CONFIRMATIONS = parseInt(opts.confirmations || '2', 10);   // runs that must all get the case right
 if (!(CONFIRMATIONS >= 1)) { console.error('--confirmations must be a positive integer'); process.exit(1); }         // confirmation agent in ai/ that must pick the ladder move
 const confirmAgent = require(`./ai/${AGENT}.js`);
-// Positions come from the position agent's self-play (ref-fp-heavy's softmax
+// Positions come from the position agent's self-play (ref-featurepol-softmax's
 // sampling varies the games), so cases arise in game-like positions rather
 // than random-play ones.
-const POSITION_AGENT = opts['position-agent'] || 'ref-fp-heavy';
+const POSITION_AGENT = opts['position-agent'] || 'ref-featurepol-softmax';
 const positionAgent = require(`./ai/${POSITION_AGENT}.js`);
 
 const TYPES = [
