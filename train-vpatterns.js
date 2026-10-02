@@ -1,22 +1,19 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-vpatterns.js — learn pattern weights via TD(λ) self-play.
+// train-vpatterns.js — learn pattern weights via TD(0) self-play.
 //
 // Value function (absolute, P(BLACK wins)):
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
 //
-// Update rule — λ-return TD applied at episode end, 2-ply lookahead
-// (bootstraps from the next position where the same player moves):
-//   G_t^λ      = (1−λ)·V(s_{t+2}) + λ·G_{t+2}^λ      (recursive form)
-//   G_{M-1}^λ  = G_{M-2}^λ = outcome ∈ {1, 0.5, 0}   (terminal, M = #moves)
-//   Δw_k       = (LR / n_features) · (G_t^λ − V_t) · polarity_k
+// Update rule — online 2-ply TD(0) (Silver et al.'s logistic NTD2(0)),
+// applied after every move: bootstraps from the next position where the
+// same player moves.
+//   target_t   = V(s_{t+2}),  or the outcome ∈ {1, 0.5, 0} for the last two
+//   Δw_k       = (LR / n_features) · (target_t − V(s_t)) · polarity_k
 //
-//   Targets are absolute (P(BLACK wins)), independent of current player.
-//   The two parity classes (even-t and odd-t) form independent chains.
-//   λ = 0  → pure 2-step TD (target = V(s_{t+2}))
-//   λ = 1  → pure Monte Carlo (target = outcome)
-//   0<λ<1  → exponentially-weighted bootstrap trading bias for variance
+//   V(s_t) is re-evaluated with the current weights at update time.  Targets
+//   are absolute (P(BLACK wins)), independent of current player.
 //
 // Training: pure self-play — both colours use the pattern policy.
 //   Move selection uses absolute V = P(BLACK wins).
@@ -50,7 +47,7 @@ const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['a
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
-TD(lambda) self-play trainer for vpatterns value weights (V(s) = P(BLACK
+TD(0) self-play trainer for vpatterns value weights (V(s) = P(BLACK
 wins), 2-ply lookahead).  Runs indefinitely unless --limit is given; the
 checkpoint is written at every print.
 
@@ -327,9 +324,8 @@ function search1ply(game) {
   return search(game, { weights, specs, preparedSpecs: prepSpecs });
 }
 
-// Both colours use the policy.  Per-position features and values are collected
-// during play; at episode end the λ-return target is computed by a single
-// backward pass and applied to each position.
+// Both colours use the policy.  Weights update online, after every move
+// (2-ply TD(0); see the header).
 function trainGame(N, epsilon = EPSILON) {
   const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
   const maxMoves = N * N * 4;
@@ -348,14 +344,20 @@ function trainGame(N, epsilon = EPSILON) {
   const g3 = useG3 ? game3FromGame2(game) : undefined;
 
   let moves = 0;
-  const featsArr = [];
-  const vals = [];
+  let prev2 = null, prev1 = null;   // features from 2 and 1 plies ago
 
   while (!game.gameOver && moves < maxMoves) {
     const features = extractFeatures(game, prepSpecs, undefined, undefined, undefined, g3);
     evaluateFeatures(features, weights);
-    featsArr.push(features);
-    vals.push(features.val);
+    // Online TD(0), 2-ply: the position two plies ago (same player to move)
+    // moves toward this one's value, re-evaluated first with the weights as
+    // they stand now.
+    if (prev2 !== null) {
+      evaluateFeatures(prev2, weights);
+      tdUpdate(prev2, features.val, LR);
+    }
+    prev2 = prev1;
+    prev1 = features;
 
     let move;
     if (Math.random() < epsilon) {
@@ -376,19 +378,12 @@ function trainGame(N, epsilon = EPSILON) {
   const elapsedMs = Date.now() - tStartMs;
   const outcome   = absoluteOutcome(game);
 
-  // TD(0) backward pass with 2-ply lookahead.  Each parity class (even-t and
-  // odd-t) is its own chain — same-player moves are 2 apart.  The target for
-  // step t is the value of the next same-parity step (V_{t+2}); base cases
-  // G_{M-1} = G_{M-2} = outcome.
-  let G0 = outcome, G1 = outcome;
-  for (let t = featsArr.length - 1; t >= 0; t--) {
-    if ((t & 1) === 0) {
-      tdUpdate(featsArr[t], G0, LR);
-      G0 = vals[t];
-    } else {
-      tdUpdate(featsArr[t], G1, LR);
-      G1 = vals[t];
-    }
+  // The last two positions have no same-player successor: they move toward
+  // the outcome.
+  for (const f of [prev2, prev1]) {
+    if (f === null) continue;
+    evaluateFeatures(f, weights);
+    tdUpdate(f, outcome, LR);
   }
 
   return { winner: game.estimateWinner(), elapsedMs, moves };
