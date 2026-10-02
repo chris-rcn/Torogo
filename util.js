@@ -250,7 +250,17 @@ const Util = (() => {
     return ((Date.now() ^ (process.pid << 16) ^ (Math.random() * 0x7fffffff | 0)) >>> 0) || 1;
   }
 
-  return { shuffle, envStr, envFloat, envInt, makeCfg, parseArgs, makeZobrist, randomSeed, fmt4, fmt4i, fmtRatio4, fmtMs, load };
+  // Write `data` to `filePath` atomically (Node only): write <filePath>.tmp,
+  // then rename it over filePath, so a reader or a crash mid-write never sees
+  // a partial file.
+  function writeFileAtomic(filePath, data) {
+    const fs = require('fs');
+    const tmp = filePath + '.tmp';
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, filePath);
+  }
+
+  return { shuffle, envStr, envFloat, envInt, makeCfg, parseArgs, makeZobrist, randomSeed, fmt4, fmt4i, fmtRatio4, fmtMs, load, writeFileAtomic };
 
 })();
 

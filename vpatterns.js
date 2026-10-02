@@ -1225,7 +1225,7 @@ function modelLiteral(model) {
 // provenance: optional lines (the caller's settings, inputs, progress), each
 // written as a '// ' comment under the Generated-by line.
 function saveWeights(filePath, model, provenance) {
-  const fs = require('fs'), path = require('path');
+  const path = require('path');
   const producer = process.argv[1] ? [path.basename(process.argv[1]), ...process.argv.slice(2)].join(' ') : 'node (no script)';
   const src = [
     "'use strict';",
@@ -1235,7 +1235,7 @@ function saveWeights(filePath, model, provenance) {
     "if (typeof module !== 'undefined') module.exports = vpatternsModel;",
     "else window.vpatternsModel = vpatternsModel;",
   ].join('\n') + '\n';
-  fs.writeFileSync(filePath, src);
+  require('./util.js').writeFileAtomic(filePath, src);
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
