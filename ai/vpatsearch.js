@@ -12,9 +12,13 @@
  * Value function: V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
  * Move selection: full-width alpha-beta, BLACK maximises V, WHITE minimises V.
  *
- * Weights and specs are loaded from a JS file specified by the VPAT_DATA
- * environment variable (Node) or by calling loadWeights() directly.  A
- * health-coded model (size:H<N> specs) carries its health model embedded.
+ * create(cfg) builds an instance from a config reader (Util.makeCfg), so
+ * selfplay can run two with different models (P1_VPAT_DATA / P2_VPAT_DATA).
+ * Config: VPAT_DATA (model file, default out/ref13.js), SEARCH_DEPTH (1),
+ * DITHER (0.002), and MIN_LIBS / MAX_LIBS (1, 1) for the specs used when no
+ * model file loads (the browser).  A health-coded model (size:H<N> specs)
+ * carries its health model embedded.  The module-level getMove / valueB use
+ * a default instance built from plain env on first use.
  */
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
@@ -25,19 +29,40 @@ const Util = _isNode ? require('../util.js') : window.Util;
 const { BLACK, PASS } = _isNode ? require('../game2.js') : window.game;
 const { game3FromGame2 } = _isNode ? require('../game3.js') : window.Game3;
 
-const MIN_LIBS = Util.envInt  ('MIN_LIBS',     1);
-const MAX_LIBS = Util.envInt  ('MAX_LIBS',     1);
-const SEARCH_DEPTH    = Util.envInt  ('SEARCH_DEPTH', 1);
-const DITHER   = Util.envFloat('DITHER',       0.002);
-const VPAT_DATA = Util.envStr ('VPAT_DATA',    'out/ref13.js');
-// ── Agent state ───────────────────────────────────────────────────────────────
+// ── Agent factory ─────────────────────────────────────────────────────────────
 
-const defaultSpecs = [];
-for (let maxLibs = MIN_LIBS; maxLibs <= MAX_LIBS; maxLibs++)
-  for (const size of [1, 2, 3])
-    defaultSpecs.push({ size, maxLibs });
+function create(cfg) {
+  const MIN_LIBS     = cfg.int('MIN_LIBS', 1);
+  const MAX_LIBS     = cfg.int('MAX_LIBS', 1);
+  const SEARCH_DEPTH = cfg.int('SEARCH_DEPTH', 1);
+  const DITHER       = cfg.float('DITHER', 0.002);
+  const VPAT_DATA    = cfg.str('VPAT_DATA', 'out/ref13.js');
 
-let model = { weights: makeWeights(), specs: defaultSpecs, preparedSpecs: prepareSpecs(defaultSpecs) };
+  let model;
+  if (_isNode && VPAT_DATA) {
+    model = loadWeights(VPAT_DATA);
+  } else {
+    const specs = [];
+    for (let maxLibs = MIN_LIBS; maxLibs <= MAX_LIBS; maxLibs++)
+      for (const size of [1, 2, 3]) specs.push({ size, maxLibs });
+    model = { weights: makeWeights(), specs, preparedSpecs: prepareSpecs(specs) };
+  }
+
+  function getMove(game) {
+    return { move: search(game, model, SEARCH_DEPTH, DITHER) };
+  }
+
+  // Position value oracle: the static evaluation itself — V(s) = P(BLACK wins).
+  // Each call is an independent position with no Game3 in hand, so a ladder spec
+  // must rebuild one — inherent here (game3RebuildOk), not a missed reuse.
+  function valueB(game) {
+    const g = game.cells ? game : game.toGame2();
+    if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
+    return evaluateFeatures(extractFeatures(g, model.preparedSpecs, false, undefined, true, undefined, true), model.weights);
+  }
+
+  return { getMove, valueB };
+}
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
@@ -100,29 +125,20 @@ function search1(game, m, dither) {
   return best;
 }
 
-function getMove(game) {
-  return { move: search(game, model, SEARCH_DEPTH, DITHER) };
-}
-
-// Position value oracle: the static evaluation itself — V(s) = P(BLACK wins).
-// Each call is an independent position with no Game3 in hand, so a ladder spec
-// must rebuild one — inherent here (game3RebuildOk), not a missed reuse.
-function valueB(game) {
-  const g = game.cells ? game : game.toGame2();
-  if (g.gameOver) return g.calcWinner() === BLACK ? 1 : 0;
-  return evaluateFeatures(extractFeatures(g, model.preparedSpecs, false, undefined, true, undefined, true), model.weights);
-}
-
-// ── Persistence ───────────────────────────────────────────────────────────────
-
-// Auto-load weights and specs if VPAT_DATA env var is set.
-if (_isNode && VPAT_DATA) {
-  model = loadWeights(VPAT_DATA);
-}
+// ── Default instance (lazy) ───────────────────────────────────────────────────
+// Built from plain env on first use, for callers that use the module directly
+// (gen-agent-evals, evalagentvalues).  Two-agent callers (selfplay) use create.
+let _default = null;
+function _def() { return _default || (_default = create(Util.makeCfg())); }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-const PatternAgent = { getMove, search, valueB };
+const PatternAgent = {
+  create,
+  search,
+  getMove: (game) => _def().getMove(game),
+  valueB:  (game) => _def().valueB(game),
+};
 
 if (typeof module !== 'undefined') module.exports = PatternAgent;
 else window.PatternAgent = PatternAgent;
