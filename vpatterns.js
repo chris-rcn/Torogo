@@ -92,6 +92,10 @@ const _leafTab = _PRIMES.map(p => p - 1);   // leaf = prime - 1, so 1+leaf is pr
 // cheaper than a uh() and holds the same fidelity.  Baked into the stored h3
 // plane, so 4×4 / 3×4 inherit it.  Odd base keeps the multiply near-bijective
 // (only centre leaf 1 makes the factor even).
+// Current 3×3 fidelity, centre mix included (distinct keys of one colouring
+// over all D4 orbits of the (2·ml+1)^9 windows, 2026-10-02): ml=1 91.5%
+// (2,619 keys / 2,862 orbits), ml=2 97.1% (244,931 / 252,375), ml=3 98.4%
+// (5,025,766 / 5,105,212).
 const _NC3_CTR_MIX = 2649461;
 // Ordered-fold constant for the octagon (size 8): the distinguished centre 2×2
 // hash is folded into the D4-symmetric arm combine as an odd multiplier, the
