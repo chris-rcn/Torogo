@@ -409,7 +409,7 @@ static float *theta;
  * a checkpoint resumes from the average, not from the raw state that produced it. */
 static float *theta_ema = NULL;
 static long   ema_last_pos = 0;
-static int    cfg_ema_window;          /* --ema-window, aggregate positions; default 2000, 0 = off */
+static int    cfg_ema_window;          /* --ema-window, aggregate positions; default 5000, 0 = off */
 static int    cfg_seed;                /* --seed; 0 = seed from the clock (non-reproducible) */
 static long   cfg_test_from;           /* --test-from: pin the position where testing starts */
 
@@ -2075,7 +2075,7 @@ static void print_help(FILE *out, const char *prog) {
 "  --sync-dir PATH            shared sync directory (default out/ppat-sync)\n"
 "  --monitor PATH             run as a test-only monitor of the checkpoint at PATH\n"
 "  --ema-window N             Polyak averaging window in aggregate positions\n"
-"                             (default 2000; 0 = off, save the raw iterate)\n"
+"                             (default 5000; 0 = off, save the raw iterate)\n"
 "\n"
 "Checkpoints / reproducibility\n"
 "  --load PATH                initial weights (fine-tune from an existing model)\n"
@@ -2166,12 +2166,12 @@ int main(int argc, char **argv) {
      * 100 -> 36 pos/s, 30 -> 37, 25 -> 34, 20 -> 35, 5 -> 28.  Down to ~25 the
      * barrier is nearly free; it only bites below that. */
     cfg_sync_every = get_int_arg(argc, argv, "--sync-every", 30);
-    /* Polyak averaging window in AGGREGATE POSITIONS (default 2000; 0 = off,
+    /* Polyak averaging window in AGGREGATE POSITIONS (default 5000; 0 = off,
      * save the raw iterate).  A window is a real hyperparameter, and an untuned
      * one silently lags every column for its first window's worth of training;
      * 2000 is small (well under a report row).  ~30000 is where to start a sweep
      * if raising it. */
-    cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 2000);
+    cfg_ema_window = get_int_arg(argc, argv, "--ema-window", 5000);
     cfg_seed       = get_int_arg(argc, argv, "--seed", 0);
     /* Pin the position where the expensive columns switch on.  Without it the
      * switch is timing-derived (first cycle whose TRAINING time exceeds a test),
