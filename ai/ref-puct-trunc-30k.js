@@ -104,8 +104,11 @@ function create() {
     throw new Error(`ref-puct-trunc-30k: cannot load vpatterns evaluator from ` +
       (_isNode ? VPAT_PATH : 'window.truncVpatModel'));
   }
-  // Expand-cost coefficients, auto-calibrated below for the loaded models.
-  let PLAYOUT_OVERHEAD = 7, UNIFORM_WEIGHT = 0.15, TRUNC_OVERHEAD = 4;
+  // Expand-cost coefficients: fixed, the medians of 30 startup calibrations of
+  // these models on 13x13 (2026-10-01), as in puct-trunc.  Per-run timing
+  // varied the playout overhead 1.2-2.6 and once failed outright, so the
+  // construction-time calibration was dropped.
+  const PLAYOUT_OVERHEAD = 1.8, UNIFORM_WEIGHT = 0.09, TRUNC_OVERHEAD = 3.4;
   let _lastPlayoutPpat = 0, _lastPlayoutUniform = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Prefix length in moves, set once per turn from the board size (getMove).
   let _prefixLen = 0;
@@ -131,47 +134,6 @@ function create() {
   }
   const _ppatName = _isNode ? require('path').basename(PPAT_PATH) : 'window.PPATWeights';
   _model.ppatMinPhase = PPAT_MIN_PHASE;
-
-  // Auto-calibrate the work-model coefficients for the loaded ppat/vpat models
-  // (nothing pins them).  Time four playout-shaped loops, each
-  // an average over ITERS iterations, with two move counts per shape so the
-  // per-move slope and the fixed intercept separate by differencing:
-  //   uniform prefix + trunc eval, at 20 and 40 moves (in its own phase-0.2 band):
-  //       T_u20 = O_trunc + 20*c_uniform,   T_u40 = O_trunc + 40*c_uniform
-  //   ppat rollout + terminal score, at 10 and 20 moves (in the phase-0.6 band):
-  //       T_p10 = O_score + 10*c_ppat,      T_p20 = O_score + 20*c_ppat
-  // Solve: c_uniform=(T_u40-T_u20)/20, c_ppat=(T_p20-T_p10)/10, then the intercepts
-  // O_trunc / O_score by back-substitution.  In c_ppat units the work model wants
-  //   PLAYOUT_OVERHEAD = O_score / c_ppat            (full playout: score at the end)
-  //   UNIFORM_WEIGHT   = c_uniform / c_ppat
-  //   TRUNC_OVERHEAD   = (O_trunc - O_score) / c_ppat (the EXTRA a trunc eval costs
-  //                                                    over scoring)
-  // G1 sits below PPAT_MIN_PHASE so its moves are naturally uniform, G2 at/above so
-  // its moves extract — the exact code paths used in play.  The whole thing repeats
-  // REPS times and each loop keeps its MIN per-iteration time, discarding the cold
-  // early reps and per-rep GC/scheduling noise; differencing warm mins is clean.
-  if (_isNode) {
-    const cN = 13, cst = createState(cN), crng = makeRng(1), REPS = 20, ITERS = 50;
-    const G1 = new Game2(cN, false);
-    while (!G1.gameOver && (cN * cN - G1.emptyCount) < cN * cN * 0.20) G1.play(ppatMove(G1, cst, _model, crng));
-    const G2 = G1.clone();
-    while (!G2.gameOver && (cN * cN - G2.emptyCount) < cN * cN * 0.60) G2.play(ppatMove(G2, cst, _model, crng));
-    const uni = (n) => { const g = G1.clone(); for (let m = 0; m < n && !g.gameOver; m++) g.play(ppatMove(g, cst, _model, crng)); vpatValueB(g); };
-    const ppt = (n) => { const g = G2.clone(); for (let m = 0; m < n && !g.gameOver; m++) g.play(ppatMove(g, cst, _model, crng)); g.estimateWinner(); };
-    const timeLoop = (fn, n) => { const t0 = performance.now(); for (let i = 0; i < ITERS; i++) fn(n); return (performance.now() - t0) / ITERS; };
-    let Tu20 = Infinity, Tu40 = Infinity, Tp10 = Infinity, Tp20 = Infinity;
-    for (let r = 0; r < REPS; r++) {
-      Tu20 = Math.min(Tu20, timeLoop(uni, 20));
-      Tu40 = Math.min(Tu40, timeLoop(uni, 40));
-      Tp10 = Math.min(Tp10, timeLoop(ppt, 10));
-      Tp20 = Math.min(Tp20, timeLoop(ppt, 20));
-    }
-    const cUniform = (Tu40 - Tu20) / 20, cPpat = (Tp20 - Tp10) / 10;
-    const oTrunc = Tu20 - 20 * cUniform, oScore = Tp10 - 10 * cPpat;
-    PLAYOUT_OVERHEAD = oScore / cPpat;
-    UNIFORM_WEIGHT   = cUniform / cPpat;
-    TRUNC_OVERHEAD   = (oTrunc - oScore) / cPpat;
-  }
 
   // featurepol policy model (priors + top-K pruning); browser: window.featurepolModel.
   const fpModel     = FeaturePol.loadModel({ name: 'ref-puct-trunc-30k', path: FPOL_PATH });
