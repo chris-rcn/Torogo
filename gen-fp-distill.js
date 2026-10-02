@@ -4,7 +4,7 @@
 //
 // Positions come from fp-heavy self-play, cut at a random phase (half drawn
 // from [0.4, 0.8], where pruning costs most; half from [0, 0.8]).  At each,
-// the model's top --cands moves (vpat ranking off, as in puct-trunc) are each
+// the model's top --cands (60) moves (vpat ranking off, as in puct-trunc) are each
 // played and searched once by puct-trunc at --playouts, so moves top-K pruning
 // would drop still get their own win ratio.  NDJSON to stdout, one record per
 // position; progress to stderr:
@@ -28,7 +28,7 @@ if (opts.help) {
 Per-candidate puct-trunc win ratios for featurepol distillation.
 
   --positions N   positions to record                          (default 1000)
-  --cands N       candidates per position, the model's top N   (default 40)
+  --cands N       candidates per position, the model's top N   (default 60)
   --playouts N    puct-trunc playouts per candidate            (default 50)
   --model FILE    featurepol model ranking the candidates      (default ref/ref-fp2-data.js)
   --size N        board size                                   (default 13)
@@ -37,7 +37,7 @@ Per-candidate puct-trunc win ratios for featurepol distillation.
   process.exit(0);
 }
 const POSITIONS = parseInt(opts.positions || '1000', 10);
-const CANDS     = parseInt(opts.cands || '40', 10);
+const CANDS     = parseInt(opts.cands || '60', 10);
 const PLAYOUTS  = parseInt(opts.playouts || '50', 10);
 const SIZE      = parseInt(opts.size || '13', 10);
 const MODEL     = opts.model || 'ref/ref-fp2-data.js';
