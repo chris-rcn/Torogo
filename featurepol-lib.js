@@ -76,6 +76,8 @@
 //               liberty); 0 if the move does not self-atari
 //   lib<n>      liberty count of the chain the move produces (captures counted),
 //               cumulative up to n; 0 (suicide) emits nothing
+//   liberty<n>  lib<n> ONE-HOT: the produced chain's liberty count capped at n,
+//               one key per move; 0 (suicide) emits nothing
 //   chainSize<n> ONE-HOT stone count of the chain the move produces (the stone
 //               plus the friendly chains it joins), capped at n, one key per move
 //   ko          binary: 1 iff the move creates a ko (captures one lone stone
@@ -1152,6 +1154,13 @@ function _makeTerm(str) {
       // (suicide-without-capture) is the reference state and emits nothing.
       if (!param) throw new Error(`featurepol: lib<n> needs a size, got "${str}"`);
       cumulative = true; sizeFn = (ctx, idx) => ctx.game.resultingLibertyCount(idx);
+      break;
+    }
+    case 'liberty': {
+      // lib<n> ONE-HOT: one key for the produced chain's liberty count capped at
+      // n.  0 (suicide) is gated and emits nothing, as for lib<n>.
+      if (!param) throw new Error(`featurepol: liberty<n> needs a size, got "${str}"`);
+      cumulative = true; oneHot = true; sizeFn = (ctx, idx) => ctx.game.resultingLibertyCount(idx);
       break;
     }
     case 'chainSize': {
