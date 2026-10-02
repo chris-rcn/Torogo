@@ -92,7 +92,8 @@ checkpoint is written at every print.
   --bootstrap N     run N fully-random (epsilon=1) games to seed the value
                     estimates before normal training; ignored with --load
 
-  --load PATH       resume from a checkpoint
+  --load PATH       resume from a checkpoint; periodic saves start once training
+                    time exceeds 2x the load time
   --ladder-min-chain N  smallest chain the ladder-coded (size:L) specs read:
                     2 skips single stones (~57% of the ladder time).  Saved
                     with the model; default: the --load model's value, else 1
@@ -561,13 +562,18 @@ const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
+// Wall time of the --load read; the periodic save waits until training has
+// run longer than twice this (0 without --load: save from the first row).
+let loadMs = 0;
 if (LOAD_PATH) {
   if (fs.existsSync(LOAD_PATH)) {
     // Compare canonical fields, not whole objects (spec objects can carry
     // derived properties that would false-positive the comparison).
     const specKey = ss => ss.map(x => x.turn ? 't' : `${x.size}:${x.maxLibs === 0 ? 'L' : x.maxLibs}`).join(',');
     const cliSpecs = opts.spec ? specs : null;
+    const tLoad = Date.now();
     const loaded = loadWeights(LOAD_PATH, HEALTH_PATH);
+    loadMs = Date.now() - tLoad;
     ({ weights, specs, preparedSpecs: prepSpecs } = loaded);
     if (LADDER_MIN_CHAIN_FLAG !== null) prepSpecs.ladderMinChain = LADDER_MIN_CHAIN_FLAG;   // the flag overrides the file
     // Saved komi wins over any auto:<start> seed (auto mode only; the eval
@@ -587,7 +593,7 @@ if (LOAD_PATH) {
       weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
-    console.log(`Loaded ${weights.size} weights from ${LOAD_PATH}`);
+    console.log(`Loaded ${weights.size} weights from ${LOAD_PATH} in ${Util.fmtMs(loadMs)}`);
   } else {
     console.warn(`Warning: --load file not found: ${LOAD_PATH}`);
   }
@@ -644,6 +650,7 @@ console.log([
 ].join('  '));
 
 const t0 = Date.now();
+let saveSkipped = false, saveSkipNoted = false;   // periodic save held back by the load-time rule
 const MAX_PRINT_INTERVAL_MS = 4 * 60 * 60 * 1000;  // cap status-print gap at 4 hours
 let nextPrintAt = t0 + 1000;
 let g = 0;
@@ -752,11 +759,21 @@ while (true) {
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
     ].join('  '));
-    saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
+    if (elapsedMs > 2 * loadMs) {
+      saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
+      saveSkipped = false;
+    } else {
+      if (!saveSkipNoted) {
+        console.log(`(save skipped until training time exceeds 2x the model load time, ${Util.fmtMs(2 * loadMs)})`);
+        saveSkipNoted = true;
+      }
+      saveSkipped = true;
+    }
     nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);
   }
 
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
+    if (saveSkipped) saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
     console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
     break;
   }
