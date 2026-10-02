@@ -650,7 +650,7 @@ console.log([
 ].join('  '));
 
 const t0 = Date.now();
-let saveSkipped = false, saveSkipNoted = false;   // periodic save held back by the load-time rule
+let saveSkipped = false;   // periodic save held back by the load-time rule
 const MAX_PRINT_INTERVAL_MS = 4 * 60 * 60 * 1000;  // cap status-print gap at 4 hours
 let nextPrintAt = t0 + 1000;
 let g = 0;
@@ -763,10 +763,6 @@ while (true) {
       saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
       saveSkipped = false;
     } else {
-      if (!saveSkipNoted) {
-        console.log(`(save skipped until training time exceeds 2x the model load time, ${Util.fmtMs(2 * loadMs)})`);
-        saveSkipNoted = true;
-      }
       saveSkipped = true;
     }
     nextPrintAt = Math.min(t0 + Math.round(nextMs * 1.4), Date.now() + MAX_PRINT_INTERVAL_MS);
