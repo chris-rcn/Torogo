@@ -229,7 +229,12 @@ function create(cfg) {
   // No-op for specs without vpat<n>.
   const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 0);
   if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
-  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
+  // Softmax temperature of the featurepol priors.  Top-K keeps moves by rank,
+  // which temperature does not change; it reshapes the PUCT priors among them.
+  // 1 = the policy's own softmax, 0 = all prior on its top move.
+  const FPOL_TEMP = cfg.float('FPOL_TEMP', 1);
+  if (!(FPOL_TEMP >= 0)) throw new Error(`puct-trunc: FPOL_TEMP must be >= 0, got ${FPOL_TEMP}`);
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
@@ -250,7 +255,7 @@ function create(cfg) {
     if (!state) { state = FeaturePol.createState(N, fpWeights.spec); stateByN.set(N, state); }
     FeaturePol.extractFeatures(game2, state, fpWeights, game3);
     if (state.count === 0) return null;
-    FeaturePol.computeSoftmax(state, fpWeights);
+    FeaturePol.computeSoftmax(state, fpWeights, FPOL_TEMP);
     return state;
   }
 
