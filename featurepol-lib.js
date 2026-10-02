@@ -76,8 +76,8 @@
 //               liberty); 0 if the move does not self-atari
 //   lib<n>      liberty count of the chain the move produces (captures counted),
 //               cumulative up to n; 0 (suicide) emits nothing
-//   chainSize<n> stone count of the chain the move produces (the stone plus the
-//               friendly chains it joins), cumulative up to n
+//   chainSize<n> ONE-HOT stone count of the chain the move produces (the stone
+//               plus the friendly chains it joins), capped at n, one key per move
 //   ko          binary: 1 iff the move creates a ko (captures one lone stone
 //               into a ko shape), else 0
 //   anyKo       binary BOARD-CONTEXT flag: 1 iff a ko is currently active on the
@@ -1156,9 +1156,10 @@ function _makeTerm(str) {
     }
     case 'chainSize': {
       // Stone count of the chain the move produces (1 for a lone stone),
-      // cumulative up to n.  Crosses with lib<n> as lib4+chainSize8.
+      // ONE-HOT: one key for the size capped at n.  Crosses with lib<n> as
+      // lib4+chainSize8.
       if (!param) throw new Error(`featurepol: chainSize<n> needs a size, got "${str}"`);
-      cumulative = true; sizeFn = (ctx, idx) => _resultChainSize(ctx.game, idx);
+      cumulative = true; oneHot = true; sizeFn = (ctx, idx) => _resultChainSize(ctx.game, idx);
       break;
     }
     case 'joins': {
