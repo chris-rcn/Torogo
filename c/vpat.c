@@ -93,6 +93,45 @@ static int vp_spec_field(const char *p, const char *end, const char *name, int d
     return dflt;
 }
 
+/* Size the open-addressing table for n entries (load factor <= 0.5). */
+static void vp_table_init(long n) {
+    uint32_t cap = 64;
+    while (cap < (uint32_t)(n * 2 + 1)) cap <<= 1;
+    free(vp_keys); free(vp_vals); free(vp_used);
+    vp_keys = malloc(cap * sizeof(int32_t));
+    vp_vals = malloc(cap * sizeof(double));
+    vp_used = calloc(cap, 1);
+    vp_mask = cap - 1;
+}
+
+/* Standard base64 (A-Z a-z 0-9 + /, '=' padding) of len chars; returns a
+ * malloc'd buffer and its length in *out_len.  Exits on a bad character. */
+static unsigned char *vp_b64_decode(const char *s, long len, long *out_len) {
+    static signed char tab[256];
+    static int tab_ready = 0;
+    if (!tab_ready) {
+        for (int i = 0; i < 256; i++) tab[i] = -1;
+        const char *alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; i++) tab[(unsigned char)alpha[i]] = (signed char)i;
+        tab_ready = 1;
+    }
+    unsigned char *out = malloc((size_t)(len / 4 + 1) * 3);
+    long o = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (long i = 0; i < len; i++) {
+        const unsigned char c = (unsigned char)s[i];
+        if (c == '=') break;
+        const int v = tab[c];
+        if (v < 0) { fprintf(stderr, "vpat: bad base64 character 0x%02x in weightsQ6\n", c); exit(1); }
+        acc = (acc << 6) | (uint32_t)v;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; out[o++] = (unsigned char)(acc >> bits); }
+    }
+    *out_len = o;
+    return out;
+}
+
 bool vpat_load(const char *path) {
     long len;
     char *buf = vp_read_file(path, &len);
@@ -136,21 +175,43 @@ bool vpat_load(const char *path) {
         }
     }
 
-    /* weights: new Map([[k,v],...]) */
+    long loaded = 0;
+    char *q6 = strstr(buf, "weightsQ6:");
+    if (q6) {
+        /* weightsQ6: { count: N, b64: '...' } -- base64 of N int32 keys then N
+         * int32 values in millionths, little-endian (vpatterns.js). */
+        char *cp = strstr(q6, "count:");
+        char *bp = strstr(q6, "b64:");
+        if (!cp || !bp) { fprintf(stderr, "vpat: bad weightsQ6 in %s\n", path); exit(1); }
+        long n = strtol(cp + 6, NULL, 10);
+        char *b64 = strchr(bp, '\'');
+        char *b64_end = b64 ? strchr(b64 + 1, '\'') : NULL;
+        if (n < 0 || !b64_end) { fprintf(stderr, "vpat: bad weightsQ6 in %s\n", path); exit(1); }
+        b64++;
+        long nbytes = 0;
+        unsigned char *bytes = vp_b64_decode(b64, b64_end - b64, &nbytes);
+        if (nbytes != n * 8) {
+            fprintf(stderr, "vpat: weightsQ6 holds %ld bytes, expected %ld for %ld weights in %s\n", nbytes, n * 8, n, path);
+            exit(1);
+        }
+        vp_table_init(n);
+        for (long i = 0; i < n; i++) {
+            const unsigned char *kb = bytes + i * 4, *vb = bytes + n * 4 + i * 4;
+            int32_t key = (int32_t)((uint32_t)kb[0] | (uint32_t)kb[1] << 8 | (uint32_t)kb[2] << 16 | (uint32_t)kb[3] << 24);
+            int32_t qv  = (int32_t)((uint32_t)vb[0] | (uint32_t)vb[1] << 8 | (uint32_t)vb[2] << 16 | (uint32_t)vb[3] << 24);
+            vp_insert(key, (double)qv / 1e6);   /* exactly the double the 6-decimal text parsed to */
+            loaded++;
+        }
+        free(bytes);
+    } else {
+    /* older files: weights: new Map([[k,v],...]) */
     char *w = strstr(buf, "new Map([");
-    if (!w) { fprintf(stderr, "vpat: no weights Map in %s\n", path); exit(1); }
+    if (!w) { fprintf(stderr, "vpat: no weightsQ6 or weights Map in %s\n", path); exit(1); }
     w += (long)strlen("new Map([");
     /* count entries for table sizing */
     long n = 0;
     for (const char *q = w; *q && !(q[0] == ']' && q[1] == ')'); q++) if (*q == '[') n++;
-    uint32_t cap = 64;
-    while (cap < (uint32_t)(n * 2 + 1)) cap <<= 1;
-    free(vp_keys); free(vp_vals); free(vp_used);
-    vp_keys = malloc(cap * sizeof(int32_t));
-    vp_vals = malloc(cap * sizeof(double));
-    vp_used = calloc(cap, 1);
-    vp_mask = cap - 1;
-    long loaded = 0;
+    vp_table_init(n);
     char *q = w;
     while (*q) {
         while (*q && *q != '[' && !(q[0] == ']' && q[1] == ')')) q++;
@@ -167,6 +228,7 @@ bool vpat_load(const char *path) {
         loaded++;
     }
     if (loaded != n) { fprintf(stderr, "vpat: parsed %ld of %ld weight entries in %s\n", loaded, n, path); exit(1); }
+    }
 
     /* Optional baked truncation default: trunc: { delta: D }.  The JS consumers
      * read it as a default; here it lets the trainer default --trunc-delta.

@@ -25,7 +25,7 @@
  * same values the JS Map holds).
  */
 
-bool   vpat_load(const char *path);       /* parses the model JS file; exits loudly on unsupported specs */
+bool   vpat_load(const char *path);       /* parses the model JS file (weightsQ6 or the older literal Map); exits loudly on unsupported specs */
 double vpat_evaluate(const Game2 *g);     /* P(BLACK wins) for the current position */
 double vpat_evaluate_z(const Game2 *g);   /* the raw logit, for callers applying a logit-space offset */
 

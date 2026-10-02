@@ -31,7 +31,7 @@ const KEEP = opts.keep !== undefined ? parseFloat(opts.keep) : 0.5;
 if (!(KEEP > 0 && KEEP < 1)) { console.error('--keep must be in (0, 1)'); process.exit(1); }
 
 const raw = require(IN);
-const isVpat = raw && raw.specs !== undefined && raw.weights instanceof Map;
+const isVpat = raw && raw.specs !== undefined && (raw.weightsQ6 !== undefined || raw.weights instanceof Map);
 const isFp   = raw && typeof raw.spec === 'string' && raw.keys !== undefined;
 if (!isVpat && !isFp) {
   console.error(`unrecognised checkpoint format (expected a vpatterns or featurepol save; hpatterns -> filter-hpat-extreme.js)`);

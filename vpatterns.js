@@ -1175,8 +1175,15 @@ function loadWeights(filePath, health) {
 // table so callers don't share a Map, and prepared specs.
 function modelFromRaw(raw, health) {
   const specs = raw.specs;
-  const weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
-  for (const [k, v] of raw.weights) weights.set(k, v);
+  let weights;
+  if (raw.weightsQ6) {
+    const { keys, q } = _decodeWeightsQ6(raw.weightsQ6);
+    weights = makeWeights(Math.max(1024, keys.length * 2));
+    for (let i = 0; i < keys.length; i++) weights.set(keys[i], q[i] / 1e6);
+  } else {   // older files: a literal Map
+    weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
+    for (const [k, v] of raw.weights) weights.set(k, v);
+  }
   // Prefer the health model embedded in the file (it travels with the vpat model
   // it was trained against, so loading needs no external HEALTH_DATA); fall back
   // to the caller-supplied one for older files that recorded only parameters.
@@ -1185,7 +1192,47 @@ function modelFromRaw(raw, health) {
   return { specs, preparedSpecs, weights, komi: raw.komi, trunc: raw.trunc };
 }
 
-// The `{ specs, weights: new Map(...), komi, healthModel?, trunc? }` object literal
+// Weights are stored as `weightsQ6: { count, b64 }`: base64 of count int32 keys
+// followed by count int32 values in millionths (round(w*1e6), the same 6
+// decimals the older `weights: new Map([[k, v], ...])` text carried, and
+// q/1e6 is exactly the double that text parsed to), little-endian.  A literal
+// Map is capped at 2^24 entries by V8 and parses slowly; this has no cap short
+// of the 512M-character string limit (~50M weights).  c/vpat.c reads both.
+const _LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+function _encodeWeightsQ6(weights) {
+  if (!_LITTLE_ENDIAN) throw new Error('vpatterns: weightsQ6 encoding assumes a little-endian host');
+  let n = 0;
+  weights.forEach((k, v) => { if (Math.round(+v.toFixed(6) * 1e6) !== 0) n++; });
+  const keys = new Int32Array(n), q = new Int32Array(n);
+  let i = 0;
+  weights.forEach((k, v) => {
+    const m = Math.round(+v.toFixed(6) * 1e6);
+    if (m === 0) return;   // reads back as 0 anyway (a missing key looks up to 0)
+    if (m > 2147483647 || m < -2147483648) throw new Error(`vpatterns: weight ${v} (key ${k}) does not fit weightsQ6`);
+    keys[i] = k | 0; q[i] = m; i++;
+  });
+  let b64;
+  if (typeof Buffer !== 'undefined') {
+    b64 = Buffer.concat([Buffer.from(keys.buffer, 0, n * 4), Buffer.from(q.buffer, 0, n * 4)]).toString('base64');
+  } else {
+    const bytes = new Uint8Array(n * 8);
+    bytes.set(new Uint8Array(keys.buffer), 0); bytes.set(new Uint8Array(q.buffer), n * 4);
+    let str = ''; for (let j = 0; j < bytes.length; j++) str += String.fromCharCode(bytes[j]);
+    b64 = btoa(str);
+  }
+  return `{ count: ${n}, b64: '${b64}' }`;
+}
+function _decodeWeightsQ6(w) {
+  if (!_LITTLE_ENDIAN) throw new Error('vpatterns: weightsQ6 decoding assumes a little-endian host');
+  const n = w.count;
+  const bytes = typeof Buffer !== 'undefined' ? Buffer.from(w.b64, 'base64')
+                                              : Uint8Array.from(atob(w.b64), c => c.charCodeAt(0));
+  if (bytes.length !== n * 8) throw new Error(`vpatterns: weightsQ6 holds ${bytes.length} bytes, expected ${n * 8} for ${n} weights`);
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + n * 8);
+  return { keys: new Int32Array(ab, 0, n), q: new Int32Array(ab, n * 4, n) };
+}
+
+// The `{ specs, weightsQ6: {...}, komi, healthModel?, trunc? }` object literal
 // for a model — the payload of a vpat file, and also what a featurepol file
 // embeds under its `vpat` field so the rank model travels with the policy it was
 // trained against.
@@ -1206,15 +1253,11 @@ function modelLiteral(model) {
   if (model.trunc && model.trunc.delta != null) {
     truncStr = `, trunc: { delta: ${model.trunc.delta} }`;
   }
-  const pairs = [];
-  // Skip weights that quantize to zero: they read back as 0 anyway (a missing
-  // key looks up to 0 in every consumer), so writing them is pure file bloat.
-  model.weights.forEach((k, v) => { const q = +v.toFixed(6); if (q !== 0) pairs.push(`[${k},${q}]`); });
-  const weightsStr = '[' + pairs.join(',') + ']';
+  const weightsStr = _encodeWeightsQ6(model.weights);
   // Ladder-coded models record the smallest chain their ladder codes read.
   const lmcStr = model.specs.some(sp => sp.maxLibs === 0)
     ? `, ladderMinChain: ${(model.preparedSpecs && model.preparedSpecs.ladderMinChain) || 1}` : '';
-  return `{ specs: ${specStr}${healthStr}${truncStr}${lmcStr}, weights: new Map(${weightsStr})` +
+  return `{ specs: ${specStr}${healthStr}${truncStr}${lmcStr}, weightsQ6: ${weightsStr}` +
          (model.komi !== undefined ? `, komi: ${model.komi}` : '') + ` }`;
 }
 
