@@ -99,14 +99,6 @@ function create(cfg) {
   const C_PUCT     = cfg.float('C_PUCT', 0.25);
   // RAVE blend strength: Q mixes rave/real win-rate with weight RAVE_K/(RAVE_K+n).
   const RAVE_K     = cfg.float('RAVE_K', 800);
-  // Mix of prior rank and grandparent-RAVE rank, at nodes with a grandparent
-  // (the grandparent has the same side to move).  Candidates are ordered by
-  // (1-w)*priorRank + w*raveRank (ties to the prior); top-K keeps the first K,
-  // and featurepol's prior VALUES are reassigned in that order
-  // (the i-th move gets the prior's i-th largest value), so the prior's shape
-  // is kept whichever moves are kept.  0 = prior only
-  // (exactly the old behaviour), 1 = grandparent RAVE only.
-  const RAVE_MIX   = cfg.float('RAVE_MIX', 0);
   // Top-K kept move count, applied at EVERY node including the root (0 = full
   // width).  30 beat 40 by 52.3% over 1427 games (match8, 2026-09-09).  Two
   // things were folded in here: the old separate ROOT_TOP_K (a sweep found the
@@ -186,7 +178,6 @@ function create(cfg) {
     `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
     `expand-work: ${EXPAND_WORK}, ` +
-    `rave-mix: ${RAVE_MIX}, ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
@@ -369,11 +360,7 @@ function create(cfg) {
     // the root): keep the policy's top K, interpolated by this node's phase
     // between TOP_K_A (phase 0) and TOP_K_B (phase 1).
     const k = Math.round(TOP_K_A + (TOP_K_B - TOP_K_A) * game2.phase());
-    const mixGp = (RAVE_MIX > 0 && RAVE_K > 0 && fpState && parent !== null && parent.parent !== null) ? parent.parent : null;
-    let mixProb = null;   // featurepol prior values reassigned by mixed rank
-    if (mixGp) {
-      ({ moves: movesArr, prob: mixProb } = _mixPrune(movesArr, fpState, k, N, mixGp, RAVE_MIX));
-    } else if (k > 0) {
+    if (k > 0) {
       movesArr = _pruneToTopK(movesArr, fpState, k, N);
     }
     const M = movesArr.length;
@@ -393,11 +380,8 @@ function create(cfg) {
     // all other entries take the softmax probability directly; then renormalise.
     const priors = new Float32Array(M);
     if (fpState) {
-      let probByMove = mixProb;
-      if (!probByMove) {
-        probByMove = new Float64Array(area);
-        for (let i = 0; i < fpState.count; i++) probByMove[fpState.moves[i]] = fpState.probs[i];
-      }
+      const probByMove = new Float64Array(area);
+      for (let i = 0; i < fpState.count; i++) probByMove[fpState.moves[i]] = fpState.probs[i];
       const floor = 1 / area;
       let sum = 0;
       for (let i = 0; i < M; i++) {
@@ -739,37 +723,6 @@ function _pruneToTopK(allMoves, state, K, N) {
   const top = placements.slice(0, K);
   if (hasPass) top.push(PASS);
   return top;
-}
-
-// RAVE_MIX pruning: order the placements by (1-w)*priorRank + w*raveRank,
-// raveRank by the grandparent's RAVE win ratio (ties to the prior rank), keep
-// the first K (all when K <= 0) plus PASS, and give the i-th kept placement
-// the i-th largest featurepol prior value.
-function _mixPrune(allMoves, state, K, N, gp, w) {
-  const area = N * N;
-  const probByMove = new Float64Array(area);
-  for (let i = 0; i < state.count; i++) probByMove[state.moves[i]] = state.probs[i];
-  const placements = [];
-  let hasPass = false;
-  for (const m of allMoves) {
-    if (m === PASS) hasPass = true;
-    else placements.push(m);
-  }
-  const n = placements.length;
-  placements.sort((a, b) => probByMove[b] - probByMove[a]);   // _pruneToTopK's order
-  const priorRank = new Float64Array(area);
-  for (let i = 0; i < n; i++) priorRank[placements[i]] = i + 1;
-  const gw = gp.raveWins, gv = gp.raveVisits;
-  const byRave = placements.slice().sort((a, b) =>
-    (gw[b] / gv[b] - gw[a] / gv[a]) || (priorRank[a] - priorRank[b]));
-  const mixed = new Float64Array(area);
-  for (let i = 0; i < n; i++) mixed[byRave[i]] = (1 - w) * priorRank[byRave[i]] + w * (i + 1);
-  const order = placements.slice().sort((a, b) => (mixed[a] - mixed[b]) || (priorRank[a] - priorRank[b]));
-  const kept = K > 0 ? order.slice(0, K) : order;
-  const prob = new Float64Array(area);
-  for (let i = 0; i < kept.length; i++) prob[kept[i]] = probByMove[placements[i]];
-  if (hasPass) kept.push(PASS);
-  return { moves: kept, prob };
 }
 
 // ── Default instance (lazy) for direct-require / browser callers ───────────────
