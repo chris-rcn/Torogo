@@ -765,7 +765,6 @@ while (true) {
 
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) {
     if (saveSkipped) saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
-    console.log(`Reached --limit ${LIMIT_GAMES} games — saved ${SAVE_PATH}`);
     break;
   }
 }
