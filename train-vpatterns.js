@@ -70,7 +70,9 @@ checkpoint is written at every print.
   --limit N         stop after N games (default 0 = run indefinitely)
 
   --lr F            step size for the TD update (default 0.3)
-  --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off
+  --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off.
+                    auto (default): A = 1 - 400/g at game g of this run, a
+                    window of ~g/4 games (about one status-row interval)
                     (default 0.9).  The EMA weights are what gets saved
   --epsilon F       share of moves played uniformly at random (default 0.1)
   --on-policy F     share of the NON-random moves from this model's own
@@ -145,8 +147,18 @@ const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
 // Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
-const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
+// 'auto' (default) grows the window with the run: alpha = 1 - 4·EMA_PERIOD/g at
+// game g of this run (0 below 400 games), a window of ~g/4 — about one ×1.4
+// status-row interval, so each saved row averages its own stretch of training,
+// and a --load start keeps only ~e^-4 of the average.
 const EMA_PERIOD = 100;
+const EMA_AUTO   = (opts['smooth-weights'] ?? 'auto') === 'auto';
+const EMA_ALPHA  = EMA_AUTO ? null : parseFloat(opts['smooth-weights']);
+if (!EMA_AUTO && !(EMA_ALPHA >= 0 && EMA_ALPHA < 1)) {
+  console.error(`--smooth-weights: expected auto or 0 <= A < 1, got '${opts['smooth-weights']}'`); process.exit(1);
+}
+const EMA_ON     = EMA_AUTO || EMA_ALPHA > 0;
+const emaAlphaAt = g => EMA_AUTO ? Math.max(0, 1 - 4 * EMA_PERIOD / g) : EMA_ALPHA;
 const BUDGET     = parseFloat(opts['budget']   || '1');
 
 // Komi controller (the train-hpatterns design): every KOMI_WINDOW self-play
@@ -274,7 +286,7 @@ function applyEMA(alpha) {
 // Eval ≡ save: the model that save writes and eval matches measure — the EMA
 // shadow when enabled (and initialized), else the live weights.
 function saveSource() {
-  return (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
+  return (EMA_ON && weightsEMAInit) ? weightsEMA : weights;
 }
 let wAbsSum = 0, wUpdateCount = 0;  // per-interval |weight| sum/count over feature updates (avgW; reset each print)
 
@@ -584,7 +596,7 @@ if (LOAD_PATH) {
       specs = cliSpecs;
       prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: prepSpecs.ladderMinChain });
     }
-    if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
+    if (EMA_ON) {   // continue averaging on top of the persisted values
       weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
@@ -596,7 +608,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
@@ -669,7 +681,7 @@ while (true) {
       komiGames = 0; komiBlackWins = 0;
     }
   }
-  if (EMA_ALPHA > 0 && g % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
+  if (EMA_ON && g % EMA_PERIOD === 0) applyEMA(emaAlphaAt(g));
   intervalGames++;
   intervalMoves += moves;
   intervalTrainMs += elapsedMs;
