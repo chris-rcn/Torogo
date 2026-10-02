@@ -1584,7 +1584,7 @@ static void match_cols(char *dw, size_t dwn) {
  * see policy_cost_us. */
 static int cfg_puct_match;                  /* --do-puct-match */
 #define PUCT_FPOL       "ref/ref-fp-fast.js"   /* prior / top-K / rff model */
-#define PUCT_GAMES      50                     /* first row's games */
+#define PUCT_GAMES     100                     /* first row's games */
 #define PUCT_PLAYOUTS   100                    /* simulations per move, both sides */
 #define PUCT_MIN_PHASE  0.5                    /* rff plays both sides below it */
 #define PUCT_MATCH_SEED 0x9c7a11L
@@ -2056,7 +2056,7 @@ static void print_help(FILE *out, const char *prog) {
 "                             both play the reference (default 0.6,1)\n"
 "\n"
 "PUCT match (the ppat match metric: puct-ppat-fp, uniform vs this model's playouts)\n"
-"  --do-puct-match            play it every row: 50 games growing 1.1x per row, 100\n"
+"  --do-puct-match            play it every row: 100 games growing 1.1x per row, 100\n"
 "                             playouts, rff to phase 0.5, fpol ref/ref-fp-fast.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
 "                             ppatUs = this model's CPU us per ppat move in 1000\n"
