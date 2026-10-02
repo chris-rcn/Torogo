@@ -76,6 +76,8 @@
 //               liberty); 0 if the move does not self-atari
 //   lib<n>      liberty count of the chain the move produces (captures counted),
 //               cumulative up to n; 0 (suicide) emits nothing
+//   chainSize<n> stone count of the chain the move produces (the stone plus the
+//               friendly chains it joins), cumulative up to n
 //   ko          binary: 1 iff the move creates a ko (captures one lone stone
 //               into a ko shape), else 0
 //   anyKo       binary BOARD-CONTEXT flag: 1 iff a ko is currently active on the
@@ -198,6 +200,24 @@ function _atariStones(game, idx) {
     total += ss[g];
   }
   return total;
+}
+
+// Stone count of the chain playing empty cell idx would produce: the played
+// stone plus every distinct friendly chain adjacent to it.
+function _resultChainSize(game, idx) {
+  const me = game.current;
+  const nbr = game._nbr, cells = game.cells, gid = game._gid, ss = game._ss;
+  const b = idx * 4;
+  let size = 1, s0 = -1, s1 = -1, s2 = -1;
+  for (let d = 0; d < 4; d++) {
+    const ni = nbr[b + d];
+    if (cells[ni] !== me) continue;
+    const g = gid[ni];
+    if (g === s0 || g === s1 || g === s2) continue;
+    if (s0 < 0) s0 = g; else if (s1 < 0) s1 = g; else s2 = g;
+    size += ss[g];
+  }
+  return size;
 }
 
 // Number of DISTINCT friendly chains adjacent to empty cell idx (0..4) — i.e. how
@@ -1132,6 +1152,13 @@ function _makeTerm(str) {
       // (suicide-without-capture) is the reference state and emits nothing.
       if (!param) throw new Error(`featurepol: lib<n> needs a size, got "${str}"`);
       cumulative = true; sizeFn = (ctx, idx) => ctx.game.resultingLibertyCount(idx);
+      break;
+    }
+    case 'chainSize': {
+      // Stone count of the chain the move produces (1 for a lone stone),
+      // cumulative up to n.  Crosses with lib<n> as lib4+chainSize8.
+      if (!param) throw new Error(`featurepol: chainSize<n> needs a size, got "${str}"`);
+      cumulative = true; sizeFn = (ctx, idx) => _resultChainSize(ctx.game, idx);
       break;
     }
     case 'joins': {
