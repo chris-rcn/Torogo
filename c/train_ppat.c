@@ -18,30 +18,13 @@
  *     --playouts <n>        default for --value-playouts and --gradient-playouts (default 500)
  *     --value-playouts <n>  rollouts for the V estimate (default --playouts)
  *     --gradient-playouts <n>  rollouts for the gradient (default --playouts)
- *     --trunc-vpat <path>   TRUNCATED training rollouts: after ceil(delta*area)
- *                           moves, if the phase there is <= --trunc-max-phase
- *                           (default 0.55, the deployed gate) the rollout stops
- *                           and z becomes this vpat evaluator's value; a cut past
- *                           the gate runs full as before.
- *                           Makes an early band mouth affordable: playout cost
- *                           becomes delta*area moves + one eval, flat in the
- *                           mouth's phase, with the evaluator confined to the
- *                           band deployment already trusts.  Applies to train
- *                           AND test rollouts (same estimator; directWR, the
- *                           primary readout, is match-based and unaffected).
- *     --trunc-delta <f>     the cut distance, in phase units (moves-method:
- *                           ceil(delta * area) moves past the start).  Defaults
- *                           to the model file's baked delta (trunc.delta) when
- *                           omitted; required if the model has none.
- *     --trunc-max-phase <f> the gate B (default 0.55)
  *     --match-phases A,B    directWR match band (default 0.6,1): inside [A, B]
  *                           each side plays its own weights; outside, BOTH
  *                           sides play reference moves, so games differ only
  *                           where the subject is trained and the out-of-band
  *                           play is fixed, competent and symmetric (fixed-seed
- *                           rows still pair).  For truncation-band training
- *                           set it to the corpus band.  Rows are comparable
- *                           only across runs at the same band
+ *                           rows still pair).  Rows are comparable only
+ *                           across runs at the same band
  *     --phase-compensation-buckets <n>
  *                           reweight per-step gradient credit so applied
  *                           pressure is uniform by phase (default 0 = off).
@@ -53,7 +36,7 @@
  *                           its meaning.  Without it, pressure by phase is an
  *                           artifact of corpus geometry (a mouth corpus ramps
  *                           across its band then plateaus to the game-end
- *                           taper; truncation reshapes it again)
+ *                           taper)
  *     --batch <n>           batch size (default 1)
  *     --test-pos <n>        test positions (default 0 = no teMSE test).  The match
  *                           columns are the primary readout now; a test set costs
@@ -174,7 +157,6 @@
 #include "ppat.h"
 #include "fpol.h"
 #include "match.h"
-#include "vpat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -255,27 +237,16 @@ static float cfg_match_phase_lo = 0.6f, cfg_match_phase_hi = 1.0f;
  * thing at any worker count. */
 static int    cfg_workers;
 
-/* Truncated training rollouts (--trunc-vpat + friends): after ceil(delta *
- * area) moves, if the phase there is <= trunc-max-phase the rollout stops and
- * z becomes the vpat value — the same estimator deployment trusts, gated to the
- * same band (the evaluator is never consulted past B; a rollout whose cut
- * overshoots the gate just runs to the end as before).  --trunc-delta defaults
- * to the model file's baked delta when omitted. */
-static int    cfg_trunc_on;
-static float  cfg_trunc_delta;
-static float  cfg_trunc_max_phase;
-static int    cfg_trunc_delta_from_model;  /* delta defaulted from the model's baked trunc block, not --trunc-delta */
-static const char *cfg_trunc_vpat = "";
 static int    cfg_init_from_next;
 static float  cfg_init_phase_scale = 1.0f;
 
 /* --phase-comp: reweight per-step gradient credit so the applied pressure is
  * uniform by phase.  Without it, pressure is a pure artifact of corpus
  * geometry (a mouth corpus ramps across its band, then a plateau to the
- * game-end taper; truncation reshapes it again), which makes configs hard to
+ * game-end taper), which makes configs hard to
  * reason about.  Buckets track APPLIED weight (each gradient step adds its
- * 1/(N*T) coefficient — steps are not equal across rollouts, 3x so under
- * mixed truncated/full), pre-compensation so the estimator never chases its
+ * 1/(N*T) coefficient — steps are not equal across rollouts),
+ * pre-compensation so the estimator never chases its
  * own output.  The correction shrinks toward 1 on thin evidence:
  * c[b] = Wbar/(w[b] + Wbar/PC_SHRINK), normalized to mean 1 over occupied
  * buckets so the effective lr keeps its meaning; count-only during warmup. */
@@ -612,7 +583,7 @@ static void load_positions_from(const char *path, int test_head) {
         if (!in_test_head && cfg_no_extreme > 0 && fabsf(pos.value) > extreme_threshold) { filtered++; continue; }
 
         /* Phase is needed ONLY for the --phase filter: the stored pos.phase is
-         * read nowhere else (truncation and the phase mask recompute it from the
+         * read nowhere else (the phase mask recomputes it from the
          * live rollout board), so without a filter this play-through is pure
          * waste — skip it. */
         if (cfg_phase >= 0) {
@@ -820,25 +791,9 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
     g2_clone(&sim, game);
     int steps = 0;
 
-    /* Truncation cut, in MOVES past the start (the deployed moves-method). */
-    const int cut_steps = cfg_trunc_on ? (int)ceilf(cfg_trunc_delta * (float)(sim.N * sim.N)) : -1;
-
     int passed_yet = 0, rejected_pass = 0, reject_first = 0;
     if (RUN_EARLY_PASS && rng_float(&g_rng) < PASS_REJECT_RATE) reject_first = 1;
     for (int step = 0; !sim.game_over; step++) {
-        if (step == cut_steps) {
-            const float area = (float)(sim.N * sim.N);
-            const float ph = 1.0f - (float)sim.empty_count / area;
-            if (ph <= cfg_trunc_max_phase) {
-                /* Evaluate here, exactly as deployment does (puct-trunc):
-                 * v = sigma(z), mapped to the rollout's [-1, 1] convention. */
-                float v = (float)(1.0 / (1.0 + exp(-vpat_evaluate_z(&sim))));
-                if (player != BLACK) v = 1.0f - v;
-                if (out_steps) *out_steps = steps;
-                return 2.0f * v - 1.0f;
-            }
-            /* Cut overshot the gate: run the rollout to the end as usual. */
-        }
         int chosen = policy_select(&sim);
         if (chosen == PICK_NO_MOVES) {
             /* Nothing to choose between — no decision, so no gradient. */
@@ -1752,11 +1707,6 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
     if (cfg_pc_buckets)
         printf("          phase-comp %d buckets (shrink %g, warmup %d)\n",
                cfg_pc_buckets, (double)PC_SHRINK, PC_WARMUP_POSITIONS);
-    if (cfg_trunc_on)
-        printf("          trunc vpat %s, delta %g%s, max-phase %g\n",
-               cfg_trunc_vpat, (double)cfg_trunc_delta,
-               cfg_trunc_delta_from_model ? " (model)" : "",
-               (double)cfg_trunc_max_phase);
 
     if (cfg_puct_match)
         printf("puct      %d games first row (x%.2g per row), %d playouts, rff to phase %g, fpol %s\n",
@@ -2062,13 +2012,6 @@ static void print_help(FILE *out, const char *prog) {
 "  --batch N                  positions per weight update (default 1)\n"
 "  --no-extreme F             drop TRAIN positions with |value| > 1-2F (default 0 = keep all)\n"
 "\n"
-"Truncated rollouts (affordable early-band training)\n"
-"  --trunc-vpat PATH          after ceil(delta*area) moves, if phase there is <=\n"
-"                             the gate B the rollout stops and z becomes this vpat\n"
-"                             evaluator's value; a cut past B runs full.  Applies\n"
-"                             to train AND test rollouts.\n"
-"  --trunc-delta F            cut distance in phase units (default: the model's baked delta)\n"
-"  --trunc-max-phase F        the gate B (default 0.55)\n"
 "\n"
 "Pattern features (all APPENDED blocks; --load of a model without them fine-tunes)\n"
 "  --adj-lib N                orthogonal liberty cap in the 3x3 pattern, 2..4\n"
@@ -2198,33 +2141,6 @@ int main(int argc, char **argv) {
     /* Presence of --init-phase-scale enables seeding phase P from phase P+1. */
     cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
     cfg_init_phase_scale = get_float_arg(argc, argv, "--init-phase-scale", 1.0f);
-    {
-        const char *tv = get_str_arg(argc, argv, "--trunc-vpat", NULL);
-        int delta_given     = has_flag(argc, argv, "--trunc-delta");
-        cfg_trunc_delta     = get_float_arg(argc, argv, "--trunc-delta", 0.0f);
-        cfg_trunc_max_phase = get_float_arg(argc, argv, "--trunc-max-phase", 0.55f);
-        if (tv) {
-            vpat_load(tv);              /* load first so the model's baked delta is available */
-            cfg_trunc_vpat = tv;
-            cfg_trunc_on = 1;
-
-            /* Delta: an explicit --trunc-delta wins; otherwise default to the
-             * model's baked delta (as the JS consumers do). */
-            double bd;
-            if (!delta_given && vpat_trunc(&bd)) {
-                cfg_trunc_delta = (float)bd;
-                cfg_trunc_delta_from_model = 1;
-            }
-            if (cfg_trunc_delta <= 0.0f) {
-                fprintf(stderr, "error: --trunc-vpat requires --trunc-delta > 0 "
-                                "(%s has no baked trunc.delta to default from)\n", tv);
-                exit(1);
-            }
-        } else if (delta_given || has_flag(argc, argv, "--trunc-max-phase")) {
-            fprintf(stderr, "error: --trunc-delta/--trunc-max-phase need --trunc-vpat\n");
-            exit(1);
-        }
-    }
     {
         const char *mp = get_str_arg(argc, argv, "--match-phases", NULL);
         if (mp) {
