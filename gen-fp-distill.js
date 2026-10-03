@@ -4,8 +4,7 @@
 //
 // Positions come from fp-heavy self-play from an empty board opened with
 // RANDOM_STONES uniformly random moves (no free centre stone), cut at a
-// random phase (half drawn from [0.4, 0.8], where pruning costs most; half
-// from [0, 0.8]).  At each,
+// phase drawn uniformly from [0, 0.8] (the MD positions' range).  At each,
 // the model's top --cands (60) moves (vpat ranking off, as in puct-trunc) are each
 // played and searched once by puct-trunc at --playouts, so moves top-K pruning
 // would drop still get their own win ratio.  NDJSON to stdout, one record per
@@ -61,7 +60,7 @@ const t0 = Date.now();
 let done = 0;
 while (done < POSITIONS) {
   // Position: fp-heavy self-play to a sampled phase.
-  const target = rng.random() < 0.5 ? 0.4 + 0.4 * rng.random() : 0.8 * rng.random();
+  const target = 0.8 * rng.random();
   const g = new Game2(SIZE, false);
   const moves = [];
   for (let k = 0; k < RANDOM_STONES; k++) {
