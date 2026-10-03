@@ -22,7 +22,7 @@
 // checks the SAVED model against the source on a fixed held-out set.
 //
 // Usage: node fpol-fold.js --in MODEL --spec TARGET [--out FILE] [--limit N]
-//                          [--size 13] [--seed N] [--check-games 100]
+//                          [--size 13] [--seed N] [--check-games 200]
 
 const path = require('path');
 const Util = require('./util.js');
@@ -43,14 +43,14 @@ self-play through featurepol's own extraction.
   --limit N           stop after N corpus games                (default: unlimited)
   --size N            board size                                        (default 13)
   --seed N            rng seed                              (default: random, logged)
-  --check-games N     held-out games checked each row                (default 100)
+  --check-games N     held-out games checked each row                (default 200)
   --help              show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 const OUT    = opts.out || opts.in.replace(/\.js$/, '') + '-fold.js';
 const LIMIT  = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
 const SIZE   = parseInt(opts.size || '13', 10);
-const CHECK  = parseInt(opts['check-games'] || '100', 10);
+const CHECK  = parseInt(opts['check-games'] || '200', 10);
 const SEED   = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 const EPSILON = 0.1;
 const die = msg => { console.error(`fpol-fold: ${msg}`); process.exit(1); };
