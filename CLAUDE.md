@@ -41,14 +41,6 @@
   completion, immediately `cat` the output file so the user can review it
   before deciding next steps.
 
-- **Training external policy: `ref-npat-softmax`.** For training runs that
-  need an external opponent (`--ext`), use `ref-npat-softmax` — same npat
-  weights as plain `npat` but with softmax sampling instead of greedy
-  argmax, so it provides stochastic moves.  All parameters are hardcoded
-  in the agent file; do **not** pass any env vars when using it.
-  Do **not** use `vlibpat-ref-2x2` as `--ext`: it loads a 175k-weight
-  model and runs its own search at every move, roughly doubling per-move
-  cost.
 - **Elo rating via local CGOS.** `cgos/` contains a toroidal CGOS server
   (vendored + patched) for rating agents against the reference fleet.
   Start the ladder with `node cgos/run.js`, attach a candidate with
