@@ -34,7 +34,8 @@ Per-candidate puct-trunc win ratios for featurepol distillation.
   --playouts N    puct-trunc playouts per candidate            (default 50)
   --model FILE    featurepol model ranking the candidates      (default ref/ref-fp2-data.js)
   --size N        board size                                   (default 13)
-  --seed N        rng seed                                     (default: random, logged)
+  --seed N        rng seed; positions depend only on it, not on --playouts
+                                                               (default: random, logged)
   --help          show this message`);
   process.exit(0);
 }
@@ -47,7 +48,10 @@ const SEED      = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.rando
 for (const [k, v] of [['positions', POSITIONS], ['cands', CANDS], ['playouts', PLAYOUTS], ['size', SIZE]])
   if (!(v >= 1)) { console.error(`--${k} must be a positive integer`); process.exit(1); }
 
-const rng = makeRng(SEED);
+// Two streams: positions (phase target, random opening, fp-heavy moves) and
+// the teacher's searches, so the same --seed gives the same positions at any
+// --playouts and only the labels differ.
+const posRng = makeRng(SEED), teacherRng = makeRng((SEED ^ 0x5bd1e995) >>> 0 || 1);
 const { weights } = FP.loadModel({ path: MODEL });
 if (weights.spec.rankSpaces && weights.spec.rankSpaces.length) weights.rankTopN = 0;   // as puct-trunc
 const fpState = FP.createState(SIZE, weights.spec);
@@ -60,16 +64,16 @@ const t0 = Date.now();
 let done = 0;
 while (done < POSITIONS) {
   // Position: fp-heavy self-play to a sampled phase.
-  const target = 0.8 * rng.random();
+  const target = 0.8 * posRng.random();
   const g = new Game2(SIZE, false);
   const moves = [];
   for (let k = 0; k < RANDOM_STONES; k++) {
-    const m = g.randomLegalMove(rng);
+    const m = g.randomLegalMove(posRng);
     g.play(m);
     moves.push(coordStr(m, SIZE));
   }
   while (!g.gameOver && g.phase() < target) {
-    const m = fpHeavy.getMove(g, 0, { rng }).move;
+    const m = fpHeavy.getMove(g, 0, { rng: posRng }).move;
     g.play(m);
     moves.push(coordStr(m, SIZE));
   }
@@ -90,7 +94,7 @@ while (done < POSITIONS) {
     let w;
     if (c.gameOver) w = c.calcWinner() === g.current ? 1 : 0;
     else {
-      const res = teacher.getMove(c, 1e9, { rng, playoutLimit: PLAYOUTS });
+      const res = teacher.getMove(c, 1e9, { rng: teacherRng, playoutLimit: PLAYOUTS });
       w = 1 - res.rootWinRatio;   // rootWinRatio is the child's mover's
     }
     wr.push(+w.toFixed(3));
