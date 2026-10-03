@@ -23,13 +23,15 @@ const FP = require('./featurepol-lib.js');
 const { Game2, PASS, coordStr } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['positions', 'cands', 'playouts', 'model', 'size', 'seed']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['positions', 'cands', 'playouts', 'model', 'size', 'seed', 'skip']);
 if (opts.help) {
   console.log(`Usage: node gen-fp-distill.js [options] > out/records.ndjson
 
 Per-candidate puct-trunc win ratios for featurepol distillation.
 
   --positions N   positions to record                          (default 1000)
+  --skip N        generate and discard the seed's first N positions (no
+                  teacher), to split one seed's sequence across workers (default 0)
   --cands N       candidates per position, the model's top N   (default 60)
   --playouts N    puct-trunc playouts per candidate            (default 50)
   --model FILE    featurepol model ranking the candidates      (default ref/ref-fp2-data.js)
@@ -40,6 +42,8 @@ Per-candidate puct-trunc win ratios for featurepol distillation.
   process.exit(0);
 }
 const POSITIONS = parseInt(opts.positions || '1000', 10);
+const SKIP      = parseInt(opts.skip || '0', 10);
+if (!(SKIP >= 0)) { console.error('--skip must be >= 0'); process.exit(1); }
 const CANDS     = parseInt(opts.cands || '60', 10);
 const PLAYOUTS  = parseInt(opts.playouts || '50', 10);
 const SIZE      = parseInt(opts.size || '13', 10);
@@ -57,11 +61,11 @@ if (weights.spec.rankSpaces && weights.spec.rankSpaces.length) weights.rankTopN 
 const fpState = FP.createState(SIZE, weights.spec);
 const fpHeavy = require('./ai/ref-fp-heavy.js');
 const teacher = require('./ai/puct-trunc.js').create(Util.makeCfg(null));
-console.error(`gen-fp-distill: positions ${POSITIONS}, cands ${CANDS}, playouts ${PLAYOUTS}, model ${MODEL}, size ${SIZE}, seed ${SEED}`);
+console.error(`gen-fp-distill: positions ${POSITIONS}, cands ${CANDS}, playouts ${PLAYOUTS}, model ${MODEL}, size ${SIZE}, seed ${SEED}${SKIP ? `, skip ${SKIP}` : ''}`);
 
 const RANDOM_STONES = 4;   // uniformly random opening moves, in place of the free centre stone
 const t0 = Date.now();
-let done = 0;
+let done = 0, skipped = 0;
 while (done < POSITIONS) {
   // Position: fp-heavy self-play to a sampled phase.
   const target = 0.8 * posRng.random();
@@ -85,6 +89,7 @@ while (done < POSITIONS) {
   const order = Array.from({ length: fpState.count }, (_, i) => i)
     .sort((a, b) => fpState.probs[b] - fpState.probs[a]).slice(0, CANDS).map(i => fpState.moves[i]);
   if (order.length < 2) continue;
+  if (skipped < SKIP) { skipped++; continue; }   // same position stream, no teacher
 
   // Teacher: one search per candidate, from the position after it.
   const wr = [];
