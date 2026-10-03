@@ -19,7 +19,7 @@
 //
 // Runs until --limit games (default: unlimited).  Each status row (after 10,
 // 14, 20, 28, ... games, x1.4) rebuilds the folded weights, saves them, and
-// checks the SAVED model against the source on a fixed held-out set: unfold =
+// checks the SAVED model against the source on a fixed held-out set: nonfold =
 // share of held-out moves with a target key not yet folded, inexact = share
 // scoring more than 0.01 from the source.
 //
@@ -222,7 +222,7 @@ function check(foldedRaw) {
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 console.log('');
-const COLS = [['games', 5], ['positions', 9], ['moves', 6], ['tKeys', 7], ['nWts', 5], ['gated', 6], ['unfold', 6],
+const COLS = [['games', 5], ['positions', 9], ['moves', 6], ['tKeys', 7], ['nWts', 5], ['gated', 6], ['nonfold', 7],
               ['inexact', 7], ['meanDif', 8], ['maxDif', 7], ['top1', 6], ['tCheck', 7], ['elapsed', 8]];
 console.log(COLS.map(([h, w]) => h.padStart(w)).join('  '));
 const t0 = Date.now();
