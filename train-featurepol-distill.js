@@ -97,7 +97,7 @@ const mdRows = loadMdRows(MD_FILE);
 
 const states = new Map();
 function setUp(rec) {
-  const g = new Game2(rec.size, true);
+  const g = new Game2(rec.size, rec.start !== 'empty');   // older records: the free centre stone
   for (const t of rec.moves) if (!g.play(parseMove(t, rec.size))) throw new Error(`illegal replay move ${t}`);
   let st = states.get(rec.size);
   if (!st) { st = FP.createState(rec.size, weights.spec); states.set(rec.size, st); }

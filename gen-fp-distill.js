@@ -2,18 +2,22 @@
 
 // gen-fp-distill.js — distillation targets for a featurepol PUCT prior.
 //
-// Positions come from fp-heavy self-play, cut at a random phase (half drawn
-// from [0.4, 0.8], where pruning costs most; half from [0, 0.8]).  At each,
+// Positions come from fp-heavy self-play from an empty board opened with
+// RANDOM_STONES uniformly random moves (no free centre stone), cut at a
+// random phase (half drawn from [0.4, 0.8], where pruning costs most; half
+// from [0, 0.8]).  At each,
 // the model's top --cands (60) moves (vpat ranking off, as in puct-trunc) are each
 // played and searched once by puct-trunc at --playouts, so moves top-K pruning
 // would drop still get their own win ratio.  NDJSON to stdout, one record per
 // position; progress to stderr:
 //
-//   {"size":13,"moves":[..],"phase":0.52,"po":50,"cands":["d4",..],"wr":[0.613,..]}
-//     moves: coordStr history played after Game2(size, true)'s free stone
+//   {"size":13,"start":"empty","moves":[..],"phase":0.52,"po":50,"cands":["d4",..],"wr":[0.613,..]}
+//     moves: coordStr history from the empty board (Game2(size, false)),
+//            the random opening included; records without "start" (older
+//            files) replay from Game2(size, true)'s free stone
 //     wr[i]: the position's mover's win ratio after cands[i]
 //
-// Usage: node gen-fp-distill.js [--positions 1000] [--cands 40] [--playouts 50]
+// Usage: node gen-fp-distill.js [--positions 1000] [--cands 60] [--playouts 50]
 //                               [--model ref/ref-fp2-data.js] [--size 13] [--seed N] > out/x.ndjson
 
 const Util = require('./util.js');
@@ -53,13 +57,19 @@ const fpHeavy = require('./ai/ref-fp-heavy.js');
 const teacher = require('./ai/puct-trunc.js').create(Util.makeCfg(null));
 console.error(`gen-fp-distill: positions ${POSITIONS}, cands ${CANDS}, playouts ${PLAYOUTS}, model ${MODEL}, size ${SIZE}, seed ${SEED}`);
 
+const RANDOM_STONES = 4;   // uniformly random opening moves, in place of the free centre stone
 const t0 = Date.now();
 let done = 0;
 while (done < POSITIONS) {
   // Position: fp-heavy self-play to a sampled phase.
   const target = rng.random() < 0.5 ? 0.4 + 0.4 * rng.random() : 0.8 * rng.random();
-  const g = new Game2(SIZE, true);
+  const g = new Game2(SIZE, false);
   const moves = [];
+  for (let k = 0; k < RANDOM_STONES; k++) {
+    const m = g.randomLegalMove(rng);
+    g.play(m);
+    moves.push(coordStr(m, SIZE));
+  }
   while (!g.gameOver && g.phase() < target) {
     const m = fpHeavy.getMove(g, 0, { rng }).move;
     g.play(m);
@@ -87,7 +97,7 @@ while (done < POSITIONS) {
     }
     wr.push(+w.toFixed(3));
   }
-  process.stdout.write(JSON.stringify({ size: SIZE, moves, phase: +g.phase().toFixed(3), po: PLAYOUTS,
+  process.stdout.write(JSON.stringify({ size: SIZE, start: 'empty', moves, phase: +g.phase().toFixed(3), po: PLAYOUTS,
                                         cands: order.map(m => coordStr(m, SIZE)), wr }) + '\n');
   done++;
   if (done % 10 === 0 || done === POSITIONS)
