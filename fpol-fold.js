@@ -9,7 +9,7 @@
 // w(adjLib4).  Spaces in both specs carry over unchanged.
 //
 // No feature is computed here: the key mapping is learned by replaying
-// self-play positions through featurepol's own extraction (moves sampled from
+// self-play positions (empty-board starts) through featurepol's own extraction (moves sampled from
 // the source model's temperature-1 softmax, 10% uniformly random), recording
 // every candidate move's per-space keys.  Pairs seen there fold exactly;
 // target keys never seen keep only their own weight.  Stops on a mapping
@@ -127,7 +127,7 @@ function recordPosition() {
   }
 }
 function playCorpusGame() {
-  const game = new Game2(SIZE, true);
+  const game = new Game2(SIZE, false);
   for (let m = 0; m < 3 * SIZE * SIZE && !game.gameOver; m++) {
     FP.extractFeatures(game, state, sw);
     recordPosition();
@@ -141,7 +141,7 @@ const held = [];   // { moves: Int16Array (game moves), pos: [{ cands: Int16Arra
 {
   const st = FP.createState(SIZE, sw.spec), sc = new Float64Array(SIZE * SIZE + 1);
   for (let g = 0; g < CHECK; g++) {
-    const game = new Game2(SIZE, true), mv = [], pos = [];
+    const game = new Game2(SIZE, false), mv = [], pos = [];
     for (let m = 0; m < 3 * SIZE * SIZE && !game.gameOver; m++) {
       FP.extractFeatures(game, st, sw); FP.scoreAll(st, sw, sc);
       pos.push({ cands: Int16Array.from(st.moves.subarray(0, st.count)), scores: Float32Array.from(sc.subarray(0, st.count)) });
@@ -196,7 +196,7 @@ function check(foldedRaw) {
   const fnS = fw.spec.spaces.length;
   let n = 0, nF = 0, within = 0, sumAbs = 0, maxAbs = 0, top = 0, posN = 0;
   for (const h of held) {
-    const game = new Game2(SIZE, true);
+    const game = new Game2(SIZE, false);
     for (let p = 0; p < h.pos.length; p++) {
       const { cands, scores } = h.pos[p];
       FP.extractFeatures(game, fSt, fw); FP.scoreAll(fSt, fw, fSc);
