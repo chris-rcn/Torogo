@@ -410,6 +410,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
   let totalMoves = 0;
   let accCorrect = 0, accN = 0;   // per-position winner prediction (test-side acc)
   let predHit = 0, predN = 0;     // mvPred: subject moves that match the eval agent's move (50% sampled)
+  let subjNs = 0n, subjMoves = 0; // tTurn: the subject's own move choice (filter + search) only
 
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -432,9 +433,11 @@ function evalVsReference(N, refGetMove, nGames, budget) {
       gameVals.push(f.val);
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
+        const t0 = process.hrtime.bigint();
         const cand = fpWeights ? fpTopK(game, FP_WIDTH) : null;
         idx = (cand && cand.length) ? bestFiltered(game, cand, evalW)
                                     : search(game, { weights: evalW, specs, preparedSpecs: prepSpecs });
+        subjNs += process.hrtime.bigint() - t0; subjMoves++;
         // mvPred: how often the subject's move matches the eval agent's.  Sample
         // half the subject's moves — the eval agent call is a full search.
         if (Math.random() < 0.5) {
@@ -464,7 +467,7 @@ function evalVsReference(N, refGetMove, nGames, budget) {
     }
   }
 
-  return { results, moves: totalMoves, accCorrect, accN, predHit, predN };
+  return { results, moves: totalMoves, accCorrect, accN, predHit, predN, subjMs: Number(subjNs) / 1e6, subjMoves };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -651,8 +654,8 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(mdPositions ? ['mdMae'.padStart(5)] : []),
-  // tTest = whole eval pass; tTurn = wall-clock per move of the reference
-  // MATCHES only (both sides' moves); training's per-move time is tMv.
+  // tTest = whole eval pass; tTurn = the subject's own time per move in the
+  // reference matches (its filter + search only); training's per-move time is tMv.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
 ].join('  '));
 
@@ -692,15 +695,15 @@ while (true) {
   if (Date.now() >= nextPrintAt) {
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
-    let evalMatchMs = 0, evalMatchMoves = 0, evalAccC = 0, evalAccN = 0, evalPredHit = 0, evalPredN = 0;
+    let evalMatchMs = 0, evalSubjMs = 0, evalSubjMoves = 0, evalAccC = 0, evalAccN = 0, evalPredHit = 0, evalPredN = 0;
     if (evalGetMove) {
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
       const resultsBatch = [];
       while (true) {
-        const { results, moves, accCorrect, accN, predHit, predN } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
+        const { results, accCorrect, accN, predHit, predN, subjMs, subjMoves } = evalVsReference(EVAL_SIZE, evalGetMove, 2, refBudgetMs);
         for (const r of results) resultsBatch.push(r);
-        evalMatchMoves += moves;
+        evalSubjMs += subjMs; evalSubjMoves += subjMoves;
         evalAccC += accCorrect; evalAccN += accN;
         evalPredHit += predHit; evalPredN += predN;
         evalMatchMs = Date.now() - tTestStart;
@@ -764,7 +767,7 @@ while (true) {
       ...(vaccCol ? [vaccCol]               : []),
       ...(mdMaeCol ? [mdMaeCol]             : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
-                         Util.fmtMs(evalMatchMoves > 0 ? evalMatchMs / evalMatchMoves : 0)] : []),
+                         Util.fmtMs(evalSubjMoves > 0 ? evalSubjMs / evalSubjMoves : 0)] : []),
     ].join('  '));
     if (elapsedMs > 2 * loadMs) {
       saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
