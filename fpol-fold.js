@@ -19,7 +19,9 @@
 //
 // Runs until --limit games (default: unlimited).  Each status row (after 10,
 // 14, 20, 28, ... games, x1.4) rebuilds the folded weights, saves them, and
-// checks the SAVED model against the source on a fixed held-out set.
+// checks the SAVED model against the source on a fixed held-out set: unfold =
+// share of held-out moves with a target key not yet folded, inexact = share
+// scoring more than 0.01 from the source.
 //
 // Usage: node fpol-fold.js --in MODEL --spec TARGET [--out FILE] [--limit N]
 //                          [--size 13] [--seed N] [--check-games 200]
@@ -215,13 +217,13 @@ function check(foldedRaw) {
       game.play(h.moves[p]);
     }
   }
-  return { cover: nF / n, exact: within / n, meanAbs: sumAbs / n, maxAbs, top: top / posN, weights: fw.size };
+  return { unfolded: 1 - nF / n, inexact: 1 - within / n, meanAbs: sumAbs / n, maxAbs, top: top / posN, weights: fw.size };
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 console.log('');
-const COLS = [['games', 5], ['positions', 9], ['moves', 6], ['tKeys', 7], ['nWts', 5], ['gated', 6], ['cover', 6],
-              ['exact', 6], ['meanDif', 8], ['maxDif', 7], ['top1', 6], ['tCheck', 7], ['elapsed', 8]];
+const COLS = [['games', 5], ['positions', 9], ['moves', 6], ['tKeys', 7], ['nWts', 5], ['gated', 6], ['unfold', 6],
+              ['inexact', 7], ['meanDif', 8], ['maxDif', 7], ['top1', 6], ['tCheck', 7], ['elapsed', 8]];
 console.log(COLS.map(([h, w]) => h.padStart(w)).join('  '));
 const t0 = Date.now();
 let games = 0, nextRow = 10;
@@ -236,7 +238,7 @@ while (games < LIMIT) {
     const c = check(foldedRaw);
     const tCheck = Date.now() - tc0;
     const cells = [Util.fmt4i(games), Util.fmt4i(positions), Util.fmt4i(movesSeen), Util.fmt4i(tKeys), Util.fmt4i(c.weights),
-                   Util.fmt4i(gatedLoss), Util.fmtRatio4(c.cover), Util.fmtRatio4(c.exact), c.meanAbs.toFixed(4),
+                   Util.fmt4i(gatedLoss), Util.fmtRatio4(c.unfolded), Util.fmtRatio4(c.inexact), c.meanAbs.toFixed(4),
                    c.maxAbs.toFixed(3), Util.fmtRatio4(c.top), Util.fmtMs(tCheck), Util.fmtMs(Date.now() - t0)];
     console.log(cells.map((v, k) => String(v).padStart(COLS[k][1])).join('  '));
     nextRow = Math.max(games + 1, Math.ceil(nextRow * 1.4));
