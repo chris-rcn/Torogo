@@ -667,10 +667,10 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(mdPositions ? ['mdMae'.padStart(5)] : []),
-  ...(eloMap ? ['elo'.padStart(5)] : []),
   // tTest = whole eval pass; tTurn = the subject's own time per move in the
   // reference matches (its filter + search only); training's per-move time is tMv.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
+  ...(eloMap ? ['elo'.padStart(5)] : []),
 ].join('  '));
 
 const t0 = Date.now();
@@ -786,9 +786,9 @@ while (true) {
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(mdMaeCol ? [mdMaeCol]             : []),
-      ...(eloCol ? [eloCol]                 : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalSubjMoves > 0 ? evalSubjMs / evalSubjMoves : 0)] : []),
+      ...(eloCol ? [eloCol]                 : []),
     ].join('  '));
     if (elapsedMs > 2 * loadMs) {
       saveWeights(SAVE_PATH, { weights: saveSource(), specs, preparedSpecs: prepSpecs, komi: KOMI(TRAIN_SIZE) });
