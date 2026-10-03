@@ -217,7 +217,7 @@ function check(foldedRaw) {
       game.play(h.moves[p]);
     }
   }
-  return { unfolded: 1 - nF / n, inexact: 1 - within / n, meanAbs: sumAbs / n, maxAbs, top: top / posN, weights: fw.size };
+  return { nonfold: 1 - nF / n, inexact: 1 - within / n, meanAbs: sumAbs / n, maxAbs, top: top / posN, weights: fw.size };
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ while (games < LIMIT) {
     const c = check(foldedRaw);
     const tCheck = Date.now() - tc0;
     const cells = [Util.fmt4i(games), Util.fmt4i(positions), Util.fmt4i(movesSeen), Util.fmt4i(tKeys), Util.fmt4i(c.weights),
-                   Util.fmt4i(gatedLoss), Util.fmtRatio4(c.unfolded), Util.fmtRatio4(c.inexact), c.meanAbs.toFixed(4),
+                   Util.fmt4i(gatedLoss), Util.fmtRatio4(c.nonfold), Util.fmtRatio4(c.inexact), c.meanAbs.toFixed(4),
                    c.maxAbs.toFixed(3), Util.fmtRatio4(c.top), Util.fmtMs(tCheck), Util.fmtMs(Date.now() - t0)];
     console.log(cells.map((v, k) => String(v).padStart(COLS[k][1])).join('  '));
     nextRow = Math.max(games + 1, Math.ceil(nextRow * 1.4));
