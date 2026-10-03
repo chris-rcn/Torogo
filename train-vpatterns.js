@@ -666,10 +666,10 @@ console.log([
   ...(evalGetMove ? ['winRatio'.padStart(21), ' acc'.padStart(4)] : []),
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
-  ...(mdPositions ? ['mdMae'.padStart(5)] : []),
   // tTest = whole eval pass; tTurn = the subject's own time per move in the
   // reference matches (its filter + search only); training's per-move time is tMv.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
+  ...(mdPositions ? ['mdMae'.padStart(5)] : []),
   ...(eloMap ? ['elo'.padStart(5)] : []),
 ].join('  '));
 
@@ -785,9 +785,9 @@ while (true) {
                          Util.fmtRatio4(evalAccN > 0 ? evalAccC / evalAccN : 0)] : []),
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
-      ...(mdMaeCol ? [mdMaeCol]             : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalSubjMoves > 0 ? evalSubjMs / evalSubjMoves : 0)] : []),
+      ...(mdMaeCol ? [mdMaeCol]             : []),
       ...(eloCol ? [eloCol]                 : []),
     ].join('  '));
     if (elapsedMs > 2 * loadMs) {
