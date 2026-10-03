@@ -38,7 +38,7 @@ ranking loss.
   --data FILE      gen-fp-distill.js NDJSON records                  (required)
   --load FILE      starting model                         (default ref/ref-fp2-data.js)
   --save FILE      output model             (default out/featurepol-distill-<pid>.js)
-  --lr F           learning rate (untuned)                              (default 1)
+  --lr F           learning rate                                      (default 0.5)
   --decay F        pull toward the starting weights, per update        (default 0)
   --min-z F        pairs need a gap of F standard errors              (default 2)
   --epochs N       passes over the training records                  (default 10)
@@ -50,7 +50,7 @@ ranking loss.
 }
 const LOAD    = opts.load || 'ref/ref-fp2-data.js';
 const SAVE    = opts.save || `out/featurepol-distill-${process.pid}.js`;
-const LR      = parseFloat(opts.lr || '1');
+const LR      = parseFloat(opts.lr || '0.5');
 const DECAY   = parseFloat(opts.decay || '0');
 const MIN_Z   = parseFloat(opts['min-z'] || '2');
 const EPOCHS  = parseInt(opts.epochs || '10', 10);
