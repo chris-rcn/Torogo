@@ -21,7 +21,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -86,6 +86,10 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --t3-limits D,N   tactics3 depth limit D and node limit N for t3Status.
                     Saved with the model; default: the --load model's
                     values, else tactics3's defaults (7,1000)
+  --smooth-weights A  Polyak average of the weights, updated every 100 games:
+                    avg = A*avg + (1-A)*live; saves and every test column use
+                    it, self-play the live weights.  auto (default): A = 1 -
+                    400/g at game g of this run (a ~g/4-game window); 0 = off
   --max-weights N   stop interning NEW keys once the table holds N;
                     existing weights keep training (0 = unlimited, default).
                     The soft form of --no-add for huge shapes (stones20/24)
@@ -113,6 +117,17 @@ const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored 
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdMae column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
+// --smooth-weights: train-vpatterns' Polyak rule.  'auto' sets the decay at
+// game g of this run to 1 - 4*EMA_PERIOD/g (0 below 400 games): a window of
+// ~g/4 games, about one x1.4 status-row interval.
+const EMA_PERIOD = 100;
+const EMA_AUTO   = (opts['smooth-weights'] ?? 'auto') === 'auto';
+const EMA_ALPHA  = EMA_AUTO ? null : parseFloat(opts['smooth-weights']);
+if (!EMA_AUTO && !(EMA_ALPHA >= 0 && EMA_ALPHA < 1)) {
+  console.error(`Error: --smooth-weights expects auto or 0 <= A < 1, got '${opts['smooth-weights']}'`); process.exit(1);
+}
+const EMA_ON     = EMA_AUTO || EMA_ALPHA > 0;
+const emaAlphaAt = gi => EMA_AUTO ? Math.max(0, 1 - 4 * EMA_PERIOD / gi) : EMA_ALPHA;
 const LOAD_PATH   = opts.load || null;
 // Eval may shortlist the rank-feature ranking; self-play never does (see the usage note).
 const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '3', 10);
@@ -270,20 +285,47 @@ if (MAX_WEIGHTS > 0) {
 
 const evalGetMove = EVAL_AGENT ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove : null;
 
-// Greedy featurepol policy as a getMove(game) for the ladder / move-detail suites.
-const _suiteStates = new Map();
-function fpGreedyMove(game) {
-  let st = _suiteStates.get(game.N);
-  if (!st) { st = FeaturePol.createState(game.N, weights.spec); _suiteStates.set(game.N, st); }
-  const game3 = weights.spec.needsLadder ? game3FromGame2(game) : undefined;
-  return { move: FeaturePol.greedyMove(game, st, weights, game3) };
+// ── Polyak averaging ──────────────────────────────────────────────────────────
+// emaVals shadows weights.vals by dense index (the same key table).  Keys
+// interned since the last update join at their live value.  Seeded from the
+// starting weights, so a --load run continues from the loaded model.
+let emaVals = null, emaSize = 0;
+function emaSync(alpha) {
+  const v = weights.vals;
+  if (emaVals === null || emaVals.length < v.length) {
+    const nv = new Float32Array(v.length);
+    if (emaVals) nv.set(emaVals.subarray(0, emaSize));
+    emaVals = nv;
+  }
+  if (alpha !== null) for (let i = 0; i < emaSize; i++) emaVals[i] = alpha * emaVals[i] + (1 - alpha) * v[i];
+  for (let i = emaSize; i < weights.size; i++) emaVals[i] = v[i];
+  emaSize = weights.size;
 }
+if (EMA_ON) emaSync(null);
+// The model saves write and tests score: with averaging, a view of the weights
+// on the averaged values that cannot intern (a test must never add keys to the
+// shared table behind the live weights' back; an unknown key scores 0 either way).
+function testWeights() {
+  if (!EMA_ON) return weights;
+  emaSync(null);   // keys interned since the last update: live values
+  return Object.assign({}, weights, { vals: emaVals, noAdd: true });
+}
+
+// Greedy featurepol policy over weights w as a getMove(game), for the ladder /
+// move-detail suites.
+const _suiteStates = new Map();
+const fpGreedyMoveWith = w => game => {
+  let st = _suiteStates.get(game.N);
+  if (!st) { st = FeaturePol.createState(game.N, w.spec); _suiteStates.set(game.N, st); }
+  const game3 = w.spec.needsLadder ? game3FromGame2(game) : undefined;
+  return { move: FeaturePol.greedyMove(game, st, w, game3) };
+};
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 
-function saveWeights() {
+function saveWeights(w) {
   fs.mkdirSync(path.dirname(SAVE_PATH), { recursive: true });
-  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(weights, { spec: weights.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }, SAVE_ZEROS));
+  fs.writeFileSync(SAVE_PATH, FeaturePol.serialize(w, { spec: w.spec.str, ema, totalUpdates, komi: KOMI(TRAIN_SIZE) }, SAVE_ZEROS));
 }
 
 // ── Mirror-pair openings (ported from selfplay.js) ────────────────────────────
@@ -419,9 +461,9 @@ function trainGame(N) {
 // Per-print eval move-time accumulator (the trainee's greedyMove during eval
 // games); reset before each print's eval loop, read into the eval tMv column.
 let _evalMoveMs = 0, _evalMoveN = 0;
-function evalVsReference(N, nGames) {
-  const state = FeaturePol.createState(N, weights.spec);
-  const needTac = weights.spec.needsLadder;
+function evalVsReference(N, nGames, w) {
+  const state = FeaturePol.createState(N, w.spec);
+  const needTac = w.spec.needsLadder;
   let wins = 0;
   for (let g = 0; g < nGames; g++) {
     const policyIsBlack = (g % 2 === 0);
@@ -438,7 +480,7 @@ function evalVsReference(N, nGames) {
       let idx;
       if ((game.current === BLACK) === policyIsBlack) {
         const _tMv = performance.now();
-        idx = FeaturePol.greedyMove(game, state, weights, needTac ? game3 : undefined);
+        idx = FeaturePol.greedyMove(game, state, w, needTac ? game3 : undefined);
         _evalMoveMs += performance.now() - _tMv; _evalMoveN++;
       } else {
         const mv = evalGetMove(game);
@@ -461,7 +503,7 @@ function evalVsReference(N, nGames) {
 console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}` +
             (weights.spec.needsLadder ? `  ladderMinChain=${weights.ladderMinChain}` : '') +
             (weights.spec.needsT3 ? `  t3MinChain=${weights.t3MinChain}  t3Limits=${weights.t3DepthLimit},${weights.t3NodeLimit}` : ''));
-console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
+console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
 if (EVAL_RANK_TOPN > 0 && weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) console.log(`eval-rank-topn=${EVAL_RANK_TOPN} (eval ranks the best ${EVAL_RANK_TOPN} moves; self-play ranks every candidate)`);
@@ -516,6 +558,7 @@ const evalHistory = [];   // per-game eval results (1/0); the rolling-half avg (
 while (true) {
   g++;
   const r = trainGame(TRAIN_SIZE);
+  if (EMA_ON && g % EMA_PERIOD === 0) emaSync(emaAlphaAt(g));
   totalUpdates += r.weightUpdates;
   elapsedAcc += r.elapsedMs; movesAcc += r.moves; maxPSum += r.maxProbSum; maxPN += r.maxProbN;
 
@@ -546,23 +589,24 @@ while (true) {
       Util.fmt4(komiSumGames > 0 ? komiSum / komiSumGames : KOMI(TRAIN_SIZE)),
       Util.fmt4(candSum > 0 ? featSum / candSum : 0),
     ];
+    const tw = testWeights();   // the averaged model when --smooth-weights is on
     if (EVAL_AGENT) {
       // Eval always runs at EVAL_KOMI so the column stays comparable while the
       // controller moves the self-play komi.  When the sizes match these are the
       // same game2 entry, so save and restore around the batch.
       const trainKomi = KOMI(TRAIN_SIZE);
       setKomi(EVAL_SIZE, EVAL_KOMI);
-      weights.rankTopN = EVAL_RANK_TOPN;   // eval ranks the best N; restored to whole-board (-1) after
+      tw.rankTopN = EVAL_RANK_TOPN;   // eval ranks the best N; restored to whole-board (-1) after
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(1);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(1);
       const evalBudget = (Date.now() - lastPrintAt) * 0.2, evalStart = Date.now();
       let evalWins = 0, evalGames = 0;
       _evalMoveMs = 0; _evalMoveN = 0;
       while (evalGames < MAX_EVAL_GAMES && Date.now() - evalStart < evalBudget) {
-        const w1 = evalVsReference(EVAL_SIZE, 1);
+        const w1 = evalVsReference(EVAL_SIZE, 1, tw);
         evalHistory.push(w1); evalWins += w1; evalGames++;
       }
-      weights.rankTopN = -1;   // self-play ranks every candidate (whole board)
+      tw.rankTopN = -1;   // self-play ranks every candidate (whole board)
       if (RANK_POS_RATIO < 1) FeaturePol.setRankPositionRatio(RANK_POS_RATIO);
       if (SL_TRAIN_KEEP < 1) FeaturePol.setStoneLimitTrainKeep(SL_TRAIN_KEEP);
       setKomi(TRAIN_SIZE, trainKomi);
@@ -575,15 +619,15 @@ while (true) {
       row.push(Util.fmtMs(_evalMoveN > 0 ? _evalMoveMs / _evalMoveN : 0));   // eval move time
     }
     if (ladderCases) {
-      const { passed, total } = evalCases(ladderCases, fpGreedyMove, { budgetMs: 1, oversample: 1 });
+      const { passed, total } = evalCases(ladderCases, fpGreedyMoveWith(tw), { budgetMs: 1, oversample: 1 });
       row.push(Util.fmtRatio4(total ? passed / total : 0));
     }
     if (mdPositions) {
-      const { maeErr } = evalPositions(fpGreedyMove, mdPositions, 0);
+      const { maeErr } = evalPositions(fpGreedyMoveWith(tw), mdPositions, 0);
       row.push(Util.fmtRatio4(maeErr));
     }
     printRow(row);
-    saveWeights();
+    saveWeights(tw);
     maxPSum = 0; maxPN = 0; elapsedAcc = 0; movesAcc = 0;
     komiSum = 0; komiSumGames = 0;
     featSum = 0; candSum = 0;
