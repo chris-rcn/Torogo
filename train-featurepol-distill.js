@@ -43,7 +43,7 @@ ranking loss.
   --min-z F        pairs need a gap of F standard errors              (default 2)
   --epochs N       passes over the training records                  (default 10)
   --holdout F      fraction of records held out for pair accuracy    (default 0.1)
-  --md-file FILE   MD positions for the recall columns  (default out/md-trunc30k-827.md)
+  --md-file FILE   MD positions for the recall columns      (default out/md-trunc30k)
   --seed N         shuffle seed                            (default: random, logged)
   --help           show this message`);
   process.exit(opts.help ? 0 : 1);
@@ -55,7 +55,7 @@ const DECAY   = parseFloat(opts.decay || '0');
 const MIN_Z   = parseFloat(opts['min-z'] || '2');
 const EPOCHS  = parseInt(opts.epochs || '10', 10);
 const HOLDOUT = parseFloat(opts.holdout || '0.1');
-const MD_FILE = opts['md-file'] || 'out/md-trunc30k-827.md';
+const MD_FILE = opts['md-file'] || 'out/md-trunc30k';
 const SEED    = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 const rng     = makeRng(SEED);
 if (!(LR > 0) || !(DECAY >= 0) || !(MIN_Z >= 0) || !(EPOCHS >= 1) || !(HOLDOUT >= 0 && HOLDOUT < 1)) {

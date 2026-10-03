@@ -9,7 +9,7 @@
 //   near d      some move rated within d of the best is inside the top K
 //   regret      best rated win ratio minus the best kept move's
 //
-// Usage: node fp-recall.js [--model ref/ref-fp2-data.js] [--md-file out/md-trunc30k-827.md]
+// Usage: node fp-recall.js [--model ref/ref-fp2-data.js] [--md-file out/md-trunc30k]
 // Library: recallStats(weights, mdRows, opts) -> { n, bestKept, near1, near2, meanRegret, byBand }
 
 (function () {
@@ -76,12 +76,12 @@ Recall at puct-trunc's top-K of the referee's best MD moves, and the
 win ratio pruning costs.
 
   --model FILE     featurepol model             (default ref/ref-fp2-data.js)
-  --md-file FILE   movedetails positions        (default out/md-trunc30k-827.md)
+  --md-file FILE   movedetails positions        (default out/md-trunc30k)
   --help           show this message`);
     process.exit(0);
   }
   const model = opts.model || 'ref/ref-fp2-data.js';
-  const mdFile = opts['md-file'] || 'out/md-trunc30k-827.md';
+  const mdFile = opts['md-file'] || 'out/md-trunc30k';
   const { weights } = FP.loadModel({ path: model });
   const r = recallStats(weights, loadMdRows(mdFile));
   const pct = x => (100 * x).toFixed(1) + '%';
