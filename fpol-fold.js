@@ -17,8 +17,8 @@
 // space emitting more than one key per move, or on a rank space that would
 // need folding.
 //
-// Runs until --limit games (default: unlimited).  Each status row (after 1, 2,
-// 3, 5, 7, 10, ... games, x1.4) rebuilds the folded weights, saves them, and
+// Runs until --limit games (default: unlimited).  Each status row (after 10,
+// 14, 20, 28, ... games, x1.4) rebuilds the folded weights, saves them, and
 // checks the SAVED model against the source on a fixed held-out set.
 //
 // Usage: node fpol-fold.js --in MODEL --spec TARGET [--out FILE] [--limit N]
@@ -224,7 +224,7 @@ const COLS = [['games', 5], ['positions', 9], ['moves', 6], ['tKeys', 7], ['nWts
               ['exact', 6], ['meanDif', 8], ['maxDif', 7], ['top1', 6], ['tCheck', 7], ['elapsed', 8]];
 console.log(COLS.map(([h, w]) => h.padStart(w)).join('  '));
 const t0 = Date.now();
-let games = 0, nextRow = 1;
+let games = 0, nextRow = 10;
 while (games < LIMIT) {
   playCorpusGame();
   games++;
