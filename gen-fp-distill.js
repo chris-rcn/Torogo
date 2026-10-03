@@ -11,10 +11,9 @@
 // would drop still get their own win ratio.  NDJSON to stdout, one record per
 // position; progress to stderr:
 //
-//   {"size":13,"start":"empty","moves":[..],"phase":0.52,"po":50,"cands":["d4",..],"wr":[0.613,..]}
+//   {"size":13,"moves":[..],"phase":0.52,"po":50,"cands":["d4",..],"wr":[0.613,..]}
 //     moves: coordStr history from the empty board (Game2(size, false)),
-//            the random opening included; records without "start" (older
-//            files) replay from Game2(size, true)'s free stone
+//            the random opening included
 //     wr[i]: the position's mover's win ratio after cands[i]
 //
 // Usage: node gen-fp-distill.js [--positions 1000] [--cands 60] [--playouts 50]
@@ -97,7 +96,7 @@ while (done < POSITIONS) {
     }
     wr.push(+w.toFixed(3));
   }
-  process.stdout.write(JSON.stringify({ size: SIZE, start: 'empty', moves, phase: +g.phase().toFixed(3), po: PLAYOUTS,
+  process.stdout.write(JSON.stringify({ size: SIZE, moves, phase: +g.phase().toFixed(3), po: PLAYOUTS,
                                         cands: order.map(m => coordStr(m, SIZE)), wr }) + '\n');
   done++;
   if (done % 10 === 0 || done === POSITIONS)
