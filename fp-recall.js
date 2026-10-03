@@ -9,8 +9,10 @@
 //   near d      some move rated within d of the best is inside the top K
 //   regret      best rated win ratio minus the best kept move's
 //
-// Usage: node fp-recall.js [--model ref/ref-fp2-data.js] [--md-file out/md-trunc30k]
-// Library: recallStats(weights, mdRows, opts) -> { n, bestKept, near1, near2, meanRegret, byBand }
+// Usage: node fp-recall.js [--model A.js,B.js,...] [--baseline FILE] [--by-phase] [--md-file out/md-trunc30k]
+//   Each model's recall and mean regret (± SE).  With --baseline, each model's
+//   regret is also paired against the baseline's position by position (± SE).
+// Library: recallStats(weights, mdRows, opts) -> { n, bestKept, near1, near2, meanRegret, regretSE, regrets, byBand }
 
 (function () {
 
@@ -28,6 +30,7 @@ function recallStats(weights, mdRows, opts = {}) {
   const states = new Map();
   const acc = () => ({ n: 0, bestKept: 0, near1: 0, near2: 0, regretSum: 0 });
   const all = acc(), byBand = Array.from({ length: BANDS }, acc);
+  const regrets = [];   // per position, in mdRows order (positions with < 2 rated moves skipped)
   for (const p of mdRows) {
     const rated = p.candidates.filter(c => c.winRatio != null);
     if (rated.length < 2) continue;
@@ -46,6 +49,7 @@ function recallStats(weights, mdRows, opts = {}) {
     for (const c of wr) if (kept.has(c.m)) { bestKept = c.w; break; }
     const near = d => wr.some(c => c.w >= best - d && kept.has(c.m));
     const b = Math.min(BANDS - 1, Math.floor(g.phase() * BANDS));
+    regrets.push(bestKept === null ? best : best - bestKept);
     for (const s of [all, byBand[b]]) {
       s.n++;
       if (kept.has(wr[0].m)) s.bestKept++;
@@ -57,7 +61,15 @@ function recallStats(weights, mdRows, opts = {}) {
   weights.rankTopN = savedTopN;
   const fin = s => ({ n: s.n, bestKept: s.bestKept / s.n, near1: s.near1 / s.n, near2: s.near2 / s.n,
                       meanRegret: s.regretSum / s.n });
-  return { ...fin(all), byBand: byBand.map((s, i) => s.n ? { lo: i / BANDS, hi: (i + 1) / BANDS, ...fin(s) } : null) };
+  return { ...fin(all), regretSE: _se(regrets), regrets,
+           byBand: byBand.map((s, i) => s.n ? { lo: i / BANDS, hi: (i + 1) / BANDS, ...fin(s) } : null) };
+}
+
+function _se(a) {
+  const n = a.length; if (n < 2) return NaN;
+  let m = 0; for (const x of a) m += x; m /= n;
+  let v = 0; for (const x of a) v += (x - m) * (x - m);
+  return Math.sqrt(v / (n - 1) / n);
 }
 
 function loadMdRows(file) {
@@ -68,27 +80,50 @@ module.exports = { recallStats, loadMdRows };
 
 if (require.main === module) {
   const Util = require('./util.js');
-  const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'md-file']);
+  const path = require('path');
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'by-phase'], ['model', 'baseline', 'md-file']);
   if (opts.help) {
-    console.log(`Usage: node fp-recall.js [--model FILE] [--md-file FILE]
+    console.log(`Usage: node fp-recall.js [--model A.js,B.js,...] [--baseline FILE] [options]
 
 Recall at puct-trunc's top-K of the referee's best MD moves, and the
-win ratio pruning costs.
+win ratio pruning costs (regret), for each model.
 
-  --model FILE     featurepol model             (default ref/ref-fp2-data.js)
-  --md-file FILE   movedetails positions        (default out/md-trunc30k)
+  --model LIST     comma-separated featurepol models     (default ref/ref-fp2-data.js)
+  --baseline FILE  pair every model's regret against this model, position by
+                   position (± SE); it is reported on its own row too
+  --by-phase       add each model's phase-band breakdown
+  --md-file FILE   movedetails positions                 (default out/md-trunc30k)
   --help           show this message`);
     process.exit(0);
   }
-  const model = opts.model || 'ref/ref-fp2-data.js';
+  const models = (opts.model || 'ref/ref-fp2-data.js').split(',').map(x => x.trim()).filter(Boolean);
   const mdFile = opts['md-file'] || 'out/md-trunc30k';
-  const { weights } = FP.loadModel({ path: model });
-  const r = recallStats(weights, loadMdRows(mdFile));
+  const rows = loadMdRows(mdFile);
+  const run = file => recallStats(FP.loadModel({ path: file }).weights, rows);
+  const base = opts.baseline ? { file: opts.baseline, r: run(opts.baseline) } : null;
+  const results = models.map(file => ({ file, r: file === opts.baseline ? base.r : run(file) }));
   const pct = x => (100 * x).toFixed(1) + '%';
-  console.log(`model: ${model}  md: ${mdFile}  positions: ${r.n}`);
-  console.log(`best kept: ${pct(r.bestKept)}  within 0.01: ${pct(r.near1)}  within 0.02: ${pct(r.near2)}  mean regret: ${r.meanRegret.toFixed(4)}`);
-  console.log('phase      positions  best kept  within 0.01  within 0.02  mean regret');
-  for (const b of r.byBand) if (b) console.log(`${b.lo.toFixed(1)}-${b.hi.toFixed(1)}  ${String(b.n).padStart(9)}  ${pct(b.bestKept).padStart(9)}  ${pct(b.near1).padStart(11)}  ${pct(b.near2).padStart(11)}  ${b.meanRegret.toFixed(4).padStart(11)}`);
+  const n = (base || results[0]).r.n;
+  console.log(`md: ${mdFile}  positions: ${n}${base ? `  baseline: ${base.file}` : ''}`);
+  const w = Math.max(5, ...[...results, ...(base ? [base] : [])].map(x => path.basename(x.file).length));
+  const head = `${'model'.padEnd(w)}  best kept  within 0.01  within 0.02  mean regret` + (base ? '          vs baseline' : '');
+  console.log(head);
+  const line = (x, isBase) => {
+    const r = x.r;
+    let t = `${path.basename(x.file).padEnd(w)}  ${pct(r.bestKept).padStart(9)}  ${pct(r.near1).padStart(11)}  ${pct(r.near2).padStart(11)}  ${r.meanRegret.toFixed(4)} ± ${r.regretSE.toFixed(4)}`;
+    if (base && !isBase) {
+      const d = r.regrets.map((v, i) => v - base.r.regrets[i]);
+      let m = 0; for (const v of d) m += v; m /= d.length;
+      t += `  ${m >= 0 ? '+' : ''}${m.toFixed(4)} ± ${_se(d).toFixed(4)}`;
+    } else if (base) t += '  (baseline)';
+    console.log(t);
+  };
+  if (base && !models.includes(base.file)) line(base, true);
+  for (const x of results) line(x, x.file === opts.baseline);
+  if (opts['by-phase']) for (const x of (base && !models.includes(base.file) ? [base, ...results] : results)) {
+    console.log(`\n${path.basename(x.file)}\nphase      positions  best kept  within 0.01  within 0.02  mean regret`);
+    for (const b of x.r.byBand) if (b) console.log(`${b.lo.toFixed(1)}-${b.hi.toFixed(1)}  ${String(b.n).padStart(9)}  ${pct(b.bestKept).padStart(9)}  ${pct(b.near1).padStart(11)}  ${pct(b.near2).padStart(11)}  ${b.meanRegret.toFixed(4).padStart(11)}`);
+  }
 }
 
 })();
