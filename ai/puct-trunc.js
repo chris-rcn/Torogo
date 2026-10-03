@@ -222,7 +222,7 @@ function create(cfg) {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'puct-trunc',
     path: _isBrowser ? undefined
-                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp2-data.js')) });
+                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-fast.js')) });
   const fpWeights   = fpModel.weights;
   // Rank the vpat<n> feature over the best FPOL_RANK_TOPN candidates when the fp
   // spec ranks (0 = off (default), N > 0 = top-N, N < 0 = every candidate).
