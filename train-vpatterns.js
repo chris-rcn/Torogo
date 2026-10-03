@@ -35,7 +35,7 @@ const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, sa
 const { search } = require('./ai/vpatsearch.js');
 const FeaturePol = require('./featurepol-lib.js');
 const { game3FromGame2 } = require('./game3.js');
-const { loadPositions, evalPositions } = require('./evalmovedetails.js');
+const { loadPositions, evalPositions, loadEloMap, evalPositionsElo, mdFingerprint } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
 const Util = require('./util.js');
@@ -43,7 +43,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -105,6 +105,9 @@ checkpoint is written at every print.
   --budget MS       per-move time budget for the reference agent (default 1)
   --md-file F       evalmovedetails positions, single full pass each print
                     (mdMae column)
+  --elo             estimate Elo each print (elo column): the saved model's
+                    greedy moves on every position of the Elo map's MD file
+                    (out/elo-map-trunc30k-827.json and its out/md-trunc30k-827.md)
   --ladder-file F   evalladders2 suite scored each print (ladr column)
   --accuracy-file F game corpus for winner-prediction accuracy each print
                     (vacc column)
@@ -565,6 +568,16 @@ function bestFiltered(game, cand, w) {
 // gap to the top move).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
+// --elo: the Elo map is valid only on every position of its own MD file.
+const ELO_MAP_PATH = path.join(__dirname, 'out', 'elo-map-trunc30k-827.json');
+let eloMap = null, eloPositions = null;
+if (opts.elo) {
+  eloMap = loadEloMap(ELO_MAP_PATH);
+  const eloMdFile = path.join(__dirname, eloMap.mdFile);
+  if (mdFingerprint(eloMdFile) !== eloMap.mdFingerprint) { console.error(`--elo: ${eloMap.mdFile} is not the MD file the map ${ELO_MAP_PATH} was fitted on`); process.exit(1); }
+  eloPositions = loadPositions(eloMdFile);
+  console.log(`elo: ${path.basename(ELO_MAP_PATH)} on ${eloMap.mdFile} (${eloPositions.length} positions)`);
+}
 
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
 // against --ladder-file at each status print (the `ladr` column).
@@ -654,6 +667,7 @@ console.log([
   ...(ladderCases ? ['ladr'.padStart(4)] : []),
   ...(ACCURACY_FILE     ? ['vacc'.padStart(4)] : []),
   ...(mdPositions ? ['mdMae'.padStart(5)] : []),
+  ...(eloMap ? ['elo'.padStart(5)] : []),
   // tTest = whole eval pass; tTurn = the subject's own time per move in the
   // reference matches (its filter + search only); training's per-move time is tMv.
   ...(evalGetMove ? ['tTest'.padStart(5), 'tTurn'.padStart(5)] : []),
@@ -740,6 +754,12 @@ while (true) {
       const { maeErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
       mdMaeCol = Util.fmtRatio4(maeErr).padStart(5);
     }
+    let eloCol = null;
+    if (eloMap) {
+      const w = saveSource();   // the model a save writes
+      const { elo } = evalPositionsElo(game => ({ move: search(game, { weights: w, specs, preparedSpecs: prepSpecs }) }), eloPositions, 0, eloMap);
+      eloCol = (Number.isFinite(elo) ? elo.toFixed(0) : '-').padStart(5);
+    }
     const wAvg = wUpdateCount > 0 ? wAbsSum / wUpdateCount : 0;
     wAbsSum = 0; wUpdateCount = 0;   // per-interval avgW: reset at each print
 
@@ -766,6 +786,7 @@ while (true) {
       ...(ladrCol ? [ladrCol]               : []),
       ...(vaccCol ? [vaccCol]               : []),
       ...(mdMaeCol ? [mdMaeCol]             : []),
+      ...(eloCol ? [eloCol]                 : []),
       ...(evalGetMove ? [Util.fmtMs(tTestMs),
                          Util.fmtMs(evalSubjMoves > 0 ? evalSubjMs / evalSubjMoves : 0)] : []),
     ].join('  '));

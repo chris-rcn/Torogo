@@ -106,6 +106,48 @@ function evalPositions(agent, positions, budgetMs) {
            count: positions.length };
 }
 
+// ── Elo estimate from per-band mae (the --elo-map formula) ──────────────────
+// elo = intercept - A * sum_b exp(k * mid_b) * mae_b over the map's bands.
+// Only valid on every position of the map's own MD file (mdFingerprint).
+function loadEloMap(filePath) {
+  const eloMap = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  // Only mae curves are computed; a zero-weight curve of another kind adds
+  // nothing and is ignored, any other is an older map that needs a refit.
+  const bad = Object.entries(eloMap.curves).filter(([kind, { A }]) => kind !== 'mae' && A !== 0).map(([kind]) => kind);
+  if (bad.length) throw new Error(`elo map ${filePath} weights ${bad.join(', ')}, which evalmovedetails no longer computes; refit with md-phase-fit.js`);
+  return eloMap;
+}
+function bandOf(phase, nBands) {
+  let b = Math.floor(phase * nBands);
+  if (b >= nBands) b = nBands - 1;   // phase === 1 lands in the last band
+  if (b < 0) b = 0;
+  return b;
+}
+// Per-band gap sums/counts (eloMap.phaseBuckets bands) -> elo, or NaN when a
+// mapped band has no results.
+function eloFromBands(eloMap, bandSum, bandN) {
+  const { A, k } = eloMap.curves.mae;
+  let elo = eloMap.intercept;
+  for (const { lo, hi } of eloMap.bands) {
+    const b = bandOf((lo + hi) / 2, eloMap.phaseBuckets), n = bandN[b];
+    if (n === 0) return NaN;
+    elo -= A * Math.exp(k * (lo + hi) / 2) * (bandSum[b] / n);
+  }
+  return elo;
+}
+// Evaluate agent on the map's positions; returns { maeErr, elo }.
+function evalPositionsElo(agent, positions, budgetMs, eloMap) {
+  const nb = eloMap.phaseBuckets, bandSum = new Float64Array(nb), bandN = new Int32Array(nb);
+  let gapSum = 0;
+  for (const position of positions) {
+    const { gap, phase } = evalPosition(agent, position, budgetMs);
+    gapSum += gap;
+    const b = bandOf(phase, nb);
+    bandSum[b] += gap; bandN[b]++;
+  }
+  return { maeErr: gapSum / positions.length, elo: eloFromBands(eloMap, bandSum, bandN) };
+}
+
 // Evaluate agent on a random sample of n positions from the pool.
 // If n >= pool.length, uses the full pool.  Returns { maeErr, rmsErr, count }.
 function evalPositionsSample(agent, pool, n, budgetMs) {
@@ -168,14 +210,11 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   const oversample = parseInt(opts.oversample || '1',    10);
   const eloMapPath   = opts['elo-map'] || path.join(__dirname, 'out', 'elo-map-trunc30k-827.json');
   if (!fs.existsSync(eloMapPath)) { console.error(`--elo-map ${eloMapPath} not found (write one with md-phase-fit.js --save)`); process.exit(1); }
-  const eloMap       = JSON.parse(fs.readFileSync(eloMapPath, 'utf8'));
+  let eloMap;
+  try { eloMap = loadEloMap(eloMapPath); } catch (e) { console.error(`--elo-map: ${e.message}`); process.exit(1); }
   if (opts['phase-buckets'] !== undefined && parseInt(opts['phase-buckets'], 10) !== eloMap.phaseBuckets) {
     console.error(`--phase-buckets ${opts['phase-buckets']} differs from the elo map's ${eloMap.phaseBuckets}`); process.exit(1);
   }
-  // Only mae curves are computed; a zero-weight curve of another kind adds
-  // nothing and is ignored, any other is an older map that needs a refit.
-  const badCurves = Object.entries(eloMap.curves).filter(([kind, { A }]) => kind !== 'mae' && A !== 0).map(([kind]) => kind);
-  if (badCurves.length) { console.error(`--elo-map ${eloMapPath} weights ${badCurves.join(', ')}, which evalmovedetails no longer computes; refit with md-phase-fit.js`); process.exit(1); }
   const phaseBuckets = eloMap.phaseBuckets;   // band count: the map's, always accumulated
   const printPhases  = !!opts['show-phases'];
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
@@ -378,11 +417,7 @@ const agent = (typeof _agentMod.create === 'function'
     console.error(`--elo-map: no results in band${empty.length > 1 ? 's' : ''} ${empty.map(({ lo, hi }) => `${lo.toFixed(2)}-${hi.toFixed(2)}`).join(', ')}; elo not estimated`);
     elo = NaN;
   } else {
-    const { A, k } = eloMap.curves.mae;
-    for (const { lo, hi } of eloMap.bands) {
-      const b = phaseBandOf((lo + hi) / 2), n = phaseBandN[b];
-      elo -= A * Math.exp(k * (lo + hi) / 2) * (phaseBandSum[b] / n);
-    }
+    elo = eloFromBands(eloMap, phaseBandSum, phaseBandN);
   }
 
   // Single greppable summary line (grep for "SUMMARY").
@@ -394,4 +429,4 @@ const agent = (typeof _agentMod.create === 'function'
     `mae=${(gapSum / evals).toFixed(4)} elo=${(isNaN(elo) ? '-' : elo.toFixed(0)).padStart(5)}`);
 }
 
-module.exports = { loadPositions, evalPositions, evalPositionsSample, mdFingerprint };
+module.exports = { loadPositions, evalPositions, evalPositionsSample, mdFingerprint, loadEloMap, eloFromBands, evalPositionsElo };
