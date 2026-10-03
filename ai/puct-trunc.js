@@ -224,17 +224,12 @@ function create(cfg) {
     path: _isBrowser ? undefined
                      : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-fast.js')) });
   const fpWeights   = fpModel.weights;
-  // Rank the vpat<n> feature over the best FPOL_RANK_TOPN candidates when the fp
-  // spec ranks (0 = off (default), N > 0 = top-N, N < 0 = every candidate).
-  // No-op for specs without vpat<n>.
-  const FPOL_RANK_TOPN = cfg.int('FPOL_RANK_TOPN', 0);
-  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = FPOL_RANK_TOPN;
   // Softmax temperature of the featurepol priors.  Top-K keeps moves by rank,
   // which temperature does not change; it reshapes the PUCT priors among them.
   // 1 = the policy's own softmax, 0 = all prior on its top move.
   const FPOL_TEMP = cfg.float('FPOL_TEMP', 1);
   if (!(FPOL_TEMP >= 0)) throw new Error(`puct-trunc: FPOL_TEMP must be >= 0, got ${FPOL_TEMP}`);
-  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
