@@ -582,7 +582,8 @@ if (opts.elo) {
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
 // against --ladder-file at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
-const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm) });
+// The model a save writes (saveSource), like every other test column.
+const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search(gm, { weights: saveSource(), specs, preparedSpecs: prepSpecs }) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
 // Wall time of the --load read; the periodic save waits until training has
@@ -746,17 +747,18 @@ while (true) {
     }
     let vaccCol = null;
     if (ACCURACY_FILE) {
-      const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights, specs }, { nGames: ACCURACY_GAMES });
+      const { accuracy } = evalValueAccuracy(ACCURACY_FILE, { weights: saveSource(), specs }, { nGames: ACCURACY_GAMES });
       vaccCol = Util.fmtRatio4(accuracy);
     }
     let mdMaeCol = null;
     if (mdPositions) {
-      const { maeErr } = evalPositions(game => ({ move: search(game, { weights, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
+      const w = saveSource();   // the model a save writes
+      const { maeErr } = evalPositions(game => ({ move: search(game, { weights: w, specs, preparedSpecs: prepSpecs }) }), mdPositions, 0);
       mdMaeCol = Util.fmtRatio4(maeErr).padStart(5);
     }
     let eloCol = null;
     if (eloMap) {
-      const w = saveSource();   // the model a save writes
+      const w = saveSource();
       const { elo } = evalPositionsElo(game => ({ move: search(game, { weights: w, specs, preparedSpecs: prepSpecs }) }), eloPositions, 0, eloMap);
       eloCol = (Number.isFinite(elo) ? elo.toFixed(0) : '-').padStart(5);
     }
