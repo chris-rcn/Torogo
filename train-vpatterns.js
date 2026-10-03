@@ -69,7 +69,7 @@ checkpoint is written at every print.
                     the controller.  Eval games always use a fixed komi
   --limit N         stop after N games (default 0 = run indefinitely)
 
-  --lr F            step size for the TD update (default 0.3)
+  --lr F            step size for the TD update (default 0.1)
   --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off.
                     auto (default): A = 1 - 400/g at game g of this run, a
                     window of ~g/4 games (about one status-row interval)
@@ -144,7 +144,7 @@ const MD_FILE         = opts['md-file']          || null;   // evalmovedetails p
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
 const ACCURACY_FILE   = opts['accuracy-file']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
-const LR         = parseFloat(opts['lr']       || '0.3');
+const LR         = parseFloat(opts['lr']       || '0.1');
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
 // Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
 // 'auto' (default) grows the window with the run: alpha = 1 - 4·EMA_PERIOD/g at
