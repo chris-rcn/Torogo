@@ -2066,7 +2066,7 @@ function loadModel({ name = 'featurepol', path: pathOverride } = {}) {
   // the ranking reads it through ctx without any process-global or env var.  A
   // spec with vpat<n> but no embedded model errors at first ranking (in
   // _vpatPrepare), not silently.
-  if (raw.vpat) weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined);
+  if (raw.vpat) weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined, { float32: true });   // read-only: inference table
   return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0,
            komi: raw.komi === undefined ? null : raw.komi };
 }
