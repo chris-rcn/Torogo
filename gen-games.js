@@ -19,7 +19,7 @@
 //
 // Output goes to stdout (redirect to a file); progress/config to stderr.
 // Naming convention: out/games-s<size>-<generator-tag>.txt.  Usage:
-//   node gen-games.js --agent <name> [--size 9] [--limit N] [--seed n]
+//   node gen-games.js --agent <name> [--size 13] [--limit N] [--seed n]
 //        [--rand-open 4]  > out.txt
 
 const path = require('path');
@@ -52,7 +52,7 @@ config/progress to stderr.
   --agent NAME      ai/<name>.js self-play policy — needs getMove(); a
                     stochastic agent (e.g. ref-featurepol-softmax) gives
                     game diversity (required)
-  --size N          board size (default 9)
+  --size N          board size (default 13)
   --limit N         stop after N games (default: run until killed)
   --rand-open N     random opening moves per game for extra diversity
                     (default 4)
@@ -64,7 +64,7 @@ config/progress to stderr.
 }
 
 const agentName = opts.agent;
-const size      = parseInt(opts.size || '9', 10);
+const size      = parseInt(opts.size || '13', 10);
 const limit     = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
 const randOpen  = parseInt(opts['rand-open'] !== undefined ? opts['rand-open'] : '4', 10);
 const seed      = opts.seed !== undefined ? (parseInt(opts.seed, 10) >>> 0) : Util.randomSeed();
