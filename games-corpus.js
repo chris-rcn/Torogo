@@ -15,20 +15,39 @@
 const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
 
+// Calls fn(line, lineNo) for each line, reading the file in chunks: a corpus
+// can exceed V8's ~512M-character string limit, so it is never read whole.
+// Lines split at byte 0x0A, so a multi-byte character never straddles a chunk.
+function _forEachLine(filePath, fn) {
+  const fd = fs.openSync(filePath, 'r');
+  const chunk = Buffer.allocUnsafe(1 << 24);
+  let carry = null, lineNo = 0, n;
+  try {
+    while ((n = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+      const data = carry ? Buffer.concat([carry, chunk.subarray(0, n)]) : chunk.subarray(0, n);
+      const cut = data.lastIndexOf(10);
+      if (cut < 0) { carry = Buffer.from(data); continue; }
+      for (const line of data.toString('utf8', 0, cut).split('\n')) fn(line, ++lineNo);
+      carry = cut + 1 < data.length ? Buffer.from(data.subarray(cut + 1)) : null;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (carry) fn(carry.toString('utf8'), ++lineNo);
+}
+
 function loadGamesCorpus(filePath) {
   const games = [], provenance = [];
   let malformed = 0;
-  const lines = fs.readFileSync(filePath, 'utf8').split('\n');
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
-    if (!line) continue;
+  _forEachLine(filePath, (line, lineNo) => {
+    if (!line) return;
     if (line[0] === '#') {
       if (line.startsWith('# gen-games:')) provenance.push(line);
-      continue;
+      return;
     }
     const p = line.split(/\s+/);
     const size = p.length === 2 ? parseInt(p[0], 10) : NaN;
-    if (!Number.isFinite(size)) { malformed++; continue; }
+    if (!Number.isFinite(size)) { malformed++; return; }
     const toks = p[1].split(',');
     const moves = new Int16Array(toks.length);
     let ok = true;
@@ -39,9 +58,9 @@ function loadGamesCorpus(filePath) {
       if (!Number.isInteger(m) || m < PASS || m >= size * size) { ok = false; break; }
       moves[i] = m;
     }
-    if (!ok) { malformed++; continue; }
-    games.push({ size, moves, line: li + 1 });
-  }
+    if (!ok) { malformed++; return; }
+    games.push({ size, moves, line: lineNo });
+  });
   return { games, malformed, provenance };
 }
 
