@@ -138,7 +138,7 @@ function create(cfg) {
     if (VPAT_PICK && !TRUNC_ON) {
       throw new Error(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: VPAT_PICK needs TRUNC_VPAT_DATA (the evaluator it picks with)`);
     }
-    vpatModel = VPat.loadWeights(TRUNC_VPAT);   // throws if unloadable — no silent full-playout fallback
+    vpatModel = VPat.loadWeights(TRUNC_VPAT, undefined, { float32: true });   // evaluate-only table; throws if unloadable — no silent full-playout fallback
     const tm = vpatModel.trunc || {};
     // delta: env override, else the model's baked delta.  delta 0 is valid
     // (truncate at the leaf — a pure static vpat evaluation); only a delta from
