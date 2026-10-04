@@ -98,8 +98,9 @@ checkpoint is written at every print.
                     order reshuffled each epoch (ep column: epochs consumed)
   --corpus-ratio R  share of training GAMES drawn from --corpus; the rest are
                     self-play (default 1).  Corpus games never feed the komi
-                    controller, so R = 1 needs --komi <number>, and refuses the
-                    self-play-only --epsilon, --on-policy, --ext, --start-phase
+                    controller, so at R = 1 komi stays at its start value.  R = 1
+                    refuses the self-play-only --epsilon, --on-policy, --ext,
+                    --start-phase
 
   --load PATH       resume from a checkpoint; periodic saves start once training
                     time exceeds 2x the load time
@@ -164,9 +165,6 @@ if (CORPUS_FILE && CORPUS_RATIO === 1) {
   const selfPlayOnly = ['epsilon', 'on-policy', 'ext', 'start-phase'].filter(k => opts[k] !== undefined);
   if (selfPlayOnly.length) {
     console.error(`--corpus-ratio 1 plays no self-play games, so ${selfPlayOnly.map(k => '--' + k).join(', ')} would do nothing`); process.exit(1);
-  }
-  if (opts.komi === undefined || /^auto/.test(opts.komi)) {
-    console.error('--corpus-ratio 1 needs --komi <number>: corpus games do not feed the komi controller'); process.exit(1);
   }
 }
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
