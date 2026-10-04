@@ -15,7 +15,6 @@
     { "name": "ref-search-top2-fp", "agent": "ref-search-top2-fp", "budget": 1 },
     { "name": "ref-rave-2k",        "agent": "ref-rave-2k",        "budget": 1 },
     { "name": "prod-2026-08-18-5k", "agent": "prod-2026-08-18-5k", "budget": 1 },
-    { "name": "prod-2026-08-18-10k", "agent": "prod-2026-08-18-10k", "budget": 1 },
     { "name": "ref-puct-ppat-300",  "agent": "ref-puct-ppat-300",  "budget": 1 },
     { "name": "ref-puct-ppat-1k",   "agent": "ref-puct-ppat-1k",   "budget": 1 },
     { "name": "ref-puct-ppat-3k",   "agent": "ref-puct-ppat-3k",   "budget": 1 },
