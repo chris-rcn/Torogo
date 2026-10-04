@@ -81,9 +81,11 @@ print, and each new best teMSE also writes the -best checkpoint.
   --lr F            step size for the update (default 0.2)
   --lr-decay F      multiply LR by this factor at the end of each epoch
                     (default 1 = no decay)
-  --smooth-weights A  Polyak EMA decay, applied every 1000 positions; 0 = off
-                    (default 0.9).  The EMA weights are what gets saved, and
-                    what teMSE / ladder / md / eval games measure
+  --smooth-weights A  Polyak EMA decay, applied every 1000 positions; 0 = off.
+                    auto (default): A = 1 - 4000/n at position n of this run
+                    (0 below 4000), a window of ~n/4 positions.  The EMA
+                    weights are what gets saved, and what teMSE / ladder / md /
+                    eval games measure
   --max-weights N   stop admitting NEW patterns once the weight table holds
                     N entries; existing weights keep training.  0 = unlimited
 
@@ -118,8 +120,18 @@ const LADDER_FILE = opts['ladder-file'] || null;
 const MD_FILE     = opts['md-file'] || null;
 let LR           = parseFloat(opts.lr       || '0.2');
 const LR_DECAY   = parseFloat(opts['lr-decay'] || '1');
-const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');
+// --smooth-weights: train-vpatterns' Polyak rule, counted in positions.
+// 'auto' sets the decay at position n of this run to 1 - 4*EMA_PERIOD/n: a
+// window of ~n/4 positions, about one x1.4 status-row interval.
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
+const EMA_AUTO   = (opts['smooth-weights'] ?? 'auto') === 'auto';
+const EMA_ALPHA  = EMA_AUTO ? null : parseFloat(opts['smooth-weights']);
+if (!EMA_AUTO && !(EMA_ALPHA >= 0 && EMA_ALPHA < 1)) {
+  console.error(`--smooth-weights: expected auto or 0 <= A < 1, got '${opts['smooth-weights']}'`); process.exit(1);
+}
+const EMA_ON     = EMA_AUTO || EMA_ALPHA > 0;
+const emaAlphaAt = n => EMA_AUTO ? Math.max(0, 1 - 4 * EMA_PERIOD / n) : EMA_ALPHA;
+const EMA_LABEL  = EMA_AUTO ? 'auto' : EMA_ALPHA;
 const MAX_WEIGHTS = opts['max-weights'] !== undefined ? parseInt(opts['max-weights'], 10) : 0;
 const EPOCHS     = opts.epochs !== undefined ? parseInt(opts.epochs, 10) : 0;
 // The test set comes only from --test-file; --test-pos caps it (default: all).
@@ -260,7 +272,7 @@ function applyEMA(alpha) {
 // Eval ≡ save: every test harness (teMSE, ladder/md suites, reference games)
 // measures the weights the model save would write.
 function saveEvalW() {
-  return (EMA_ALPHA > 0 && weightsEMAInit) ? weightsEMA : weights;
+  return (EMA_ON && weightsEMAInit) ? weightsEMA : weights;
 }
 
 // Logistic update; a feature is skipped (and takes no share of the error)
@@ -517,7 +529,7 @@ if (LOAD_PATH) {
       specs = cliSpecs;
       prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: prepSpecs.ladderMinChain });
     }
-    if (EMA_ALPHA > 0) {   // continue averaging on top of the persisted values
+    if (EMA_ON) {   // continue averaging on top of the persisted values
       weightsEMA = weights.clone();
       weightsEMAInit = true;
     }
@@ -691,7 +703,7 @@ bline('model:', `${specString(specs)}` +
   (NO_ADD ? `  no-add` : ``) +
   (prepSpecs.hasLadder ? `  ladder-min-chain ${prepSpecs.ladderMinChain}` : ``) +
   (LOAD_PATH && weights.size > 0 ? `  (resumed ${f4(weights.size)} weights from ${LOAD_PATH})` : ``));
-bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_ALPHA}, ` +
+bline('train:', `lr ${LR}, lr-decay ${LR_DECAY}, smooth-weights ${EMA_LABEL}, ` +
   `max-weights ${MAX_WEIGHTS ? f4(MAX_WEIGHTS) : 'unlimited'}, eval-size ${EVAL_SIZE}` +
   (EVAL_AGENT ? `, ref ${EVAL_AGENT}` : ``));
 bline('cache:', CACHE_FEATURES
@@ -763,7 +775,7 @@ const PROV_STATIC = [
   `spec: ${specString(specs)}` +
     (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : '') +
     (FROZEN.size > 0 ? `  frozen: ${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}` : ''),
-  `settings: lr: ${LR}  lr-decay: ${LR_DECAY}  smooth-weights: ${EMA_ALPHA}` +
+  `settings: lr: ${LR}  lr-decay: ${LR_DECAY}  smooth-weights: ${EMA_LABEL}` +
     `  max-weights: ${MAX_WEIGHTS || 'unlimited'}  epochs: ${EPOCHS || 'unlimited'}` +
     `  band: [${MIN_PHASE}, ${MAX_PHASE}]  delta: ${DELTA !== null ? DELTA : 'none'}` +
     `  no-add: ${NO_ADD}  cache-features: ${CACHE_FEATURES}`,
@@ -961,7 +973,7 @@ while (!done) {
     intervalTrainMs += dt;
     if (epoch === 1) { ep1TrainMs += dt; ep1Pos++; }
 
-    if (EMA_ALPHA > 0 && nPos % EMA_PERIOD === 0) applyEMA(EMA_ALPHA);
+    if (EMA_ON && nPos % EMA_PERIOD === 0) applyEMA(emaAlphaAt(nPos));
     if (nPos >= nextPrintPos || Date.now() >= nextPrintAt) statusPrint();
   }
   if (epoch === 1) tPosEp1 = ep1Pos > 0 ? ep1TrainMs / ep1Pos : null;   // freeze tPos
