@@ -5,15 +5,15 @@
 // evaluation, the call puct-trunc's truncated playouts make).  Every model
 // sees the same positions; the order rotates per position.  Only positions
 // with --min-phase <= phase <= --max-phase are evaluated; each game ends once
-// the board is fuller than --max-phase.  Each model's weights are copied into
-// an int-map makeIntFloat32Map table, the inference layout.
+// the board is fuller than --max-phase.  Models load with vpatterns' float32
+// opt-in, the inference table.
 //
 // --f32 (prototype): extract once per position, then time the weight lookup
 // three ways on the same features: int-map's get() (int32 keys and float64
 // values in two arrays); 'split', the same two-array layout probed inline;
 // and 'f32', an interleaved table (int32 key + float32 value in one 8-byte
 // slot).  All three share int-map's hash, probing and capacity, and all read
-// the model's own float64 table rather than the float32 copy.
+// the model's float64 table (the prototype loads without the float32 opt-in).
 //
 //   node bench-vpat.js --model A.js[,B.js...] [--games 200] [--size 13]
 //                      [--min-phase 0] [--max-phase 1] [--seed 1] [--f32]
@@ -21,7 +21,6 @@
 const { performance } = require('perf_hooks');
 const Util = require('./util.js');
 const VPat = require('./vpatterns.js');
-const { makeIntFloat32Map } = require('./int-map.js');
 const { Game2 } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 
@@ -39,7 +38,7 @@ if (!(MIN_PHASE >= 0 && MIN_PHASE <= MAX_PHASE && MAX_PHASE <= 1)) {
 }
 const rng   = makeRng(parseInt(opts.seed || '1', 10));
 const F32 = !!opts.f32;
-const models = opts.model.split(',').map(f => ({ file: f, m: VPat.loadWeights(f), ms: 0, n: 0, sink: 0,
+const models = opts.model.split(',').map(f => ({ file: f, m: VPat.loadWeights(f, undefined, { float32: !F32 }), ms: 0, n: 0, sink: 0,
                                                  tbl: null, spl: null, exMs: 0, mapMs: 0, splMs: 0, f32Ms: 0, maxDiff: 0 }));
 
 // --f32: int-map's hash and triangular probing over one buffer of 8-byte
@@ -107,14 +106,6 @@ function evalMap(features, weights) {
   return 1 / (1 + Math.exp(-z));
 }
 if (F32) for (const x of models) { x.tbl = makeF32Table(x.m.weights); x.spl = makeSplitTable(x.m.weights); }
-// The float32 inference copy of each model's table, sized as modelFromRaw sizes the float64 one.
-function toFloat32(weights) {
-  const t = makeIntFloat32Map(Math.max(1024, 2 * weights.size));
-  t.suppressZeroWarning();
-  weights.forEach((k, v) => t.set(k, v));
-  return t;
-}
-if (!F32) for (const x of models) x.m.weights = toFloat32(x.m.weights);
 
 // puct-trunc's vpatValueB shape: a small helper, so V8 inlines as it does there.
 function valueB(game2, m) {
