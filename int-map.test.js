@@ -4,7 +4,7 @@
 // Called by int-map.js at module load time (Node only) via runTests().
 // Silent on success; logs failures to stderr.
 
-function runTests({ makeIntMap, makeIntFloatMap }) {
+function runTests({ makeIntMap, makeIntFloatMap, makeIntFloat32Map }) {
   let failures = 0;
 
   function check(cond, msg) {
@@ -198,6 +198,51 @@ function runTests({ makeIntMap, makeIntFloatMap }) {
       if (m.get(i) !== i / 7) { ok = false; break; }
     }
     check(ok, 'float post-resize: all values retrievable exactly');
+  }
+
+  // ── makeIntFloat32Map: interleaved float32 values ─────────────────────────
+  {
+    const m = makeIntFloat32Map();
+    check(m.get(1) === undefined,                    'f32: miss returns undefined');
+    m.set(1, 0.001544);
+    m.set(2, -0.151171);
+    m.set(3, 0);
+    check(m.get(1) === Math.fround(0.001544),        'f32: value rounded to float32');
+    check(m.get(2) === Math.fround(-0.151171),       'f32: negative value rounded to float32');
+    check(m.get(3) === 0,                            'f32: stored 0 is 0, not undefined');
+    check(m.size === 3,                              'f32: size correct');
+    m.set(1, 0.5);
+    check(m.get(1) === 0.5 && m.size === 3,          'f32: update keeps size');
+
+    m.suppressZeroWarning();
+    m.set(0, 7);
+    check(m.get(0) === undefined,                    'f32: key 0 not insertable');
+
+    const c = m.clone();
+    check(c.get(2) === Math.fround(-0.151171),       'f32: clone copies values');
+    check(c.get(9) === undefined,                    'f32: clone miss returns undefined');
+    c.set(2, 1);
+    check(m.get(2) === Math.fround(-0.151171),       'f32: original unaffected by clone mutation');
+
+    const seen = new Map();
+    m.forEach((k, v) => seen.set(k, v));
+    check(seen.size === 3 && seen.get(1) === 0.5,    'f32: forEach yields every key and value');
+
+    m.clear();
+    check(m.size === 0 && m.get(1) === undefined,    'f32: clear empties the map');
+  }
+
+  // ── makeIntFloat32Map: resize and collisions preserve values ──────────────
+  {
+    const m = makeIntFloat32Map(4);
+    const N = 2000;
+    for (let i = 1; i <= N; i++) m.set(Math.imul(i, 2654435761) || 1, i / 7);
+    check(m.size === N, 'f32 post-resize: size correct');
+    let ok = true;
+    for (let i = 1; i <= N; i++) {
+      if (m.get(Math.imul(i, 2654435761) || 1) !== Math.fround(i / 7)) { ok = false; break; }
+    }
+    check(ok, 'f32 post-resize: all values retrievable (float32-rounded)');
   }
 
   // ── Report ─────────────────────────────────────────────────────────────────
