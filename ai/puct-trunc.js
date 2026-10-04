@@ -171,7 +171,7 @@ function create(cfg) {
   // Static evaluator (the raw was loaded up top so its baked truncation defaults
   // could feed the knobs above).  modelFromRaw builds a fresh weight table and
   // prepares the specs, using the health model embedded in the vpat file.
-  const _vpatModel = VPat.modelFromRaw(_vpatRaw);
+  const _vpatModel = VPat.modelFromRaw(_vpatRaw, undefined, { float32: true });   // evaluate-only: float32 table
   // Name the evaluator file and the truncation knobs in the banner: two slots
   // (P1_/P2_TRUNC_*) otherwise print identical lines, hiding which evaluator
   // and gate each side is actually running.

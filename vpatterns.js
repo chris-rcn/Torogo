@@ -9,7 +9,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { BLACK, EMPTY, PASS, isTrueEye } = _isNode ? require('./game2.js') : window.game;
-const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
+const { makeIntFloat64Map, makeIntFloat32Map } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
 
@@ -1168,24 +1168,35 @@ function evaluate(game, model, game3) {
 // Always returns a fresh copy so multiple callers don't share the same Map.
 // health: path to (or already-loaded) health model, required when the specs
 // are health-coded or use the C survival attribute.
-function loadWeights(filePath, health) {
+function loadWeights(filePath, health, opts) {
   const raw = require(require('path').resolve(filePath));
-  return modelFromRaw(raw, health);
+  return modelFromRaw(raw, health, opts);
 }
 
 // Build a runtime model from an already-loaded raw object (the module export a
 // vpat file produces, or the `vpat` field embedded in a featurepol file), rather
 // than from a file path.  Same processing as loadWeights: a fresh makeWeights
 // table so callers don't share a Map, and prepared specs.
-function modelFromRaw(raw, health) {
+//
+// opts.float32: build the table as an int-map makeIntFloat32Map (float32
+// values interleaved with the keys, 2/3 the memory) — for callers that only
+// evaluate.  Never for a table that will be trained or written back: set()
+// rounds to float32, so small SGD steps would vanish without any error.
+function modelFromRaw(raw, health, opts = {}) {
   const specs = raw.specs;
+  const newTable = cap => {
+    if (!opts.float32) return makeWeights(cap);
+    const t = makeIntFloat32Map(cap);
+    t.suppressZeroWarning();   // as makeWeights does
+    return t;
+  };
   let weights;
   if (raw.weightsQ6) {
     const { keys, q } = _decodeWeightsQ6(raw.weightsQ6);
-    weights = makeWeights(Math.max(1024, keys.length * 2));
+    weights = newTable(Math.max(1024, keys.length * 2));
     for (let i = 0; i < keys.length; i++) weights.set(keys[i], q[i] / 1e6);
   } else {   // older files: a literal Map
-    weights = makeWeights(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
+    weights = newTable(Math.max(1024, (raw.weights.size ?? raw.weights.length) * 2));
     for (const [k, v] of raw.weights) weights.set(k, v);
   }
   // Prefer the health model embedded in the file (it travels with the vpat model
