@@ -6,16 +6,16 @@
 // visits every slot exactly once when capacity is a power of two.
 //
 // Two variants share the implementation and differ only in value storage:
-//   makeIntMap(minCap)      — int32 values,   get() miss → -1
-//   makeIntFloatMap(minCap) — float64 values, get() miss → undefined
-//                             (Map-compatible: `m.get(k) ?? fallback`)
+//   makeIntMap(minCap)        — int32 values,   get() miss → -1
+//   makeIntFloat64Map(minCap) — float64 values, get() miss → undefined
+//                               (Map-compatible: `m.get(k) ?? fallback`)
 // and a third, for inference only:
 //   makeIntFloat32Map(minCap) — float32 values interleaved with the keys in
-//                             one buffer (8 bytes a slot, not 12), get() miss
-//                             → undefined.  set() rounds to float32, so it is
-//                             no table to train in: an SGD step below half the
-//                             float32 spacing at the weight (~6e-8 at |w| 0.5)
-//                             is lost.  Build it from a trained table.
+//                               one buffer (8 bytes a slot, not 12), get() miss
+//                               → undefined.  set() rounds to float32, so it is
+//                               no table to train in: an SGD step below half the
+//                               float32 spacing at the weight (~6e-8 at |w| 0.5)
+//                               is lost.  Build it from a trained table.
 //
 // Classes, not closures: state lives in fields, so V8 inlines get() with
 // plain field loads.  The closure version kept the arrays in mutable context
@@ -248,10 +248,10 @@ class IntFloat32Map {
 }
 
 function makeIntMap(minCap)        { return new IntIntMap(minCap); }
-function makeIntFloatMap(minCap)   { return new IntFloatMap(minCap); }
+function makeIntFloat64Map(minCap) { return new IntFloatMap(minCap); }
 function makeIntFloat32Map(minCap) { return new IntFloat32Map(minCap); }
 
-const IntMap = { makeIntMap, makeIntFloatMap, makeIntFloat32Map };
+const IntMap = { makeIntMap, makeIntFloat64Map, makeIntFloat32Map };
 
 if (typeof module !== 'undefined') {
   module.exports = IntMap;

@@ -22,7 +22,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { isTrueEye } = _isNode ? require('./game2.js') : window.Game2;
-const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
@@ -53,7 +53,7 @@ function ladderStateByGid(game3) {
 // canonical key of exactly 0 (a ~2^-31 hash coincidence) is silently
 // dropped — the same class of accepted risk as any collision.
 function makeWeights(minCap) {
-  const m = makeIntFloatMap(minCap || 1024);
+  const m = makeIntFloat64Map(minCap || 1024);
   m.suppressZeroWarning();
   return m;
 }

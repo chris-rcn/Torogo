@@ -24,7 +24,7 @@
 (function () {
   const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
   const { EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
-  const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+  const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
 
   // Weight tables are open-addressing int32→float64 maps (int-map.js): far
   // cheaper get/set than a V8 Map at millions of entries, same get/set/size
@@ -32,7 +32,7 @@
   // sentinel; a canonical key of exactly 0 (a ~2^-31 hash coincidence) is
   // silently dropped — the same class of accepted risk as any collision.
   function makeWeights(minCap) {
-    const m = makeIntFloatMap(minCap);
+    const m = makeIntFloat64Map(minCap);
     m.suppressZeroWarning();
     return m;
   }

@@ -27,7 +27,7 @@
 
 const Util = (typeof require === 'function') ? require('./util.js') : window.Util;
 const NPat = Util.load('./npat-lib.js', 'NPatterns');
-const { makeIntFloatMap } = Util.load('./int-map.js', 'IntMap');
+const { makeIntFloat64Map } = Util.load('./int-map.js', 'IntMap');
 
 const VERSION = 1;
 
@@ -47,7 +47,7 @@ function freshModel() {
 // A mutable weight store keyed by raw canonical feature id.  Map-like:
 // get() returns undefined for absent keys (use `?? 0`).
 function makeWeights(minCap) {
-  const map = makeIntFloatMap(minCap);
+  const map = makeIntFloat64Map(minCap);
   return {
     get(rawKey)    { return map.get(rawKey + KEY_BIAS); },
     set(rawKey, v) { map.set(rawKey + KEY_BIAS, v); },

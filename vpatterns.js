@@ -9,7 +9,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { BLACK, EMPTY, PASS, isTrueEye } = _isNode ? require('./game2.js') : window.game;
-const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
 

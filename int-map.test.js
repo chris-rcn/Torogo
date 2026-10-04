@@ -4,7 +4,7 @@
 // Called by int-map.js at module load time (Node only) via runTests().
 // Silent on success; logs failures to stderr.
 
-function runTests({ makeIntMap, makeIntFloatMap, makeIntFloat32Map }) {
+function runTests({ makeIntMap, makeIntFloat64Map, makeIntFloat32Map }) {
   let failures = 0;
 
   function check(cond, msg) {
@@ -164,9 +164,9 @@ function runTests({ makeIntMap, makeIntFloatMap, makeIntFloat32Map }) {
     check(m.get(200) === 200,'minCap: value correct');
   }
 
-  // ── makeIntFloatMap: float values, Map-compatible misses ──────────────────
+  // ── makeIntFloat64Map: float values, Map-compatible misses ────────────────
   {
-    const m = makeIntFloatMap();
+    const m = makeIntFloat64Map();
     check(m.get(1) === undefined,     'float: miss returns undefined');
     check((m.get(1) ?? 0) === 0,      'float: miss with ?? 0 fallback');
 
@@ -187,9 +187,9 @@ function runTests({ makeIntMap, makeIntFloatMap, makeIntFloat32Map }) {
     check(c.get(9) === undefined,     'float: clone miss returns undefined');
   }
 
-  // ── makeIntFloatMap: resize preserves float values ─────────────────────────
+  // ── makeIntFloat64Map: resize preserves float values ───────────────────────
   {
-    const m = makeIntFloatMap(4);
+    const m = makeIntFloat64Map(4);
     const N = 200;
     for (let i = 1; i <= N; i++) m.set(i, i / 7);
     check(m.size === N, 'float post-resize: size correct');

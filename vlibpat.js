@@ -16,7 +16,7 @@ const {
   DEFAULT_NODE_LIMIT:  TACTICS3_NODE_LIMIT,
   DEFAULT_DEPTH_LIMIT: TACTICS3_DEPTH_LIMIT,
 } = Util.load('./tactics3.js', 'Tactics3');
-const { makeIntFloatMap }      = Util.load('./int-map.js', 'IntMap');
+const { makeIntFloat64Map }      = Util.load('./int-map.js', 'IntMap');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -455,7 +455,7 @@ let _rawVBuf = new Int8Array(0);
 
 // V(s) = σ(Σ polarity_i · w[key_i]) = P(BLACK wins)
 // features: { keys: Int32Array, pols: Int8Array, count, val }  (from extractFeatures)
-// weights:  anything Map-shaped — Map<key, float> or int-map makeIntFloatMap
+// weights:  anything Map-shaped — Map<key, float> or int-map makeIntFloat64Map
 //           (missing keys treated as 0)
 function evaluateFeatures(features, weights) {
   let z = 0;
@@ -511,7 +511,7 @@ function prepareModel(raw) {
     depthLimit: raw.depthLimit,  // undefined ⇒ tactics3 default
   };
   const mw = modelWeights(raw);
-  const weights = makeIntFloatMap(2 * mw.count);
+  const weights = makeIntFloat64Map(2 * mw.count);
   mw.forEach((k, v) => weights.set(k, v));
   return { specs, opts, preparedSpecs: prepareSpecs(specs, opts), weights };
 }

@@ -60,10 +60,10 @@
 (function () {
   const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
   const { EMPTY, PASS } = _isNode ? require('./game2.js') : window.game;
-  const { makeIntFloatMap } = _isNode ? require('./int-map.js') : window.IntMap;
+  const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
 
   function makeWeights(minCap) {
-    const m = makeIntFloatMap(minCap);
+    const m = makeIntFloat64Map(minCap);
     m.suppressZeroWarning();
     return m;
   }
