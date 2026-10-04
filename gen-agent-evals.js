@@ -45,9 +45,8 @@
 //   node gen-agent-evals.js --value-agent <name> (--corpus <file> | --position-agent <name>)
 //        [--min-phase 0] [--max-phase 1] [--prefix-delta D] [--limit N]  > out.txt
 
-const fs = require('fs');
 const path = require('path');
-const { Game2, BLACK, PASS, coordStr, parseMove, setKomi } = require('./game2.js');
+const { Game2, BLACK, coordStr, setKomi } = require('./game2.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
@@ -172,30 +171,10 @@ if (PREFIX_DELTA !== null) {
 // validated when first selected).  Gen-agent mode uses no corpus.
 const corpus = [];                   // corpus mode: [{ size, moves: Int16Array }]
 if (!GAME_MODE) {
-  let malformed = 0;
-  for (const line of fs.readFileSync(corpusPath, 'utf8').split('\n')) {
-    if (!line) continue;
-    if (line[0] === '#') {
-      // Chain provenance: the corpus's own generation header goes into ours.
-      if (line.startsWith('# gen-games:')) process.stdout.write(line + '\n');
-      continue;
-    }
-    const p = line.split(/\s+/);
-    const gsize = p.length === 2 ? parseInt(p[0], 10) : NaN;
-    if (!Number.isFinite(gsize)) { malformed++; continue; }
-    const toks = p[1].split(',');
-    const moves = new Int16Array(toks.length);
-    let ok = true;
-    for (let i = 0; i < toks.length; i++) {
-      const m = parseMove(toks[i], gsize);
-      // Guard the Int16Array store: NaN (torn token) would coerce to 0 = a1,
-      // silently turning a corrupt record into a playable game.
-      if (!Number.isInteger(m) || m < PASS || m >= gsize * gsize) { ok = false; break; }
-      moves[i] = m;
-    }
-    if (!ok) { malformed++; continue; }
-    corpus.push({ size: gsize, moves });
-  }
+  const { games, malformed, provenance } = require('./games-corpus.js').loadGamesCorpus(corpusPath);
+  // Chain provenance: the corpus's own generation header goes into ours.
+  for (const line of provenance) process.stdout.write(line + '\n');
+  for (const gm of games) corpus.push(gm);
   if (malformed) process.stderr.write(`corpus: ${malformed} malformed line(s) skipped\n`);
   if (corpus.length === 0) {
     console.error(`corpus '${corpusPath}' contains no games`);

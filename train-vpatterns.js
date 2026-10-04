@@ -38,12 +38,13 @@ const { game3FromGame2 } = require('./game3.js');
 const { loadPositions, evalPositions, loadEloMap, evalPositionsElo, mdFingerprint } = require('./evalmovedetails.js');
 const { loadCases, evalCases } = require('./evalladders2.js');
 const { evalValueAccuracy } = require('./eval-value-accuracy.js');
+const { loadGamesCorpus, isCompleted, startGame } = require('./games-corpus.js');
 const Util = require('./util.js');
 const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -90,6 +91,15 @@ checkpoint is written at every print.
                     'uniform' draws a fresh random phase per game
   --bootstrap N     run N fully-random (epsilon=1) games to seed the value
                     estimates before normal training; ignored with --load
+  --corpus FILE     also train on gen-games.js trajectories from FILE (completed
+                    games only; cut ones are skipped), replayed from gen-games'
+                    start with the same 2-ply TD as self-play and the outcome
+                    scored at the training komi.  The file is cycled, its game
+                    order reshuffled each epoch (ep column: epochs consumed)
+  --corpus-ratio R  share of training GAMES drawn from --corpus; the rest are
+                    self-play (default 1).  Corpus games never feed the komi
+                    controller, so R = 1 needs --komi <number>, and refuses the
+                    self-play-only --epsilon, --on-policy, --ext, --start-phase
 
   --load PATH       resume from a checkpoint; periodic saves start once training
                     time exceeds 2x the load time
@@ -142,6 +152,22 @@ const START_PHASE = START_PHASE_UNIFORM ? 0 : parseFloat(opts['start-phase'] || 
 if (!START_PHASE_UNIFORM && !(START_PHASE >= 0 && START_PHASE <= 1)) {
   console.error(`--start-phase must be a phase in [0,1] or 'uniform' (got '${opts['start-phase']}')`);
   process.exit(1);
+}
+// --corpus: gen-games trajectories, a CORPUS_RATIO share of the training games.
+const CORPUS_FILE  = opts.corpus || null;
+const CORPUS_RATIO = parseFloat(opts['corpus-ratio'] ?? '1');
+if (opts['corpus-ratio'] !== undefined && !CORPUS_FILE) { console.error('--corpus-ratio needs --corpus'); process.exit(1); }
+if (CORPUS_FILE && !(CORPUS_RATIO > 0 && CORPUS_RATIO <= 1)) {
+  console.error(`--corpus-ratio must be in (0, 1] (got '${opts['corpus-ratio']}')`); process.exit(1);
+}
+if (CORPUS_FILE && CORPUS_RATIO === 1) {
+  const selfPlayOnly = ['epsilon', 'on-policy', 'ext', 'start-phase'].filter(k => opts[k] !== undefined);
+  if (selfPlayOnly.length) {
+    console.error(`--corpus-ratio 1 plays no self-play games, so ${selfPlayOnly.map(k => '--' + k).join(', ')} would do nothing`); process.exit(1);
+  }
+  if (opts.komi === undefined || /^auto/.test(opts.komi)) {
+    console.error('--corpus-ratio 1 needs --komi <number>: corpus games do not feed the komi controller'); process.exit(1);
+  }
 }
 const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
 const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
@@ -341,16 +367,20 @@ function search1ply(game) {
 
 // Both colours use the policy.  Weights update online, after every move
 // (2-ply TD(0); see the header).
-function trainGame(N, epsilon = EPSILON) {
-  const game     = new Game2(N, true);   // free initial stone (applyFirstMove=true)
-  const maxMoves = N * N * 4;
+// corpusGame (a games-corpus record): replay its trajectory from the corpus
+// start instead of choosing moves; epsilon and --start-phase do not apply.
+function trainGame(N, epsilon = EPSILON, corpusGame = null) {
+  const corpusMoves = corpusGame ? corpusGame.moves : null;
+  const game     = corpusMoves ? startGame(N)
+                               : new Game2(N, true);   // self-play: free initial stone (applyFirstMove=true)
+  const maxMoves = corpusMoves ? corpusMoves.length : N * N * 4;
   const tStartMs = Date.now();
 
   // --start-phase: fill the board with random stones up to the target phase
   // before training begins.  The prefix is untrained (no features recorded).
   // 'uniform' draws a fresh target in [0,1) each game, spreading coverage across
   // all phases instead of one fixed curriculum stage.
-  const startPhase = START_PHASE_UNIFORM ? Math.random() : START_PHASE;
+  const startPhase = corpusMoves ? 0 : START_PHASE_UNIFORM ? Math.random() : START_PHASE;
   while (game.phase() < startPhase && !game.gameOver) game.play(game.randomLegalMove());
 
   // One Game3, advanced in lockstep with `game`, reused for ladder-coded
@@ -375,7 +405,9 @@ function trainGame(N, epsilon = EPSILON) {
     prev1 = features;
 
     let move;
-    if (Math.random() < epsilon) {
+    if (corpusMoves) {
+      move = corpusMoves[moves];
+    } else if (Math.random() < epsilon) {
       move = game.randomLegalMove();                 // full-width exploration (coverage off the filter)
     } else if (extGetMove && Math.random() > ON_POLICY) {
       move = extGetMove(game).move;
@@ -385,9 +417,13 @@ function trainGame(N, epsilon = EPSILON) {
     } else {
       move = search1ply(game);
     }
-    game.play(move);
+    const legal = game.play(move);
+    if (corpusMoves && !legal) throw new Error(`--corpus line ${corpusGame.line}: illegal move at ply ${moves + 1}`);
     if (useG3) g3.play(move);
     moves++;
+  }
+  if (corpusMoves && !(game.gameOver && moves === corpusMoves.length)) {
+    throw new Error(`--corpus line ${corpusGame.line}: replay ${game.gameOver ? `ended at ply ${moves} of ${corpusMoves.length}` : 'did not end the game'}`);
   }
 
   const elapsedMs = Date.now() - tStartMs;
@@ -402,6 +438,28 @@ function trainGame(N, epsilon = EPSILON) {
   }
 
   return { winner: game.estimateWinner(), elapsedMs, moves };
+}
+
+// --corpus: the completed games, cycled; the order is reshuffled each epoch.
+let corpus = null, corpusMalformed = 0, corpusCut = 0, corpusNext = 0, corpusEpoch = 0;
+function shuffleCorpus() {
+  for (let i = corpus.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = corpus[i]; corpus[i] = corpus[j]; corpus[j] = t;
+  }
+}
+if (CORPUS_FILE) {
+  const { games, malformed } = loadGamesCorpus(CORPUS_FILE);
+  const wrong = games.find(gm => gm.size !== TRAIN_SIZE);
+  if (wrong) { console.error(`--corpus line ${wrong.line}: size ${wrong.size}, but --train-size is ${TRAIN_SIZE}`); process.exit(1); }
+  corpus = games.filter(gm => isCompleted(gm.moves));
+  corpusMalformed = malformed; corpusCut = games.length - corpus.length;
+  if (corpus.length === 0) { console.error(`--corpus '${CORPUS_FILE}' holds no completed games`); process.exit(1); }
+  shuffleCorpus();
+}
+function nextCorpusGame() {
+  if (corpusNext === corpus.length) { shuffleCorpus(); corpusNext = 0; corpusEpoch++; }
+  return corpus[corpusNext++];
 }
 
 // ── Evaluation against a reference agent ─────────────────────────────────────
@@ -629,6 +687,7 @@ console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weight
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
+if (corpus) console.log(`corpus: ${CORPUS_FILE}  games: ${corpus.length}  cut skipped: ${corpusCut}  malformed skipped: ${corpusMalformed}  corpus-ratio: ${CORPUS_RATIO}`);
 console.log();
 
 // --bootstrap N: seed the value estimates with N fully-random (epsilon=1) games
@@ -660,6 +719,7 @@ console.log([
   'avgL'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
+  ...(corpus ? ['  ep'] : []),
   // Test / eval columns (right).
   ...(evalGetMove ? ['mvPred'.padStart(6)] : []),
   // winRatio: "wr(g)/avg(ga)" — wr/avg fmtRatio4, g/ga fmt4 game counts (this
@@ -687,9 +747,10 @@ const evalHistory = [];   // per-interval game results (1/0.5/0)
 
 while (true) {
   g++;
-  const { winner, moves, elapsedMs } = trainGame(TRAIN_SIZE);
+  const fromCorpus = corpus !== null && Math.random() < CORPUS_RATIO;
+  const { winner, moves, elapsedMs } = trainGame(TRAIN_SIZE, EPSILON, fromCorpus ? nextCorpusGame() : null);
   komiSum += KOMI(TRAIN_SIZE); komiSumGames++;
-  if (AUTO_KOMI) {
+  if (AUTO_KOMI && !fromCorpus) {   // corpus winners are their players', not this komi's
     komiGames++; komiBlackWins += winner === BLACK ? 1 : 0;
     if (komiGames >= KOMI_WINDOW) {
       const bw = komiBlackWins / komiGames;
@@ -780,6 +841,7 @@ while (true) {
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),
+      ...(corpus ? [Util.fmt4(corpusEpoch + corpusNext / corpus.length)] : []),
       // Test / eval columns (right).
       ...(evalGetMove ? [Util.fmtRatio4(evalPredN > 0 ? evalPredHit / evalPredN : 0).padStart(6)] : []),
       ...(evalGetMove ? [(`${Util.fmtRatio4(latestWR)}(${Util.fmt4i(resultsBatchLen)})` +
