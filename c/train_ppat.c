@@ -1583,7 +1583,7 @@ static void match_cols(char *dw, size_t dwn) {
  * ppatUs, the cost side of the metric, is measured apart from both matches:
  * see policy_cost_us. */
 static int cfg_puct_match;                  /* --do-puct-match */
-#define PUCT_FPOL       "ref/ref-fp-fast.js"   /* prior / top-K / rff model */
+#define PUCT_FPOL       "ref/ref-fp-stone8AdjLib3.js"   /* prior / top-K / rff model */
 #define PUCT_GAMES     100                     /* first row's games */
 #define PUCT_PLAYOUTS   100                    /* simulations per move, both sides */
 #define PUCT_MIN_PHASE  0.5                    /* rff plays both sides below it */
