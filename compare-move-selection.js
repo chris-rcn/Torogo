@@ -19,7 +19,8 @@
 // (the oracle's "best" cancels in the difference).  Positive => p1 gives up
 // more, i.e. p2 is the better mover by that margin.  Same-move decisions are
 // exact zeros: kept as-is in --file mode; in --referee mode the referee is
-// skipped for them (they're still counted for the agreement rate).
+// skipped for them (they're still counted for the agreement rate).  The se
+// column is Δ's standard error over decisions.
 //
 // Agents load like selfplay.js: --p1 / --p2 through slot-scoped config readers,
 // so P1_ / P2_ env prefixes differentiate the two sides (P1_/P2_BUDGET too).
@@ -54,7 +55,8 @@ if (opts.help || !opts.p1 || !opts.p2 || (!opts.file && !opts.referee)) {
 
 Compare two agents' move selection, scored against an oracle.  Headline is the
 paired mean win-prob difference Δ(p2-p1): positive => p2 (the challenger) is the
-better mover by that margin.  Agents are interleaved per decision (shared load).
+better mover by that margin; se is its standard error.  Agents are interleaved
+per decision (shared load).
 
   --p1 NAME         ai/<name>.js for slot 1 (needs getMove()); P1_* env config
   --p2 NAME         ai/<name>.js for slot 2; P2_* env config
@@ -133,6 +135,11 @@ let p1Seed = SEED, p2Seed = SEED;
 
 const r4  = Util.fmtRatio4;
 const sgn = v => (v >= 0 ? '+' : '-') + r4(Math.abs(v));
+// Standard error of a paired mean, from the per-decision differences' sum and
+// sum of squares (agreeing decisions are zeros).  With --oversample > 1 the
+// repeats of a position are not independent, so it reads somewhat low there.
+const seOf = (sum, sumSq, n) => n > 1 ? Math.sqrt(Math.max(0, sumSq - sum * sum / n) / (n - 1) / n) : NaN;
+const seCell = (sum, sumSq, n) => { const se = seOf(sum, sumSq, n); return Number.isFinite(se) ? r4(se) : '-'; };
 
 if (FILE_MODE) runFileMode();
 else           runRefereeMode();
@@ -172,15 +179,16 @@ function runFileMode() {
     (oversample > 1 ? ` (oversampled ${oversample}x to ${positions.length * oversample})` : ''));
   console.log();
   console.log(['pos'.padStart(5), 'elapsed'.padStart(7),
-               'gapP1'.padStart(6), 'gapP2'.padStart(6), 'Δp2-p1'.padStart(7), 'agree'.padStart(6)].join('  '));
+               'gapP1'.padStart(6), 'gapP2'.padStart(6), 'Δp2-p1'.padStart(7), 'se'.padStart(5), 'agree'.padStart(6)].join('  '));
 
   const startTime = performance.now();
-  let evals = 0, sum1 = 0, sum2 = 0, agreeN = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
+  let evals = 0, sum1 = 0, sum2 = 0, sumDsq = 0, agreeN = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
   const printStats = () => {
     console.log([
       Util.fmt4i(evals).padStart(5), Util.fmtMs(performance.now() - startTime).padStart(7),
       r4(sum1 / evals).padStart(6), r4(sum2 / evals).padStart(6),
-      sgn((sum1 - sum2) / evals).padStart(7), (agreeN / evals).toFixed(3).padStart(6),
+      sgn((sum1 - sum2) / evals).padStart(7), seCell(sum1 - sum2, sumDsq, evals).padStart(5),
+      (agreeN / evals).toFixed(3).padStart(6),
     ].join('  '));
   };
 
@@ -195,7 +203,7 @@ function runFileMode() {
         r2 = moveGap(p2, position, budget2, false);
         r1 = moveGap(p1, position, budget1, true);
       }
-      sum1 += r1.gap; sum2 += r2.gap;
+      sum1 += r1.gap; sum2 += r2.gap; sumDsq += (r1.gap - r2.gap) * (r1.gap - r2.gap);
       if (r1.str === r2.str) agreeN++;
       evals++;
       if (evals >= nextPrintPos) { printStats(); printedAt = evals; nextPrintPos = Math.max(Math.ceil(nextPrintPos * 1.5), nextPrintPos + 1); }
@@ -240,15 +248,16 @@ function runRefereeMode() {
     (bandActive ? `  band=[${minPhase}, ${maxPhase}]` : '') + (limit !== Infinity ? `  limit=${limit}` : ''));
   console.log();
   console.log(['sampled'.padStart(7), 'elapsed'.padStart(7),
-               'Δp2-p1'.padStart(7), 'agree'.padStart(6)].join('  '));
+               'Δp2-p1'.padStart(7), 'se'.padStart(5), 'agree'.padStart(6)].join('  '));
 
   const startTime = performance.now();
-  let sampled = 0, agreed = 0, disag = 0, sumD = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by sampled positions
+  let sampled = 0, agreed = 0, disag = 0, sumD = 0, sumDsq = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by sampled positions
   const printStats = () => {
     const el = performance.now() - startTime;
     console.log([
       Util.fmt4i(sampled).padStart(7), Util.fmtMs(el).padStart(7),
-      (sampled ? sgn(sumD / sampled) : '-').padStart(7), (sampled ? (agreed / sampled).toFixed(3) : '-').padStart(6),
+      (sampled ? sgn(sumD / sampled) : '-').padStart(7), seCell(sumD, sumDsq, sampled).padStart(5),
+      (sampled ? (agreed / sampled).toFixed(3) : '-').padStart(6),
     ].join('  '));
   };
 
@@ -277,7 +286,7 @@ function runRefereeMode() {
         } else {
           const wr1 = labelMove(game, m1);        // same mover for both, so
           const wr2 = labelMove(game, m2);        // directly comparable
-          sumD += (wr2 - wr1); disag++;
+          sumD += (wr2 - wr1); sumDsq += (wr2 - wr1) * (wr2 - wr1); disag++;
           if (disag >= limit) break outer;
         }
       }
