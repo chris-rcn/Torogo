@@ -205,7 +205,7 @@ static const char *cfg_ref_weights;    /* reference model for the directWR colum
  *             play the same game, so each colour-swapped pair scores one win and
  *             one loss by construction and the self-match cannot drift off 50. */
 #define DIRECT_GAMES     10000   /* directWR, FIRST row: SE ~0.5pp (~3s at size 10, ~3x that at 13) */
-#define MATCH_GROWTH       1.1   /* match effort grows this much per printed row */
+#define MATCH_GROWTH       1.2   /* match effort grows this much per printed row */
 #define MATCH_MAX_S      600.0   /* wall-clock ceiling per match; growth stops once hit */
 /* directWR match band (--match-phases A,B): inside [A, B] each side plays its
  * own weights; OUTSIDE the band both sides play REFERENCE moves, so the games
@@ -1518,8 +1518,9 @@ static float direct_match_wr(int games) {
 }
 
 /* The match steps its game count up MATCH_GROWTH per printed row.  Rows are
- * already geometric (1.3 in the monitor, 1.5 inline), so a slower 1.1 keeps the
- * match a SHRINKING fraction of each row interval while the columns get
+ * already geometric (1.3 in the monitor, 1.5 inline), so a slower 1.2 keeps the
+ * match a SHRINKING fraction of each row interval (until the monitor's 1 h row
+ * cap; MATCH_MAX_S then bounds it) while the columns get
  * quieter exactly when the differences being judged get smaller.  The early
  * rows stay cheap, which is when they are closest together. */
 static double match_scale = 1.0;
@@ -1539,7 +1540,7 @@ static int peak_col(double v, double *best, const char *fmt, char *buf, size_t n
 
 /* Last row's directWR lower bound (win rate minus two standard errors of that
  * row's match, in points) and whether it set a new high — what -best keys on.
- * The match grows 1.1x per row, so early rows are the noisiest; keying on the
+ * The match grows MATCH_GROWTH per row, so early rows are the noisiest; keying on the
  * bound stops a lucky early row from holding a high that later, more precise
  * rows cannot beat.
  * directWR is the one indicator that cannot be gamed by anything except playing
@@ -2056,8 +2057,8 @@ static void print_help(FILE *out, const char *prog) {
 "                             both play the reference (default 0.6,1)\n"
 "\n"
 "PUCT match (the ppat match metric: puct-ppat-fp, uniform vs this model's playouts)\n"
-"  --do-puct-match            play it every row: 100 games growing 1.1x per row, 100\n"
-"                             playouts, rff to phase 0.5, fpol ref/ref-fp-fast.js.\n"
+"  --do-puct-match            play it every row: 100 games growing 1.2x per row, 100\n"
+"                             playouts, rff to phase 0.5, fpol ref/ref-fp-stone8AdjLib3.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
 "                             ppatUs = this model's CPU us per ppat move in 1000\n"
 "                             self-play games (moves past the uniform gate).\n"
