@@ -2216,11 +2216,10 @@ int main(int argc, char **argv) {
      * It does NOT make a parallel run reproducible: the barrier's poll loop draws
      * from this same stream, and how many times it spins depends on wall-clock
      * timing and machine load, so the training stream advances by a different
-     * amount every run.  Warn rather than pretend. */
-    if (cfg_seed != 0 && parallel)
-        fprintf(stderr, "WARNING: --seed does not make a parallel run reproducible — the sync\n"
-                        "         barrier's poll loop draws from the same RNG, so wall-clock\n"
-                        "         timing perturbs the training stream.  Use --workers 1.\n");
+     * amount every run.  c/train-ppat-parallel warns about it, once, when an
+     * explicit --seed is given to a multi-worker run; here every worker gets
+     * the wrapper's seed, so a per-worker warning would fire K times on every
+     * parallel run. */
     /* One derivation for both paths, so the seed reported below is exactly what
      * --seed needs to reproduce the run.  Masked to fit a positive int, since
      * --seed is parsed with atoi. */

@@ -64,6 +64,11 @@ for a in "$@"; do
 done
 if [ -n "$SEED" ]; then
     SEED_ARGS=""                                   # already in "$@"
+    # The sync barrier's poll loop draws from the same RNG, so with K > 1
+    # wall-clock timing perturbs the training stream whatever the seed.
+    [ "$K" -gt 1 ] && echo "WARNING: --seed does not make a parallel run reproducible — the sync
+         barrier's poll loop draws from the same RNG, so wall-clock
+         timing perturbs the training stream.  Use K = 1." >&2
 else
     SEED=$(( ($(date +%s) + $$ * 7919) % 2147483647 ))
     SEED_ARGS="--seed $SEED"
