@@ -244,6 +244,7 @@ const _atariLibsArr = new Int32Array(8);
 let _sbcCells       = new Int32Array(64);   // save-by-capture cell indices (grown to cap)
 const _koSolveLibs  = new Int32Array(4);
 const _seenBuf      = new Int32Array(16);   // dedup scratch
+const _capGids      = new Int32Array(4);    // distinct adjacent enemy chains in atari (capture features)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -252,7 +253,10 @@ function createState(N) {
   const cap = N * N;
   return {
     moves:          new Int32Array(cap),
-    feat:           new Int32Array(cap * 10),  // flat feature keys (1 pat + 7 prev + 1 twelvecell + 1 self-atari)
+    // flat feature keys; at most 10 per candidate: pattern, twelvecell,
+    // self-atari, capture, capture-by-self-atari, atari, atari-by-self-atari,
+    // and three locals (one save slot, ko-solve, contiguity)
+    feat:           new Int32Array(cap * 10),
     featStart:      new Int32Array(cap + 1),  // featStart[i]..featStart[i+1] = keys for candidate i
     count:          0,
   };
@@ -344,11 +348,18 @@ function _selfAtariSize(game, idx, cur) {
   return libs >= 2 ? 0 : size;
 }
 
-function totalWeights(phaseCount, adjLib = 2, t12mode = 0, selfAtari = false, atariN = 0) {
+// Blocks, in weight order (each spans all phases): pattern, 7 local,
+// twelvecell, self-atari, atari, atari-by-self-atari (xaN×xaN), capture,
+// capture-by-self-atari (csN×csN) — c/ppat.c's layout.
+function totalWeights(phaseCount, adjLib = 2, t12mode = 0, selfAtari = false, atariN = 0,
+                      xaN = 0, captureN = 0, csN = 0) {
   return phaseCount * (_buildTables(adjLib).numPatterns + 7) +
          phaseCount * t12Block(t12mode | 0) +
          (selfAtari ? phaseCount * SA_N : 0) +
-         phaseCount * (atariN | 0);
+         phaseCount * (atariN | 0) +
+         phaseCount * (xaN | 0) * (xaN | 0) +
+         phaseCount * (captureN | 0) +
+         phaseCount * (csN | 0) * (csN | 0);
 }
 
 // Extract features for all legal non-true-eye moves from game into state.
@@ -368,7 +379,8 @@ function totalWeights(phaseCount, adjLib = 2, t12mode = 0, selfAtari = false, at
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0) {
+function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0,
+                         xaN = 0, captureN = 0, csN = 0) {
   const N      = game.N;
   const cap    = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
@@ -393,6 +405,10 @@ function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = fa
   const t12Offset = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
   const saOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode)) + phase * SA_N;
   const atOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0)) + phase * atariN;
+  const xaOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN) + phase * xaN * xaN;
+  const capOffset = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN) + phase * captureN;
+  const csOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN + captureN)
+                  + phase * csN * csN;
   const nbr    = game._nbr;
   const dnbr   = game._dnbr;
   const cur    = game.current;
@@ -564,23 +580,43 @@ function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = fa
       state.feat[nf++] = t12Offset + _T12C[t12];
     }
 
-    // Computed once; feeds the graded feature AND the save-slot split.
-    const sa = (selfAtari || hasPrev) ? _selfAtariSize(game, idx, cur) : 0;
+    // Computed once; feeds the graded feature, the save-slot split and the
+    // two interaction grids.
+    const sa = (selfAtari || hasPrev || xaN > 0 || csN > 0) ? _selfAtariSize(game, idx, cur) : 0;
     if (selfAtari && sa > 0) state.feat[nf++] = saOffset + (sa < SA_N ? sa : SA_N) - 1;
 
     // Gives-atari: the largest adjacent enemy chain this move reduces to one
     // liberty (pre-move ls === 2 is exact: an adjacent empty point is always
-    // one of its liberties).
-    if (atariN > 0) {
-      let biggest = 0;
+    // one of its liberties).  Capture: the total size of the distinct
+    // adjacent enemy chains in atari, which this move takes.  Emit order and
+    // tie rules mirror c/ppat.c (capture, capture-by-self-atari, atari,
+    // atari-by-self-atari).
+    if (atariN > 0 || xaN > 0 || captureN > 0 || csN > 0) {
+      let biggest = 0, capSum = 0, nCapG = 0;
       for (let d = 0; d < 4; d++) {
         const ni = nbr[b4 + d], c = cells[ni];
         if (c !== 0 && c !== cur) {
           const eg = gidArr[ni];
           if (lsArr[eg] === 2 && ssArr[eg] > biggest) biggest = ssArr[eg];
+          else if ((captureN > 0 || csN > 0) && lsArr[eg] === 1) {
+            let dup = false;
+            for (let k = 0; k < nCapG; k++) if (_capGids[k] === eg) { dup = true; break; }
+            if (!dup) { _capGids[nCapG++] = eg; capSum += ssArr[eg]; }
+          }
         }
       }
-      if (biggest > 0) state.feat[nf++] = atOffset + (biggest < atariN ? biggest : atariN) - 1;
+      if (captureN > 0 && capSum > 0) state.feat[nf++] = capOffset + (capSum < captureN ? capSum : captureN) - 1;
+      // Ko-take / snapback family: captures while ending in atari.
+      if (csN > 0 && sa > 0 && capSum > 0) {
+        const bs = sa < csN ? sa : csN, bc = capSum < csN ? capSum : csN;
+        state.feat[nf++] = csOffset + (bs - 1) * csN + (bc - 1);
+      }
+      if (atariN > 0 && biggest > 0) state.feat[nf++] = atOffset + (biggest < atariN ? biggest : atariN) - 1;
+      // Mutual atari: both in danger — the (own, victim) size grid.
+      if (xaN > 0 && sa > 0 && biggest > 0) {
+        const bs = sa < xaN ? sa : xaN, ba = biggest < xaN ? biggest : xaN;
+        state.feat[nf++] = xaOffset + (bs - 1) * xaN + (ba - 1);
+      }
     }
 
     // ── Previous-move features (mirrors c/ppat.c: slots 1-5 + contiguity) ────
@@ -622,7 +658,8 @@ function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = fa
 // Score all moves with a model { phaseCount, weights } and return them sorted by
 // score descending.
 function evaluate(game, state, model) {
-  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
+  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN,
+                  model.xaN, model.captureN, model.csN);
   const weights = model.weights;
   const out = [];
   for (let i = 0; i < state.count; i++) {
@@ -668,7 +705,8 @@ function ppatMove(game, state, model, rng = Math) {
     if (fullness < ubp) return game.randomLegalMove(rng);
   }
 
-  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN);
+  extractFeatures(game, state, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari, model.atariN,
+                  model.xaN, model.captureN, model.csN);
   const weights = model.weights;
   const n = state.count;
   if (n === 0) return PASS;
@@ -755,6 +793,7 @@ function loadWeights(pathOrObj) {
   const twelvecell = raw.twelvecell === true, twelvecell2 = raw.twelvecell2 === true;
   const selfAtari = raw.selfAtari === true;
   const atariN = raw.atari | 0;
+  const xaN = raw.atariBySelfAtari | 0, captureN = raw.capture | 0, csN = raw.captureBySelfAtari | 0;
   if (twelvecell && twelvecell2) {
     console.error('ppat loadWeights: twelvecell and twelvecell2 are mutually exclusive');
     return null;
@@ -773,8 +812,15 @@ function loadWeights(pathOrObj) {
   // pattern weight shifts all logits equally and leaves the softmax unchanged.
   // Enabling it on such a model therefore produces a pass frequency that is an
   // accident of training, not a decision.
+  // The weight count must match every block the header declares: a block this
+  // library did not know would otherwise be ignored silently.
+  const expected = totalWeights(phases, adjLib, t12mode, selfAtari, atariN, xaN, captureN, csN);
+  if (raw.weights.length !== expected) {
+    console.error(`ppat loadWeights: ${raw.weights.length} weights in file but ${expected} expected from its header`);
+    return null;
+  }
   return { phaseCount: phases, weights: raw.weights, adjLib, skipLocal,
-           twelvecell, twelvecell2, t12mode, selfAtari, atariN,
+           twelvecell, twelvecell2, t12mode, selfAtari, atariN, xaN, captureN, csN,
            earlyPass: raw.earlyPass === true,
            passWeight: typeof raw.passWeight === 'number' ? raw.passWeight : 0 };
 }
