@@ -4,6 +4,7 @@
 #include "ppat.h"
 #include <math.h>
 #include <string.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -815,10 +816,10 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights,
 #include <stdio.h>
 #include <stdlib.h>
 
-void ppat_save_weights(const char *path, const float *weights, int total,
+bool ppat_save_weights(const char *path, const float *weights, int total,
                        bool early_pass, float pass_weight, const char *comment) {
     FILE *f = fopen(path, "w");
-    if (!f) { fprintf(stderr, "ppat_save_weights: cannot open %s\n", path); return; }
+    if (!f) { fprintf(stderr, "ppat_save_weights: cannot open %s: %s\n", path, strerror(errno)); return false; }
     fprintf(f, "'use strict';\n");
     if (comment) fprintf(f, "// %s\n", comment);
     fprintf(f, "const _w = { weights: new Float32Array([");
@@ -837,7 +838,15 @@ void ppat_save_weights(const char *path, const float *weights, int total,
             ppat_self_atari ? "true" : "false", ppat_atari_n, ppat_xa_n, ppat_capture_n, ppat_cs_n);
     fprintf(f, "if (typeof module !== 'undefined') module.exports = _w;\n");
     fprintf(f, "else window.PPATWeights = _w;\n");
-    fclose(f);
+    /* A failed write (e.g. a full disk) shows as the stream's error flag or a
+     * failing fclose, which flushes the last buffer. */
+    const bool write_err = ferror(f) != 0;
+    const int  close_err = fclose(f);
+    if (write_err || close_err != 0) {
+        fprintf(stderr, "ppat_save_weights: write to %s failed: %s\n", path, strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 static int load_adopt_features = 0;    /* set only inside ppat_load_model */

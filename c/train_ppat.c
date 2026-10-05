@@ -160,6 +160,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <math.h>
 #include <time.h>
 #include <float.h>
@@ -1260,6 +1261,22 @@ static void ema_update(long agg_pos) {
     ema_last_pos = agg_pos;
 }
 
+/* Rename a written tmp file over the checkpoint.  A failed write or rename
+ * warns and leaves the previous checkpoint in place (the tmp is removed);
+ * training continues. */
+static void publish_checkpoint(const char *tmp, const char *path, bool written) {
+    if (!written) {
+        fprintf(stderr, "warning: checkpoint %s NOT updated (write failed); training continues\n", path);
+        remove(tmp);
+        return;
+    }
+    if (rename(tmp, path) != 0) {
+        fprintf(stderr, "warning: checkpoint %s NOT updated (rename from %s failed: %s); training continues\n",
+                path, tmp, strerror(errno));
+        remove(tmp);
+    }
+}
+
 static void save_weights(int iterations, int total_positions, const char *elapsed) {
     char comment[384];
     /* Training-fit accumulators for the monitor: the last completed epoch (full)
@@ -1281,9 +1298,9 @@ static void save_weights(int iterations, int total_positions, const char *elapse
      * sees a half-written checkpoint. */
     char tmp[300];
     snprintf(tmp, sizeof(tmp), "%s.tmp", weights_file);
-    ppat_save_weights(tmp, theta_ema ? theta_ema : theta, TOTAL, RUN_EARLY_PASS,
-                      theta_ema ? run_pass_weight_ema : run_pass_weight, comment);
-    rename(tmp, weights_file);
+    publish_checkpoint(tmp, weights_file,
+                       ppat_save_weights(tmp, theta_ema ? theta_ema : theta, TOTAL, RUN_EARLY_PASS,
+                                         theta_ema ? run_pass_weight_ema : run_pass_weight, comment));
 }
 
 /* Snapshot the currently-loaded theta to "<checkpoint>-best.js" — called whenever
@@ -1302,8 +1319,7 @@ static void save_best(const char *ckpt_path, const char *comment) {
     best_path(ckpt_path, best, sizeof best);
     char tmp[330];
     snprintf(tmp, sizeof tmp, "%s.tmp", best);
-    ppat_save_weights(tmp, theta, TOTAL, RUN_EARLY_PASS, run_pass_weight, comment);
-    rename(tmp, best);
+    publish_checkpoint(tmp, best, ppat_save_weights(tmp, theta, TOTAL, RUN_EARLY_PASS, run_pass_weight, comment));
 }
 
 /* Read the `positions: N` count embedded in a checkpoint comment (-1 if absent). */

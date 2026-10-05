@@ -73,13 +73,14 @@ fi
 rm -rf "$SYNC_DIR"; mkdir -p "$SYNC_DIR"
 
 # The binary's monitor prints the whole shared banner (data / model / match /
-# out); the wrapper adds only the seed, which the workers (stdout to /dev/null)
+# out); the wrapper adds only the seed, which the workers (stdout to /dev/null;
+# stderr kept, so their warnings and errors reach the terminal)
 # cannot report and which is replayable only at K=1.
 [ "$K" -eq 1 ] && echo "seed      $SEED  (replay with --seed $SEED)"
 PIDS=""
 i=0
 while [ "$i" -lt "$K" ]; do
-    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" $SAVE_ARGS $SEED_ARGS "$@" >/dev/null 2>&1 &
+    "$BIN" "$DATA" --workers "$K" --worker-id "$i" --sync-dir "$SYNC_DIR" $SAVE_ARGS $SEED_ARGS "$@" >/dev/null &
     PIDS="$PIDS $!"
     i=$((i + 1))
 done

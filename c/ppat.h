@@ -164,8 +164,9 @@ int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights,
 
 /* ── Weight file I/O (JS-compatible format) ────────────────────────────────── */
 
-/* Save weights to a JS module file.  comment is optional (NULL ok). */
-void  ppat_save_weights(const char *path, const float *weights, int total,
+/* Save weights to a JS module file.  comment is optional (NULL ok).  Returns
+ * false (after an error message) if the file could not be opened or written. */
+bool  ppat_save_weights(const char *path, const float *weights, int total,
                         bool early_pass, float pass_weight,
                         const char *comment);
 
