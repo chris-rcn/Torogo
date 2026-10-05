@@ -5,12 +5,19 @@
 //
 // The fold works when the SOURCE term's per-cell window is derivable from the
 // DEST term's per-cell window content — i.e. the source is a sub-window and/or a
-// coarser encoding of the dest, sharing the anchor.  Two cases:
+// coarser encoding of the dest, sharing the anchor.  Three cases:
 //   2:M -> 3:M   the 2×2 is the top-left corner sub-window of the co-anchored 3×3
 //   3:k -> 3:K   (k<K) the same 3×3 window, ml-k a per-cell liberty-clamp of ml-K
+//   1:m -> d:M   (m<=M, d = 2 or 3; liberty family) a single cell of the d×d
 // The source's per-cell contribution folds into the dest key:
 //
 //     w_dst'[kd] = w_dst[kd] + mean_i( pol_s·pol_d·w_src[ks] : kd(i) = kd )
+//
+// except for a 1:m source, which is split evenly over the dest windows: each
+// window takes (1/d²)·Σ over its d² cells of pol_s·pol_d·w_src.  On the torus a
+// cell lies in exactly d² windows, so the total is preserved, and the share is
+// a symmetric function of the window's content — exact even though the dest
+// key (D4-invariant) cannot say which of its cells is the anchor.
 //
 // EXACT wherever the (lossy) dest key uniquely determines the source content, and
 // the occurrence-weighted mean is the L2-optimal flat value where the dest key
@@ -58,7 +65,8 @@ same agent.
   --size N           board size (default 13)
 
 Foldable when source.size <= dest.size and source.maxLibs <= dest.maxLibs
-(the source window is a sub-window and/or a coarser encoding of the dest).`);
+(the source window is a sub-window and/or a coarser encoding of the dest).
+Sizes: source 1, 2 or 3 (size 1: liberty-coded only), dest 2 or 3.`);
   process.exit(opts.help ? 0 : 1);
 }
 
@@ -85,7 +93,9 @@ if (tok(SRC) === tok(DST)) fail('source and dest are the same term.');
 if ((SRC.phaseBins || 1) > 1 || (DST.phaseBins || 1) > 1)
   fail(`source/dest are phase-binned; the fold cannot reconstruct their per-bin salts. ` +
        `(Other, non-fold terms may be phased — they are carried through unchanged.)`);
-if (!(SRC.size === 2 || SRC.size === 3) || !(DST.size === 2 || DST.size === 3)) fail('only size 2 and 3 terms are supported.');
+if (!(SRC.size === 1 || SRC.size === 2 || SRC.size === 3) || !(DST.size === 2 || DST.size === 3))
+  fail('supported: source size 1, 2 or 3 into dest size 2 or 3.');
+if (SRC.size === 1 && !(SRC.maxLibs > 0)) fail('a size-1 source must be liberty-coded (maxLibs > 0).');
 // Same encoding family only: maxLibs>0 = liberty counts, 0 = ladder codes (L).
 // The fold maps the source sub-window onto the co-anchored dest window within
 // ONE alphabet, so cross-family folds (e.g. an L window into a liberty term)
@@ -100,9 +110,35 @@ if (SRC.size > DST.size || SRC.maxLibs > DST.maxLibs)
 const PS = 0;   // src/dest are unphased (asserted above), so their keys carry no salt
 const SRC_TAG = (VPatterns.tagBaseOf(SRC.maxLibs) << 3) | VPatterns.sizeCode(SRC.size);
 const DST_TAG = (VPatterns.tagBaseOf(DST.maxLibs) << 3) | VPatterns.sizeCode(DST.size);
+const SRC1 = SRC.size === 1;   // per-stone source keys, no window planes (see the header)
 const SHN = SRC.size === 2 ? 'h2N' : 'h3N', SHI = SRC.size === 2 ? 'h2I' : 'h3I';
 const DHN = DST.size === 2 ? 'h2N' : 'h3N', DHI = DST.size === 2 ? 'h2I' : 'h3I';
 function keyFor(hN, hI, tag) { return (VPatterns.mixTag(hN < hI ? hN : hI, tag) ^ PS) | 0; }
+
+// Size-1 source: each stone's signed state, its colour times its chain's
+// liberty count capped at SRC.maxLibs (the extraction's raw value; ml 1 =
+// presence), and its key (libs + 131·tagBase, unmixed, as extractFeatures emits).
+const SRC1_BASE = 131 * VPatterns.tagBaseOf(SRC.maxLibs);
+function src1State(g, i) {
+  const c = g.cells[i];
+  if (c === 0) return 0;
+  if (SRC.maxLibs === 1) return c;
+  const libs = g._ls[g._gid[i]];
+  return c * (libs < SRC.maxLibs ? libs : SRC.maxLibs);
+}
+function src1Key(s) { return ((s > 0 ? s : -s) + SRC1_BASE) | 0; }
+// Cells of the DST.size window anchored (top-left) at i, on the torus.
+const DW = DST.size;
+function windowCells(i, N, out) {
+  const y = (i / N) | 0, x = i % N;
+  let n = 0;
+  for (let dy = 0; dy < DW; dy++) {
+    const r = ((y + dy) % N) * N;
+    for (let dx = 0; dx < DW; dx++) out[n++] = r + (x + dx) % N;
+  }
+  return out;
+}
+const _win = new Int32Array(DW * DW);
 
 // Output = the input minus the folded-away source term (dest absorbs it); every
 // other term (e.g. a phased turn conditioner) is carried through unchanged.
@@ -152,10 +188,11 @@ function eqMultiset(a, b) { if (a.size !== b.size) return false; for (const [k, 
   for (const gamePositions of selfCheckGames()) {
     for (const g of gamePositions) {
       const f = VPatterns.extractFeatures(g, comp.preparedSpecs);
-      const sp = comp.preparedSpecs._planes.get(SRC.maxLibs), dp = comp.preparedSpecs._planes.get(DST.maxLibs);
+      const sp = SRC1 ? null : comp.preparedSpecs._planes.get(SRC.maxLibs), dp = comp.preparedSpecs._planes.get(DST.maxLibs);
       const cap = g.N * g.N, mySrc = [], myDst = [];
       for (let i = 0; i < cap; i++) {
-        if (sp[SHN][i] !== sp[SHI][i]) mySrc.push(keyFor(sp[SHN][i], sp[SHI][i], SRC_TAG));
+        if (SRC1) { const st = src1State(g, i); if (st !== 0) mySrc.push(src1Key(st)); }
+        else if (sp[SHN][i] !== sp[SHI][i]) mySrc.push(keyFor(sp[SHN][i], sp[SHI][i], SRC_TAG));
         if (dp[DHN][i] !== dp[DHI][i]) myDst.push(keyFor(dp[DHN][i], dp[DHI][i], DST_TAG));
       }
       const exSrc = [], exDst = [];
@@ -197,9 +234,32 @@ function foldPosition(g) {
       if (!carry.has(k)) { const w = comp.weights.get(k); if (w !== undefined) carry.set(k, w); }
     }
   }
-  const sp = comp.preparedSpecs._planes.get(SRC.maxLibs), dp = comp.preparedSpecs._planes.get(DST.maxLibs);
-  const sHN = sp[SHN], sHI = sp[SHI], dHN = dp[DHN], dHI = dp[DHI];
+  const dp = comp.preparedSpecs._planes.get(DST.maxLibs);
+  const dHN = dp[DHN], dHI = dp[DHI];
   const cap = g.N * g.N;
+  if (SRC1) {
+    // Each stone's source weight, then each dest window takes 1/d² of its cells' sum.
+    const ws = new Float64Array(cap);
+    for (let i = 0; i < cap; i++) {
+      const st = src1State(g, i);
+      if (st !== 0) ws[i] = (st > 0 ? 1 : -1) * (comp.weights.get(src1Key(st)) ?? 0);
+    }
+    for (let i = 0; i < cap; i++) {
+      const dN = dHN[i], dI = dHI[i];
+      windowCells(i, g.N, _win);
+      let sum = 0, any = false;
+      for (let j = 0; j < _win.length; j++) { const c = _win[j]; if (g.cells[c] !== 0) { any = true; sum += ws[c]; } }
+      if (dN === dI) { if (any) lost++; continue; }   // colour-symmetric dest: no dest key
+      const dk = keyFor(dN, dI, DST_TAG);
+      const pd = dN < dI ? 1 : -1;
+      let a = acc.get(dk);
+      if (!a) { a = { wd: comp.weights.get(dk) ?? 0, sum: 0, cnt: 0 }; acc.set(dk, a); }
+      a.sum += pd * sum / _win.length; a.cnt++; cells++;
+    }
+    return;
+  }
+  const sp = comp.preparedSpecs._planes.get(SRC.maxLibs);
+  const sHN = sp[SHN], sHI = sp[SHI];
   for (let i = 0; i < cap; i++) {
     const dN = dHN[i], dI = dHI[i], sN = sHN[i], sI = sHI[i];
     const hasS = sN !== sI;
