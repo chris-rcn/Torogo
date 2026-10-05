@@ -112,7 +112,7 @@ int32_t ppat_num_patterns = 0;
 int32_t ppat_adj_lib = 0;      /* 0 = not yet initialised */
 int32_t ppat_raw_size = 0;
 int     ppat_phase_count = 1;
-float   ppat_uniform_below_phase = 0.0f;
+float   ppat_min_phase = 0.0f;
 int     ppat_load_quiet = 0;
 
 /* D4 permutations: perm[src] = dst */
@@ -759,9 +759,9 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights,
      * policy is ≈ uniform.  Threshold is board fullness (cap-empty)/cap in [0,1].
      * g2_random_legal_move only reorders the empty list, so the const-cast is
      * logically safe. */
-    if (ppat_uniform_below_phase > 0) {
+    if (ppat_min_phase > 0) {
         float fullness = (float)(g->cap - g->empty_count) / g->cap;
-        if (fullness < ppat_uniform_below_phase) return g2_random_legal_move((Game2 *)g, rng);
+        if (fullness < ppat_min_phase) return g2_random_legal_move((Game2 *)g, rng);
     }
 
     ppat_extract(g, st);

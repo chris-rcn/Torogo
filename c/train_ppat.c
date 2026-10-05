@@ -1445,8 +1445,8 @@ static float direct_match_wr(int games) {
      * consecutive rows pair.  Rows are comparable only across runs at the
      * same band (the historical uniform-below-0.6 rows are a different
      * universe). */
-    const float saved_ubp = ppat_uniform_below_phase;
-    ppat_uniform_below_phase = 0.0f;    /* banding replaces the uniform gate */
+    const float saved_min_phase = ppat_min_phase;
+    ppat_min_phase = 0.0f;    /* banding replaces the uniform gate */
     /* Deployment-size board for the match; the training size's topology is
      * restored on exit for the other monitor instruments. */
     g2_init_topology(DEPLOY_BOARD_SIZE);
@@ -1512,7 +1512,7 @@ static float direct_match_wr(int games) {
         match_se = var > 0 ? sqrt(var / pairs) : 0.0;
     } else match_se = 0.0;
     use_run_model();
-    ppat_uniform_below_phase = saved_ubp;
+    ppat_min_phase = saved_min_phase;
     g2_init_topology(topo_size);
     return played > 0 ? (float)wins / (float)played : 0.0f;
 }
@@ -1598,8 +1598,8 @@ static double puct_scale = 1.0;
 #define COST_GAMES 1000
 static double policy_cost_us(void) {
     use_run_model();
-    const float gate = ppat_uniform_below_phase;
-    ppat_uniform_below_phase = 0.0f;           /* the gate is applied here, untimed side */
+    const float gate = ppat_min_phase;
+    ppat_min_phase = 0.0f;           /* the gate is applied here, untimed side */
     g2_init_topology(DEPLOY_BOARD_SIZE);
     static PpatState st;
     Rng rng;
@@ -1621,7 +1621,7 @@ static double policy_cost_us(void) {
             g2_play(&game, mv);
         }
     }
-    ppat_uniform_below_phase = gate;
+    ppat_min_phase = gate;
     g2_init_topology(topo_size);
     return moves ? 1e6 * cpu_s / moves : 0.0;
 }
@@ -1636,7 +1636,7 @@ static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
     mc.side[1].ppat_w         = theta;
     mc.side[1].early_pass     = RUN_EARLY_PASS;
     mc.side[1].pass_weight    = run_pass_weight;
-    mc.side[1].ppat_min_phase = ppat_uniform_below_phase;  /* the deployment gate */
+    mc.side[1].ppat_min_phase = ppat_min_phase;  /* the deployment gate */
     Match *m = match_new(&mc);
     MatchStats st = {0};
     int pairs = (int)(PUCT_GAMES * puct_scale / 2 + 0.5);
@@ -2043,7 +2043,7 @@ static void print_help(FILE *out, const char *prog) {
 "  --overfit                  use the same data for train and test\n"
 "\n"
 "Playout gate\n"
-"  --uniform-below-phase F    ppat_policy_move plays uniform-random below fullness F (default 0.6)\n"
+"  --ppat-min-phase F         ppat_policy_move plays uniform-random below fullness F (default 0.6)\n"
 "\n"
 "directWR match (move-quality readout: current model vs a fixed reference)\n"
 "  --ref-weights PATH|none    reference model for the directWR/WR columns (default\n"
@@ -2125,7 +2125,7 @@ int main(int argc, char **argv) {
     /* Deployment playout gate (mc-ppat's PPAT_MIN_PHASE): ppat_policy_move plays
      * uniform-random below this board fullness.  Default 0.6, matching the fielded
      * playout. */
-    ppat_uniform_below_phase = get_float_arg(argc, argv, "--uniform-below-phase", 0.6f);
+    ppat_min_phase = get_float_arg(argc, argv, "--ppat-min-phase", 0.6f);
     cfg_local_features = has_flag(argc, argv, "--local-features");
     cfg_ref_weights    = get_str_arg(argc, argv, "--ref-weights", "out/ppat-data-233162-best-ref-candidate.js");
     if (strcmp(cfg_ref_weights, "none") == 0) cfg_ref_weights = NULL;

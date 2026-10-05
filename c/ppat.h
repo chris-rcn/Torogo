@@ -47,7 +47,7 @@ extern int32_t ppat_adj_lib;           /* active cap (set by ppat_init) */
 extern int32_t ppat_raw_size;          /* (2*cap+1)^4 * 81 for the active cap */
 extern int32_t ppat_num_patterns;      /* set by ppat_init() */
 extern int     ppat_phase_count;       /* number of game phases (default 1 = no phase splitting) */
-extern float   ppat_uniform_below_phase; /* default 0 = off; >0: ppat_policy_move plays uniform random while board fullness (cap-empty)/cap < this fraction [0,1] */
+extern float   ppat_min_phase; /* default 0 = off; >0: ppat_policy_move plays uniform random while board fullness (cap-empty)/cap < this fraction [0,1] */
 extern int     ppat_load_quiet;        /* default 0; when 1, ppat_load_weights suppresses its success message (errors still print) */
 
 /* Max features per candidate: 1 pattern + 7 prev-move + 1 twelvecell */

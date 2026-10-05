@@ -77,8 +77,8 @@ static double playout(PuctSearch *s, Game2 *g, Rng *rng) {
     const double step = 1.0 / cap;
     double weight = 1.0;
     memset(s->played, 0, sizeof s->played);
-    const float saved_gate = ppat_uniform_below_phase;
-    ppat_uniform_below_phase = 0;
+    const float saved_gate = ppat_min_phase;
+    ppat_min_phase = 0;
     for (int moves = 0; !g->game_over && moves < move_limit; moves++) {
         const int8_t cur = g->current;
         const int32_t idx = playout_move(s, g, rng);
@@ -87,7 +87,7 @@ static double playout(PuctSearch *s, Game2 *g, Rng *rng) {
         g2_play(g, idx);
         weight -= step;
     }
-    ppat_uniform_below_phase = saved_gate;
+    ppat_min_phase = saved_gate;
     return g2_estimate_winner(g) == BLACK ? 1 : 0;
 }
 
