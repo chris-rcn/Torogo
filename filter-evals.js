@@ -16,7 +16,7 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['file', 'no-extreme', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
+  ['file', 'no-extreme', 'min-wr-dev', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
 if (opts.help) {
   console.log(`Usage: node filter-evals.js [options] > out.txt
 
@@ -36,6 +36,9 @@ replayed, which costs far more.
   --file PATH        input file (default: stdin)
   --no-extreme F     keep only winRatio in [F, 1-F] (drop value extremes;
                      same margin as train_ppat's --filter)     (default 0 = off)
+  --min-wr-dev D     keep only |winRatio - 0.5| >= D (drop near-even
+                     positions; --no-extreme bounds it from above:
+                     |winRatio - 0.5| <= 0.5 - F)                 (default 0 = off)
   --min-phase P      drop positions with phase < P             (default 0 = off)
   --max-phase P      drop positions with phase > P             (default 1 = off)
                      (phase = board fullness, 1 - empty/area; read from the
@@ -54,6 +57,8 @@ Examples:
 }
 
 const noExtreme    = opts['no-extreme']    !== undefined ? parseFloat(opts['no-extreme'])    : 0;
+const minWrDev     = opts['min-wr-dev']    !== undefined ? parseFloat(opts['min-wr-dev'])    : 0;
+if (!(minWrDev >= 0 && minWrDev <= 0.5)) { console.error(`--min-wr-dev must be in [0, 0.5] (got '${opts['min-wr-dev']}')`); process.exit(1); }
 const minPhase     = opts['min-phase']     !== undefined ? parseFloat(opts['min-phase'])     : 0;
 const maxPhase     = opts['max-phase']     !== undefined ? parseFloat(opts['max-phase'])     : 1;
 const valueCap     = opts['value-cap']     !== undefined ? parseFloat(opts['value-cap'])     : 0;
@@ -67,7 +72,7 @@ function parseMoveTok(t, N) {
   return (parseInt(t.slice(1), 10) - 1) * N + (t.charCodeAt(0) - 97);
 }
 
-let total = 0, dropExtreme = 0, dropPhase = 0, skipped = 0;
+let total = 0, dropExtreme = 0, dropNearEven = 0, dropPhase = 0, skipped = 0;
 const kept = [];   // { line, w }
 
 function processLine(line) {
@@ -84,6 +89,7 @@ function processLine(line) {
 
   // Value extremeness (cheap: no replay).
   if (noExtreme > 0 && (w < noExtreme || w > 1 - noExtreme)) { dropExtreme++; return; }
+  if (minWrDev > 0 && Math.abs(w - 0.5) < minWrDev) { dropNearEven++; return; }
 
   // Phase filter: current-format lines carry the phase in the file (as
   // train-vpat-supervised trusts it); legacy lines must be replayed.
@@ -161,11 +167,11 @@ for (let i = out.length - 1; i > 0; i--) {
 
 process.stderr.write(
   `filter-evals: ${total} read → ${out.length} kept  ` +
-  `(no-extreme=${noExtreme} min-phase=${minPhase} max-phase=${maxPhase} value-cap=${valueCap})  ` +
-  `dropped: extreme=${dropExtreme} phase=${dropPhase} skipped=${skipped}\n`);
+  `(no-extreme=${noExtreme} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase} value-cap=${valueCap})  ` +
+  `dropped: extreme=${dropExtreme} near-even=${dropNearEven} phase=${dropPhase} skipped=${skipped}\n`);
 
 process.stdout.write(
-  `# filter-evals: no-extreme=${noExtreme} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}; ` +
+  `# filter-evals: no-extreme=${noExtreme} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}; ` +
   `kept ${out.length} of ${total}\n`);
 // Batched writes: one syscall per ~64K lines, not per line.
 for (let i = 0; i < out.length; i += 65536) {
