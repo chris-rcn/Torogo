@@ -40,6 +40,12 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //           — sim moves only: ply 0 and the root argmax see no last move, so
 //           the root decision never depends on the game's last move, and at
 //           ply 0 the key would be the same in every sim anyway
+//   last move (mover, last SIM move L, p): an exact response table, one weight
+//           per (L, p) pair (2 * area * area)              ACTOR_LASTMOVE_LAYER
+//           — sim moves only, as the local slice: ply 0 and the root argmax see
+//           no last move, and a pass adds nothing.  Its key moves every ply and
+//           reaches every point, so each actor ply after the first rescores the
+//           whole board
 // plus the chain layer (ACTOR_CHAIN_LAYER): one weight per chain STATE,
 // keyed by (the chain's lowest-index stone, its stone count, its liberty
 // count) for chains of either colour with at most CHAIN_MAX_LIBS (3)
@@ -145,6 +151,9 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     least one of the two base tables must be on        (default 1)
 //   ACTOR_LOCAL_LAYER  1 = stacked slice keyed by "one of the 8 points around the
 //                     last sim move" (none at ply 0 and the root)           (default 0)
+//   ACTOR_LASTMOVE_LAYER  1 = stacked slice keyed by the exact last sim move: a
+//                     (mover, last move, point) response table (none at ply 0
+//                     and the root)                                      (default 0)
 //   ACTOR_CHAIN_LAYER  1 = add the chain layer: one weight per state of each chain
 //                     with at most 3 liberties, added to its adjacent points'
 //                     scores, shared by both sides                       (default 0)
@@ -176,6 +185,7 @@ function create(cfg) {
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
   const RESET_EACH_MOVE = cfg.int('RESET_EACH_MOVE', 1) !== 0;
   const USE_L    = cfg.int('ACTOR_LOCAL_LAYER', 0) !== 0;   // local slice
+  const USE_LM   = cfg.int('ACTOR_LASTMOVE_LAYER', 0) !== 0;   // (mover, last move, point) response slice
   const USE_M    = cfg.int('ACTOR_COLOR_LAYER', 1) !== 0;   // (mover, point) base table
   const USE_C    = cfg.int('ACTOR_COLORBLIND_LAYER', 1) !== 0;   // (point) base table, both sides
   const USE_K    = cfg.int('ACTOR_CHAIN_LAYER', 0) !== 0;        // chain-state layer
@@ -260,6 +270,7 @@ function create(cfg) {
   let bs = null, lastAt = null;                 // per-step phase bucket and sim last move, for the update
   let loc = null, curLast = PASS;               // local slice: per-point key (1 = one of the 8 points around curLast), the sim's last move
   let locMark = null;                           // scratch: the local points of one recorded step
+  let wLM = null, lmLast = PASS, lmAt = null;   // last-move slice: weights [mover][last move][p], its current key, per-step key
   // Chain layer: wK[key] over chain states; kSum[p] = Σ wK over the qualifying
   // chains adjacent to empty p (both movers' scores share it); gK = the board
   // being scored.  Per actor step, each qualifying chain's key, its liberties'
@@ -288,6 +299,7 @@ function create(cfg) {
     wP = new Float32Array(PB > 0 ? 2 * area * PB : 0);
     wR = new Float32Array(USE_R ? 2 * area : 0);
     wL = new Float32Array(USE_L ? 2 * area * 2 : 0);
+    wLM = new Float32Array(USE_LM ? 2 * area * area : 0);
     wK = new Float32Array(USE_K ? CHAIN_MAX_LIBS * area * area : 0);
     kSum = new Float64Array(area);
     kStamp = new Int32Array(area + 4); kStampN = 0;
@@ -310,11 +322,12 @@ function create(cfg) {
     fromActor = new Uint8Array(maxSteps);
     bs = new Uint8Array(maxSteps);
     lastAt = new Int32Array(maxSteps);
+    lmAt = new Int32Array(maxSteps);
     ppatState = ppatModel ? PPat.createState(N) : null;
   }
 
   function reset() {
-    w1.fill(0); wC.fill(0); wP.fill(0); wR.fill(0); wL.fill(0); wK.fill(0);
+    w1.fill(0); wC.fill(0); wP.fill(0); wR.fill(0); wL.fill(0); wLM.fill(0); wK.fill(0);
     base[0] = base[1] = 0.5;
   }
 
@@ -329,6 +342,7 @@ function create(cfg) {
     if (PB > 0) s += wP[mp * PB + curB];
     if (USE_R && atRoot) s += wR[mp];
     if (USE_L) s += wL[mp * 2 + loc[p]];
+    if (USE_LM && lmLast !== PASS) s += wLM[(m * area + lmLast) * area + p];
     if (USE_K) s += kSum[p];
     return s;
   }
@@ -603,6 +617,7 @@ function create(cfg) {
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(g) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // ply 0: no last move
+    if (USE_LM) lmLast = PASS;                     // ply 0: no last move
     recomputeAll(cells);
     const nbr = g._nbr, dnbr = g._dnbr;
     nbrT = nbr; dnbrT = dnbr;
@@ -623,7 +638,7 @@ function create(cfg) {
         move = sample(g, m, rng);
         exs.set(ex[m], o);
         Ss[t] = S[m];
-        bs[t] = curB; lastAt[t] = curLast;
+        bs[t] = curB; lastAt[t] = curLast; lmAt[t] = lmLast;
         if (USE_K) chainRecord(g, t, m, move);
         actorSteps++;
       } else {
@@ -647,6 +662,9 @@ function create(cfg) {
       // neighbourhood did not change, so lift its exclusion explicitly.
       if (prevKo !== PASS && cells[prevKo] === EMPTY) recompute(cells, prevKo);
       if (USE_L) setLast(cells, nbr, dnbr, move);
+      // The last-move key changes every point's score: rescore the board if
+      // the actor plays the next ply.
+      if (USE_LM) { lmLast = move; if (t + 1 < actorDepth) recomputeAll(cells); }
       t++;
     }
     lastActorSteps = actorSteps;
@@ -674,6 +692,7 @@ function create(cfg) {
     // The local key at this step: the 8 neighbours of the step's last move.
     const L = USE_L ? lastAt[t] : PASS;
     if (L !== PASS) { const bb = L * 4; for (let d = 0; d < 4; d++) { locMark[nbrT[bb + d]] = 1; locMark[dnbrT[bb + d]] = 1; } }
+    const LM = USE_LM ? lmAt[t] : PASS, lmB = LM !== PASS ? (m * area + LM) * area : -1;
     for (let p = 0; p < area; p++) {
       const v = e[p];
       if (v <= 0) continue;
@@ -684,6 +703,7 @@ function create(cfg) {
       if (PB > 0) wP[mp * PB + b] += k * gr;
       if (root) wR[mp] += k * gr;
       if (USE_L) wL[mp * 2 + locMark[p]] += k * gr;
+      if (lmB >= 0) wLM[lmB + p] += k * gr;
     }
     if (L !== PASS) { const bb = L * 4; for (let d = 0; d < 4; d++) { locMark[nbrT[bb + d]] = 0; locMark[dnbrT[bb + d]] = 0; } }
     // Chain layer: Σ over a chain's liberties of ([a = chosen] − π(a)) is
@@ -789,6 +809,7 @@ function create(cfg) {
     actorOn = true;
     atRoot = USE_R; curB = PB > 0 ? phaseBucket(game) : 0;
     if (USE_L) { loc.fill(0); curLast = PASS; }   // the root sees no last move
+    if (USE_LM) lmLast = PASS;
     gK = game;
     recomputeAll(cells);                  // root scores
     let best = PASS, bestS = -Infinity;
@@ -808,7 +829,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
-             setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, loc, area,
+             setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, wLM, loc, area,
              wK, kSum, chainKey, chainSum, lastBoard: () => gK };
   }
 

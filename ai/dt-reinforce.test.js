@@ -97,5 +97,57 @@ function libsOf(g, s) {
   check(worst < 1e-6, `chain weight change differs from its liberties' point changes by ${worst}`);
 }
 
+// ── Last-move slice: scores stay current as its key moves every ply ──────────
+// LR 0 and random response weights: after a whole actor-played sim, every
+// empty point's maintained score must equal a fresh score() under the final
+// key (a missed rescore leaves the previous ply's row in sc).
+{
+  const N = 7;
+  const a = agent({ LR: '0', ACTOR_CHAIN_LAYER: '0', ACTOR_LASTMOVE_LAYER: '1' });
+  const root = randomPosition(N, 6, 1);
+  a.getMove(root, 0, { rng: makeRng(2) });
+  const st = a._internals();
+  const rng = makeRng(5);
+  for (let i = 0; i < st.wLM.length; i++) st.wLM[i] = (rng.random() - 0.5) * 2;
+  let worst = 0, checked = 0;
+  for (let sim = 0; sim < 30; sim++) {
+    const g = randomPosition(N, 4 + (sim % 15), 300 + sim);
+    if (g.gameOver) continue;
+    st.simulate(g, rng);
+    const fin = st.lastBoard();
+    for (let m = 0; m < 2; m++) for (let p = 0; p < st.area; p++) {
+      if (fin.cells[p] !== EMPTY) continue;
+      worst = Math.max(worst, Math.abs(st.sc[m][p] - st.score(m, p))); checked++;
+    }
+  }
+  check(checked > 0 && worst < 1e-12, `last-move slice: maintained scores drifted by ${worst} over ${checked} points`);
+}
+
+// ── Last-move slice: a step trains exactly its (mover, last move) row ────────
+// Two actor plies per sim: ply 0 has no last move, ply 1 keys on ply 0's move
+// and is the only step of its mover, so that one row's change must equal the
+// (mover, point) table's change for that mover, and every other row stays 0.
+{
+  const N = 9;
+  const a = agent({ LR: '0.5', ACTOR_DEPTH: '2', ACTOR_CHAIN_LAYER: '0', ACTOR_LASTMOVE_LAYER: '1' });
+  const root = randomPosition(N, 30, 7);
+  a.getMove(root, 0, { rng: makeRng(3) });
+  const st = a._internals(), A = st.area;
+  let worst = 0, sims = 0, stray = 0;
+  for (let k = 0; k < 10; k++) {
+    st.reset();
+    st.simulate(root, makeRng(20 + k));
+    const L = st.chosen()[0], m1 = root.current === BLACK ? 1 : 0;   // ply 1's mover
+    if (L === -1) continue;
+    sims++;
+    for (let m = 0; m < 2; m++) for (let r = 0; r < A; r++) for (let p = 0; p < A; p++) {
+      const v = st.wLM[(m * A + r) * A + p];
+      if (m === m1 && r === L) worst = Math.max(worst, Math.abs(v - st.w1[m1 * A + p]));
+      else if (v !== 0) stray++;
+    }
+  }
+  check(sims > 0 && worst < 1e-7 && stray === 0, `last-move slice: row change off by ${worst}, ${stray} stray weights (${sims} sims)`);
+}
+
 if (failures) { console.error(`[dt-reinforce] ${failures} test(s) failed`); process.exit(1); }
 else console.log('[dt-reinforce] all tests passed');
