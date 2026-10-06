@@ -1609,12 +1609,17 @@ static int cfg_puct_match;                  /* --do-puct-match */
 static double puct_scale = 1.0;
 
 /* The model's playout-policy cost: COST_GAMES self-play games of the model
- * against itself on the deployment board, uniform below the deployment gate
- * as in a playout, and only the ppat moves at or past it timed.  Returns
+ * against itself on the deployment board (growing COST_GROWTH per printed
+ * row, as the matches grow), uniform below the deployment gate as in a
+ * playout, and only the ppat moves at or past it timed.  Returns
  * microseconds of THREAD CPU time per ppat move, so machine load (parallel
  * workers) inflates it less than wall clock would.  Fixed seed per game. */
-#define COST_GAMES 1000
+#define COST_GAMES  1000   /* first row's games */
+#define COST_GROWTH 1.1
+static double cost_scale = 1.0;
 static double policy_cost_us(void) {
+    const int games = (int)(COST_GAMES * cost_scale + 0.5);
+    cost_scale *= COST_GROWTH;
     use_run_model();
     const float gate = ppat_min_phase;
     ppat_min_phase = 0.0f;           /* the gate is applied here, untimed side */
@@ -1623,7 +1628,7 @@ static double policy_cost_us(void) {
     Rng rng;
     double cpu_s = 0;
     long moves = 0;
-    for (int gi = 0; gi < COST_GAMES; gi++) {
+    for (int gi = 0; gi < games; gi++) {
         rng_seed(&rng, 0xc057L + gi);
         Game2 game;
         g2_new(&game, DEPLOY_BOARD_SIZE);
@@ -2087,7 +2092,8 @@ static void print_help(FILE *out, const char *prog) {
 "                             playouts, rff to phase 0.5, fpol ref/ref-fp-stone8AdjLib3.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
 "                             ppatUs = this model's CPU us per ppat move in 1000\n"
-"                             self-play games (moves past the uniform gate).\n"
+"                             self-play games growing 1.1x per row (moves past the\n"
+"                             uniform gate).\n"
 "                             Monitor-only: -best does not read it\n"
 "\n"
 "Gradient shaping\n"
