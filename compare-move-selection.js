@@ -55,7 +55,8 @@ if (opts.help || !opts.p1 || !opts.p2 || (!opts.file && !opts.referee)) {
 
 Compare two agents' move selection, scored against an oracle.  Headline is the
 paired mean win-prob difference Δ(p2-p1): positive => p2 (the challenger) is the
-better mover by that margin; se is its standard error.  Agents are interleaved
+better mover by that margin; se is its standard error (clustered by position
+under --oversample, whose repeats of a position are not independent).  Agents are interleaved
 per decision (shared load).
 
   --p1 NAME         ai/<name>.js for slot 1 (needs getMove()); P1_* env config
@@ -136,10 +137,23 @@ let p1Seed = SEED, p2Seed = SEED;
 const r4  = Util.fmtRatio4;
 const sgn = v => (v >= 0 ? '+' : '-') + r4(Math.abs(v));
 // Standard error of a paired mean, from the per-decision differences' sum and
-// sum of squares (agreeing decisions are zeros).  With --oversample > 1 the
-// repeats of a position are not independent, so it reads somewhat low there.
+// sum of squares (agreeing decisions are zeros).
 const seOf = (sum, sumSq, n) => n > 1 ? Math.sqrt(Math.max(0, sumSq - sum * sum / n) / (n - 1) / n) : NaN;
 const seCell = (sum, sumSq, n) => { const se = seOf(sum, sumSq, n); return Number.isFinite(se) ? r4(se) : '-'; };
+// --file with --oversample: a position's repeats are correlated, so the SE of
+// the mean over decisions is clustered by position — per position i, S_i (sum
+// of its differences) and n_i (its decisions):
+//   Var(mean) = C/(C-1) · Σ_i (S_i − n_i·mean)² / N²   (C positions, N decisions)
+// which at one decision per position is the plain paired SE above.
+function clusterSeCell(posS, posN) {
+  let C = 0, N = 0, S = 0;
+  for (let i = 0; i < posN.length; i++) if (posN[i] > 0) { C++; N += posN[i]; S += posS[i]; }
+  if (C < 2) return '-';
+  const mean = S / N;
+  let v = 0;
+  for (let i = 0; i < posN.length; i++) if (posN[i] > 0) { const r = posS[i] - posN[i] * mean; v += r * r; }
+  return r4(Math.sqrt(C / (C - 1) * v) / N);
+}
 
 if (FILE_MODE) runFileMode();
 else           runRefereeMode();
@@ -182,12 +196,13 @@ function runFileMode() {
                'gapP1'.padStart(6), 'gapP2'.padStart(6), 'Δp2-p1'.padStart(7), 'se'.padStart(5), 'agree'.padStart(6)].join('  '));
 
   const startTime = performance.now();
-  let evals = 0, sum1 = 0, sum2 = 0, sumDsq = 0, agreeN = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
+  let evals = 0, sum1 = 0, sum2 = 0, agreeN = 0, nextPrintPos = 1, printedAt = -1;   // geometric row schedule by positions
+  const posS = new Float64Array(positions.length), posN = new Int32Array(positions.length);   // per-position Σ(gap1 − gap2), decisions
   const printStats = () => {
     console.log([
       Util.fmt4i(evals).padStart(5), Util.fmtMs(performance.now() - startTime).padStart(7),
       r4(sum1 / evals).padStart(6), r4(sum2 / evals).padStart(6),
-      sgn((sum1 - sum2) / evals).padStart(7), seCell(sum1 - sum2, sumDsq, evals).padStart(5),
+      sgn((sum1 - sum2) / evals).padStart(7), clusterSeCell(posS, posN).padStart(5),
       (agreeN / evals).toFixed(3).padStart(6),
     ].join('  '));
   };
@@ -203,7 +218,7 @@ function runFileMode() {
         r2 = moveGap(p2, position, budget2, false);
         r1 = moveGap(p1, position, budget1, true);
       }
-      sum1 += r1.gap; sum2 += r2.gap; sumDsq += (r1.gap - r2.gap) * (r1.gap - r2.gap);
+      sum1 += r1.gap; sum2 += r2.gap; posS[i] += r1.gap - r2.gap; posN[i]++;
       if (r1.str === r2.str) agreeN++;
       evals++;
       if (evals >= nextPrintPos) { printStats(); printedAt = evals; nextPrintPos = Math.max(Math.ceil(nextPrintPos * 1.5), nextPrintPos + 1); }
