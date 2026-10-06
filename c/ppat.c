@@ -11,7 +11,7 @@
 /* ── Canon table ───────────────────────────────────────────────────────────── */
 
 /* Active canonical-ID table, plus the per-cap cache behind it (see ppat.h). */
-const int32_t *ppat_canon_id = NULL;
+const int16_t *ppat_canon_id = NULL;
 
 /* ── Twelvecell extension ──────────────────────────────────────────────────── */
 /* Canonicalising the four arms under the full D4 is EXACT here rather than the
@@ -106,7 +106,7 @@ static void ppat_build_t12(void) {
     }
     t12_built = true;
 }
-static int32_t *canon_by_cap[PPAT_MAX_ADJ_LIB + 1];
+static int16_t *canon_by_cap[PPAT_MAX_ADJ_LIB + 1];
 static int32_t  np_by_cap   [PPAT_MAX_ADJ_LIB + 1];
 static int32_t  raw_by_cap  [PPAT_MAX_ADJ_LIB + 1];
 int32_t ppat_num_patterns = 0;
@@ -153,14 +153,14 @@ void ppat_init(int adj_lib) {
 
     const int R = 2 * adj_lib + 1;            /* orthogonal radix */
     const int raw_size = R * R * R * R * 81;  /* R^4 * 3^4 */
-    int32_t *table = malloc((size_t)raw_size * sizeof(int32_t));
+    int16_t *table = malloc((size_t)raw_size * sizeof(int16_t));
     if (!table) {
         fprintf(stderr, "ppat_init: out of memory for adjLib %d (%d entries)\n", adj_lib, raw_size);
         exit(1);
     }
 
-    /* Map: minVariant → assigned dense ID.  Static (not stack): at cap 4 this is
-     * 531441 int32 = 2.1 MB, far past any sane stack. */
+    /* Map: minVariant → assigned dense ID.  Static (not stack): at cap 3 this is
+     * 194481 int32 = 778 KB, past any sane stack. */
     static int32_t id_of[PPAT_RAW_SIZE];
     for (int i = 0; i < raw_size; i++) id_of[i] = -1;
     int next_id = 0;
@@ -186,7 +186,7 @@ void ppat_init(int adj_lib) {
         }
 
         if (id_of[min_v] == -1) id_of[min_v] = next_id++;
-        table[raw] = id_of[min_v];
+        table[raw] = (int16_t)id_of[min_v];
     }
     canon_by_cap[adj_lib] = table;
     np_by_cap[adj_lib]    = next_id;

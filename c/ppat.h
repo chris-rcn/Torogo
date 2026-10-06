@@ -29,20 +29,21 @@
  * orthogonals encode 0/1/2 like the diagonals) — the whole 3x3 becomes pure
  * shape, useful as an ablation isolating what the atari bit is worth.
  * The cap is a property of a trained model and travels in its weights file.
- * Raw space = (2*cap+1)^4 * 3^4: 6561 (cap 1), 50625 (2), 194481 (3), 531441 (4). */
+ * Raw space = (2*cap+1)^4 * 3^4: 6561 (cap 1), 50625 (2), 194481 (3). */
 #define PPAT_MIN_ADJ_LIB  1
-#define PPAT_MAX_ADJ_LIB  4
+#define PPAT_MAX_ADJ_LIB  3
 /* Weight files predating the adjLib field are the historical encoding, cap 2.
  * NOT PPAT_MIN_ADJ_LIB: that floor dropped to 1 when cap-1 support landed, and
  * tying the legacy default to it silently reinterpreted every old file. */
 #define PPAT_LEGACY_ADJ_LIB  2
-#define PPAT_RAW_SIZE  531441          /* 9^4 * 3^4 — the cap-4 (max) raw space */
+#define PPAT_RAW_SIZE  194481          /* 7^4 * 3^4 — the cap-3 (max) raw space */
 
-/* Widened to 32-bit: cap 4 canonicalises to ~71k patterns, past int16's range.
- * A POINTER, not an array: one table per adjLib is built on first use and kept,
+/* 16-bit: cap 3, the largest supported, canonicalises to 25,473 patterns, so
+ * its table is 389 KB (fits a 512 KB L2), half an int32 table.  A POINTER, not
+ * an array: one table per adjLib is built on first use and kept,
  * so alternating caps (a match between models built at different caps) costs a
  * pointer swap instead of a multi-megabyte rebuild. */
-extern const int32_t *ppat_canon_id;
+extern const int16_t *ppat_canon_id;
 extern int32_t ppat_adj_lib;           /* active cap (set by ppat_init) */
 extern int32_t ppat_raw_size;          /* (2*cap+1)^4 * 81 for the active cap */
 extern int32_t ppat_num_patterns;      /* set by ppat_init() */
