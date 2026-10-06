@@ -55,7 +55,7 @@ const Util = require('./util.js');
 // '#' comment lines; the data itself is written via process.stdout.write.
 console.log = (...a) => process.stdout.write('# ' + a.join(' ') + '\n');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'],
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'corpus-ordered'],
   ['value-agent', 'corpus', 'position-agent', 'size', 'rand-open', 'min-phase', 'max-phase', 'prefix-delta', 'limit', 'komi']);
 if (opts.help || !opts['value-agent'] || (!opts.corpus && !opts['position-agent'])) {
   console.error(`Usage: node gen-agent-evals.js --value-agent <name> (--corpus <file> | --position-agent <name>) [options]  > out.txt
@@ -80,6 +80,12 @@ to stderr.  Non-deterministic; runs until --limit or killed.
   --corpus FILE     gen-games.js corpus ("<size> <move1,move2,...>" lines;
                     mixed sizes fine — size comes from each record).  One of
                     --corpus / --position-agent is required (mutually exclusive)
+  --corpus-ordered  take the corpus games in file order, looping, instead of
+                    at random; eval k's ply (and --prefix-delta moves) come
+                    from an rng seeded by k.  Runs with the same corpus, phase
+                    window and prefix then emit the same positions line for
+                    line, whatever the value agent and its effort (labels use
+                    their own rng)
   --position-agent NAME
                     ai/<name>.js self-play policy (needs getMove()) that
                     generates a novel game per position — no corpus file
@@ -112,6 +118,8 @@ const GAME_MODE     = !!gameAgentName;
 if (corpusPath && gameAgentName) {
   console.error('--corpus and --position-agent are mutually exclusive'); process.exit(1);
 }
+const ORDERED = opts['corpus-ordered'] === true;
+if (ORDERED && !corpusPath) { console.error('--corpus-ordered needs --corpus'); process.exit(1); }
 const GAME_SIZE = opts.size !== undefined ? parseInt(opts.size, 10) : 13;
 const randOpen = opts['rand-open'] !== undefined ? parseInt(opts['rand-open'], 10) : 4;
 if (!GAME_MODE && (opts.size !== undefined || opts['rand-open'] !== undefined)) {
@@ -186,7 +194,7 @@ if (!GAME_MODE) {
 process.stdout.write(`# format: bsize phase moves winRatio\n`);
 process.stdout.write(GAME_MODE
   ? `# position-agent: ${gameAgentName} size: ${GAME_SIZE} rand-open: ${randOpen}\n`
-  : `# corpus: ${corpusPath} (${corpus.length} games)\n`);
+  : `# corpus: ${corpusPath} (${corpus.length} games)${ORDERED ? ' ordered (eval k seeded by k)' : ''}\n`);
 process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
 if (PREFIX_DELTA !== null) process.stdout.write(
   `# prefix-delta: ${PREFIX_DELTA} (standard-playout prefix from each sampled ply; endpoint labeled)\n`);
@@ -198,6 +206,10 @@ const sourceStr = GAME_MODE ? `position-agent: ${gameAgentName} (rand-open ${ran
 process.stderr.write(`gen-agent-evals: agent: ${agentName}  ${sourceStr}  size: ${sizeStr}  min-phase: ${minPhase}  max-phase: ${maxPhase}${PREFIX_DELTA !== null ? `  prefix-delta: ${PREFIX_DELTA}` : ''}  komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}  limit: ${limit === Infinity ? 'none' : limit}\n`);
 
 let emitted = 0, misses = 0, prefixSkips = 0, prefixStreak = 0;
+// --corpus-ordered: the next game (looping), and eval k's position rng, seeded
+// by k so every run makes the same choices; the labels keep using `rng`.
+let nextGame = 0;
+const evalRng = k => makeRng((Math.imul(k + 1, 0x9E3779B1) >>> 0) || 1);
 
 // Progress table (stderr): geometric print schedule, capped at 4 h between
 // rows (the JS-trainer convention).  tPosition is the interval mean.
@@ -247,8 +259,13 @@ while (emitted < limit) {
   // one.  Replay it once, reservoir-sampling one ply inside the phase window
   // (the same replay validates a corpus record).
   let gi = -1, size, moves;
+  const prng = ORDERED ? evalRng(emitted) : rng;   // position choices (ply, prefix)
   if (GAME_MODE) {
     ({ size, moves } = generateTrajectory());
+  } else if (ORDERED) {
+    gi = nextGame;
+    nextGame = (nextGame + 1) % corpus.length;
+    ({ size, moves } = corpus[gi]);
   } else {
     gi = (rng.random() * corpus.length) | 0;
     ({ size, moves } = corpus[gi]);
@@ -262,12 +279,17 @@ while (emitted < limit) {
     // position is the same degenerate one every time.
     if (phase >= minPhase && i > 0) {
       seen++;
-      if (rng.random() < 1 / seen) chosenPos = i;
+      if (prng.random() < 1 / seen) chosenPos = i;
     }
     if (!game.play(moves[i])) { ok = false; break; }
   }
   if (!ok) {
     if (GAME_MODE) { console.error('position-agent: generated game failed replay (bug)'); process.exit(1); }
+    if (ORDERED) {   // keep the order: skip the record (every pass), loudly
+      process.stderr.write(`corpus: game ${gi} failed replay, skipped\n`);
+      if (++misses >= MAX_MISSES) { console.error(`no eligible position in ${MAX_MISSES} consecutive games`); process.exit(1); }
+      continue;
+    }
     // Bad corpus record (e.g. torn tail): drop it from the pool, loudly.
     process.stderr.write(`corpus: game ${gi} failed replay, dropped (${corpus.length - 1} left)\n`);
     corpus[gi] = corpus[corpus.length - 1];
@@ -302,7 +324,7 @@ while (emitted < limit) {
     const prefixLen = Math.ceil(PREFIX_DELTA * size * size);
     let n = 0;
     while (!pos.gameOver && n < prefixLen) {
-      const m = PPat.ppatMove(pos, state, ppatModel, rng);
+      const m = PPat.ppatMove(pos, state, ppatModel, prng);
       pos.play(m);
       seq += ',' + coordStr(m, size);
       n++;
