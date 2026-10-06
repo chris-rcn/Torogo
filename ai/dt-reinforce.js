@@ -137,6 +137,10 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
 //   LR                actor step size on the return minus the baseline.  Ladder at
 //                     2 s: 0.04 -> 0.0189 ... 0.005 -> 0.0108, 0.002 -> 0.0103 (default 0.002)
+//   END_LR_RATIO      ramp the step size linearly over a move from LR at its first
+//                     sim to END_LR_RATIO * LR at its end, by the share of
+//                     PLAYOUTS run (or of the time budget used) when a sim
+//                     starts; 1 = constant LR, 0 = ramp to 0             (default 1)
 //   ACTOR_PHASE_BUCKETS  stacked slice keyed by the sim board's phase bucket, this
 //                     many equal-width buckets of [0,1]; 0 = off           (default 0)
 //   ACTOR_ROOT_LAYER  1 = stacked slice read and trained on ply 0 of a sim only
@@ -180,6 +184,9 @@ function create(cfg) {
   const ACTOR_DEPTH = cfg.int('ACTOR_DEPTH', 30);
   let actorOn = true;                        // the actor plays the current sim ply (else the tail)
   const TERM_LR  = cfg.float('LR', 0.002);
+  const END_LR_RATIO = cfg.float('END_LR_RATIO', 1);
+  if (!(END_LR_RATIO >= 0)) throw new Error(`dt-reinforce: END_LR_RATIO must be >= 0, got ${END_LR_RATIO}`);
+  let curLR = TERM_LR;                       // this sim's step size (END_LR_RATIO ramps it over the move)
   const PB       = cfg.int('ACTOR_PHASE_BUCKETS', 0);       // phase slice: bucket count, 0 = off
   const USE_R    = cfg.int('ACTOR_ROOT_LAYER', 0) !== 0;    // root slice
   const ROOT_RESET = cfg.int('ACTOR_ROOT_RESET', 1) !== 0;
@@ -687,7 +694,7 @@ function create(cfg) {
     const o = t * area;
     const e = exs.subarray(o, o + area);
     const invS = 1 / Ss[t];
-    const k = TERM_LR * adv / TEMP;
+    const k = curLR * adv / TEMP;
     const b = bs[t], root = USE_R && t === 0;
     // The local key at this step: the 8 neighbours of the step's last move.
     const L = USE_L ? lastAt[t] : PASS;
@@ -770,6 +777,8 @@ function create(cfg) {
     let sims = 0, longest = 0, totalSteps = 0, sumZ = 0;
     while (true) {
       if (PLAYOUTS_CAP > 0 ? sims >= PLAYOUTS_CAP : Date.now() - tStart >= budgetMs) break;
+      const used = PLAYOUTS_CAP > 0 ? sims / PLAYOUTS_CAP : (Date.now() - tStart) / budgetMs;   // share of the move's effort spent
+      curLR = TERM_LR * (1 - used * (1 - END_LR_RATIO));
       const steps = simulate(game, rng);
       if (steps > longest) longest = steps;
       totalSteps += steps;
@@ -829,6 +838,7 @@ function create(cfg) {
              get lastActorSteps() { return lastActorSteps; },
              get lastReturn() { return lastReturn; },
              setTrunc: (active, plies) => { truncActive = active; truncPly = plies; },
+             get curLR() { return curLR; },
              setLast, chosen: () => chosen, sc, ex, S, base, w1, wC, wP, wR, wL, wLM, loc, area,
              wK, kSum, chainKey, chainSum, lastBoard: () => gK };
   }
