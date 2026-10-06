@@ -65,7 +65,7 @@
  *                           teMSE_c stays comparable because it removes the
  *                           0.25/N floor.
  *     --no-extreme <f>      drop TRAIN positions whose value is more extreme than ±(1-2f) (default 0 = keep all)
- *     --iteration-limit <n> stop after n iterations (default infinite)
+ *     --epochs <n>          stop after n epochs (passes over the train set; default infinite)
  *     --overfit             use same data for train and test
  *
  * EARLY PASS: always on.  The playout policy offers PASS as a candidate at
@@ -186,7 +186,7 @@ static int    cfg_test_playouts;        /* explicit per-position count; 0 = deri
 static int    cfg_test_total_playouts;  /* > 0: spread this total over the test set instead */
 static int    cfg_test_playouts_derived; /* set when cfg_test_playouts came from the total */
 static float  cfg_no_extreme;
-static int    cfg_iter_limit;          /* 0 = infinite */
+static int    cfg_epochs;              /* --epochs: 0 = infinite */
 static int    cfg_overfit;
 static int    cfg_phase;               /* -1 = all phases; >= 0 = train/test only this phase */
 static int    cfg_local_features;      /* --local-features: train the 7 previous-move ("local") features; else frozen */
@@ -2101,7 +2101,7 @@ static void print_help(FILE *out, const char *prog) {
 "  --test-from N              pin the position where the expensive columns switch on (default 0)\n"
 "\n"
 "Control\n"
-"  --iteration-limit N        stop after N iterations (default 0 = infinite)\n"
+"  --epochs N                 stop after N epochs, passes over the train set (default 0 = infinite)\n"
 "  --baseline-only            print the uniform-policy baseline row, then exit\n"
 "  -h, --help                 show this help and exit\n"
 "\n"
@@ -2133,7 +2133,7 @@ int main(int argc, char **argv) {
     cfg_test_playouts = get_int_arg(argc, argv, "--test-playouts", 0);
     cfg_test_total_playouts = get_int_arg(argc, argv, "--test-total-playouts", 200000);
     cfg_no_extreme       = get_float_arg(argc, argv, "--no-extreme", 0.0f);
-    cfg_iter_limit   = get_int_arg(argc, argv, "--iteration-limit", 0);
+    cfg_epochs       = get_int_arg(argc, argv, "--epochs", 0);
     cfg_overfit      = has_flag(argc, argv, "--overfit");
     int baseline_only = has_flag(argc, argv, "--baseline-only");  /* print uniform baseline, then exit */
     ppat_phase_count = get_int_arg(argc, argv, "--phases", 1);
@@ -2449,7 +2449,7 @@ int main(int argc, char **argv) {
         iterations++;
         shuffle_train();
 
-        if (cfg_iter_limit > 0 && iterations >= cfg_iter_limit) {
+        if (cfg_epochs > 0 && iterations >= cfg_epochs) {
             if (do_inline) print_stats(iterations, total_positions, 0, 0, 1);
             break;
         }
