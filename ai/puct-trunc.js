@@ -189,7 +189,7 @@ function create(cfg) {
   }
 
   // ppat playout policy weights: PPAT_DATA, defaulting to out/ppat-data-1623136.js
-  // (the current single-phase model, as cascade.js does); window.PPATWeights in
+  // (single-phase, the full ppat feature set); window.PPATWeights in
   // the browser.  Hard failure, not a fallback: this agent's strength IS its
   // ppat playouts, so silently running uniform (e.g. a relative PPAT_DATA that
   // misses under a different cwd) fields a wrong engine under the right name.
