@@ -1602,7 +1602,7 @@ static void match_cols(char *dw, size_t dwn) {
  * see policy_cost_us. */
 static int cfg_puct_match;                  /* --do-puct-match */
 #define PUCT_FPOL       "ref/ref-fp-stone8AdjLib3.js"   /* prior / top-K / rff model */
-#define PUCT_GAMES     100                     /* first row's games */
+static int cfg_init_puct_games = 100;          /* --init-puct-games: first row's games */
 #define PUCT_PLAYOUTS   100                    /* simulations per move, both sides */
 #define PUCT_MIN_PHASE  0.5                    /* rff plays both sides below it */
 #define PUCT_MATCH_SEED 0x9c7a11L
@@ -1662,7 +1662,7 @@ static void puct_match_cols(char *pw, size_t pwn, char *cw, size_t cwn) {
     mc.side[1].ppat_min_phase = ppat_min_phase;  /* the deployment gate */
     Match *m = match_new(&mc);
     MatchStats st = {0};
-    int pairs = (int)(PUCT_GAMES * puct_scale / 2 + 0.5);
+    int pairs = (int)(cfg_init_puct_games * puct_scale / 2 + 0.5);
     if (pairs < 1) pairs = 1;
     const double t0 = wall_now();
     int truncated = 0;
@@ -1733,7 +1733,7 @@ static void print_banner(bool monitor, const char *ckpt, const char *best) {
 
     if (cfg_puct_match)
         printf("puct      %d games first row (x%.2g per row), %d playouts, rff to phase %g, fpol %s\n",
-               PUCT_GAMES, MATCH_GROWTH, PUCT_PLAYOUTS, PUCT_MIN_PHASE, PUCT_FPOL);
+               cfg_init_puct_games, MATCH_GROWTH, PUCT_PLAYOUTS, PUCT_MIN_PHASE, PUCT_FPOL);
 
     /* The run line carries the only mode-specific facts: worker count, plus the
      * seed (solo, replayable) or a monitor tag (parallel). */
@@ -2088,13 +2088,15 @@ static void print_help(FILE *out, const char *prog) {
 "                             both play the reference (default 0.6,1)\n"
 "\n"
 "PUCT match (the ppat match metric: puct-ppat-fp, uniform vs this model's playouts)\n"
-"  --do-puct-match            play it every row: 100 games growing 1.2x per row, 100\n"
-"                             playouts, rff to phase 0.5, fpol ref/ref-fp-stone8AdjLib3.js.\n"
+"  --do-puct-match            play it every row: --init-puct-games games growing 1.2x\n"
+"                             per row, 100 playouts, rff to phase 0.5, fpol\n"
+"                             ref/ref-fp-stone8AdjLib3.js.\n"
 "                             pWR-2se = P2 win ratio minus two SE of its pair scores,\n"
 "                             ppatUs = this model's CPU us per ppat move in 1000\n"
 "                             self-play games growing 1.1x per row (moves past the\n"
 "                             uniform gate).\n"
 "                             Monitor-only: -best does not read it\n"
+"  --init-puct-games N        the puct match's first-row game count (default 100)\n"
 "\n"
 "Gradient shaping\n"
 "  --phase-compensation-buckets N\n"
@@ -2166,6 +2168,8 @@ int main(int argc, char **argv) {
      * Forcing ref_theta off is enough — every directWR path is gated on it. */
     if (has_flag(argc, argv, "--no-direct")) cfg_ref_weights = NULL;
     cfg_puct_match     = has_flag(argc, argv, "--do-puct-match");
+    cfg_init_puct_games = get_int_arg(argc, argv, "--init-puct-games", 100);
+    if (cfg_init_puct_games < 2) { fprintf(stderr, "error: --init-puct-games must be >= 2 (games are played in pairs)\n"); exit(1); }
     if (cfg_puct_match) fpol_load(PUCT_FPOL);   /* exits loudly on a missing file or other spec */
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
