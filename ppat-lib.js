@@ -37,10 +37,11 @@ const _D4 = [
 //
 // The encoding is already relative to the current mover (FRIEND/FOE), so color
 // swap is NOT a symmetry.  Only the 8 D4 spatial transforms are applied.
-// canonId maps raw → dense canonical ID (0-based); Int32Array because cap 4
-// canonicalises to ~71k patterns, past Int16's range.
+// canonId maps raw → dense canonical ID (0-based); Int16Array: cap 3, the
+// largest supported, canonicalises to 25,473 patterns.  Half the bytes of an
+// Int32 table, so cap 3's (194,481 entries, 389 KB) fits a 512 KB L2.
 
-const MIN_ADJ_LIB = 1, MAX_ADJ_LIB = 4;   // cap 1 = presence-only (pure shape)
+const MIN_ADJ_LIB = 1, MAX_ADJ_LIB = 3;   // cap 1 = presence-only (pure shape)
 const _tablesByCap = new Map();   // adjLib → { canonId, numPatterns, rawSize }
 
 function _buildTables(adjLib) {
@@ -51,7 +52,7 @@ function _buildTables(adjLib) {
 
   const R = 2 * adjLib + 1;
   const rawSize = R * R * R * R * 81;
-  const canonId = new Int32Array(rawSize);
+  const canonId = new Int16Array(rawSize);
   const v  = new Int32Array(8);
   const tv = new Int32Array(8);
   const idMap = new Map(); // minVariant rawIdx → assigned canonId
