@@ -56,8 +56,8 @@ if (opts.help || !opts.p1 || !opts.p2 || (!opts.file && !opts.referee)) {
 Compare two agents' move selection, scored against an oracle.  Headline is the
 paired mean win-prob difference Δ(p2-p1): positive => p2 (the challenger) is the
 better mover by that margin; se is its standard error (clustered by position
-under --oversample, whose repeats of a position are not independent).  Agents are interleaved
-per decision (shared load).
+under --oversample, whose repeats of a position are not independent).  Agents
+are interleaved per decision (shared load).
 
   --p1 NAME         ai/<name>.js for slot 1 (needs getMove()); P1_* env config
   --p2 NAME         ai/<name>.js for slot 2; P2_* env config
