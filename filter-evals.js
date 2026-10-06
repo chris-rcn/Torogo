@@ -16,7 +16,7 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['file', 'no-extreme', 'min-wr-dev', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
+  ['file', 'max-wr-dev', 'min-wr-dev', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
 if (opts.help) {
   console.log(`Usage: node filter-evals.js [options] > out.txt
 
@@ -34,11 +34,10 @@ read the current format's phase column directly; legacy lines must be
 replayed, which costs far more.
 
   --file PATH        input file (default: stdin)
-  --no-extreme F     keep only winRatio in [F, 1-F] (drop value extremes;
-                     same margin as train_ppat's --filter)     (default 0 = off)
+  --max-wr-dev D     keep only |winRatio - 0.5| <= D (drop value extremes;
+                     D = 0.5 - f is train_ppat's --no-extreme f)  (default 0.5 = off)
   --min-wr-dev D     keep only |winRatio - 0.5| >= D (drop near-even
-                     positions; --no-extreme bounds it from above:
-                     |winRatio - 0.5| <= 0.5 - F)                 (default 0 = off)
+                     positions)                                   (default 0 = off)
   --min-phase P      drop positions with phase < P             (default 0 = off)
   --max-phase P      drop positions with phase > P             (default 1 = off)
                      (phase = board fullness, 1 - empty/area; read from the
@@ -51,12 +50,13 @@ replayed, which costs far more.
   --seed N           RNG seed (subsampling + output shuffle)    (default 1)
 
 Examples:
-  node filter-evals.js --file evals.txt --no-extreme 0.01 --value-cap 3 --value-buckets 20 > out.txt
+  node filter-evals.js --file evals.txt --max-wr-dev 0.49 --value-cap 3 --value-buckets 20 > out.txt
   cat evals.txt | node filter-evals.js --value-cap 2 > out.txt`);
   process.exit(0);
 }
 
-const noExtreme    = opts['no-extreme']    !== undefined ? parseFloat(opts['no-extreme'])    : 0;
+const maxWrDev     = opts['max-wr-dev']    !== undefined ? parseFloat(opts['max-wr-dev'])    : 0.5;
+if (!(maxWrDev >= 0 && maxWrDev <= 0.5)) { console.error(`--max-wr-dev must be in [0, 0.5] (got '${opts['max-wr-dev']}')`); process.exit(1); }
 const minWrDev     = opts['min-wr-dev']    !== undefined ? parseFloat(opts['min-wr-dev'])    : 0;
 if (!(minWrDev >= 0 && minWrDev <= 0.5)) { console.error(`--min-wr-dev must be in [0, 0.5] (got '${opts['min-wr-dev']}')`); process.exit(1); }
 const minPhase     = opts['min-phase']     !== undefined ? parseFloat(opts['min-phase'])     : 0;
@@ -88,7 +88,7 @@ function processLine(line) {
   total++;
 
   // Value extremeness (cheap: no replay).
-  if (noExtreme > 0 && (w < noExtreme || w > 1 - noExtreme)) { dropExtreme++; return; }
+  if (Math.abs(w - 0.5) > maxWrDev) { dropExtreme++; return; }
   if (minWrDev > 0 && Math.abs(w - 0.5) < minWrDev) { dropNearEven++; return; }
 
   // Phase filter: current-format lines carry the phase in the file (as
@@ -167,11 +167,11 @@ for (let i = out.length - 1; i > 0; i--) {
 
 process.stderr.write(
   `filter-evals: ${total} read → ${out.length} kept  ` +
-  `(no-extreme=${noExtreme} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase} value-cap=${valueCap})  ` +
+  `(max-wr-dev=${maxWrDev} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase} value-cap=${valueCap})  ` +
   `dropped: extreme=${dropExtreme} near-even=${dropNearEven} phase=${dropPhase} skipped=${skipped}\n`);
 
 process.stdout.write(
-  `# filter-evals: no-extreme=${noExtreme} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}; ` +
+  `# filter-evals: max-wr-dev=${maxWrDev} min-wr-dev=${minWrDev} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}; ` +
   `kept ${out.length} of ${total}\n`);
 // Batched writes: one syscall per ~64K lines, not per line.
 for (let i = 0; i < out.length; i += 65536) {
