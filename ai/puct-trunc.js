@@ -222,7 +222,7 @@ function create(cfg) {
   const _isBrowser  = typeof window !== 'undefined';
   const fpModel     = FeaturePol.loadModel({ name: 'puct-trunc',
     path: _isBrowser ? undefined
-                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-fast.js')) });
+                     : cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'out', 'featurepol-brotlz67.js')) });
   const fpWeights   = fpModel.weights;
   // Softmax temperature of the featurepol priors.  Top-K keeps moves by rank,
   // which temperature does not change; it reshapes the PUCT priors among them.
