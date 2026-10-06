@@ -91,9 +91,11 @@ while [ "$i" -lt "$K" ]; do
 done
 
 # Kill all trainers if the monitor exits (Ctrl-C, etc.); leave the checkpoint.
-trap 'kill $PIDS 2>/dev/null; rm -rf "$SYNC_DIR"' INT TERM EXIT
+trap 'kill $PIDS 2>/dev/null || true; rm -rf "$SYNC_DIR"' INT TERM EXIT   # || true: under set -e a kill of already-exited trainers would abort the cleanup
 
 # Monitor in the foreground: tests the combined checkpoint and prints the table.
 # It gets the test args from "$@" (test-pos/test-playouts/test-moves/phases) and
 # --workers so it can report aggregate positions; it ignores the training args.
-"$BIN" "$DATA" --workers "$K" --monitor "$CKPT" "$@"
+# --done-dir: each trainer leaves done.w<id> in the sync dir when it finishes
+# (--epochs), and the monitor exits after testing the final checkpoint.
+"$BIN" "$DATA" --workers "$K" --monitor "$CKPT" --done-dir "$SYNC_DIR" "$@"

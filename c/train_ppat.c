@@ -353,6 +353,7 @@ static float run_pass_weight_ema = PASS_WEIGHT_INIT;
  * i.e. hundredths rather than units. */
 static const char *cfg_save;           /* fixed checkpoint path (else a random out/ name) */
 static const char *cfg_monitor;        /* if set: run as a test-only monitor of this checkpoint */
+static const char *cfg_done_dir;       /* monitor: exit once <dir>/done.w0..w(K-1) all exist (train-ppat-parallel) */
 
 /* ── Training data ─────────────────────────────────────────────────────────── */
 
@@ -1835,17 +1836,26 @@ static void run_monitor(void) {
         _v; })
 
     for (;;) {
+        /* Every worker has finished (--epochs reached): test the final
+         * checkpoint at once if it is untested, then exit. */
+        bool done = cfg_done_dir != NULL;
+        for (int w = 0; done && w < cfg_workers; w++) {
+            char dp[512];
+            snprintf(dp, sizeof dp, "%s/done.w%d", cfg_done_dir, w);
+            done = access(dp, F_OK) == 0;
+        }
         double el_now = wall_now() - wall_start;
-        if (el_now < mon_next_test) { usleep(500000); continue; }   /* not due yet */
+        if (!done && el_now < mon_next_test) { usleep(500000); continue; }   /* not due yet */
 
         /* Sleepy loop: only test + print when the checkpoint actually changed
          * (saves are tmp+rename, so inode/mtime/size move atomically). */
         struct stat st;
-        if (stat(cfg_monitor, &st) != 0) { usleep(200000); continue; }  /* wait for first checkpoint */
+        if (stat(cfg_monitor, &st) != 0) { if (done) break; usleep(200000); continue; }  /* wait for first checkpoint */
         if (st.st_ino == mon_last_st.st_ino &&
             st.st_mtim.tv_sec == mon_last_st.st_mtim.tv_sec &&
             st.st_mtim.tv_nsec == mon_last_st.st_mtim.tv_nsec &&
             st.st_size == mon_last_st.st_size) {
+            if (done) break;
             usleep(500000);
             continue;
         }
@@ -2154,6 +2164,7 @@ int main(int argc, char **argv) {
     cfg_load = get_str_arg(argc, argv, "--load", NULL);
     cfg_save = get_str_arg(argc, argv, "--save", NULL);
     cfg_monitor = get_str_arg(argc, argv, "--monitor", NULL);
+    cfg_done_dir = get_str_arg(argc, argv, "--done-dir", NULL);
     cfg_phase = get_int_arg(argc, argv, "--phase", -1);
     /* Presence of --init-phase-scale enables seeding phase P from phase P+1. */
     cfg_init_from_next = has_flag(argc, argv, "--init-phase-scale");
@@ -2453,6 +2464,24 @@ int main(int argc, char **argv) {
             if (do_inline) print_stats(iterations, total_positions, 0, 0, 1);
             break;
         }
+    }
+
+    if (wrapper_run) {
+        /* A solo worker publishes its final weights: the sync cadence may
+         * have last saved them up to --sync-every positions ago.  With K > 1
+         * the last sync's consensus checkpoint stands — a final barrier would
+         * wait on workers whose slices, and so stopping points, can differ. */
+        if (cfg_workers == 1) {
+            flush_batch();
+            ema_update(total_positions);
+            save_weights(iterations, total_positions, "");
+        }
+        /* Tell the monitor this worker is done (train-ppat-parallel --done-dir). */
+        char dp[512];
+        snprintf(dp, sizeof dp, "%s/done.w%d", cfg_sync_dir, cfg_worker_id);
+        FILE *df = fopen(dp, "w");
+        if (df) fclose(df);
+        else fprintf(stderr, "warning: cannot write %s; the monitor will not exit on its own\n", dp);
     }
 
     free(theta);
