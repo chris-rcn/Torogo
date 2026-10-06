@@ -21,7 +21,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights', 'limit']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -86,6 +86,8 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --t3-limits D,N   tactics3 depth limit D and node limit N for t3Status.
                     Saved with the model; default: the --load model's
                     values, else tactics3's defaults (7,1000)
+  --limit N         stop after N self-play games, with a final row and save
+                    (default: run until killed)
   --smooth-weights A  Polyak average of the weights, updated every 100 games:
                     avg = A*avg + (1-A)*live; saves and every test column use
                     it, self-play the live weights.  auto (default): A = 1 -
@@ -129,6 +131,8 @@ if (!EMA_AUTO && !(EMA_ALPHA >= 0 && EMA_ALPHA < 1)) {
 const EMA_ON     = EMA_AUTO || EMA_ALPHA > 0;
 const emaAlphaAt = gi => EMA_AUTO ? Math.max(0, 1 - 4 * EMA_PERIOD / gi) : EMA_ALPHA;
 const LOAD_PATH   = opts.load || null;
+const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
+if (opts.limit !== undefined && !(LIMIT_GAMES >= 1)) { console.error(`Error: --limit must be a positive integer (got '${opts.limit}')`); process.exit(1); }
 // Eval may shortlist the rank-feature ranking; self-play never does (see the usage note).
 const EVAL_RANK_TOPN = parseInt(opts['eval-rank-topn'] || '3', 10);
 // Self-play may compute the rank feature in only a fraction of positions; eval always uses
@@ -573,7 +577,8 @@ while (true) {
     }
   }
 
-  if (Date.now() >= nextPrintAt) {
+  const lastGame = LIMIT_GAMES > 0 && g >= LIMIT_GAMES;   // --limit: force the final row
+  if (lastGame || Date.now() >= nextPrintAt) {
     // Per-interval mean |weight|: difference this row's cumulative wStats from
     // the last row's snapshot, so avgW tracks the current weight scale rather
     // than a lifetime average that only ever drifts up.
@@ -636,4 +641,5 @@ while (true) {
     nextPrintAt = Math.min(t0 + Math.round((nowMs - t0) * 1.4), nowMs + MAX_PRINT_GAP_MS);
     lastPrintAt = Date.now();
   }
+  if (lastGame) break;
 }
