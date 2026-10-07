@@ -15,9 +15,13 @@
 // random.  Then every legal move
 // is enumerated, the game is cloned, the move is made, then the VALUE
 // agent's getMove is called with the full budget.  The rootWinRatio is flipped to the
-// original player's perspective and recorded as kwr (× 1000).  One position
-// per game keeps the samples independent.  Games with no eligible position
-// emit nothing.
+// original player's perspective and recorded as kwr (× 1000).  A FLAT position
+// — more than MAX_NEAR_BEST other moves rated within NEAR_BEST_DEV of the best
+// — is then discarded and does not count toward its band, so the band keeps
+// being drawn: flat positions barely separate agents of different strength
+// (verbose fleet sweep, 2026-10-07), and most opening positions are flat.  One
+// position per game keeps the samples independent.  Games with no eligible
+// position emit nothing.
 //
 // Output goes to stdout, one row per position as it is produced, after a
 // '#' comment recording the generation parameters (redirect it to the file).
@@ -79,6 +83,11 @@ const WR_DEV = 0.2;
 // empty/area) must be below this, skipping crowded late-game positions.
 const PHASE_MAX = 0.8;
 
+// ...and not flat: at most MAX_NEAR_BEST other moves rated within
+// NEAR_BEST_DEV of the best one.
+const NEAR_BEST_DEV = 0.01;
+const MAX_NEAR_BEST = 10;
+
 function legalMoves(game2) {
   const N   = game2.N;
   const cap = N * N;
@@ -90,7 +99,7 @@ function legalMoves(game2) {
   return moves;
 }
 
-process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  phase-buckets=${phaseBuckets}\n`);
+process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  phase-buckets=${phaseBuckets}\n`);
 
 console.error(`position-agent=${posAgentName}  value-agent=${valAgentName}  size=${boardSize}  budget=${budget}ms`);
 console.error();
@@ -98,6 +107,7 @@ console.error([
   'pos'    .padStart(5),
   'elapsed'.padStart(7),
   'tPos'   .padStart(5),
+  'flat'   .padStart(5),
   'bands',
 ].join('  '));
 
@@ -105,6 +115,7 @@ const startTime = performance.now();
 let printPeriodMs = 1000;
 let lastPrintTime = startTime;
 let posCount = 0;
+let flatCount = 0;   // labeled positions discarded as flat
 
 function printStats() {
   const elapsedMs = performance.now() - startTime;
@@ -112,6 +123,7 @@ function printStats() {
     Util.fmt4i(posCount)            .padStart(5),
     Util.fmtMs(elapsedMs)           .padStart(7),
     Util.fmtMs(elapsedMs / posCount).padStart(5),
+    Util.fmt4i(flatCount)           .padStart(5),
     Array.from(bandCount).join(','),   // samples per phase band so far
   ].join('  '));
 }
@@ -152,7 +164,6 @@ while (true) {
   const v = valAgent(probe, budget);
   if (v.rootWinRatio === undefined) { console.error('value agent did not return rootWinRatio'); process.exit(1); }
   if (Math.abs(v.rootWinRatio - 0.5) > WR_DEV) continue;
-  bandCount[band]++;
   const position = new Game2(boardSize, true);
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
@@ -177,6 +188,14 @@ while (true) {
   }
 
   moveInfos.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
+
+  // Flat: too many moves within NEAR_BEST_DEV of the best.  Discarded without
+  // counting toward the band.  Compared as stored (kwr, thousandths), so the
+  // written file obeys the same count.
+  const kwr = w => Math.round(w * 1000), rated = moveInfos.filter(x => x.winRatio !== null);
+  const nearBest = rated.length ? rated.slice(1).filter(x => kwr(rated[0].winRatio) - kwr(x.winRatio) <= Math.round(NEAR_BEST_DEV * 1000)).length : 0;
+  if (nearBest > MAX_NEAR_BEST) { flatCount++; continue; }
+  bandCount[band]++;
 
   // The new format holds EVERY stone: prepend the free centre stone so the
   // position replays from an empty board.  Phase is stored (board fullness).
