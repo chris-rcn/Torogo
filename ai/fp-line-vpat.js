@@ -21,6 +21,8 @@
 //   FPOL_RANK_TOPN  for a model with a vpat<n> ranking term (fp-heavy), rank over
 //                   its top N candidates, as ref-fp-heavy does; 0 = off (default 14)
 //   VPAT_DATA       evaluator                      (default out/vpat-6qiy9adq.js)
+//   DITHER          uniform noise in [0, DITHER) added to each vpat evaluation;
+//                   0 = off                                          (default 0.001)
 // In the browser the models come from window.featurepolModel and
 // window.vpatternsModel.
 
@@ -32,6 +34,7 @@ const { PASS, BLACK } = Util.load('./game2.js', 'Game2');
 const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 const FeaturePol = Util.load('./featurepol-lib.js', 'FeaturePol');
 const VPat = Util.load('./vpatterns.js', 'VPatterns');
+const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
@@ -40,6 +43,9 @@ function create(cfg) {
   const ROOT_WIDTH = cfg.int('ROOT_WIDTH', 2);
   if (!(DEPTH >= 1))      throw new Error(`fp-line-vpat: DEPTH must be >= 1, got ${DEPTH}`);
   if (!(ROOT_WIDTH >= 0)) throw new Error(`fp-line-vpat: ROOT_WIDTH must be >= 0, got ${ROOT_WIDTH}`);
+  const DITHER     = cfg.float('DITHER', 0.001);
+  if (!(DITHER >= 0))     throw new Error(`fp-line-vpat: DITHER must be >= 0, got ${DITHER}`);
+  const ownRng = makeRng();
 
   const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
   const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-line-vpat', path: fpPath });
@@ -55,7 +61,7 @@ function create(cfg) {
   // back to the root), when featurepol's ladder features or the vpat model need it.
   const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
 
-  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, root-width: ${ROOT_WIDTH === 0 ? 'all' : ROOT_WIDTH}, ` +
+  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, root-width: ${ROOT_WIDTH === 0 ? 'all' : ROOT_WIDTH}, dither: ${DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)})`);
 
@@ -91,14 +97,16 @@ function create(cfg) {
   }
 
   // Mean P(BLACK wins) over the positions after each ply of the line that
-  // starts with rootMove.  game3 (if any) is back at the root on return.
-  function lineValue(game, rootMove, game3) {
+  // starts with rootMove, each vpat evaluation dithered.  game3 (if any) is
+  // back at the root on return.
+  function lineValue(game, rootMove, game3, rng) {
     const g = game.clone();
     let move = rootMove, sum = 0, n = 0;
     for (let d = 0; d < DEPTH; d++) {
       g.play(move);
       if (game3) game3.play(move);
-      sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
+      sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0)
+                        : VPat.evaluate(g, vpatModel, game3) + (DITHER > 0 ? rng.random() * DITHER : 0);
       n++;
       if (g.gameOver || d === DEPTH - 1) break;
       move = fpBest(g, game3);
@@ -108,8 +116,9 @@ function create(cfg) {
     return sum / n;
   }
 
-  function getMove(game) {
+  function getMove(game, _budgetMs, options = {}) {
     if (game.gameOver) return { move: PASS };
+    const rng = options.rng || ownRng;
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
     const cand = new Int32Array(ROOT_WIDTH || game.N * game.N);
@@ -118,7 +127,7 @@ function create(cfg) {
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
-      const v = lineValue(game, cand[j], g3);
+      const v = lineValue(game, cand[j], g3, rng);
       const mv = mover === BLACK ? v : 1 - v;
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
