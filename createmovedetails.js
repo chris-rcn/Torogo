@@ -3,9 +3,10 @@
 
 // Generate per-position move-value data by self-play.
 //
-// Each self-play game is played to completion by the POSITION agent, which
-// only has to return moves.  One position with board fullness (phase) below
-// 0.8 is then drawn for deep analysis and checked for contestedness by the
+// Each self-play game is played by the POSITION agent, which only has to
+// return moves, until it ends or its board fullness (phase) first reaches 0.8;
+// later positions are never drawn.  One position with phase below 0.8 is then
+// drawn for deep analysis and checked for contestedness by the
 // VALUE agent: its win ratio must be within [0.3, 0.7], else the game is
 // discarded.  Phase bands
 // (--phase-buckets N equal-width bands of [0,1]) are kept level: the game's
@@ -119,16 +120,18 @@ const bandCount = new Int32Array(phaseBuckets);   // samples written per phase b
 while (true) {
   const N = boardSize;
 
-  // Play a full self-play game, recording each move and which positions
-  // (identified by the number of moves played before them) fall in each band.
+  // Play the self-play game up to PHASE_MAX (nothing later is eligible),
+  // recording each move and which positions (identified by the number of
+  // moves played before them) fall in each band.
   const game     = new Game2(boardSize, true);
   const moves    = [];
   const inBand = Array.from({ length: phaseBuckets }, () => []);   // per band: move counts of its positions
 
   while (!game.gameOver) {
-    const advancingMove = posAgent(game, budget);
     const phase = 1 - game.emptyCount / (N * N);
-    if (phase < PHASE_MAX) inBand[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
+    if (phase >= PHASE_MAX) break;
+    inBand[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
+    const advancingMove = posAgent(game, budget);
     moves.push(advancingMove.move);
     game.play(advancingMove.move);
   }
