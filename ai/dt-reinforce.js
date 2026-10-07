@@ -132,7 +132,7 @@ const { game3FromGame2 } = Util.load('./game3.js', 'Game3');
 //                     featurepol choices                                (default 20)
 //   FPOL_DATA         the featurepol model, loaded only when a weight or
 //                     ROOT_MOVE_FILTER is non-zero
-//                                              (default ref/ref-fp-heavy-data.js)
+//                                              (default out/featurepol-brotlz67.js, puct-trunc's prior)
 //   FPOL_RANK_TOPN    the model's vpat<n> ranking term is computed over its top N
 //                     candidates, as ref-fp-heavy does; 0 = off         (default 14)
 //   LR                actor step size on the return minus the baseline.  Ladder at
@@ -242,7 +242,7 @@ function create(cfg) {
   const FPOL_TOP_K = cfg.int('ROOT_MOVE_FILTER', 20);
   let fpWeights = null, fpState = null, fpScores = null, fpPt = null, fpAllow = null;
   if (FPOL_W0 !== 0 || FPOL_W1 !== 0 || FPOL_TOP_K > 0) {
-    const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-heavy-data.js')) : undefined;
+    const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'out', 'featurepol-brotlz67.js')) : undefined;
     fpWeights = FeaturePol.loadModel({ name: 'dt-reinforce', path: fpPath }).weights;
     const rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
     if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = rankTopN;
