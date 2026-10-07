@@ -40,7 +40,7 @@
 //   FP_SOFTMAX_RATIO  per-move probability of playing an fp softmax move
 //               (temperature 1) instead of searching, scaled by (1 - phase):
 //               FP_SOFTMAX_RATIO on an empty board, tapering to 0 at the
-//               endgame (default 0.4; 0 = off)
+//               endgame (default 0 = off)
 //   ROOT_SYMMETRY  prune symmetry-equivalent root candidates (default 1; 0=off).
 //               A symmetric root (common in the opening) has orbits of equal-
 //               value moves, so searching one representative per orbit is exact
@@ -73,7 +73,7 @@ function create(cfg) {
   }
   const DITHER   = cfg.float('DITHER', 0.001);
   const AB_TEMP  = cfg.float('AB_TEMP', 0.003);
-  const FP_SOFTMAX_RATIO = cfg.float('FP_SOFTMAX_RATIO', 0.4);
+  const FP_SOFTMAX_RATIO = cfg.float('FP_SOFTMAX_RATIO', 0);
   const ROOT_SYMMETRY = cfg.int('ROOT_SYMMETRY', 1) !== 0;
 
   const fpWeights = FeaturePol.loadModel({ name: 'ab-fp-vpat',
