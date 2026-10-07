@@ -121,7 +121,6 @@ function create() {
   let _truncActive = false;
 
   const _vpatModel = VPat.modelFromRaw(_vpatRaw, undefined, { float32: true });
-  const _vpatName = _isNode ? require('path').basename(VPAT_PATH) : 'window.vpatternsModel';
 
   // Static value of `game2`: P(BLACK wins) from the vpatterns evaluator.
   function vpatValueB(game2) {
@@ -137,18 +136,11 @@ function create() {
     throw new Error(`prod: cannot load ppat weights from ` +
       (_isNode ? PPAT_PATH : 'window.PPATWeights'));
   }
-  const _ppatName = _isNode ? require('path').basename(PPAT_PATH) : 'window.PPATWeights';
   _model.ppatMinPhase = PPAT_MIN_PHASE;
 
   // featurepol policy model (priors + top-K pruning); browser: window.featurepolModel.
   const fpModel     = FeaturePol.loadModel({ name: 'prod', path: FPOL_PATH });
   const fpWeights   = fpModel.weights;
-  console.error(`prod: puct-trunc, ` +
-    `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
-    `${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), trunc-root-phase: ${TRUNC_ROOT_PHASE}, ` +
-    `expand-work: ${EXPAND_WORK}, expand costs: playout ${PLAYOUT_OVERHEAD.toFixed(2)}, uniform-move ${UNIFORM_WEIGHT.toFixed(2)}, trunc ${TRUNC_OVERHEAD.toFixed(2)}, ` +
-    `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
 
   let _ppatState = null;
   function _ensurePpatState(N) {
