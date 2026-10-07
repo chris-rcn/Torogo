@@ -13,7 +13,8 @@
 //
 // Config (cfg reader, slot-aware):
 //   AB_DEPTH    plies of lookahead (1 = score own moves' results) (default 2)
-//   AB_WIDTH    fp candidates searched at the ROOT                (default 4)
+//   AB_WIDTH    fp candidates searched at the ROOT; 0 = every candidate, at
+//               every ply (AB_WIDTH_SHRINK then has no effect)     (default 4)
 //   AB_WIDTH_SHRINK  subtracted from the width per ply of depth  (default 0)
 //               Root searches AB_WIDTH, the next ply AB_WIDTH - SHRINK, and so
 //               on, floored at 1 — a width-1 ply extends the principal line
@@ -58,7 +59,8 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const AB_DEPTH = Math.max(1, cfg.int('AB_DEPTH', 2));
-  const AB_WIDTH = Math.max(1, cfg.int('AB_WIDTH', 4));
+  const AB_WIDTH = Math.max(0, cfg.int('AB_WIDTH', 4));
+  const WIDTH    = AB_WIDTH === 0 ? Infinity : AB_WIDTH;   // 0 = unlimited
   const AB_WIDTH_SHRINK = Math.max(0, cfg.int('AB_WIDTH_SHRINK', 0));
   // ply 0 is the root; a node reached with `depth` remaining sits at
   // AB_DEPTH - depth.  Floored at 1: below the root a width-1 node chooses
@@ -66,7 +68,7 @@ function create(cfg) {
   // stopping, which beats the static eval it replaces.  Only the ROOT is
   // degenerate at width 1, and the root uses AB_WIDTH directly.
   function widthAt(ply) {
-    const w = AB_WIDTH - ply * AB_WIDTH_SHRINK;
+    const w = WIDTH - ply * AB_WIDTH_SHRINK;
     return w < 1 ? 1 : w;
   }
   const DITHER   = cfg.float('DITHER', 0.001);
@@ -80,7 +82,7 @@ function create(cfg) {
   const vpatModel = VPat.loadWeights(cfg.str('VPAT_DATA',
     path.join(__dirname, '..', 'ref', 'ref-ab-fp-vpat-data.js')));
 
-  console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH}` +
+  console.log(`ab-fp-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth=${AB_DEPTH} width=${AB_WIDTH === 0 ? 'unlimited' : AB_WIDTH}` +
               (AB_WIDTH_SHRINK > 0 ? ` shrink=${AB_WIDTH_SHRINK} (${[...Array(AB_DEPTH).keys()].map(widthAt).join('/')})` : '') +
               (AB_TEMP > 0 ? ` temp=${AB_TEMP}` : '') +
               (FP_SOFTMAX_RATIO > 0 ? ` fp-softmax-ratio=${FP_SOFTMAX_RATIO}` : '') +
@@ -120,7 +122,7 @@ function create(cfg) {
   // node.  Behaviour-identical to rebuilding.
   function ab(g, depth, alpha, beta, game3) {
     if (g.gameOver || depth === 0) return evaluate(g, game3);
-    const cand = new Int32Array(AB_WIDTH);
+    const cand = new Int32Array(AB_WIDTH || g.N * g.N + 1);
     const k = fpTopK(g, cand, widthAt(AB_DEPTH - depth), game3);
     if (k === 0) return evaluate(g, game3);
     const maxing = g.current === BLACK;
@@ -158,13 +160,13 @@ function create(cfg) {
       const m = FeaturePol.policyMove(game, fpState, fpWeights, r, game3, 1).move;
       return { move: m, info: 'fp-softmax (ratio)' };
     }
-    const cand = new Int32Array(AB_WIDTH);
+    const cand = new Int32Array(AB_WIDTH || game.N * game.N + 1);
     // One Game3 for the whole search, advanced in lockstep with the recursion
     // and reused for featurepol extraction + the leaf vpat eval instead of a
     // rebuild per node.  Reused-vs-rebuilt gives identical features (speed only).
     const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
-    let k = fpTopK(game, cand, AB_WIDTH, g3);
+    let k = fpTopK(game, cand, WIDTH, g3);
     if (k === 0) return { move: PASS };
     // Root symmetry pruning: a symmetric root has orbits of equal-value moves,
     // so search one representative per orbit and skip the duplicates.
