@@ -362,6 +362,20 @@ function create(cfg) {
       for (let i = 0; i < M; i++) priors[i] = u;
     }
 
+    // After a pass, passing back ends the game, so that edge's value is exact:
+    // seed it with one visit of the final score, for this node's chooser (the
+    // side to move).  The opponent then weighs passing back against playing
+    // on — e.g. capturing dead stones that still count as they lie.
+    let totalVisits = 0.1;
+    if (game2.consecutivePasses > 0) {
+      const passIdx = movesArr.indexOf(PASS);
+      const ended = game2.clone();
+      ended.play(PASS);
+      wins[passIdx]   += ended.calcWinner() === game2.current ? 1 : 0;
+      visits[passIdx] += 1;
+      totalVisits     += 1;
+    }
+
     const mover = -game2.current;
 
     return {
@@ -369,7 +383,7 @@ function create(cfg) {
       parent,
       ci,
       mover,
-      totalVisits:  0.1,
+      totalVisits,
       selectedChild: -1,
 
       legalMoves,
@@ -389,9 +403,10 @@ function create(cfg) {
     // Q: mean backpropagated value for this move.
     let Q = node.wins[moveIdx] / node.visits[moveIdx];
 
-    if (RAVE_K > 0) {
-      const move   = node.legalMoves[moveIdx];
-      const raveWR = (move === PASS) ? 0 : (node.raveWins[move] / node.raveVisits[move]);
+    // RAVE blend, except for PASS: it has no RAVE statistics.
+    const move = node.legalMoves[moveIdx];
+    if (RAVE_K > 0 && move !== PASS) {
+      const raveWR = node.raveWins[move] / node.raveVisits[move];
       const beta   = RAVE_K / (RAVE_K + node.visits[moveIdx]);
       Q = (1 - beta) * Q + beta * raveWR;
     }
@@ -432,10 +447,8 @@ function create(cfg) {
       game3.play(move);
       depth++;
 
-      if (!game2.gameOver && game2.consecutivePasses > 0) {
-        game2.play(PASS);
-        game3.play(PASS);
-        depth++;
+      // The game ended (the second of two passes): scored exactly by the caller.
+      if (game2.gameOver) {
         node.selectedChild = best;
         break;
       }
@@ -443,7 +456,7 @@ function create(cfg) {
       // Expansion: create the child (featurepol extraction + priors) once its
       // edge has accrued EXPAND_WORK of playout work; before that, run the playout
       // from the unexpanded position with stats accumulating on the parent's edge
-      // (same backprop shape as the pass-break case above).
+      // (same backprop shape as the game-over case above).
       if (node.children[best] === null) {
         if (node.work[best] >= EXPAND_WORK) {
           node.children[best] = makeNode(move, node, best, game2, N, game3);
