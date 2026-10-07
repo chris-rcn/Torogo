@@ -18,8 +18,6 @@
 //                   moves' own results                                (default 5)
 //   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 2)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
-//   FPOL_RANK_TOPN  for a model with a vpat<n> ranking term (fp-heavy), rank over
-//                   its top N candidates, as ref-fp-heavy does; 0 = off (default 14)
 //   VPAT_DATA       evaluator                      (default out/vpat-6qiy9adq.js)
 //   DITHER          uniform noise in [0, DITHER) added to each vpat evaluation;
 //                   0 = off                                          (default 0.001)
@@ -49,7 +47,6 @@ function create(cfg) {
 
   const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
   const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-line-vpat', path: fpPath });
-  if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = cfg.int('FPOL_RANK_TOPN', 14);
 
   const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-6qiy9adq.js')) : null;
   const vpatRaw = _isNode ? require(require('path').resolve(vpatPath))
@@ -62,7 +59,7 @@ function create(cfg) {
   const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
 
   console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, root-width: ${ROOT_WIDTH === 0 ? 'all' : ROOT_WIDTH}, dither: ${DITHER}, ` +
-                `fp: ${fpName} (${fpWeights.map.size} weights${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}), ` +
+                `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)})`);
 
   let fpState = null, fpScores = null, stateN = 0;
