@@ -195,7 +195,8 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
                     file (any row order), unfiltered: with another file,
                     --min/--max-phase, --limit or --index, elo=- and stderr
                     says why
-  --verbose         per-position comparison table
+  --verbose         per-position comparison table; its header and rows
+                    start with 'pos' (grep '^pos')
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
   }
@@ -312,14 +313,16 @@ const agent = (typeof _agentMod.create === 'function'
   // the slice starts at the file head so the array index is the file index.
   const indexBase = index !== null ? index : 0;
 
+  // Every verbose line starts with 'pos', so `grep '^pos'` extracts the table
+  // (header and one row per position) from the progress output, for any agent.
   if (verbose) {
     console.log(
-      `${'idx'.padStart(wIdx)}  ` +
+      `pos ${'idx'.padStart(wIdx)}  ` +
       `${'hist'.padStart(4)}  ` +
       `${'top'.padEnd(wMove)} ${'WR'.padStart(wWR)}  ` +
       `${'agent'.padEnd(wMove)} ${'WR'.padStart(wWR)}  gap`
     );
-    console.log('-'.repeat(wIdx + 2 + 4 + wMove + wWR + wMove + wWR + 20));
+    console.log('-'.repeat(wIdx + 6 + 4 + wMove + wWR + wMove + wWR + 20));
   }
 
   // Oversample is the outer loop: each pass sweeps all positions, so stats
@@ -348,7 +351,7 @@ const agent = (typeof _agentMod.create === 'function'
       }
 
       if (verbose) console.log(
-        `${String(indexBase + i).padStart(wIdx)}  ` +
+        `pos ${String(indexBase + i).padStart(wIdx)}  ` +
         `${String(positions[i].history.length).padStart(4)}  ` +
         `${topCand.m.padEnd(wMove)} ${topCand.winRatio.toFixed(3).padStart(wWR)}  ` +
         `${agentStr.padEnd(wMove)} ${agentCand.winRatio.toFixed(3).padStart(wWR)}  ` +
