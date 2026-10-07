@@ -17,9 +17,14 @@
 // agent's getMove is called with the full budget.  The rootWinRatio is flipped to the
 // original player's perspective and recorded as kwr (× 1000).  A FLAT position
 // — more than MAX_NEAR_BEST other moves rated within NEAR_BEST_DEV of the best
-// — is then discarded and does not count toward its band, so the band keeps
+// — is discarded and does not count toward its band, so the band keeps
 // being drawn: flat positions barely separate agents of different strength
-// (verbose fleet sweep, 2026-10-07), and most opening positions are flat.  One
+// (verbose fleet sweep, 2026-10-07), and most opening positions are flat.
+// Moves are rated in ref-featurepol's prior order (ORDER_MODEL) and rating
+// stops as soon as the moves rated so far are flat against the best so far;
+// a later move could still have beaten that best, so a few positions that
+// are not flat are discarded too (~4% on md-trunc30k, for ~24% fewer
+// ratings, mostly in the opening).  One
 // position per game keeps the samples independent.  Games with no eligible
 // position emit nothing.
 //
@@ -41,6 +46,8 @@ const { performance } = require('perf_hooks');
 const { Game2, PASS, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
+const FeaturePol = require('./featurepol-lib.js');
+const { game3FromGame2 } = require('./game3.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['position-agent', 'value-agent', 'budget', 'size', 'phase-buckets']);
 
@@ -88,18 +95,32 @@ const PHASE_MAX = 0.8;
 const NEAR_BEST_DEV = 0.01;
 const MAX_NEAR_BEST = 10;
 
-function legalMoves(game2) {
+// Rating order: ref-featurepol's prior, most probable first.
+const ORDER_MODEL = path.join(__dirname, 'featurepol-cbk7wa32.js');
+const { weights: orderWeights, modelName: orderModelName } = FeaturePol.loadModel({ name: 'featurepol', path: ORDER_MODEL });
+const orderState = FeaturePol.createState(boardSize, orderWeights.spec);
+
+// Legal moves by descending prior; moves the policy does not list (PASS) last.
+function legalMovesByPrior(game2) {
   const N   = game2.N;
   const cap = N * N;
+  FeaturePol.extractFeatures(game2, orderState, orderWeights, orderWeights.spec.needsLadder ? game3FromGame2(game2) : undefined);
+  FeaturePol.computeSoftmax(orderState, orderWeights);
+  const prior = new Float64Array(cap + 1).fill(-1);   // index cap = PASS
+  for (let i = 0; i < orderState.count; i++) {
+    const m = orderState.moves[i];
+    prior[m === PASS ? cap : m] = orderState.probs[i];
+  }
   const moves = [];
   for (let i = 0; i < cap; i++) {
     if (game2.cells[i] === 0 && game2.isLegal(i)) moves.push(i);
   }
+  moves.sort((a, b) => prior[b] - prior[a]);
   moves.push(PASS);
   return moves;
 }
 
-process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  phase-buckets=${phaseBuckets}\n`);
+process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  order-model=${orderModelName}  phase-buckets=${phaseBuckets}\n`);
 
 console.error(`position-agent=${posAgentName}  value-agent=${valAgentName}  size=${boardSize}  budget=${budget}ms`);
 console.error();
@@ -168,8 +189,14 @@ while (true) {
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
 
+  // Flat: more than MAX_NEAR_BEST rated moves within NEAR_BEST_DEV of the
+  // best so far (compared as stored, kwr thousandths) — stop rating and
+  // discard without counting toward the band.
+  const kwr = w => Math.round(w * 1000), nearDev = Math.round(NEAR_BEST_DEV * 1000);
+  const ratedKwr = [];
+  let bestKwr = -Infinity, flat = false;
   const moveInfos = [];
-  for (const move of legalMoves(position)) {
+  for (const move of legalMovesByPrior(position)) {
     const clone = position.clone();
     clone.play(move);
 
@@ -185,17 +212,18 @@ while (true) {
     }
     const wr = 1 - oppResponseMove.rootWinRatio;
     moveInfos.push({ m: coordStr(move, N), winRatio: wr });
+
+    const wk = kwr(wr);
+    ratedKwr.push(wk);
+    if (wk > bestKwr) bestKwr = wk;
+    let nearBest = -1;   // the best itself is not counted
+    for (const r of ratedKwr) if (bestKwr - r <= nearDev) nearBest++;
+    if (nearBest > MAX_NEAR_BEST) { flat = true; break; }
   }
+  if (flat) { flatCount++; continue; }
+  bandCount[band]++;
 
   moveInfos.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
-
-  // Flat: too many moves within NEAR_BEST_DEV of the best.  Discarded without
-  // counting toward the band.  Compared as stored (kwr, thousandths), so the
-  // written file obeys the same count.
-  const kwr = w => Math.round(w * 1000), rated = moveInfos.filter(x => x.winRatio !== null);
-  const nearBest = rated.length ? rated.slice(1).filter(x => kwr(rated[0].winRatio) - kwr(x.winRatio) <= Math.round(NEAR_BEST_DEV * 1000)).length : 0;
-  if (nearBest > MAX_NEAR_BEST) { flatCount++; continue; }
-  bandCount[band]++;
 
   // The new format holds EVERY stone: prepend the free centre stone so the
   // position replays from an empty board.  Phase is stored (board fullness).
