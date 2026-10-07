@@ -220,20 +220,16 @@ console.log(`eval positions: ${evalSet.length}`);
 // ── Fold state ───────────────────────────────────────────────────────────────
 // acc: destKey -> { wd, sum, cnt } ; flatVal(a) = wd + sum/cnt
 const acc = new Map();
-// Type-3 weights (neither source nor dest): carried through verbatim.  Keys are
-// identified by their extraction tag, since a raw key doesn't expose its tag.
-const carry = new Map();
+// Source keys to drop from the output.  A raw key doesn't expose its tag, so a
+// 1:m source's keys are enumerated (libs + 131·tagBase) and a window source's
+// are the ones the fold saw; any it never saw are inert in the flat model,
+// which no longer extracts the source term.
+const srcKeys = new Set();
+if (SRC1) for (let l = 1; l <= SRC.maxLibs; l++) srcKeys.add(src1Key(l));
 let cells = 0, lost = 0;
 
 function foldPosition(g) {
-  const f = VPatterns.extractFeatures(g, comp.preparedSpecs);
-  for (let j = 0; j < f.count; j++) {
-    const t = f.tags[j];
-    if (t !== SRC_TAG && t !== DST_TAG) {
-      const k = f.keys[j] | 0;
-      if (!carry.has(k)) { const w = comp.weights.get(k); if (w !== undefined) carry.set(k, w); }
-    }
-  }
+  VPatterns.extractFeatures(g, comp.preparedSpecs);   // fills the planes read below
   const dp = comp.preparedSpecs._planes.get(DST.maxLibs);
   const dHN = dp[DHN], dHI = dp[DHI];
   const cap = g.N * g.N;
@@ -263,10 +259,14 @@ function foldPosition(g) {
   for (let i = 0; i < cap; i++) {
     const dN = dHN[i], dI = dHI[i], sN = sHN[i], sI = sHI[i];
     const hasS = sN !== sI;
-    if (dN === dI) { if (hasS) lost++; continue; }   // colour-symmetric dest: no dest key
+    if (dN === dI) { if (hasS) { lost++; srcKeys.add(keyFor(sN, sI, SRC_TAG)); } continue; }   // colour-symmetric dest: no dest key
     const dk = keyFor(dN, dI, DST_TAG);
     let inc = 0;
-    if (hasS) { const ps = sN < sI ? 1 : -1, pd = dN < dI ? 1 : -1; inc = ps * pd * (comp.weights.get(keyFor(sN, sI, SRC_TAG)) ?? 0); }
+    if (hasS) {
+      const sk = keyFor(sN, sI, SRC_TAG), ps = sN < sI ? 1 : -1, pd = dN < dI ? 1 : -1;
+      srcKeys.add(sk);
+      inc = ps * pd * (comp.weights.get(sk) ?? 0);
+    }
     let a = acc.get(dk);
     if (!a) { a = { wd: comp.weights.get(dk) ?? 0, sum: 0, cnt: 0 }; acc.set(dk, a); }
     a.sum += inc; a.cnt++; cells++;
@@ -282,9 +282,13 @@ console.log([
 ].join('  '));
 
 function row(games, positionsFolded) {
-  const fw = VPatterns.makeWeights(Math.max(1024, (acc.size + carry.size) * 2));
-  for (const [k, w] of carry) fw.set(k | 0, w);                 // type-3 terms, verbatim
-  for (const [dk, a] of acc) { const w = a.wd + a.sum / a.cnt; if (+w.toFixed(6) !== 0) fw.set(dk | 0, w); }
+  // Every composite weight (other terms verbatim; dest keys the fold never saw
+  // keep their composite weight), then the source dropped and the folded dest
+  // values over the top.  Zero weights are not written.
+  const fw = VPatterns.makeWeights(Math.max(1024, comp.weights.size * 2));
+  comp.weights.forEach((k, w) => fw.set(k, w));
+  for (const k of srcKeys) fw.set(k, 0);
+  for (const [dk, a] of acc) fw.set(dk | 0, a.wd + a.sum / a.cnt);
   VPatterns.saveWeights(SAVE_PATH, { specs: flatSpecs, preparedSpecs: flatPrep, weights: fw, komi: comp.komi });
 
   let se = 0, vse = 0, covered = 0, total = 0;
