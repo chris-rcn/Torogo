@@ -143,7 +143,10 @@ const _win = new Int32Array(DW * DW);
 // Output = the input minus the folded-away source term (dest absorbs it); every
 // other term (e.g. a phased turn conditioner) is carried through unchanged.
 const flatSpecs = specs.filter(sp => tok(sp) !== tok(SRC));
-const flatPrep = VPatterns.prepareSpecs(flatSpecs);
+// The composite's own settings travel with it: ladder min chain, the health
+// model of carried health terms, and (at save) the truncation delta.
+const flatPrep = VPatterns.prepareSpecs(flatSpecs, { health: comp.preparedSpecs.healthModel || undefined,
+                                                     ladderMinChain: comp.preparedSpecs.ladderMinChain });
 
 console.log(`composite: ${path.basename(MODEL_PATH)}  specs='${VPatterns.specString(specs)}'  weights=${comp.weights.size}`);
 console.log(`fold: ${tok(SRC)} -> ${tok(DST)}   agent=${POS_AGENT} (${GEN_GAMES === Infinity ? 'unlimited' : GEN_GAMES} games)   ` +
@@ -289,7 +292,7 @@ function row(games, positionsFolded) {
   comp.weights.forEach((k, w) => fw.set(k, w));
   for (const k of srcKeys) fw.set(k, 0);
   for (const [dk, a] of acc) fw.set(dk | 0, a.wd + a.sum / a.cnt);
-  VPatterns.saveWeights(SAVE_PATH, { specs: flatSpecs, preparedSpecs: flatPrep, weights: fw, komi: comp.komi });
+  VPatterns.saveWeights(SAVE_PATH, { specs: flatSpecs, preparedSpecs: flatPrep, weights: fw, komi: comp.komi, trunc: comp.trunc });
 
   let se = 0, vse = 0, covered = 0, total = 0;
   for (const e of evalSet) {
