@@ -8,10 +8,10 @@
 
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
-const { BLACK, EMPTY, PASS, isTrueEye } = _isNode ? require('./game2.js') : window.game;
+const { BLACK, EMPTY, PASS, isTrueEye } = _isNode ? require('./game2.js') : window.Game2;
 const { makeIntFloat64Map, makeIntFloat32Map } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
-const VLibPat = _isNode ? require('./vlibpat.js') : window.VLibPat;
+const VLibPat = _isNode ? require('./vlibpat.js') : window.VlibPat;
 
 // extractFeatures rebuilds a Game3 for the ladder pass when no synced one is
 // supplied (the slow path).  Warn once per process, with a stack, so those
