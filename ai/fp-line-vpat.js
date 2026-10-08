@@ -21,7 +21,7 @@
 // Config (cfg reader, slot-aware):
 //   LN_DEPTH        plies per line, the root move included; 1 = the root
 //                   moves' own results                                (default 7)
-//   LN_WIDTH        featurepol candidates at the root; 0 = every one   (default 4)
+//   LN_WIDTH        featurepol candidates at the root; 0 = every one   (default 5)
 //   LN_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   LN_VPAT_DATA    evaluator                      (default out/vpat-wabotxn6.js)
 //   LN_DITHER       uniform noise in [0, LN_DITHER·(1 − phase)) added to each
@@ -44,7 +44,7 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const LN_DEPTH   = cfg.int('LN_DEPTH', 7);
-  const LN_WIDTH   = cfg.int('LN_WIDTH', 4);
+  const LN_WIDTH   = cfg.int('LN_WIDTH', 5);
   if (!(LN_DEPTH >= 1))   throw new Error(`fp-line-vpat: LN_DEPTH must be >= 1, got ${LN_DEPTH}`);
   if (!(LN_WIDTH >= 0))   throw new Error(`fp-line-vpat: LN_WIDTH must be >= 0, got ${LN_WIDTH}`);
   const LN_DITHER  = cfg.float('LN_DITHER', 0.001);
