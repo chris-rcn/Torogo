@@ -2,15 +2,15 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
 // fp-line-vpat: featurepol filters the root moves, a featurepol line values
-// each one.  Featurepol's top WIDTH moves are the candidates.  Each is
+// each one.  Featurepol's top LN_WIDTH moves are the candidates.  Each is
 // played, then featurepol's top move for the side to move (width 1 beyond the
-// root), until the line is DEPTH plies long, root move included.  The vpat
+// root), until the line is LN_DEPTH plies long, root move included.  The vpat
 // evaluator scores the position after every ply of the line, and the
 // candidate's value is the mean of those scores, in the mover's view.  The
 // best-valued candidate is played (ties: featurepol's order).
 //
 // valueB(game, options) is that line value for any position: the mean
-// P(BLACK wins) over the position itself and the next DEPTH − 1 positions of
+// P(BLACK wins) over the position itself and the next LN_DEPTH − 1 positions of
 // featurepol's line from it.  getMove values each candidate by valueB of the
 // position after it.
 //
@@ -19,14 +19,14 @@
 // estimateWinner.
 //
 // Config (cfg reader, slot-aware):
-//   DEPTH           plies per line, the root move included; 1 = the root
+//   LN_DEPTH        plies per line, the root move included; 1 = the root
 //                   moves' own results                                (default 7)
-//   WIDTH           featurepol candidates at the root; 0 = every one   (default 4)
-//   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
-//   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
-//   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each root
-//                   candidate's value, phase = the root's fullness: full on an
-//                   empty board, zero at phase 1; 0 = off            (default 0.001)
+//   LN_WIDTH        featurepol candidates at the root; 0 = every one   (default 4)
+//   LN_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
+//   LN_VPAT_DATA    evaluator                      (default out/vpat-wabotxn6.js)
+//   LN_DITHER       uniform noise in [0, LN_DITHER·(1 − phase)) added to each
+//                   root candidate's value, phase = the root's fullness: full on
+//                   an empty board, zero at phase 1; 0 = off         (default 0.001)
 // In the browser the models come from window.featurepolModel and
 // window.vpatternsModel.
 
@@ -43,18 +43,18 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const DEPTH      = cfg.int('DEPTH', 7);
-  const WIDTH      = cfg.int('WIDTH', 4);
-  if (!(DEPTH >= 1))      throw new Error(`fp-line-vpat: DEPTH must be >= 1, got ${DEPTH}`);
-  if (!(WIDTH >= 0))      throw new Error(`fp-line-vpat: WIDTH must be >= 0, got ${WIDTH}`);
-  const DITHER     = cfg.float('DITHER', 0.001);
-  if (!(DITHER >= 0))     throw new Error(`fp-line-vpat: DITHER must be >= 0, got ${DITHER}`);
+  const LN_DEPTH   = cfg.int('LN_DEPTH', 7);
+  const LN_WIDTH   = cfg.int('LN_WIDTH', 4);
+  if (!(LN_DEPTH >= 1))   throw new Error(`fp-line-vpat: LN_DEPTH must be >= 1, got ${LN_DEPTH}`);
+  if (!(LN_WIDTH >= 0))   throw new Error(`fp-line-vpat: LN_WIDTH must be >= 0, got ${LN_WIDTH}`);
+  const LN_DITHER  = cfg.float('LN_DITHER', 0.001);
+  if (!(LN_DITHER >= 0))  throw new Error(`fp-line-vpat: LN_DITHER must be >= 0, got ${LN_DITHER}`);
   const ownRng = makeRng();
 
-  const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
+  const fpPath = _isNode ? cfg.str('LN_FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
   const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-line-vpat', path: fpPath });
 
-  const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-wabotxn6.js')) : null;
+  const vpatPath = _isNode ? cfg.str('LN_VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-wabotxn6.js')) : null;
   const vpatRaw = _isNode ? require(require('path').resolve(vpatPath))
                           : (typeof window !== 'undefined' && window.vpatternsModel) || null;
   if (!vpatRaw) throw new Error(`fp-line-vpat: cannot load the vpat model from ${_isNode ? vpatPath : 'window.vpatternsModel'}`);
@@ -64,7 +64,7 @@ function create(cfg) {
   // back to the root), when featurepol's ladder features or the vpat model need it.
   const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
 
-  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, width: ${WIDTH === 0 ? 'all' : WIDTH}, dither: ${DITHER}, ` +
+  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${LN_DEPTH}, width: ${LN_WIDTH === 0 ? 'all' : LN_WIDTH}, dither: ${LN_DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)})`);
 
@@ -99,7 +99,7 @@ function create(cfg) {
     return fpState.moves[bi];
   }
 
-  // Mean P(BLACK wins) over `game` and the next DEPTH − 1 positions of
+  // Mean P(BLACK wins) over `game` and the next LN_DEPTH − 1 positions of
   // featurepol's line from it (fewer if the game ends or featurepol lists no
   // move).  options.game3: a Game3 synced to `game`, back where it was on
   // return; built here when needed and not supplied.  `game` is not changed.
@@ -111,7 +111,7 @@ function create(cfg) {
     for (let d = 0; ; d++) {
       sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
       n++;
-      if (g.gameOver || d === DEPTH - 1) break;
+      if (g.gameOver || d === LN_DEPTH - 1) break;
       const move = fpBest(g, game3);
       if (move === PASS) break;
       g.play(move);
@@ -124,10 +124,10 @@ function create(cfg) {
   function getMove(game, _budgetMs, options = {}) {
     if (game.gameOver) return { move: PASS };
     const rng = options.rng || ownRng;
-    const dither = DITHER * (1 - game.phase());
+    const dither = LN_DITHER * (1 - game.phase());
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
-    const cand = new Int32Array(WIDTH || game.N * game.N);
+    const cand = new Int32Array(LN_WIDTH || game.N * game.N);
     const k = fpRanked(game, g3, cand);
     if (k === 0) return { move: PASS };
     const mover = game.current;
@@ -141,7 +141,7 @@ function create(cfg) {
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
-    return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${WIDTH}` };
+    return { move: best, info: `line=${bestV.toFixed(3)} d${LN_DEPTH}w${LN_WIDTH}` };
   }
 
   return { getMove, valueB };
