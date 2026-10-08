@@ -16,8 +16,8 @@
 // Config (cfg reader, slot-aware):
 //   DEPTH           plies per line, the root move included; 1 = the root
 //                   moves' own results                                (default 7)
-//   DEPTH_MIN       each move draws its depth uniformly from DEPTH_MIN..DEPTH,
-//                   inclusive                                    (default DEPTH)
+//   DEPTH_MIN       each root candidate draws its line's depth uniformly from
+//                   DEPTH_MIN..DEPTH, inclusive                  (default DEPTH)
 //   WIDTH           featurepol candidates at the root; 0 = every one   (default 4)
 //   WIDTH_MIN       each move draws its width uniformly from WIDTH_MIN..WIDTH,
 //                   inclusive; with WIDTH 0 it must be 0         (default WIDTH)
@@ -129,21 +129,21 @@ function create(cfg) {
     const dither = DITHER * (1 - game.phase());
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
-    // This move's width and depth; each drawn only when it has a range, so a
-    // fixed one consumes no rng.
+    // This move's width, and below each candidate's depth; each drawn only when
+    // it has a range, so a fixed one consumes no rng.
     const w = WIDTH_MIN < WIDTH ? WIDTH_MIN + Math.floor(rng.random() * (WIDTH - WIDTH_MIN + 1)) : WIDTH;
-    const depth = DEPTH_MIN < DEPTH ? DEPTH_MIN + Math.floor(rng.random() * (DEPTH - DEPTH_MIN + 1)) : DEPTH;
     const cand = new Int32Array(w || game.N * game.N);
     const k = fpRanked(game, g3, cand);
     if (k === 0) return { move: PASS };
     const mover = game.current;
-    let best = cand[0], bestV = -Infinity;
+    let best = cand[0], bestV = -Infinity, bestD = 0;
     for (let j = 0; j < k; j++) {
+      const depth = DEPTH_MIN < DEPTH ? DEPTH_MIN + Math.floor(rng.random() * (DEPTH - DEPTH_MIN + 1)) : DEPTH;
       const v = lineValue(game, cand[j], g3, depth);
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
-      if (mv > bestV) { bestV = mv; best = cand[j]; }
+      if (mv > bestV) { bestV = mv; best = cand[j]; bestD = depth; }
     }
-    return { move: best, info: `line=${bestV.toFixed(3)} d${depth}w${w}` };
+    return { move: best, info: `line=${bestV.toFixed(3)} d${bestD}w${w}` };
   }
 
   return { getMove };
