@@ -20,6 +20,12 @@
 // A line that ends early — the game is over, or featurepol lists no move —
 // averages over the positions it reached; a finished game scores
 // estimateWinner.
+//
+// valueB(game, options) is that line value for any position: the mean
+// P(BLACK wins) over the position itself and the next DEPTH − 1 positions of
+// featurepol's line from it.  getMove values each candidate by valueB of the
+// position after it.  (valueB added 2026-10-07, mirroring fp-line-vpat ead7369;
+// moves unchanged.)
 
 const path = require('path');
 const { PASS, BLACK } = require('../game2.js');
@@ -79,21 +85,25 @@ function create() {
     return fpState.moves[bi];
   }
 
-  // Mean P(BLACK wins) over the positions after each ply of the line that
-  // starts with rootMove.  game3 (if any) is back at the root on return.
-  function lineValue(game, rootMove, game3) {
+  // Mean P(BLACK wins) over `game` and the next DEPTH − 1 positions of
+  // featurepol's line from it (fewer if the game ends or featurepol lists no
+  // move).  options.game3: a Game3 synced to `game`, back where it was on
+  // return; built here when needed and not supplied.  `game` is not changed.
+  function valueB(game, options = {}) {
+    const game3 = needG3 ? (options.game3 || game3FromGame2(game)) : undefined;
+    if (stateN !== game.N) ensureState(game.N);
     const g = game.clone();
-    let move = rootMove, sum = 0, n = 0;
-    for (let d = 0; d < DEPTH; d++) {
-      g.play(move);
-      if (game3) game3.play(move);
+    let sum = 0, n = 0, plays = 0;
+    for (let d = 0; ; d++) {
       sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
       n++;
       if (g.gameOver || d === DEPTH - 1) break;
-      move = fpBest(g, game3);
+      const move = fpBest(g, game3);
       if (move === PASS) break;
+      g.play(move);
+      if (game3) { game3.play(move); plays++; }
     }
-    if (game3) for (let i = 0; i < n; i++) game3.undo();
+    if (game3) for (let i = 0; i < plays; i++) game3.undo();
     return sum / n;
   }
 
@@ -109,16 +119,20 @@ function create() {
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
-      const v = lineValue(game, cand[j], g3);
+      const child = game.clone();
+      child.play(cand[j]);
+      if (g3) g3.play(cand[j]);
+      const v = valueB(child, { game3: g3 });
+      if (g3) g3.undo();
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
     return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${WIDTH}` };
   }
 
-  return { getMove };
+  return { getMove, valueB };
 }
 
 let _default = null;
 function _def() { return _default || (_default = create()); }
-module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o) };
+module.exports = { create, getMove: (g, b, o) => _def().getMove(g, b, o), valueB: (g, o) => _def().valueB(g, o) };
