@@ -16,11 +16,7 @@
 // Config (cfg reader, slot-aware):
 //   DEPTH           plies per line, the root move included; 1 = the root
 //                   moves' own results                                (default 7)
-//   DEPTH_MIN       each move draws its depth uniformly from DEPTH_MIN..DEPTH,
-//                   inclusive                                    (default DEPTH)
 //   WIDTH           featurepol candidates at the root; 0 = every one   (default 4)
-//   WIDTH_MIN       each move draws its width uniformly from WIDTH_MIN..WIDTH,
-//                   inclusive; with WIDTH 0 it must be 0         (default WIDTH)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
 //   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
 //   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each root
@@ -45,13 +41,7 @@ function create(cfg) {
   const DEPTH      = cfg.int('DEPTH', 7);
   const WIDTH      = cfg.int('WIDTH', 4);
   if (!(DEPTH >= 1))      throw new Error(`fp-line-vpat: DEPTH must be >= 1, got ${DEPTH}`);
-  const DEPTH_MIN  = cfg.int('DEPTH_MIN', DEPTH);
-  if (!(DEPTH_MIN >= 1 && DEPTH_MIN <= DEPTH))
-    throw new Error(`fp-line-vpat: DEPTH_MIN must be in 1..DEPTH, got ${DEPTH_MIN} with DEPTH ${DEPTH}`);
   if (!(WIDTH >= 0))      throw new Error(`fp-line-vpat: WIDTH must be >= 0, got ${WIDTH}`);
-  const WIDTH_MIN  = cfg.int('WIDTH_MIN', WIDTH);
-  if (WIDTH === 0 ? WIDTH_MIN !== 0 : !(WIDTH_MIN >= 1 && WIDTH_MIN <= WIDTH))
-    throw new Error(`fp-line-vpat: WIDTH_MIN must be in 1..WIDTH (0 with WIDTH 0), got ${WIDTH_MIN} with WIDTH ${WIDTH}`);
   const DITHER     = cfg.float('DITHER', 0.001);
   if (!(DITHER >= 0))     throw new Error(`fp-line-vpat: DITHER must be >= 0, got ${DITHER}`);
   const ownRng = makeRng();
@@ -69,7 +59,7 @@ function create(cfg) {
   // back to the root), when featurepol's ladder features or the vpat model need it.
   const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
 
-  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH_MIN < DEPTH ? `${DEPTH_MIN}-${DEPTH}` : DEPTH}, width: ${WIDTH === 0 ? 'all' : WIDTH_MIN < WIDTH ? `${WIDTH_MIN}-${WIDTH}` : WIDTH}, dither: ${DITHER}, ` +
+  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, width: ${WIDTH === 0 ? 'all' : WIDTH}, dither: ${DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)})`);
 
@@ -105,17 +95,16 @@ function create(cfg) {
   }
 
   // Mean P(BLACK wins) over the positions after each ply of the line that
-  // starts with rootMove, `depth` plies long.  game3 (if any) is back at the
-  // root on return.
-  function lineValue(game, rootMove, game3, depth) {
+  // starts with rootMove.  game3 (if any) is back at the root on return.
+  function lineValue(game, rootMove, game3) {
     const g = game.clone();
     let move = rootMove, sum = 0, n = 0;
-    for (let d = 0; d < depth; d++) {
+    for (let d = 0; d < DEPTH; d++) {
       g.play(move);
       if (game3) game3.play(move);
       sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
       n++;
-      if (g.gameOver || d === depth - 1) break;
+      if (g.gameOver || d === DEPTH - 1) break;
       move = fpBest(g, game3);
       if (move === PASS) break;
     }
@@ -129,21 +118,17 @@ function create(cfg) {
     const dither = DITHER * (1 - game.phase());
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
-    // This move's width and depth; each drawn only when it has a range, so a
-    // fixed one consumes no rng.
-    const w = WIDTH_MIN < WIDTH ? WIDTH_MIN + Math.floor(rng.random() * (WIDTH - WIDTH_MIN + 1)) : WIDTH;
-    const depth = DEPTH_MIN < DEPTH ? DEPTH_MIN + Math.floor(rng.random() * (DEPTH - DEPTH_MIN + 1)) : DEPTH;
-    const cand = new Int32Array(w || game.N * game.N);
+    const cand = new Int32Array(WIDTH || game.N * game.N);
     const k = fpRanked(game, g3, cand);
     if (k === 0) return { move: PASS };
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
-      const v = lineValue(game, cand[j], g3, depth);
+      const v = lineValue(game, cand[j], g3);
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
-    return { move: best, info: `line=${bestV.toFixed(3)} d${depth}w${w}` };
+    return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${WIDTH}` };
   }
 
   return { getMove };
