@@ -15,10 +15,10 @@
 //
 // Config (cfg reader, slot-aware):
 //   DEPTH           plies per line, the root move included; 1 = the root
-//                   moves' own results                                (default 5)
-//   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 2)
+//                   moves' own results                                (default 7)
+//   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 4)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
-//   VPAT_DATA       evaluator                      (default out/vpat-6qiy9adq.js)
+//   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
 //   DITHER          uniform noise in [0, DITHER) added to each vpat evaluation;
 //                   0 = off                                          (default 0.001)
 // In the browser the models come from window.featurepolModel and
@@ -37,8 +37,8 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const DEPTH      = cfg.int('DEPTH', 5);
-  const ROOT_WIDTH = cfg.int('ROOT_WIDTH', 2);
+  const DEPTH      = cfg.int('DEPTH', 7);
+  const ROOT_WIDTH = cfg.int('ROOT_WIDTH', 4);
   if (!(DEPTH >= 1))      throw new Error(`fp-line-vpat: DEPTH must be >= 1, got ${DEPTH}`);
   if (!(ROOT_WIDTH >= 0)) throw new Error(`fp-line-vpat: ROOT_WIDTH must be >= 0, got ${ROOT_WIDTH}`);
   const DITHER     = cfg.float('DITHER', 0.001);
@@ -48,7 +48,7 @@ function create(cfg) {
   const fpPath = _isNode ? cfg.str('FPOL_DATA', require('path').join(__dirname, '..', 'featurepol-cbk7wa32.js')) : undefined;
   const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-line-vpat', path: fpPath });
 
-  const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-6qiy9adq.js')) : null;
+  const vpatPath = _isNode ? cfg.str('VPAT_DATA', require('path').join(__dirname, '..', 'out', 'vpat-wabotxn6.js')) : null;
   const vpatRaw = _isNode ? require(require('path').resolve(vpatPath))
                           : (typeof window !== 'undefined' && window.vpatternsModel) || null;
   if (!vpatRaw) throw new Error(`fp-line-vpat: cannot load the vpat model from ${_isNode ? vpatPath : 'window.vpatternsModel'}`);
