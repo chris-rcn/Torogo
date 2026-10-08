@@ -19,8 +19,9 @@
 //   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 4)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
 //   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
-//   DITHER          uniform noise in [0, DITHER) added to each vpat evaluation;
-//                   0 = off                                          (default 0.001)
+//   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each vpat
+//                   evaluation, phase = the root's fullness: full on an empty
+//                   board, zero at phase 1; 0 = off                  (default 0.001)
 // In the browser the models come from window.featurepolModel and
 // window.vpatternsModel.
 
@@ -94,16 +95,16 @@ function create(cfg) {
   }
 
   // Mean P(BLACK wins) over the positions after each ply of the line that
-  // starts with rootMove, each vpat evaluation dithered.  game3 (if any) is
-  // back at the root on return.
-  function lineValue(game, rootMove, game3, rng) {
+  // starts with rootMove, each vpat evaluation dithered by up to `dither`.
+  // game3 (if any) is back at the root on return.
+  function lineValue(game, rootMove, game3, rng, dither) {
     const g = game.clone();
     let move = rootMove, sum = 0, n = 0;
     for (let d = 0; d < DEPTH; d++) {
       g.play(move);
       if (game3) game3.play(move);
       sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0)
-                        : VPat.evaluate(g, vpatModel, game3) + (DITHER > 0 ? rng.random() * DITHER : 0);
+                        : VPat.evaluate(g, vpatModel, game3) + (dither > 0 ? rng.random() * dither : 0);
       n++;
       if (g.gameOver || d === DEPTH - 1) break;
       move = fpBest(g, game3);
@@ -116,6 +117,7 @@ function create(cfg) {
   function getMove(game, _budgetMs, options = {}) {
     if (game.gameOver) return { move: PASS };
     const rng = options.rng || ownRng;
+    const dither = DITHER * (1 - game.phase());
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
     const cand = new Int32Array(ROOT_WIDTH || game.N * game.N);
@@ -124,7 +126,7 @@ function create(cfg) {
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
-      const v = lineValue(game, cand[j], g3, rng);
+      const v = lineValue(game, cand[j], g3, rng, dither);
       const mv = mover === BLACK ? v : 1 - v;
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
