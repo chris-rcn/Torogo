@@ -3,8 +3,11 @@
 
 // Generate per-position move-value data by self-play.
 //
-// Each self-play game is played by the POSITION agent, which only has to
-// return moves, until it ends or its board fullness (phase) first reaches 0.8;
+// Each self-play game starts from an empty board with MIRROR_PAIRS random
+// mirror pairs (a random move and its 180-degree rotation in the other colour,
+// so the opening is exactly balanced), then is played by the POSITION agent,
+// which only has to return moves, until it ends or its board fullness (phase)
+// first reaches 0.8;
 // later positions are never drawn.  One position with phase below 0.8 is then
 // drawn for deep analysis and checked for contestedness by the
 // VALUE agent: its win ratio must be within [0.3, 0.7], else the game is
@@ -90,6 +93,9 @@ const WR_DEV = 0.2;
 // empty/area) must be below this, skipping crowded late-game positions.
 const PHASE_MAX = 0.8;
 
+// Random mirror pairs opening each self-play game, before the position agent.
+const MIRROR_PAIRS = 2;
+
 // ...and not flat: at most MAX_NEAR_BEST other moves rated within
 // NEAR_BEST_DEV of the best one.
 const NEAR_BEST_DEV = 0.01;
@@ -120,7 +126,38 @@ function legalMovesByPrior(game2) {
   return moves;
 }
 
-process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  order-model=${orderModelName}  phase-buckets=${phaseBuckets}\n`);
+// ── Mirror-pair openings (ported from selfplay.js) ────────────────────────────
+function mirror180(idx, N) {
+  const x = idx % N, y = (idx - x) / N;
+  return ((N - y) % N) * N + ((N - x) % N);
+}
+function isAntisymmetric(game) {
+  const N = game.N, area = N * N;
+  for (let i = 0; i < area; i++)
+    if (game.cells[i] !== -game.cells[mirror180(i, N)]) return false;
+  return true;
+}
+// Play a random move and its 180-degree rotation, appending both to `record`;
+// validated on a clone (no undo), rejecting fixed points and pairs whose
+// captures interact.  False when no pair can be placed.
+function playMirrorPair(game, record) {
+  for (let tries = 0; tries < 32; tries++) {
+    const idx = game.randomLegalMove();
+    if (idx === PASS) return false;
+    const m = mirror180(idx, game.N);
+    if (m === idx) continue;
+    const trial = game.clone();
+    if (!trial.play(idx) || !trial.play(m)) continue;
+    if (!isAntisymmetric(trial)) continue;
+    game.play(idx);
+    game.play(m);
+    record.push(idx, m);
+    return true;
+  }
+  return false;
+}
+
+process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  mirror-pairs=${MIRROR_PAIRS}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  order-model=${orderModelName}  phase-buckets=${phaseBuckets}\n`);
 
 console.error(`position-agent=${posAgentName}  value-agent=${valAgentName}  size=${boardSize}  budget=${budget}ms`);
 console.error();
@@ -155,10 +192,12 @@ while (true) {
 
   // Play the self-play game up to PHASE_MAX (nothing later is eligible),
   // recording each move and which positions (identified by the number of
-  // moves played before them) fall in each band.
-  const game     = new Game2(boardSize, true);
+  // moves played before them) fall in each band.  The mirror pairs come
+  // first; positions inside the opening are not eligible.
+  const game     = new Game2(boardSize, false);
   const moves    = [];
   const inBand = Array.from({ length: phaseBuckets }, () => []);   // per band: move counts of its positions
+  for (let i = 0; i < MIRROR_PAIRS; i++) if (!playMirrorPair(game, moves)) break;
 
   while (!game.gameOver) {
     const phase = 1 - game.emptyCount / (N * N);
@@ -180,12 +219,12 @@ while (true) {
   }
   if (band < 0) continue;
   const k = inBand[band][Math.floor(Math.random() * inBand[band].length)];
-  const probe = new Game2(boardSize, true);
+  const probe = new Game2(boardSize, false);
   for (let j = 0; j < k; j++) probe.play(moves[j]);
   const v = valAgent(probe, budget);
   if (v.rootWinRatio === undefined) { console.error('value agent did not return rootWinRatio'); process.exit(1); }
   if (Math.abs(v.rootWinRatio - 0.5) > WR_DEV) continue;
-  const position = new Game2(boardSize, true);
+  const position = new Game2(boardSize, false);
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
 
@@ -225,11 +264,11 @@ while (true) {
 
   moveInfos.sort((a, b) => (b.winRatio ?? -Infinity) - (a.winRatio ?? -Infinity));
 
-  // The new format holds EVERY stone: prepend the free centre stone so the
-  // position replays from an empty board.  Phase is stored (board fullness).
+  // The history holds EVERY stone (mirror pairs included), so the position
+  // replays from an empty board.  Phase is stored (board fullness).
   const phase = 1 - position.emptyCount / (N * N);
   process.stdout.write(
-    MD.formatRow({ boardSize, phase, history: [MD.centerMove(N), ...history], candidates: moveInfos }) + '\n');
+    MD.formatRow({ boardSize, phase, history, candidates: moveInfos }) + '\n');
   posCount++;
 
   const now = performance.now();
