@@ -24,7 +24,7 @@
 //                                                                    (default 1)
 //   PL_PLY_DECAY    weight d of the second ply: the value is (E1 + d·E2)/(1 + d),
 //                   E2 the same expectation after featurepol's top move;
-//                   0 = one ply only                                 (default 1)
+//                   0 = one ply only                                 (default 0)
 //   PL_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   PL_VPAT_DATA    evaluator                      (default out/vpat-24-34.js)
 //   PL_DITHER       uniform noise in [0, PL_DITHER·(1 − phase)) added to each
@@ -50,7 +50,7 @@ function create(cfg) {
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
   const PL_TEMP    = cfg.float('PL_TEMP', 1);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
-  const PL_PLY_DECAY = cfg.float('PL_PLY_DECAY', 1);
+  const PL_PLY_DECAY = cfg.float('PL_PLY_DECAY', 0);
   if (!(PL_PLY_DECAY >= 0)) throw new Error(`fp-ply-vpat: PL_PLY_DECAY must be >= 0, got ${PL_PLY_DECAY}`);
   const PL_DITHER  = cfg.float('PL_DITHER', 0.001);
   if (!(PL_DITHER >= 0))  throw new Error(`fp-ply-vpat: PL_DITHER must be >= 0, got ${PL_DITHER}`);
