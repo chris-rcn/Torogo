@@ -2,7 +2,7 @@
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
 // fp-line-vpat: featurepol filters the root moves, a featurepol line values
-// each one.  Featurepol's top ROOT_WIDTH moves are the candidates.  Each is
+// each one.  Featurepol's top WIDTH moves are the candidates.  Each is
 // played, then featurepol's top move for the side to move (width 1 beyond the
 // root), until the line is DEPTH plies long, root move included.  The vpat
 // evaluator scores the position after every ply of the line, and the
@@ -16,7 +16,7 @@
 // Config (cfg reader, slot-aware):
 //   DEPTH           plies per line, the root move included; 1 = the root
 //                   moves' own results                                (default 7)
-//   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 4)
+//   WIDTH           featurepol candidates at the root; 0 = every one   (default 4)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
 //   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
 //   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each root
@@ -39,9 +39,9 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const DEPTH      = cfg.int('DEPTH', 7);
-  const ROOT_WIDTH = cfg.int('ROOT_WIDTH', 4);
+  const WIDTH      = cfg.int('WIDTH', 4);
   if (!(DEPTH >= 1))      throw new Error(`fp-line-vpat: DEPTH must be >= 1, got ${DEPTH}`);
-  if (!(ROOT_WIDTH >= 0)) throw new Error(`fp-line-vpat: ROOT_WIDTH must be >= 0, got ${ROOT_WIDTH}`);
+  if (!(WIDTH >= 0))      throw new Error(`fp-line-vpat: WIDTH must be >= 0, got ${WIDTH}`);
   const DITHER     = cfg.float('DITHER', 0.001);
   if (!(DITHER >= 0))     throw new Error(`fp-line-vpat: DITHER must be >= 0, got ${DITHER}`);
   const ownRng = makeRng();
@@ -59,7 +59,7 @@ function create(cfg) {
   // back to the root), when featurepol's ladder features or the vpat model need it.
   const needG3 = fpWeights.spec.needsLadder || VPat.needsGame3(vpatModel.preparedSpecs);
 
-  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, root-width: ${ROOT_WIDTH === 0 ? 'all' : ROOT_WIDTH}, dither: ${DITHER}, ` +
+  console.error(`fp-line-vpat[${cfg.slot != null ? cfg.slot : '-'}]: depth: ${DEPTH}, width: ${WIDTH === 0 ? 'all' : WIDTH}, dither: ${DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)})`);
 
@@ -118,7 +118,7 @@ function create(cfg) {
     const dither = DITHER * (1 - game.phase());
     ensureState(game.N);
     const g3 = needG3 ? game3FromGame2(game) : undefined;
-    const cand = new Int32Array(ROOT_WIDTH || game.N * game.N);
+    const cand = new Int32Array(WIDTH || game.N * game.N);
     const k = fpRanked(game, g3, cand);
     if (k === 0) return { move: PASS };
     const mover = game.current;
@@ -128,7 +128,7 @@ function create(cfg) {
       const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
-    return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${ROOT_WIDTH}` };
+    return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${WIDTH}` };
   }
 
   return { getMove };
