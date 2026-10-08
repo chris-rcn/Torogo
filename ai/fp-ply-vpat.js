@@ -17,7 +17,7 @@
 // its pass: estimateWinner if that ends the game, else the vpat evaluation.
 //
 // Config (cfg reader, slot-aware):
-//   PL_WIDTH        featurepol candidates at the root; 0 = every one   (default 4)
+//   PL_WIDTH        featurepol candidates at the root; 0 = every one   (default 6)
 //   PL_TEMP         temperature of the featurepol softmax that weights the
 //                   next-ply values; 0 = all weight on featurepol's top move
 //                                                                    (default 1)
@@ -42,7 +42,7 @@ const { makeRng } = Util.load('./xorshift.js', 'XorShift');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const PL_WIDTH   = cfg.int('PL_WIDTH', 4);
+  const PL_WIDTH   = cfg.int('PL_WIDTH', 6);
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
   const PL_TEMP    = cfg.float('PL_TEMP', 1);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
