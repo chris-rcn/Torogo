@@ -6,9 +6,10 @@
 // the candidates.  Each is played, and the resulting position is valued by
 // valueB: the mean of the vpat evaluations of EVERY next-ply position (each
 // move featurepol lists for the side to move), weighted by featurepol's
-// softmax probability of that move — and, weighted PL_PLY_DECAY, the same mean
-// one ply deeper, after featurepol's top move.  The candidate's value, in the mover's
-// view plus uniform noise in [0, PL_DITHER·(1 − root phase)), picks the move
+// softmax probability of that move — and, for PL_DEPTH > 1, the same mean at
+// each further ply of featurepol's top-move line, ply k weighted
+// PL_PLY_DECAY^(k−1).  The candidate's value, in the mover's view plus uniform
+// noise in [0, PL_DITHER·(1 − root phase)), picks the move
 // (ties: featurepol's order).
 //
 // The next-ply values are incremental (vpatterns deltaZ off one extraction of
@@ -22,9 +23,10 @@
 //   PL_TEMP         temperature of the featurepol softmax that weights the
 //                   next-ply values; 0 = all weight on featurepol's top move
 //                                                                    (default 2)
-//   PL_PLY_DECAY    weight d of the second ply: the value is (E1 + d·E2)/(1 + d),
-//                   E2 the same expectation after featurepol's top move;
-//                   0 = one ply only                                 (default 0)
+//   PL_DEPTH        plies of the expectation: E1 at the position, E_k after
+//                   k−1 of featurepol's top moves; 1 = one ply       (default 1)
+//   PL_PLY_DECAY    d: the value is Σ d^(k−1)·E_k / Σ d^(k−1) over plies
+//                   1..PL_DEPTH; 0 = ply 1 only                      (default 0)
 //   PL_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   PL_VPAT_DATA    evaluator                      (default out/vpat-24-34.js)
 //   PL_DITHER       uniform noise in [0, PL_DITHER·(1 − phase)) added to each
@@ -50,6 +52,8 @@ function create(cfg) {
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
   const PL_TEMP    = cfg.float('PL_TEMP', 2);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
+  const PL_DEPTH   = cfg.int('PL_DEPTH', 1);
+  if (!(PL_DEPTH >= 1))   throw new Error(`fp-ply-vpat: PL_DEPTH must be >= 1, got ${PL_DEPTH}`);
   const PL_PLY_DECAY = cfg.float('PL_PLY_DECAY', 0);
   if (!(PL_PLY_DECAY >= 0)) throw new Error(`fp-ply-vpat: PL_PLY_DECAY must be >= 0, got ${PL_PLY_DECAY}`);
   const PL_DITHER  = cfg.float('PL_DITHER', 0.001);
@@ -77,7 +81,7 @@ function create(cfg) {
   const vpatG3 = VPat.needsGame3(prep);
   const needG3 = fpWeights.spec.needsLadder || vpatG3;
 
-  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, ply-decay: ${PL_PLY_DECAY}, dither: ${PL_DITHER}, ` +
+  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, depth: ${PL_DEPTH}, ply-decay: ${PL_PLY_DECAY}, dither: ${PL_DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)}), ` +
                 `incremental: ${incremental ? 'yes' : 'no'}`);
@@ -143,25 +147,31 @@ function create(cfg) {
     return sum;
   }
 
-  // P(BLACK wins) of `game`: (E1 + PL_PLY_DECAY·E2) / (1 + PL_PLY_DECAY), E1 =
-  // plyMean of `game`, E2 = plyMean of the position after featurepol's top move
-  // there (estimateWinner if that ends the game).  E1 alone when PL_PLY_DECAY
-  // is 0 or featurepol lists no move.  options.game3: a Game3 synced to `game`,
-  // back where it was on return; built here when needed and not supplied.
-  // `game` is not changed.
+  // P(BLACK wins) of `game`: Σ d^(k−1)·E_k / Σ d^(k−1), d = PL_PLY_DECAY, over
+  // plies k = 1..PL_DEPTH: E1 = plyMean of `game`, E_k = plyMean after k−1 of
+  // featurepol's top moves (estimateWinner once one ends the game, which also
+  // ends the line, as does a ply where featurepol lists no move).  E1 alone
+  // when d is 0.  options.game3: a Game3 synced to `game`, back where it was on
+  // return; built here when needed and not supplied.  `game` is not changed.
   function valueB(game, options = {}) {
     if (game.gameOver) return game.estimateWinner() === BLACK ? 1 : 0;
     ensureState(game.N);
     const game3 = needG3 ? (options.game3 || game3FromGame2(game)) : undefined;
-    const e1 = plyMean(game, game3);
-    if (PL_PLY_DECAY === 0 || plyTop === PASS) return e1;
-    const top = plyTop;
+    let num = plyMean(game, game3), den = 1;
+    if (PL_DEPTH === 1 || PL_PLY_DECAY === 0) return num;
     const g = game.clone();
-    g.play(top);
-    if (game3) game3.play(top);
-    const e2 = g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : plyMean(g, game3);
-    if (game3) game3.undo();
-    return (e1 + PL_PLY_DECAY * e2) / (1 + PL_PLY_DECAY);
+    let w = 1, plays = 0;
+    for (let k = 2; k <= PL_DEPTH && plyTop !== PASS; k++) {
+      const top = plyTop;
+      g.play(top);
+      if (game3) { game3.play(top); plays++; }
+      w *= PL_PLY_DECAY;
+      num += w * (g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : plyMean(g, game3));
+      den += w;
+      if (g.gameOver) break;
+    }
+    if (game3) for (let i = 0; i < plays; i++) game3.undo();
+    return num / den;
   }
 
   function getMove(game, _budgetMs, options = {}) {
