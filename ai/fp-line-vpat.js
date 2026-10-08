@@ -19,9 +19,9 @@
 //   ROOT_WIDTH      featurepol candidates at the root; 0 = every one   (default 4)
 //   FPOL_DATA       featurepol weights             (default featurepol-cbk7wa32.js)
 //   VPAT_DATA       evaluator                      (default out/vpat-wabotxn6.js)
-//   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each vpat
-//                   evaluation, phase = the root's fullness: full on an empty
-//                   board, zero at phase 1; 0 = off                  (default 0.001)
+//   DITHER          uniform noise in [0, DITHER·(1 − phase)) added to each root
+//                   candidate's value, phase = the root's fullness: full on an
+//                   empty board, zero at phase 1; 0 = off            (default 0.001)
 // In the browser the models come from window.featurepolModel and
 // window.vpatternsModel.
 
@@ -95,16 +95,14 @@ function create(cfg) {
   }
 
   // Mean P(BLACK wins) over the positions after each ply of the line that
-  // starts with rootMove, each vpat evaluation dithered by up to `dither`.
-  // game3 (if any) is back at the root on return.
-  function lineValue(game, rootMove, game3, rng, dither) {
+  // starts with rootMove.  game3 (if any) is back at the root on return.
+  function lineValue(game, rootMove, game3) {
     const g = game.clone();
     let move = rootMove, sum = 0, n = 0;
     for (let d = 0; d < DEPTH; d++) {
       g.play(move);
       if (game3) game3.play(move);
-      sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0)
-                        : VPat.evaluate(g, vpatModel, game3) + (dither > 0 ? rng.random() * dither : 0);
+      sum += g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
       n++;
       if (g.gameOver || d === DEPTH - 1) break;
       move = fpBest(g, game3);
@@ -126,8 +124,8 @@ function create(cfg) {
     const mover = game.current;
     let best = cand[0], bestV = -Infinity;
     for (let j = 0; j < k; j++) {
-      const v = lineValue(game, cand[j], g3, rng, dither);
-      const mv = mover === BLACK ? v : 1 - v;
+      const v = lineValue(game, cand[j], g3);
+      const mv = (mover === BLACK ? v : 1 - v) + (dither > 0 ? rng.random() * dither : 0);
       if (mv > bestV) { bestV = mv; best = cand[j]; }
     }
     return { move: best, info: `line=${bestV.toFixed(3)} d${DEPTH}w${ROOT_WIDTH}` };
