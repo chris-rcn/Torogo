@@ -20,7 +20,7 @@ const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
-  ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature',
+  ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'entropy-beta',
    'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights', 'limit']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
@@ -41,6 +41,9 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --reward-ema F    EMA decay for the reward baseline; 0 disables (default 0.99)
   --weight-decay F  decoupled L2 shrink per update (default 0.000002; 0 = off)
   --temperature F   softmax sampling temperature for training (default 1)
+  --entropy-beta B  entropy bonus: each self-play move adds B·∂H/∂score_i, H the
+                    entropy of the temperature-1 softmax, to the REINFORCE step,
+                    whatever the outcome (default 0 = off)
   --eval-rank-topn N  in EVAL games, rank the vpat<n> feature over only the best N
                     moves by the OTHER feature spaces (default 3; 0 = off,
                     N<0 = every candidate).  Top-N is the deployment setting:
@@ -114,6 +117,26 @@ const LR          = parseFloat(opts.lr || '0.02');
 const REWARD_EMA  = parseFloat(opts['reward-ema'] || '0.99');
 const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');
 const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
+const ENTROPY_BETA = parseFloat(opts['entropy-beta'] || '0');
+if (!(ENTROPY_BETA >= 0)) { console.error(`Error: --entropy-beta must be >= 0, got '${opts['entropy-beta']}'`); process.exit(1); }
+
+// β·∂H/∂score_i of the temperature-1 softmax over state's n candidates:
+// −β·π_i·(log π_i + H).  Pulls the favourite down and the rest up; zero when
+// uniform.  π from the raw scores in state.logits (computeSoftmax stores them
+// before applying the temperature), so it is the T=1 policy whatever
+// --temperature samples with.
+function entropyGrad(state, n) {
+  const lg = state.logits;
+  let mx = -Infinity;
+  for (let i = 0; i < n; i++) if (lg[i] > mx) mx = lg[i];
+  const p = new Float64Array(n);
+  let z = 0;
+  for (let i = 0; i < n; i++) { p[i] = Math.exp(lg[i] - mx); z += p[i]; }
+  let H = 0;
+  for (let i = 0; i < n; i++) { p[i] /= z; if (p[i] > 0) H -= p[i] * Math.log(p[i]); }
+  for (let i = 0; i < n; i++) p[i] = p[i] > 0 ? -ENTROPY_BETA * p[i] * (Math.log(p[i]) + H) : 0;
+  return p;
+}
 const EVAL_AGENT  = opts.eval || opts['eval-agent'] || null;   // no default — eval is skipped unless given
 const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored each status print (ladr column)
 const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdMae column)
@@ -419,7 +442,8 @@ function trainGame(N) {
       keyOff.set(state.keyOff.subarray(0, n + 1));
       const probs = new Float64Array(n);
       probs.set(state.probs.subarray(0, n));
-      steps.push({ player, chosenIndex: choice.index, count: n, keys, keyOff, probs, touched: state.touched });
+      steps.push({ player, chosenIndex: choice.index, count: n, keys, keyOff, probs, touched: state.touched,
+                   entGrad: ENTROPY_BETA > 0 ? entropyGrad(state, n) : null });
     }
     game.play(choice.move);
     game3.play(choice.move);
@@ -450,7 +474,7 @@ function trainGame(N) {
   for (const s of steps) {
     const sign = s.player === BLACK ? 1 : -1;
     const adv = REWARD_EMA > 0 ? sign * (outcomeBlack - ema) : sign * outcomeBlack;
-    weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY, wStats) || 0;
+    weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY, wStats, s.entGrad) || 0;
   }
   if (REWARD_EMA > 0 && steps.length > 0) ema = REWARD_EMA * ema + (1 - REWARD_EMA) * outcomeBlack;
 
@@ -507,7 +531,7 @@ function evalVsReference(N, nGames, w) {
 console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}` +
             (weights.spec.needsLadder ? `  ladderMinChain=${weights.ladderMinChain}` : '') +
             (weights.spec.needsT3 ? `  t3MinChain=${weights.t3MinChain}  t3Limits=${weights.t3DepthLimit},${weights.t3NodeLimit}` : ''));
-console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}`);
+console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}  entropy-beta=${ENTROPY_BETA}`);
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
 if (EVAL_RANK_TOPN > 0 && weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) console.log(`eval-rank-topn=${EVAL_RANK_TOPN} (eval ranks the best ${EVAL_RANK_TOPN} moves; self-play ranks every candidate)`);

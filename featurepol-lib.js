@@ -1934,11 +1934,13 @@ function applyScoreGradient(state, grad, weights, lr, weightDecay = 0, stats) {
 // the chosen move's keys get +lr·advantage and every move's keys get −lr·advantage·π_i.
 // Each move's contribution is divided by its active-feature count (keys per move), matching
 // applyScoreGradient's per-example normalisation so lr is comparable across spec widths.
-function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay = 0, stats) {
+// extraGrad (optional, per move): a further score-gradient added the same way, lr·extraGrad[i]
+// onto move i's keys — e.g. an entropy bonus.
+function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay = 0, stats, extraGrad) {
   const n = state.count;
   if (n === 0 || chosenIndex < 0) return 0;
   const step = lr * advantage;
-  if (step === 0) return 0;
+  if (step === 0 && !extraGrad) return 0;
   const keys = state.keys, keyOff = state.keyOff, probs = state.probs;
   const delta = weights.delta, touched = state.touched;
   let tc = 0;
@@ -1951,10 +1953,11 @@ function reinforceUpdate(state, chosenIndex, advantage, weights, lr, weightDecay
   }
   for (let i = 0; i < n; i++) {
     const pi = probs[i];
-    if (pi === 0) continue;
+    const g = step * pi - (extraGrad ? lr * extraGrad[i] : 0);
+    if (g === 0) continue;
     const k0 = keyOff[i], e = keyOff[i + 1], K = e - k0;
     if (K === 0) continue;
-    const sub = step * pi / K;
+    const sub = g / K;
     for (let k = k0; k < e; k++) { const idx = keys[k]; touched[tc++] = idx; delta[idx] -= sub; }
   }
   _applyTouchedDelta(state, tc, weights, lr * weightDecay, stats);
