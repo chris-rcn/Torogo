@@ -6,10 +6,8 @@
 // the candidates.  Each is played, and the resulting position is valued by
 // valueB: the mean of the vpat evaluations of EVERY next-ply position (each
 // move featurepol lists for the side to move), weighted by featurepol's
-// softmax probability of that move — and, for PL_DEPTH > 1, the same mean at
-// each further ply of featurepol's top-move line, ply k weighted
-// PL_PLY_DECAY^(k−1).  The candidate's value, in the mover's view plus uniform
-// noise in [0, PL_DITHER·(1 − root phase)), picks the move
+// softmax probability of that move.  The candidate's value, in the mover's
+// view plus uniform noise in [0, PL_DITHER·(1 − root phase)), picks the move
 // (ties: featurepol's order).
 //
 // The next-ply values are incremental (vpatterns deltaZ off one extraction of
@@ -23,10 +21,6 @@
 //   PL_TEMP         temperature of the featurepol softmax that weights the
 //                   next-ply values; 0 = all weight on featurepol's top move
 //                                                                    (default 2)
-//   PL_DEPTH        plies of the expectation: E1 at the position, E_k after
-//                   k−1 of featurepol's top moves; 1 = one ply       (default 1)
-//   PL_PLY_DECAY    d: the value is Σ d^(k−1)·E_k / Σ d^(k−1) over plies
-//                   1..PL_DEPTH; 0 = ply 1 only                      (default 0)
 //   PL_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   PL_VPAT_DATA    evaluator                      (default out/vpat-24-34.js)
 //   PL_DITHER       uniform noise in [0, PL_DITHER·(1 − phase)) added to each
@@ -52,10 +46,6 @@ function create(cfg) {
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
   const PL_TEMP    = cfg.float('PL_TEMP', 2);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
-  const PL_DEPTH   = cfg.int('PL_DEPTH', 1);
-  if (!(PL_DEPTH >= 1))   throw new Error(`fp-ply-vpat: PL_DEPTH must be >= 1, got ${PL_DEPTH}`);
-  const PL_PLY_DECAY = cfg.float('PL_PLY_DECAY', 0);
-  if (!(PL_PLY_DECAY >= 0)) throw new Error(`fp-ply-vpat: PL_PLY_DECAY must be >= 0, got ${PL_PLY_DECAY}`);
   const PL_DITHER  = cfg.float('PL_DITHER', 0.001);
   if (!(PL_DITHER >= 0))  throw new Error(`fp-ply-vpat: PL_DITHER must be >= 0, got ${PL_DITHER}`);
   const ownRng = makeRng();
@@ -81,7 +71,7 @@ function create(cfg) {
   const vpatG3 = VPat.needsGame3(prep);
   const needG3 = fpWeights.spec.needsLadder || vpatG3;
 
-  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, depth: ${PL_DEPTH}, ply-decay: ${PL_PLY_DECAY}, dither: ${PL_DITHER}, ` +
+  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, dither: ${PL_DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)}), ` +
                 `incremental: ${incremental ? 'yes' : 'no'}`);
@@ -107,23 +97,21 @@ function create(cfg) {
     return k;
   }
 
-  // One ply of the expectation: the featurepol-softmax-weighted (PL_TEMP) mean
-  // of the vpat values of every next-ply position of `game` (not over).  Sets
-  // plyTop to featurepol's top move there, PASS when it lists none (the value is
-  // then the pass's).  game3 (if any) is synced to `game` and unchanged on return.
-  let plyTop = PASS;
-  function plyMean(game, game3) {
+  // P(BLACK wins) of `game`: the featurepol-softmax-weighted (PL_TEMP) mean of the vpat
+  // values of every next-ply position.  options.game3: a Game3 synced to
+  // `game`, back where it was on return; built here when needed and not
+  // supplied.  `game` is not changed.
+  function valueB(game, options = {}) {
+    if (game.gameOver) return game.estimateWinner() === BLACK ? 1 : 0;
+    ensureState(game.N);
+    const game3 = needG3 ? (options.game3 || game3FromGame2(game)) : undefined;
     FeaturePol.extractFeatures(game, fpState, fpWeights, game3);
     const n = FeaturePol.computeSoftmax(fpState, fpWeights, PL_TEMP);
     if (n === 0) {
-      plyTop = PASS;
       const g = game.clone();
       g.play(PASS);
       return g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : VPat.evaluate(g, vpatModel, game3);
     }
-    let top = 0;
-    for (let i = 1; i < n; i++) if (fpState.probs[i] > fpState.probs[top]) top = i;
-    plyTop = fpState.moves[top];
     const g3v = vpatG3 ? game3 : undefined;
     const f = VPat.extractFeatures(game, prep, false, undefined, true, g3v);
     VPat.evaluateFeatures(f, vpatModel.weights);
@@ -145,33 +133,6 @@ function create(cfg) {
       sum += fpState.probs[i] * v;
     }
     return sum;
-  }
-
-  // P(BLACK wins) of `game`: Σ d^(k−1)·E_k / Σ d^(k−1), d = PL_PLY_DECAY, over
-  // plies k = 1..PL_DEPTH: E1 = plyMean of `game`, E_k = plyMean after k−1 of
-  // featurepol's top moves (estimateWinner once one ends the game, which also
-  // ends the line, as does a ply where featurepol lists no move).  E1 alone
-  // when d is 0.  options.game3: a Game3 synced to `game`, back where it was on
-  // return; built here when needed and not supplied.  `game` is not changed.
-  function valueB(game, options = {}) {
-    if (game.gameOver) return game.estimateWinner() === BLACK ? 1 : 0;
-    ensureState(game.N);
-    const game3 = needG3 ? (options.game3 || game3FromGame2(game)) : undefined;
-    let num = plyMean(game, game3), den = 1;
-    if (PL_DEPTH === 1 || PL_PLY_DECAY === 0) return num;
-    const g = game.clone();
-    let w = 1, plays = 0;
-    for (let k = 2; k <= PL_DEPTH && plyTop !== PASS; k++) {
-      const top = plyTop;
-      g.play(top);
-      if (game3) { game3.play(top); plays++; }
-      w *= PL_PLY_DECAY;
-      num += w * (g.gameOver ? (g.estimateWinner() === BLACK ? 1 : 0) : plyMean(g, game3));
-      den += w;
-      if (g.gameOver) break;
-    }
-    if (game3) for (let i = 0; i < plays; i++) game3.undo();
-    return num / den;
   }
 
   function getMove(game, _budgetMs, options = {}) {
