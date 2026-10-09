@@ -843,19 +843,37 @@ function incrementalPlay(game, inc, move) {
       }
     }
   };
+  // Cells within Manhattan distance 2 of c; the chains touching c have their
+  // liberties dirtied by the callers below.
   const around = c => {
     const b = c * 4;
     d0[c] = d1[c] = 1;
     for (let d = 0; d < 4; d++) {
       const n = nbr[b + d], n2 = nbr[n * 4 + d], dg = dnbr[b + d];
       d0[n] = d1[n] = 1; d0[n2] = d1[n2] = 1; d0[dg] = d1[dg] = 1;
-      if (cells[n] !== 0) markLibs(gid[n]);
     }
   };
+  const ls = game._ls, mover = cells[move];
   around(move);
+  // The mover's merged chain: identity, size and liberties all changed.
   markLibs(gid[move]);
+  // An adjacent enemy chain lost exactly one liberty and kept its identity and
+  // size.  Features see a chain's liberties only through min(ls, MAX_ADJ_LIB)
+  // (adjLib codes), ls 1 / 2 (atari, capture, ko, suicide), ls >= 3 (the cheap
+  // self-atari bound) and the exact liberty set when ls <= 2 (self-atari), so
+  // its liberties' features can change only if it now has ls < MAX_ADJ_LIB.
+  for (let d = 0; d < 4; d++) {
+    const n = nbr[move * 4 + d];
+    if (cells[n] === -mover && ls[gid[n]] < MAX_ADJ_LIB) markLibs(gid[n]);
+  }
+  // Captured stones: their cells, and the chains around them (all the mover's,
+  // which gained liberties).
   const caps = game._lastCaptures;
-  for (let k = 0; k < game._lastCaptureCount; k++) around(caps[k]);
+  for (let k = 0; k < game._lastCaptureCount; k++) {
+    const c = caps[k];
+    around(c);
+    for (let d = 0; d < 4; d++) { const n = nbr[c * 4 + d]; if (cells[n] !== 0) markLibs(gid[n]); }
+  }
   return ok;
 }
 
