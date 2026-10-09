@@ -2,8 +2,8 @@
 
 // bench-ppat.js — ppat playout cost on a fixed, reproducible workload.
 //
-// Start positions: every position with --min-phase <= phase <= --max-phase of
-// --games full 13x13 games, each opened with 2 mirror pairs and played by
+// Start positions: every position with phase >= --min-phase of --games full
+// 13x13 games, each opened with 2 mirror pairs and played by
 // featurepol (featurepol-cbk7wa32.js, softmax temperature 1 — the rfs
 // policy) from a seeded rng, so the set depends only on --seed and not on the
 // ppat code under test.  From each start position --playouts ppat playouts
@@ -16,7 +16,7 @@
 // exactness check for an optimisation.
 //
 //   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 4]
-//                      [--min-phase 0.55] [--max-phase 1] [--seed 1] [--size 13]
+//                      [--min-phase 0.55] [--seed 1] [--size 13]
 
 const path = require('path');
 const { performance } = require('perf_hooks');
@@ -27,22 +27,19 @@ const { makeRng } = require('./xorshift.js');
 const FeaturePol = require('./featurepol-lib.js');
 const PPat = require('./ppat-lib.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games', 'playouts', 'min-phase', 'max-phase', 'seed', 'size']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size']);
 if (opts.help) {
-  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 4] [--min-phase 0.55] [--max-phase 1] [--seed 1] [--size 13]');
+  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 4] [--min-phase 0.55] [--seed 1] [--size 13]');
   process.exit(0);
 }
 const MODEL    = opts.model || path.join(__dirname, 'ppat-data-1623136.js');
 const GAMES    = parseInt(opts.games || '20', 10);
 const PLAYOUTS = parseInt(opts.playouts || '4', 10);
 const MIN_PHASE = parseFloat(opts['min-phase'] ?? '0.55');
-const MAX_PHASE = parseFloat(opts['max-phase'] ?? '1');
 const SEED     = parseInt(opts.seed || '1', 10);
 const SIZE     = parseInt(opts.size || '13', 10);
 if (!(GAMES >= 1) || !(PLAYOUTS >= 1)) { console.error('--games and --playouts must be >= 1'); process.exit(1); }
-if (!(MIN_PHASE >= 0 && MIN_PHASE <= MAX_PHASE && MAX_PHASE <= 1)) {
-  console.error('--min-phase and --max-phase must satisfy 0 <= min <= max <= 1'); process.exit(1);
-}
+if (!(MIN_PHASE >= 0 && MIN_PHASE <= 1)) { console.error('--min-phase must be in [0, 1]'); process.exit(1); }
 
 const model = PPat.loadWeights(MODEL);
 if (!model) { console.error(`cannot load ppat weights from ${MODEL}`); process.exit(1); }
@@ -85,15 +82,13 @@ for (let gi = 0; gi < GAMES; gi++) {
   for (let p = 0; p < 2; p++) playMirrorPair(g, genRng);
   const g3 = game3FromGame2(g);
   for (let ply = 0; !g.gameOver && ply < 4 * SIZE * SIZE; ply++) {
-    const phase = g.phase();
-    if (phase > MAX_PHASE) break;
-    if (phase >= MIN_PHASE) starts.push(g.clone());
+    if (g.phase() >= MIN_PHASE) starts.push(g.clone());
     const m = FeaturePol.policyMove(g, fpState, fpWeights, genRng, fpWeights.spec.needsLadder ? g3 : undefined, 1).move;
     g.play(m);
     g3.play(m);
   }
 }
-if (starts.length === 0) { console.error('no start positions in the phase window'); process.exit(1); }
+if (starts.length === 0) { console.error('no start positions at or above --min-phase'); process.exit(1); }
 
 // ── Playouts ─────────────────────────────────────────────────────────────────
 const state = PPat.createState(SIZE);
@@ -115,7 +110,7 @@ function playout(start, rng, hash) {
 const warmRng = makeRng(SEED + 7919);
 for (let i = 0; i < Math.min(starts.length, 50); i++) playout(starts[i], warmRng, false);
 
-console.log(`model: ${path.basename(MODEL)}, games: ${GAMES}, start positions: ${starts.length} (phase ${MIN_PHASE}-${MAX_PHASE}), ` +
+console.log(`model: ${path.basename(MODEL)}, games: ${GAMES}, start positions: ${starts.length} (phase >= ${MIN_PHASE}), ` +
             `playouts per position: ${PLAYOUTS}, seed: ${SEED}`);
 console.log(['pos'.padStart(5), 'plays'.padStart(6), 'moves'.padStart(6), 'tElp'.padStart(6), 'tMv'.padStart(6), 'checksum'].join('  '));
 const rng = makeRng(SEED + 1);
