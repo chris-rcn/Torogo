@@ -21,6 +21,8 @@
 //   PL_TEMP         temperature of the featurepol softmax that weights the
 //                   next-ply values; 0 = all weight on featurepol's top move
 //                                                                    (default 2)
+//   PL_EVAL_TOP_K   next-ply moves that contribute: featurepol's K most probable,
+//                   their probabilities renormalised to sum 1; 0 = all (default 0)
 //   PL_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   PL_VPAT_DATA    evaluator                      (default out/vpat-24-34.js)
 //   PL_DITHER       uniform noise in [0, PL_DITHER·(1 − phase)) added to each
@@ -46,6 +48,8 @@ function create(cfg) {
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
   const PL_TEMP    = cfg.float('PL_TEMP', 2);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
+  const PL_EVAL_TOP_K = cfg.int('PL_EVAL_TOP_K', 0);
+  if (!(PL_EVAL_TOP_K >= 0)) throw new Error(`fp-ply-vpat: PL_EVAL_TOP_K must be >= 0, got ${PL_EVAL_TOP_K}`);
   const PL_DITHER  = cfg.float('PL_DITHER', 0.001);
   if (!(PL_DITHER >= 0))  throw new Error(`fp-ply-vpat: PL_DITHER must be >= 0, got ${PL_DITHER}`);
   const ownRng = makeRng();
@@ -71,7 +75,7 @@ function create(cfg) {
   const vpatG3 = VPat.needsGame3(prep);
   const needG3 = fpWeights.spec.needsLadder || vpatG3;
 
-  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, dither: ${PL_DITHER}, ` +
+  console.error(`fp-ply-vpat[${cfg.slot != null ? cfg.slot : '-'}]: width: ${PL_WIDTH === 0 ? 'all' : PL_WIDTH}, temp: ${PL_TEMP}, eval-top-k: ${PL_EVAL_TOP_K === 0 ? 'all' : PL_EVAL_TOP_K}, dither: ${PL_DITHER}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vpat: ${_isNode ? require('path').basename(vpatPath) : 'window.vpatternsModel'} (${VPat.specString(vpatModel.specs)}), ` +
                 `incremental: ${incremental ? 'yes' : 'no'}`);
@@ -98,7 +102,8 @@ function create(cfg) {
   }
 
   // P(BLACK wins) of `game`: the featurepol-softmax-weighted (PL_TEMP) mean of the vpat
-  // values of every next-ply position.  options.game3: a Game3 synced to
+  // values of every next-ply position (featurepol's PL_EVAL_TOP_K most probable,
+  // renormalised, when set).  options.game3: a Game3 synced to
   // `game`, back where it was on return; built here when needed and not
   // supplied.  `game` is not changed.
   function valueB(game, options = {}) {
@@ -116,8 +121,17 @@ function create(cfg) {
     const f = VPat.extractFeatures(game, prep, false, undefined, true, g3v);
     VPat.evaluateFeatures(f, vpatModel.weights);
     const zBase = f.z;
-    let sum = 0;
-    for (let i = 0; i < n; i++) {
+    // The contributing moves: all n, or the K most probable.
+    let idx = null, k = n;
+    if (PL_EVAL_TOP_K > 0 && PL_EVAL_TOP_K < n) {
+      idx = new Array(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      idx.sort((a, b) => fpState.probs[b] - fpState.probs[a]);
+      k = PL_EVAL_TOP_K;
+    }
+    let sum = 0, mass = 0;
+    for (let j = 0; j < k; j++) {
+      const i = idx ? idx[j] : j;
       const m = fpState.moves[i];
       const d = incremental ? VPat.deltaZ(game, prep, vpatModel.weights, m) : NaN;
       let v;
@@ -131,8 +145,9 @@ function create(cfg) {
         if (g3v) g3v.undo();
       }
       sum += fpState.probs[i] * v;
+      mass += fpState.probs[i];
     }
-    return sum;
+    return idx ? sum / mass : sum;
   }
 
   function getMove(game, _budgetMs, options = {}) {
