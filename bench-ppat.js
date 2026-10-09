@@ -15,10 +15,13 @@
 // two implementations of the same policy given the same arguments — the
 // exactness check for an optimisation.  --incremental runs the playouts with
 // ppat-lib's incremental path (ppatMoveIncremental), which must reproduce the
-// full path's checksum.
+// full path's checksum.  --candidates N (incremental only) samples among the
+// local-feature points plus N random candidates per move (ppat-lib's
+// ppatCandidates; not the same policy, so the checksum differs).
 //
 //   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10]
 //                      [--min-phase 0.55] [--seed 1] [--size 13] [--incremental]
+//                      [--candidates N]
 
 const path = require('path');
 const { performance } = require('perf_hooks');
@@ -29,9 +32,9 @@ const { makeRng } = require('./xorshift.js');
 const FeaturePol = require('./featurepol-lib.js');
 const PPat = require('./ppat-lib.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'incremental'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'incremental'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size', 'candidates']);
 if (opts.help) {
-  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10] [--min-phase 0.55] [--seed 1] [--size 13] [--incremental]');
+  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10] [--min-phase 0.55] [--seed 1] [--size 13] [--incremental] [--candidates N]');
   process.exit(0);
 }
 const MODEL    = opts.model || path.join(__dirname, 'ppat-data-1623136.js');
@@ -41,12 +44,16 @@ const MIN_PHASE = parseFloat(opts['min-phase'] ?? '0.55');
 const SEED     = parseInt(opts.seed || '1', 10);
 const SIZE     = parseInt(opts.size || '13', 10);
 const INCREMENTAL = !!opts.incremental;
+const CANDIDATES = parseInt(opts.candidates || '0', 10);
+if (!(CANDIDATES >= 0)) { console.error('--candidates must be >= 0'); process.exit(1); }
+if (CANDIDATES > 0 && !INCREMENTAL) { console.error('--candidates needs --incremental'); process.exit(1); }
 if (!(GAMES >= 1) || !(PLAYOUTS >= 1)) { console.error('--games and --playouts must be >= 1'); process.exit(1); }
 if (!(MIN_PHASE >= 0 && MIN_PHASE <= 1)) { console.error('--min-phase must be in [0, 1]'); process.exit(1); }
 
 const model = PPat.loadWeights(MODEL);
 if (!model) { console.error(`cannot load ppat weights from ${MODEL}`); process.exit(1); }
 model.ppatMinPhase = 0;   // every playout move by the ppat policy
+model.ppatCandidates = CANDIDATES;
 
 // ── Start positions ──────────────────────────────────────────────────────────
 function mirror180(idx, N) {
@@ -117,7 +124,7 @@ const warmRng = makeRng(SEED + 7919);
 for (let i = 0; i < Math.min(starts.length, 50); i++) playout(starts[i], warmRng, false);
 
 console.log(`model: ${path.basename(MODEL)}, games: ${GAMES}, start positions: ${starts.length} (phase >= ${MIN_PHASE}), ` +
-            `playouts per position: ${PLAYOUTS}, seed: ${SEED}, path: ${INCREMENTAL ? 'incremental' : 'full'}`);
+            `playouts per position: ${PLAYOUTS}, seed: ${SEED}, path: ${INCREMENTAL ? 'incremental' : 'full'}${CANDIDATES > 0 ? `, candidates: ${CANDIDATES}` : ''}`);
 console.log(['pos'.padStart(5), 'plays'.padStart(6), 'moves'.padStart(6), 'tElp'.padStart(6), 'tMv'.padStart(6), 'checksum'].join('  '));
 const rng = makeRng(SEED + 1);
 let nMoves = 0, nPlayouts = 0, ms = 0, nextRow = 1;
