@@ -51,7 +51,7 @@ const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat                  = Util.load('./vpatterns.js', 'VPatterns');
 const Symmetry              = Util.load('./symmetry.js', 'Symmetry');
-const { createState, ppatMove, loadWeights } = _ppat;
+const { loadWeights, createIncremental, incrementalReset, incrementalPlay, ppatMoveIncremental } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
   ? window.performance : require('perf_hooks').performance;
@@ -231,10 +231,11 @@ function create(cfg) {
   if (!(FPOL_TEMP >= 0)) throw new Error(`puct-trunc: FPOL_TEMP must be >= 0, got ${FPOL_TEMP}`);
   console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}`);
 
-  let _ppatState = null;
-  function _ensurePpatState(N) {
-    if (_ppatState === null || _ppatState.moves.length < N * N)
-      _ppatState = createState(N);
+  // ppat's incremental playout cache (ppat-lib): the same policy as ppatMove,
+  // bit for bit, without re-extracting every candidate each move.
+  let _ppatInc = null;
+  function _ensurePpatInc(N) {
+    if (_ppatInc === null || _ppatInc.N !== N) _ppatInc = createIncremental(N);
   }
 
   const stateByN = new Map();
@@ -264,7 +265,7 @@ function create(cfg) {
     const N   = game2.N;
     const cap = N * N;
 
-    _ensurePpatState(N);
+    _ensurePpatInc(N);
 
     // Truncation trigger, two methods — see LEGACY_PHASE_DELTA.  Both use the
     // same magnitude, ceil(TRUNC_PHASE_DELTA * area); they differ only in what
@@ -285,16 +286,27 @@ function create(cfg) {
     const weightStep = 1 / cap;
     let moves = 0, uniformMoves = 0;
     let weight = 1.0;
+    // The ppat cache goes live at the playout's first ppat move; before that
+    // (uniform moves below ubp, e.g. a whole truncated playout) it is skipped,
+    // and from then on every move goes through it to keep it in sync.
+    let incLive = false;
 
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
       // Classify BEFORE the move, the same way ppatMove does (fullness < ubp).
       if (ubp > 0 && (cap - game2.emptyCount) / cap < ubp) uniformMoves++;
-      const idx = ppatMove(game2, _ppatState, _model, rng);
+      let idx;
+      if (!incLive && ubp > 0 && (cap - game2.emptyCount) / cap < ubp) {
+        idx = game2.randomLegalMove(rng);   // ppatMove's uniform fast path
+        game2.play(idx);
+      } else {
+        if (!incLive) { incrementalReset(_ppatInc); incLive = true; }
+        idx = ppatMoveIncremental(game2, _ppatInc, _model, rng);
+        incrementalPlay(game2, _ppatInc, idx);
+      }
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
       }
-      game2.play(idx);
       moves++;
       weight -= weightStep;
       if (truncArmed && (LEGACY_PHASE_DELTA ? game2.emptyCount <= truncEmpty
