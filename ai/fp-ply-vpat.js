@@ -20,14 +20,14 @@
 //   PL_WIDTH        featurepol candidates at the root; 0 = every one   (default 8)
 //   PL_TEMP         temperature of the featurepol softmax that weights the
 //                   next-ply values; 0 = all weight on featurepol's top move
-//                                                                    (default 2)
+//                                                                    (default 3)
 //   PL_EVAL_TOP_K   next-ply moves that contribute: featurepol's K most probable,
-//                   their probabilities renormalised to sum 1; 0 = all (default 0)
+//                   their probabilities renormalised to sum 1; 0 = all (default 10)
 //   PL_FPOL_DATA    featurepol weights             (default featurepol-cbk7wa32.js)
 //   PL_VPAT_DATA    evaluator                      (default out/vpat-24-34.js)
 //   PL_DITHER       uniform noise in [0, PL_DITHER·(1 − phase)) added to each
 //                   root candidate's value, phase = the root's fullness: full on
-//                   an empty board, zero at phase 1; 0 = off         (default 0.001)
+//                   an empty board, zero at phase 1; 0 = off         (default 0.01)
 // In the browser the models come from window.featurepolModel and
 // window.vpatternsModel.
 
@@ -46,11 +46,11 @@ function create(cfg) {
 
   const PL_WIDTH   = cfg.int('PL_WIDTH', 8);
   if (!(PL_WIDTH >= 0))   throw new Error(`fp-ply-vpat: PL_WIDTH must be >= 0, got ${PL_WIDTH}`);
-  const PL_TEMP    = cfg.float('PL_TEMP', 2);
+  const PL_TEMP    = cfg.float('PL_TEMP', 3);
   if (!(PL_TEMP >= 0))    throw new Error(`fp-ply-vpat: PL_TEMP must be >= 0, got ${PL_TEMP}`);
-  const PL_EVAL_TOP_K = cfg.int('PL_EVAL_TOP_K', 0);
+  const PL_EVAL_TOP_K = cfg.int('PL_EVAL_TOP_K', 10);
   if (!(PL_EVAL_TOP_K >= 0)) throw new Error(`fp-ply-vpat: PL_EVAL_TOP_K must be >= 0, got ${PL_EVAL_TOP_K}`);
-  const PL_DITHER  = cfg.float('PL_DITHER', 0.001);
+  const PL_DITHER  = cfg.float('PL_DITHER', 0.01);
   if (!(PL_DITHER >= 0))  throw new Error(`fp-ply-vpat: PL_DITHER must be >= 0, got ${PL_DITHER}`);
   const ownRng = makeRng();
 
