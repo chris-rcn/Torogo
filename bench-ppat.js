@@ -13,10 +13,12 @@
 // Only the playouts are timed, after an untimed warm-up on separately seeded
 // playouts.  The checksum (FNV-1a over every playout move) is identical for
 // two implementations of the same policy given the same arguments — the
-// exactness check for an optimisation.
+// exactness check for an optimisation.  --incremental runs the playouts with
+// ppat-lib's incremental path (ppatMoveIncremental), which must reproduce the
+// full path's checksum.
 //
 //   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10]
-//                      [--min-phase 0.55] [--seed 1] [--size 13]
+//                      [--min-phase 0.55] [--seed 1] [--size 13] [--incremental]
 
 const path = require('path');
 const { performance } = require('perf_hooks');
@@ -27,9 +29,9 @@ const { makeRng } = require('./xorshift.js');
 const FeaturePol = require('./featurepol-lib.js');
 const PPat = require('./ppat-lib.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'incremental'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size']);
 if (opts.help) {
-  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10] [--min-phase 0.55] [--seed 1] [--size 13]');
+  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10] [--min-phase 0.55] [--seed 1] [--size 13] [--incremental]');
   process.exit(0);
 }
 const MODEL    = opts.model || path.join(__dirname, 'ppat-data-1623136.js');
@@ -38,6 +40,7 @@ const PLAYOUTS = parseInt(opts.playouts || '10', 10);
 const MIN_PHASE = parseFloat(opts['min-phase'] ?? '0.55');
 const SEED     = parseInt(opts.seed || '1', 10);
 const SIZE     = parseInt(opts.size || '13', 10);
+const INCREMENTAL = !!opts.incremental;
 if (!(GAMES >= 1) || !(PLAYOUTS >= 1)) { console.error('--games and --playouts must be >= 1'); process.exit(1); }
 if (!(MIN_PHASE >= 0 && MIN_PHASE <= 1)) { console.error('--min-phase must be in [0, 1]'); process.exit(1); }
 
@@ -92,15 +95,18 @@ if (starts.length === 0) { console.error('no start positions at or above --min-p
 
 // ── Playouts ─────────────────────────────────────────────────────────────────
 const state = PPat.createState(SIZE);
+const inc = PPat.createIncremental(SIZE);
 // One playout from `start`; returns its move count, folding every move into h.
 let h = 0x811c9dc5;
 function playout(start, rng, hash) {
   const g = start.clone();
   const limit = 3 * g.emptyCount + 20;
   let moves = 0;
+  if (INCREMENTAL) PPat.incrementalReset(inc);
   while (!g.gameOver && moves < limit) {
-    const m = PPat.ppatMove(g, state, model, rng);
-    g.play(m);
+    let m;
+    if (INCREMENTAL) { m = PPat.ppatMoveIncremental(g, inc, model, rng); PPat.incrementalPlay(g, inc, m); }
+    else             { m = PPat.ppatMove(g, state, model, rng); g.play(m); }
     moves++;
     if (hash) h = Math.imul(h ^ (m + 1), 0x01000193) >>> 0;
   }
@@ -111,7 +117,7 @@ const warmRng = makeRng(SEED + 7919);
 for (let i = 0; i < Math.min(starts.length, 50); i++) playout(starts[i], warmRng, false);
 
 console.log(`model: ${path.basename(MODEL)}, games: ${GAMES}, start positions: ${starts.length} (phase >= ${MIN_PHASE}), ` +
-            `playouts per position: ${PLAYOUTS}, seed: ${SEED}`);
+            `playouts per position: ${PLAYOUTS}, seed: ${SEED}, path: ${INCREMENTAL ? 'incremental' : 'full'}`);
 console.log(['pos'.padStart(5), 'plays'.padStart(6), 'moves'.padStart(6), 'tElp'.padStart(6), 'tMv'.padStart(6), 'checksum'].join('  '));
 const rng = makeRng(SEED + 1);
 let nMoves = 0, nPlayouts = 0, ms = 0, nextRow = 1;

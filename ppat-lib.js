@@ -380,55 +380,53 @@ function totalWeights(phaseCount, adjLib = 2, t12mode = 0, selfAtari = false, at
 // only the pattern feature is extracted.  Exactly equivalent for a model whose
 // local weights are all zero: scores are plain sums, so a zero weight
 // contributes nothing.
-function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0,
-                         xaN = 0, captureN = 0, csN = 0) {
-  const N      = game.N;
-  const cap    = N * N;
+// Per-call context shared by extractFeatures and the incremental path: the
+// model's offsets and tables plus the game's arrays, in one reused object so
+// the per-point helpers read them without re-deriving.
+const _X = {};
+function _setupCtx(X, game, phaseCount, adjLib, skipLocal, t12mode, selfAtari, atariN, xaN, captureN, csN) {
+  const N = game.N, cap = N * N;
   // Per-cap canonical tables.  _T2 is the common case (historical encoding).
-  const _tab   = adjLib === 2 ? _T2 : _buildTables(adjLib);
-  const _CANON = _tab.canonId, _NPAT = _tab.numPatterns, _R = _tab.R;
-  const _LC    = adjLib;
-  if (_sbcCells.length < cap) {
-    _sbcCells = new Int32Array(cap);
-  }
-  const cells  = game.cells;
-  const gidArr = game._gid;
-  const lsArr  = game._ls;
-  const lwArr  = game._lw;
-  const swArr  = game._sw;
-  const ssArr  = game._ss;
-  const W      = game._W;
-
+  const _tab = adjLib === 2 ? _T2 : _buildTables(adjLib);
+  const _NPAT = _tab.numPatterns;
+  if (_sbcCells.length < cap) _sbcCells = new Int32Array(cap);
   const phase = phaseCount * (cap - game.emptyCount) / cap | 0;
-  const patOffset = phase * _NPAT;
-  const prevOffset = phaseCount * _NPAT + phase * 7;
-  const _T12C = t12mode === 2 ? _T12B.canonId : _T12.canonId;
-  const t12Offset = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
-  const saOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode)) + phase * SA_N;
-  const atOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0)) + phase * atariN;
-  const xaOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN) + phase * xaN * xaN;
-  const capOffset = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN) + phase * captureN;
-  const csOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN + captureN)
-                  + phase * csN * csN;
-  const nbr    = game._nbr;
-  const dnbr   = game._dnbr;
-  const cur    = game.current;
-  const foe    = -cur;
-  const emC    = game._emptyCells;
-  const ec     = game.emptyCount;
-  const prev   = game.lastMove;
-  const hasPrev = !skipLocal && prev !== PASS;
-  const myKoStone = game.koStone[cur + 1];
+  X.cap = cap; X.CANON = _tab.canonId; X.R = _tab.R; X.LC = adjLib;
+  X.cells = game.cells; X.gidArr = game._gid; X.lsArr = game._ls; X.lwArr = game._lw;
+  X.swArr = game._sw; X.ssArr = game._ss; X.W = game._W; X.nbr = game._nbr; X.dnbr = game._dnbr;
+  X.cur = game.current; X.foe = -game.current; X.ko = game.ko;
+  X.phase = phase;
+  X.skipLocal = skipLocal; X.t12mode = t12mode; X.selfAtari = selfAtari;
+  X.atariN = atariN; X.xaN = xaN; X.captureN = captureN; X.csN = csN;
+  X.patOffset  = phase * _NPAT;
+  X.prevOffset = phaseCount * _NPAT + phase * 7;
+  X.T12C       = t12mode === 2 ? _T12B.canonId : _T12.canonId;
+  X.t12Offset  = phaseCount * (_NPAT + 7) + phase * (t12mode === 2 ? NUM_T12B : NUM_T12);
+  X.saOffset   = phaseCount * (_NPAT + 7 + t12Block(t12mode)) + phase * SA_N;
+  X.atOffset   = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0)) + phase * atariN;
+  X.xaOffset   = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN) + phase * xaN * xaN;
+  X.capOffset  = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN) + phase * captureN;
+  X.csOffset   = phaseCount * (_NPAT + 7 + t12Block(t12mode) + (selfAtari ? SA_N : 0) + atariN + xaN * xaN + captureN)
+               + phase * csN * csN;
+  X.hasPrev = !skipLocal && game.lastMove !== PASS;
+  X.sa = 0;
+  return X;
+}
 
-  // ── Pre-scan (mirrors c/ppat.c): friendly strings put in atari by prev,
-  // their save-by-capture cells, prev's 8-neighborhood, and ko-solve libs. ──
+// ── Pre-scan (mirrors c/ppat.c): friendly strings put in atari by prev,
+// their save-by-capture cells, prev's 8-neighborhood, and ko-solve libs.
+// Fills the static buffers and X.nAtari / nSbc / nKoSolve / nPrevN8. ──
+function _preScan(game, X) {
+  const cells = X.cells, gidArr = X.gidArr, lsArr = X.lsArr, lwArr = X.lwArr, swArr = X.swArr;
+  const W = X.W, cap = X.cap, nbr = X.nbr, dnbr = X.dnbr, cur = X.cur, foe = X.foe;
   const atariGids = _atariGids;     // reuse static arrays (no GC)
   const atariLibsArr = _atariLibsArr;
   let nAtari = 0;
   const prevN8 = _prevN8;
   let nPrevN8 = 0;
 
-  if (hasPrev) {
+  if (X.hasPrev) {
+    const prev = game.lastMove;
     const pb4 = prev * 4;
     for (let di = 0; di < 4; di++) {
       prevN8[nPrevN8++] = nbr[pb4 + di];
@@ -482,7 +480,8 @@ function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = fa
 
   // Feature 6 pre-scan
   let nKoSolve = 0;
-  if (!skipLocal && myKoStone !== PASS) {
+  const myKoStone = game.koStone[cur + 1];
+  if (!X.skipLocal && myKoStone !== PASS) {
     const ks4 = myKoStone * 4;
     for (let d = 0; d < 4; d++) {
       const ni = nbr[ks4 + d];
@@ -494,166 +493,188 @@ function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = fa
       }
     }
   }
+  X.nAtari = nAtari; X.nSbc = nSbc; X.nKoSolve = nKoSolve; X.nPrevN8 = nPrevN8;
+}
 
-  const ko = game.ko;
-  let count = 0;
-  let nf = 0;
+// One point's candidacy and base (non-local) features.  Returns -1 when idx is
+// not a candidate (illegal or eyelike), else writes its base keys into
+// feat[nf..] and returns the new end; X.sa is its self-atari size (computed
+// when wantSa, else 0).
+function _baseFeat(game, X, idx, feat, nf, wantSa) {
+  const cells = X.cells, gidArr = X.gidArr, lsArr = X.lsArr, ssArr = X.ssArr;
+  const nbr = X.nbr, dnbr = X.dnbr, cur = X.cur, _LC = X.LC, _R = X.R;
+  const t12mode = X.t12mode, atariN = X.atariN, xaN = X.xaN, captureN = X.captureN, csN = X.csN;
+  const b4 = idx * 4;
 
-  for (let ei = 0; ei < ec; ei++) {
-    const idx = emC[ei];
-    const b4 = idx * 4;
-
-    // Inlined legality check
-    const niN = nbr[b4], niS = nbr[b4 + 1], niW = nbr[b4 + 2], niE = nbr[b4 + 3];
-    const cN = cells[niN], cS = cells[niS], cW = cells[niW], cE = cells[niE];
-    const anyEmpty = (cN === 0) | (cS === 0) | (cW === 0) | (cE === 0);
-    if (anyEmpty) {
-      if (idx === ko && game._isKo(idx, cur)) continue;
-    } else {
-      if (game._isSingleSuicide(idx, cur)) continue;
-      if (game._isMultiSuicide(idx, cur)) continue;
-      if (idx === ko && game._isKo(idx, cur)) continue;
-    }
-
-    // Inlined true-eye check + adj_val computation
-    let friendCount = 0, emptyNbr = 0, firstGid = -2, sameGroup = 0;
-    let vN, vS2, vW2, vE2;
-    if (cN === 0) { emptyNbr++; vN = 0; }
-    else { const g_ = gidArr[niN]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
-      if (cN === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vN = s_; }
-      else vN = _LC + s_; }
-    if (cS === 0) { emptyNbr++; vS2 = 0; }
-    else { const g_ = gidArr[niS]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
-      if (cS === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vS2 = s_; }
-      else vS2 = _LC + s_; }
-    if (cW === 0) { emptyNbr++; vW2 = 0; }
-    else { const g_ = gidArr[niW]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
-      if (cW === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vW2 = s_; }
-      else vW2 = _LC + s_; }
-    if (cE === 0) { emptyNbr++; vE2 = 0; }
-    else { const g_ = gidArr[niE]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
-      if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = s_; }
-      else vE2 = _LC + s_; }
-
-    // Diag values.  Read BEFORE the eye check, which needs the hostile-diagonal
-    // count: these are the same four reads the pattern index needs below, so
-    // sharing them costs nothing but the handful of eye points that used to
-    // skip out first.
-    const cNE2 = cells[dnbr[b4 + 1]], vNE = cNE2 === 0 ? 0 : (cNE2 === cur ? 1 : 2);
-    const cSE2 = cells[dnbr[b4 + 3]], vSE = cSE2 === 0 ? 0 : (cSE2 === cur ? 1 : 2);
-    const cSW2 = cells[dnbr[b4 + 2]], vSW = cSW2 === 0 ? 0 : (cSW2 === cur ? 1 : 2);
-    const cNW2 = cells[dnbr[b4]],     vNW = cNW2 === 0 ? 0 : (cNW2 === cur ? 1 : 2);
-
-    // THE playout eye rule lives in game2.isEyelike; the counts above are
-    // handed to it so it need not rescan.  Playouts prune MORE than a root
-    // generator may: isEyelike adds the multi-chain wall with one hostile
-    // diagonal, which isTrueEye leaves legal because it cannot prove it is never a
-    // move.  This used to be an inlined copy that had drifted, which made the
-    // playout fill multi-chain eyes and kill live groups.
-    if (isEyelike(friendCount, emptyNbr, sameGroup,
-                  (vNE === 2) + (vSE === 2) + (vSW === 2) + (vNW === 2))) continue;
-
-    const rawIdx = vN + _R*(vE2 + _R*(vS2 + _R*(vW2 + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
-
-    state.moves[count] = idx;
-    state.featStart[count] = nf;
-
-    // Pattern feature
-    state.feat[nf++] = patOffset + _CANON[rawIdx];
-
-    // Twelvecell extension.  Mode 1 needs the whole ninecell empty (rawIdx 0 —
-    // every cell codes 0 when empty); mode 2 only the four adjacent points,
-    // which emptyNbr already counts.
-    if (t12mode === 1 ? rawIdx === 0 : t12mode === 2 && emptyNbr === 4) {
-      const a0 = cells[nbr[niN * 4 + 0]], a1 = cells[nbr[niE * 4 + 3]];
-      const a2 = cells[nbr[niS * 4 + 1]], a3 = cells[nbr[niW * 4 + 2]];
-      const w0 = a0 === 0 ? 0 : a0 === cur ? 1 : 2, w1 = a1 === 0 ? 0 : a1 === cur ? 1 : 2;
-      const w2 = a2 === 0 ? 0 : a2 === cur ? 1 : 2, w3 = a3 === 0 ? 0 : a3 === cur ? 1 : 2;
-      let t12;
-      if (t12mode === 1) {
-        t12 = w0 + 3 * (w1 + 3 * (w2 + 3 * w3));
-      } else {
-        // Diagonals first (NE, SE, SW, NW — vNE.. already coded 0/1/2), then
-        // the arms, jointly canonicalised so their relative placement survives.
-        t12 = vNE + 3 * (vSE + 3 * (vSW + 3 * (vNW +
-              3 * (w0 + 3 * (w1 + 3 * (w2 + 3 * w3))))));
-      }
-      state.feat[nf++] = t12Offset + _T12C[t12];
-    }
-
-    // Computed once; feeds the graded feature, the save-slot split and the
-    // two interaction grids.
-    const sa = (selfAtari || hasPrev || xaN > 0 || csN > 0) ? _selfAtariSize(game, idx, cur) : 0;
-    if (selfAtari && sa > 0) state.feat[nf++] = saOffset + (sa < SA_N ? sa : SA_N) - 1;
-
-    // Gives-atari: the largest adjacent enemy chain this move reduces to one
-    // liberty (pre-move ls === 2 is exact: an adjacent empty point is always
-    // one of its liberties).  Capture: the total size of the distinct
-    // adjacent enemy chains in atari, which this move takes.  Emit order and
-    // tie rules mirror c/ppat.c (capture, capture-by-self-atari, atari,
-    // atari-by-self-atari).
-    if (atariN > 0 || xaN > 0 || captureN > 0 || csN > 0) {
-      let biggest = 0, capSum = 0, nCapG = 0;
-      for (let d = 0; d < 4; d++) {
-        const ni = nbr[b4 + d], c = cells[ni];
-        if (c !== 0 && c !== cur) {
-          const eg = gidArr[ni];
-          if (lsArr[eg] === 2 && ssArr[eg] > biggest) biggest = ssArr[eg];
-          else if ((captureN > 0 || csN > 0) && lsArr[eg] === 1) {
-            let dup = false;
-            for (let k = 0; k < nCapG; k++) if (_capGids[k] === eg) { dup = true; break; }
-            if (!dup) { _capGids[nCapG++] = eg; capSum += ssArr[eg]; }
-          }
-        }
-      }
-      if (captureN > 0 && capSum > 0) state.feat[nf++] = capOffset + (capSum < captureN ? capSum : captureN) - 1;
-      // Ko-take / snapback family: captures while ending in atari.
-      if (csN > 0 && sa > 0 && capSum > 0) {
-        const bs = sa < csN ? sa : csN, bc = capSum < csN ? capSum : csN;
-        state.feat[nf++] = csOffset + (bs - 1) * csN + (bc - 1);
-      }
-      if (atariN > 0 && biggest > 0) state.feat[nf++] = atOffset + (biggest < atariN ? biggest : atariN) - 1;
-      // Mutual atari: both in danger — the (own, victim) size grid.
-      if (xaN > 0 && sa > 0 && biggest > 0) {
-        const bs = sa < xaN ? sa : xaN, ba = biggest < xaN ? biggest : xaN;
-        state.feat[nf++] = xaOffset + (bs - 1) * xaN + (ba - 1);
-      }
-    }
-
-    // ── Previous-move features (mirrors c/ppat.c: slots 1-5 + contiguity) ────
-    const nfLocals = nf;
-
-    // Save-atari: capture (slots 1/2) takes priority over extension (3/4),
-    // split by whether the rescue itself is a self-atari.
-    if (nAtari > 0) {
-      let feat2 = false;
-      for (let si = 0; si < nSbc; si++)
-        if (_sbcCells[si] === idx) { feat2 = true; break; }
-      if (feat2) state.feat[nf++] = prevOffset + (sa > 0 ? 2 : 1);
-      else {
-        for (let i = 0; i < nAtari; i++)
-          if (atariLibsArr[i] === idx) { state.feat[nf++] = prevOffset + (sa > 0 ? 4 : 3); break; }
-      }
-    }
-
-    // Ko-solve (slot 5)
-    for (let ki = 0; ki < nKoSolve; ki++)
-      if (idx === _koSolveLibs[ki]) { state.feat[nf++] = prevOffset + 5; break; }
-
-    // Contiguity (slot 0): within prev's 8-neighborhood, or any tactical
-    // local (slots 1-5) fired.
-    if (hasPrev) {
-      let local = nf > nfLocals;
-      for (let k = 0; !local && k < nPrevN8; k++) local = (prevN8[k] === idx);
-      if (local) state.feat[nf++] = prevOffset + 0;
-    }
-
-    count++;
+  // Inlined legality check
+  const niN = nbr[b4], niS = nbr[b4 + 1], niW = nbr[b4 + 2], niE = nbr[b4 + 3];
+  const cN = cells[niN], cS = cells[niS], cW = cells[niW], cE = cells[niE];
+  const anyEmpty = (cN === 0) | (cS === 0) | (cW === 0) | (cE === 0);
+  if (anyEmpty) {
+    if (idx === X.ko && game._isKo(idx, cur)) return -1;
+  } else {
+    if (game._isSingleSuicide(idx, cur)) return -1;
+    if (game._isMultiSuicide(idx, cur)) return -1;
+    if (idx === X.ko && game._isKo(idx, cur)) return -1;
   }
 
-  state.featStart[count] = nf;
-  state.count = count;
+  // Inlined true-eye check + adj_val computation
+  let friendCount = 0, emptyNbr = 0, firstGid = -2, sameGroup = 0;
+  let vN, vS2, vW2, vE2;
+  if (cN === 0) { emptyNbr++; vN = 0; }
+  else { const g_ = gidArr[niN]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+    if (cN === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vN = s_; }
+    else vN = _LC + s_; }
+  if (cS === 0) { emptyNbr++; vS2 = 0; }
+  else { const g_ = gidArr[niS]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+    if (cS === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vS2 = s_; }
+    else vS2 = _LC + s_; }
+  if (cW === 0) { emptyNbr++; vW2 = 0; }
+  else { const g_ = gidArr[niW]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+    if (cW === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vW2 = s_; }
+    else vW2 = _LC + s_; }
+  if (cE === 0) { emptyNbr++; vE2 = 0; }
+  else { const g_ = gidArr[niE]; let l_ = lsArr[g_]; if (l_ > _LC) l_ = _LC; const s_ = _LC + 1 - l_;
+    if (cE === cur) { friendCount++; if (firstGid === -2) { firstGid = g_; sameGroup = 1; } else if (g_ === firstGid) sameGroup++; vE2 = s_; }
+    else vE2 = _LC + s_; }
 
+  // Diag values.  Read BEFORE the eye check, which needs the hostile-diagonal
+  // count: these are the same four reads the pattern index needs below, so
+  // sharing them costs nothing but the handful of eye points that used to
+  // skip out first.
+  const cNE2 = cells[dnbr[b4 + 1]], vNE = cNE2 === 0 ? 0 : (cNE2 === cur ? 1 : 2);
+  const cSE2 = cells[dnbr[b4 + 3]], vSE = cSE2 === 0 ? 0 : (cSE2 === cur ? 1 : 2);
+  const cSW2 = cells[dnbr[b4 + 2]], vSW = cSW2 === 0 ? 0 : (cSW2 === cur ? 1 : 2);
+  const cNW2 = cells[dnbr[b4]],     vNW = cNW2 === 0 ? 0 : (cNW2 === cur ? 1 : 2);
+
+  // THE playout eye rule lives in game2.isEyelike; the counts above are
+  // handed to it so it need not rescan.  Playouts prune MORE than a root
+  // generator may: isEyelike adds the multi-chain wall with one hostile
+  // diagonal, which isTrueEye leaves legal because it cannot prove it is never a
+  // move.  This used to be an inlined copy that had drifted, which made the
+  // playout fill multi-chain eyes and kill live groups.
+  if (isEyelike(friendCount, emptyNbr, sameGroup,
+                (vNE === 2) + (vSE === 2) + (vSW === 2) + (vNW === 2))) return -1;
+
+  const rawIdx = vN + _R*(vE2 + _R*(vS2 + _R*(vW2 + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+
+  // Pattern feature
+  feat[nf++] = X.patOffset + X.CANON[rawIdx];
+
+  // Twelvecell extension.  Mode 1 needs the whole ninecell empty (rawIdx 0 —
+  // every cell codes 0 when empty); mode 2 only the four adjacent points,
+  // which emptyNbr already counts.
+  if (t12mode === 1 ? rawIdx === 0 : t12mode === 2 && emptyNbr === 4) {
+    const a0 = cells[nbr[niN * 4 + 0]], a1 = cells[nbr[niE * 4 + 3]];
+    const a2 = cells[nbr[niS * 4 + 1]], a3 = cells[nbr[niW * 4 + 2]];
+    const w0 = a0 === 0 ? 0 : a0 === cur ? 1 : 2, w1 = a1 === 0 ? 0 : a1 === cur ? 1 : 2;
+    const w2 = a2 === 0 ? 0 : a2 === cur ? 1 : 2, w3 = a3 === 0 ? 0 : a3 === cur ? 1 : 2;
+    let t12;
+    if (t12mode === 1) {
+      t12 = w0 + 3 * (w1 + 3 * (w2 + 3 * w3));
+    } else {
+      // Diagonals first (NE, SE, SW, NW — vNE.. already coded 0/1/2), then
+      // the arms, jointly canonicalised so their relative placement survives.
+      t12 = vNE + 3 * (vSE + 3 * (vSW + 3 * (vNW +
+            3 * (w0 + 3 * (w1 + 3 * (w2 + 3 * w3))))));
+    }
+    feat[nf++] = X.t12Offset + X.T12C[t12];
+  }
+
+  // Computed once; feeds the graded feature, the save-slot split and the
+  // two interaction grids.
+  const sa = wantSa ? _selfAtariSize(game, idx, cur) : 0;
+  X.sa = sa;
+  if (X.selfAtari && sa > 0) feat[nf++] = X.saOffset + (sa < SA_N ? sa : SA_N) - 1;
+
+  // Gives-atari: the largest adjacent enemy chain this move reduces to one
+  // liberty (pre-move ls === 2 is exact: an adjacent empty point is always
+  // one of its liberties).  Capture: the total size of the distinct
+  // adjacent enemy chains in atari, which this move takes.  Emit order and
+  // tie rules mirror c/ppat.c (capture, capture-by-self-atari, atari,
+  // atari-by-self-atari).
+  if (atariN > 0 || xaN > 0 || captureN > 0 || csN > 0) {
+    let biggest = 0, capSum = 0, nCapG = 0;
+    for (let d = 0; d < 4; d++) {
+      const ni = nbr[b4 + d], c = cells[ni];
+      if (c !== 0 && c !== cur) {
+        const eg = gidArr[ni];
+        if (lsArr[eg] === 2 && ssArr[eg] > biggest) biggest = ssArr[eg];
+        else if ((captureN > 0 || csN > 0) && lsArr[eg] === 1) {
+          let dup = false;
+          for (let k = 0; k < nCapG; k++) if (_capGids[k] === eg) { dup = true; break; }
+          if (!dup) { _capGids[nCapG++] = eg; capSum += ssArr[eg]; }
+        }
+      }
+    }
+    if (captureN > 0 && capSum > 0) feat[nf++] = X.capOffset + (capSum < captureN ? capSum : captureN) - 1;
+    // Ko-take / snapback family: captures while ending in atari.
+    if (csN > 0 && sa > 0 && capSum > 0) {
+      const bs = sa < csN ? sa : csN, bc = capSum < csN ? capSum : csN;
+      feat[nf++] = X.csOffset + (bs - 1) * csN + (bc - 1);
+    }
+    if (atariN > 0 && biggest > 0) feat[nf++] = X.atOffset + (biggest < atariN ? biggest : atariN) - 1;
+    // Mutual atari: both in danger — the (own, victim) size grid.
+    if (xaN > 0 && sa > 0 && biggest > 0) {
+      const bs = sa < xaN ? sa : xaN, ba = biggest < xaN ? biggest : xaN;
+      feat[nf++] = X.xaOffset + (bs - 1) * xaN + (ba - 1);
+    }
+  }
+  return nf;
+}
+
+// ── Previous-move features (mirrors c/ppat.c: slots 1-5 + contiguity) ────
+// One candidate's local keys (after _preScan), appended at feat[nf..]; returns
+// the new end.  sa is the candidate's self-atari size.
+function _localFeat(X, idx, sa, feat, nf) {
+  const nfLocals = nf, prevOffset = X.prevOffset;
+
+  // Save-atari: capture (slots 1/2) takes priority over extension (3/4),
+  // split by whether the rescue itself is a self-atari.
+  if (X.nAtari > 0) {
+    let feat2 = false;
+    for (let si = 0; si < X.nSbc; si++)
+      if (_sbcCells[si] === idx) { feat2 = true; break; }
+    if (feat2) feat[nf++] = prevOffset + (sa > 0 ? 2 : 1);
+    else {
+      for (let i = 0; i < X.nAtari; i++)
+        if (_atariLibsArr[i] === idx) { feat[nf++] = prevOffset + (sa > 0 ? 4 : 3); break; }
+    }
+  }
+
+  // Ko-solve (slot 5)
+  for (let ki = 0; ki < X.nKoSolve; ki++)
+    if (idx === _koSolveLibs[ki]) { feat[nf++] = prevOffset + 5; break; }
+
+  // Contiguity (slot 0): within prev's 8-neighborhood, or any tactical
+  // local (slots 1-5) fired.
+  if (X.hasPrev) {
+    let local = nf > nfLocals;
+    for (let k = 0; !local && k < X.nPrevN8; k++) local = (_prevN8[k] === idx);
+    if (local) feat[nf++] = prevOffset + 0;
+  }
+  return nf;
+}
+
+function extractFeatures(game, state, phaseCount = 1, adjLib = 2, skipLocal = false, t12mode = 0, selfAtari = false, atariN = 0,
+                         xaN = 0, captureN = 0, csN = 0) {
+  const X = _setupCtx(_X, game, phaseCount, adjLib, skipLocal, t12mode, selfAtari, atariN, xaN, captureN, csN);
+  _preScan(game, X);
+  const wantSa = selfAtari || X.hasPrev || xaN > 0 || csN > 0;
+  const emC = game._emptyCells, ec = game.emptyCount;
+  const feat = state.feat, moves = state.moves, fs = state.featStart;
+  let count = 0, nf = 0;
+  for (let ei = 0; ei < ec; ei++) {
+    const idx = emC[ei];
+    const nb = _baseFeat(game, X, idx, feat, nf, wantSa);
+    if (nb < 0) continue;
+    moves[count] = idx;
+    fs[count] = nf;
+    nf = _localFeat(X, idx, X.sa, feat, nb);
+    count++;
+  }
+  fs[count] = nf;
+  state.count = count;
 }
 
 // Score all moves with a model { phaseCount, weights } and return them sorted by
@@ -758,6 +779,164 @@ function ppatMove(game, state, model, rng = Math) {
   return state.moves[chosen];
 }
 
+// ── Incremental playouts ──────────────────────────────────────────────────────
+//
+// Same policy as ppatMove, bit for bit, without re-extracting every candidate
+// each move.  Per side to move, each point caches its candidacy, self-atari
+// size and BASE logit (the sum of its non-local feature weights, in emission
+// order, as a double).  A move dirties, for both sides, every point whose base
+// features can change: within Manhattan distance 2 of a changed cell (the
+// placed stone and any captured stones: 3x3 pattern, twelvecell arms, eye
+// rule), the liberties of every chain touching a changed cell (liberty codes,
+// legality, self-atari, atari and capture features), and the old and new ko
+// points.  The local (previous-move) features are appended after the base ones,
+// so each move adds them in order onto the cached base at the few points they
+// can fire on; sampling is ppatMove's own pass in empty-cell order.
+//
+// Usage per playout:  inc = createIncremental(N) (once);  incrementalReset(inc)
+// at the playout's start;  then each move  m = ppatMoveIncremental(game, inc,
+// model, rng);  incrementalPlay(game, inc, m).  The game must change only
+// through incrementalPlay between those calls.
+function createIncremental(N) {
+  const cap = N * N;
+  return {
+    N,
+    base:   [new Float64Array(cap), new Float64Array(cap)],   // [0] = black to move, [1] = white
+    cand:   [new Uint8Array(cap), new Uint8Array(cap)],
+    sa:     [new Int32Array(cap), new Int32Array(cap)],
+    dirty:  [new Uint8Array(cap).fill(1), new Uint8Array(cap).fill(1)],
+    phase:  [-1, -1],
+    feat:   new Int32Array(16),
+    moves:  new Int32Array(cap),
+    lMark:  new Int32Array(cap), lStamp: 0,     // this move's local-feature points
+    gMark:  null, gStamp: 0,                     // chains already dirtied this play
+  };
+}
+
+function incrementalReset(inc) {
+  inc.dirty[0].fill(1); inc.dirty[1].fill(1);
+  inc.phase[0] = inc.phase[1] = -1;
+}
+
+// Play `move` on game and dirty what it can change.
+function incrementalPlay(game, inc, move) {
+  const oldKo = game.ko;
+  const ok = game.play(move);
+  const d0 = inc.dirty[0], d1 = inc.dirty[1];
+  if (oldKo !== PASS) d0[oldKo] = d1[oldKo] = 1;
+  if (game.ko !== PASS) d0[game.ko] = d1[game.ko] = 1;
+  if (move === PASS || !ok) return ok;
+  const nbr = game._nbr, dnbr = game._dnbr, cells = game.cells, gid = game._gid, lw = game._lw, W = game._W, cap = game.N * game.N;
+  if (!inc.gMark || inc.gMark.length < game._ls.length) inc.gMark = new Int32Array(game._ls.length);
+  if (++inc.gStamp === 0x7fffffff) { inc.gMark.fill(0); inc.gStamp = 1; }
+  const gm = inc.gMark, gs = inc.gStamp;
+  const markLibs = g => {
+    if (gm[g] === gs) return;
+    gm[g] = gs;
+    const base = g * W;
+    for (let wi = 0; wi < W; wi++) {
+      let bits = lw[base + wi];
+      while (bits !== 0) {
+        const p = (wi << 5) + (31 - Math.clz32(bits & -bits));
+        bits &= bits - 1;
+        if (p < cap) d0[p] = d1[p] = 1;
+      }
+    }
+  };
+  const around = c => {
+    const b = c * 4;
+    d0[c] = d1[c] = 1;
+    for (let d = 0; d < 4; d++) {
+      const n = nbr[b + d], n2 = nbr[n * 4 + d], dg = dnbr[b + d];
+      d0[n] = d1[n] = 1; d0[n2] = d1[n2] = 1; d0[dg] = d1[dg] = 1;
+      if (cells[n] !== 0) markLibs(gid[n]);
+    }
+  };
+  around(move);
+  markLibs(gid[move]);
+  const caps = game._lastCaptures;
+  for (let k = 0; k < game._lastCaptureCount; k++) around(caps[k]);
+  return ok;
+}
+
+function ppatMoveIncremental(game, inc, model, rng = Math) {
+  const ubp = model.ppatMinPhase;
+  if (ubp > 0) {
+    const cap = game.N * game.N;
+    const fullness = (cap - game.emptyCount) / cap;
+    if (fullness < ubp) return game.randomLegalMove(rng);
+  }
+
+  const X = _setupCtx(_X, game, model.phaseCount, model.adjLib, model.skipLocal, model.t12mode, model.selfAtari,
+                      model.atariN, model.xaN, model.captureN, model.csN);
+  const ci = X.cur > 0 ? 0 : 1;
+  if (inc.phase[ci] !== X.phase) { inc.dirty[ci].fill(1); inc.phase[ci] = X.phase; }
+  _preScan(game, X);
+
+  // The points local features can fire on this move.
+  if (++inc.lStamp === 0x7fffffff) { inc.lMark.fill(0); inc.lStamp = 1; }
+  const lm = inc.lMark, st = inc.lStamp;
+  for (let k = 0; k < X.nPrevN8; k++) lm[_prevN8[k]] = st;
+  for (let k = 0; k < X.nAtari; k++) if (_atariLibsArr[k] >= 0) lm[_atariLibsArr[k]] = st;
+  for (let k = 0; k < X.nSbc; k++) lm[_sbcCells[k]] = st;
+  for (let k = 0; k < X.nKoSolve; k++) lm[_koSolveLibs[k]] = st;
+
+  // sa is cached for any later move's locals, so compute it whenever locals exist.
+  const wantSa = X.selfAtari || !X.skipLocal || X.xaN > 0 || X.csN > 0;
+  const dirty = inc.dirty[ci], base = inc.base[ci], cand = inc.cand[ci], saC = inc.sa[ci];
+  const feat = inc.feat, moves = inc.moves, weights = model.weights;
+  const emC = game._emptyCells, ec = game.emptyCount;
+  if (_logits.length < ec) _logits = new Float32Array(ec * 2);
+
+  let n = 0, max = -1e30;
+  for (let ei = 0; ei < ec; ei++) {
+    const idx = emC[ei];
+    if (dirty[idx]) {
+      dirty[idx] = 0;
+      const nb = _baseFeat(game, X, idx, feat, 0, wantSa);
+      if (nb < 0) cand[idx] = 0;
+      else {
+        let v = 0;
+        for (let k = 0; k < nb; k++) v += weights[feat[k]];
+        base[idx] = v; saC[idx] = X.sa; cand[idx] = 1;
+      }
+    }
+    if (cand[idx] === 0) continue;
+    let v = base[idx];
+    if (lm[idx] === st) {
+      const nl = _localFeat(X, idx, saC[idx], feat, 0);
+      for (let k = 0; k < nl; k++) v += weights[feat[k]];
+    }
+    _logits[n] = v;
+    moves[n] = idx;
+    n++;
+    if (v > max) max = v;
+  }
+  if (n === 0) return PASS;
+
+  // From here on, ppatMove's sampling pass unchanged.
+  const passOn = model.earlyPass === true;
+  const passLogit = !passOn ? 0
+                  : model.passLogit !== undefined ? model.passLogit
+                  : (model.passWeight || 0);
+  if (passOn && passLogit > max) max = passLogit;
+
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const e = _fastExp(_logits[i] - max);
+    _logits[i] = e;
+    sum += e;
+  }
+  const ePass = passOn ? _fastExp(passLogit - max) : 0;
+  sum += ePass;
+
+  let r = rng.random() * sum;
+  if (passOn) { r -= ePass; if (r <= 0) return PASS; }
+  let chosen = n - 1;
+  for (let i = 0; i < n; i++) { r -= _logits[i]; if (r <= 0) { chosen = i; break; } }
+  return moves[chosen];
+}
+
 // Load a weights file (JS module with { weights, phases, numPatterns }).
 // Returns the model { phaseCount, weights } (weights = flat Float32Array), or null.
 function loadWeights(pathOrObj) {
@@ -828,6 +1007,7 @@ function loadWeights(pathOrObj) {
 
 const PPatterns = {
   createState, extractFeatures, evaluate, ppatMove,
+  createIncremental, incrementalReset, incrementalPlay, ppatMoveIncremental,
   totalWeights, loadWeights,
   NUM_PATTERNS, NUM_T12, NUM_T12B, SA_N,
 };
