@@ -15,9 +15,9 @@
 // two implementations of the same policy given the same arguments — the
 // exactness check for an optimisation.  --incremental runs the playouts with
 // ppat-lib's incremental path (ppatMoveIncremental), which must reproduce the
-// full path's checksum.  --candidates N (incremental only) samples among the
-// local-feature points plus N random candidates per move (ppat-lib's
-// ppatCandidates; not the same policy, so the checksum differs).
+// full path's checksum.  --candidates N (incremental only) samples among N
+// random candidates per move (ppat-lib's ppatCandidates; not the same policy,
+// so the checksum differs).
 //
 //   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10]
 //                      [--min-phase 0.55] [--seed 1] [--size 13] [--incremental]

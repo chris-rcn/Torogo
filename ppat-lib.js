@@ -799,9 +799,10 @@ function ppatMove(game, state, model, rng = Math) {
 // through incrementalPlay between those calls.
 //
 // model.ppatCandidates = N (a runtime knob, like ppatMinPhase; 0 = all, the
-// exact policy): each move samples among only the local-feature points plus N
-// random candidates (empty points drawn by rejection until N of them are legal
-// non-eye moves), while the empty points number at least _CAND_RATIO x N.  NOT ppatMove's policy: the
+// exact policy): each move samples among only N random candidates (empty
+// points drawn by rejection until N of them are legal non-eye moves; local
+// features still apply to those drawn), while the empty points number at
+// least _CAND_RATIO x N.  NOT ppatMove's policy: the
 // softmax is over the subset, and an earlyPass model's pass logit competes
 // with the subset's.  Points left out stay dirty for later moves.
 // ppatCandidates: the subset is used only while the empty points number at
@@ -925,54 +926,41 @@ function ppatMoveIncremental(game, inc, model, rng = Math) {
   const nc = model.ppatCandidates | 0;
   let subset = nc > 0 && ec >= _CAND_RATIO * nc;
   if (subset) {
-    // The local-feature points, then empty points drawn uniformly at random
-    // (rejection: a drawn point already considered this move is skipped) until
-    // nc of them are candidates.  Each considered point is refreshed if dirty.
-    // Too many draws without filling the quota (mostly non-candidates) ->
-    // the exact scan below instead.
+    // Empty points drawn uniformly at random (rejection: a drawn point already
+    // considered this move is skipped) until nc of them are candidates.  Each
+    // considered point is refreshed if dirty, and gets its local features if
+    // it has any.  Too many draws without filling the quota (mostly
+    // non-candidates) -> the exact scan below instead.
     if (++inc.cStamp === 0x7fffffff) { inc.cMark.fill(0); inc.cStamp = 1; }
-    const cm = inc.cMark, cs = inc.cStamp, cells = game.cells;
-    let found = 0, draws = 0;
+    const cm = inc.cMark, cs = inc.cStamp;
     const maxDraws = _CAND_DRAWS * nc;
-    for (let pass = 0; pass < 4 + 1; pass++) {
-      // pass 0-3: the four local-feature point lists; pass 4: random draws.
-      const arr = pass === 0 ? _prevN8 : pass === 1 ? _atariLibsArr : pass === 2 ? _sbcCells : _koSolveLibs;
-      const len = pass === 0 ? X.nPrevN8 : pass === 1 ? X.nAtari : pass === 2 ? X.nSbc : pass === 3 ? X.nKoSolve : 0;
-      for (let k = 0; ; k++) {
-        let idx;
-        if (pass < 4) {
-          if (k >= len) break;
-          idx = arr[k];
-          if (idx < 0 || cells[idx] !== 0 || cm[idx] === cs) continue;
-        } else {
-          if (found >= nc) break;
-          if (++draws > maxDraws) { subset = false; break; }
-          idx = emC[Math.floor(rng.random() * ec)];
-          if (cm[idx] === cs) continue;
+    let found = 0, draws = 0;
+    while (found < nc) {
+      if (++draws > maxDraws) { subset = false; break; }
+      const idx = emC[Math.floor(rng.random() * ec)];
+      if (cm[idx] === cs) continue;
+      cm[idx] = cs;
+      if (dirty[idx]) {
+        dirty[idx] = 0;
+        const nb = _baseFeat(game, X, idx, feat, 0, wantSa);
+        if (nb < 0) cand[idx] = 0;
+        else {
+          let v = 0;
+          for (let q = 0; q < nb; q++) v += weights[feat[q]];
+          base[idx] = v; saC[idx] = X.sa; cand[idx] = 1;
         }
-        cm[idx] = cs;
-        if (dirty[idx]) {
-          dirty[idx] = 0;
-          const nb = _baseFeat(game, X, idx, feat, 0, wantSa);
-          if (nb < 0) cand[idx] = 0;
-          else {
-            let v = 0;
-            for (let q = 0; q < nb; q++) v += weights[feat[q]];
-            base[idx] = v; saC[idx] = X.sa; cand[idx] = 1;
-          }
-        }
-        if (cand[idx] === 0) continue;
-        let v = base[idx];
-        if (lm[idx] === st) {
-          const nl = _localFeat(X, idx, saC[idx], feat, 0);
-          for (let q = 0; q < nl; q++) v += weights[feat[q]];
-        }
-        _logits[n] = v;
-        moves[n] = idx;
-        n++;
-        if (v > max) max = v;
-        if (pass === 4) found++;
       }
+      if (cand[idx] === 0) continue;
+      let v = base[idx];
+      if (lm[idx] === st) {
+        const nl = _localFeat(X, idx, saC[idx], feat, 0);
+        for (let q = 0; q < nl; q++) v += weights[feat[q]];
+      }
+      _logits[n] = v;
+      moves[n] = idx;
+      n++;
+      if (v > max) max = v;
+      found++;
     }
     if (!subset) { n = 0; max = -1e30; }
   }
