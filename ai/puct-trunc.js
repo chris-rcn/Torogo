@@ -211,6 +211,11 @@ function create(cfg) {
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
   _model.ppatMinPhase = cfg.float('PPAT_MIN_PHASE', 0.6);
+  // Each ppat playout move samples among only this many random candidates
+  // (ppat-lib's ppatCandidates; 0 = all, the exact policy).
+  const PPAT_CANDIDATES = cfg.int('PPAT_CANDIDATES', 0);
+  if (!(PPAT_CANDIDATES >= 0)) throw new Error(`puct-trunc: PPAT_CANDIDATES must be >= 0, got ${PPAT_CANDIDATES}`);
+  _model.ppatCandidates = PPAT_CANDIDATES;
 
   console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `expand costs: playout ${PLAYOUT_OVERHEAD}${_envPlayoutOvh ? '(env)' : ''}, ` +
@@ -229,7 +234,8 @@ function create(cfg) {
   // 1 = the policy's own softmax, 0 = all prior on its top move.
   const FPOL_TEMP = cfg.float('FPOL_TEMP', 1);
   if (!(FPOL_TEMP >= 0)) throw new Error(`puct-trunc: FPOL_TEMP must be >= 0, got ${FPOL_TEMP}`);
-  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}`);
+  console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}, fpol-temp ${FPOL_TEMP}` +
+    (PPAT_CANDIDATES > 0 ? `, ppat-candidates ${PPAT_CANDIDATES}` : ''));
 
   // ppat's incremental playout cache (ppat-lib): the same policy as ppatMove,
   // bit for bit, without re-extracting every candidate each move.
