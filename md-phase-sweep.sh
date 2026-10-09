@@ -1,5 +1,7 @@
 #!/bin/sh
-# Per-phase movedetails MAE for every rated CGOS house agent, in cost order.
+# Per-phase movedetails MAE for every CGOS house agent (cgos/refs.json), in cost
+# order: ms/mv from cgos/standings.js, cheapest first; agents it has no ms/mv
+# for go last, in refs.json order.
 # One output file per agent: <dir>/<agent>.txt (the full evalmovedetails
 # output, phase-band table and SUMMARY at the end).  Run with --verbose, so
 # each file also holds every position's gap (rows keyed by the position's index
@@ -11,7 +13,7 @@
 #   --file F    movedetails file (default movedetails_5059.md)
 #   --dir D     output directory (default md-phase)
 #   --limit N   positions per agent (default: all)
-#   agent ...   restrict to these agents (default: all, in cost order)
+#   agent ...   restrict to these agents (default: the house fleet, in cost order)
 
 file=movedetails_5059.md; dir=md-phase; limit=
 while :; do
@@ -23,13 +25,26 @@ while :; do
   esac
 done
 
-agents="ref-ppat random ref-featurepol-softmax ref-npat-softmax ref-search-top2-fp
-ref-fp-heavy ref-ab2-fp4-vpat ref-vlibpat-or-fp ref-mc-200 ref-vlibpat
-ref-cascade-k3-v2-p100 ref-cascade-k3-v2-p300 ref-rave-1k ref-puct-ppat-fp-e2-u6-300
-ref-rave-2k ref-puct-ppat-300 prod-2026-08-18-5k ref-puct-ppat-fp-e2-u6-1k
-ref-puct-ppat-fp-e2-1k ref-puct-ppat-1k prod-2026-08-18-10k ref-puct-ppat-fp-e2-3k
-prod-2026-08-18-20k ref-puct-ppat-3k ref-puct-ppat-fp-e2-u6-6k"
-[ $# -gt 0 ] && agents="$*"
+if [ $# -gt 0 ]; then
+  agents="$*"
+else
+  agents=$(cd "$(dirname "$0")" && node -e '
+    const { execFileSync } = require("child_process");
+    const refs = JSON.parse(require("fs").readFileSync("cgos/refs.json", "utf8")).refs.map(r => r.name);
+    const cost = new Map();
+    try {
+      const out = execFileSync("node", ["cgos/standings.js"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      for (const line of out.split("\n")) {
+        const m = line.match(/^(\S+)\s+-?\d+\??\s+\d+\s+(\d+)/);
+        if (m) cost.set(m[1], +m[2]);
+      }
+    } catch (e) { console.error("md-phase-sweep: cgos/standings.js failed; refs.json order"); }
+    const order = refs.map((a, i) => ({ a, i, c: cost.has(a) ? cost.get(a) : Infinity }))
+                      .sort((x, y) => x.c - y.c || x.i - y.i);
+    console.log(order.map(o => o.a).join(" "));
+  ') || exit 1
+fi
+
 
 cd "$(dirname "$0")"
 mkdir -p "$dir"
