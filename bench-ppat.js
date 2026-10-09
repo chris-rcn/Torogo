@@ -15,7 +15,7 @@
 // two implementations of the same policy given the same arguments — the
 // exactness check for an optimisation.
 //
-//   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 4]
+//   node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10]
 //                      [--min-phase 0.55] [--seed 1] [--size 13]
 
 const path = require('path');
@@ -29,12 +29,12 @@ const PPat = require('./ppat-lib.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games', 'playouts', 'min-phase', 'seed', 'size']);
 if (opts.help) {
-  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 4] [--min-phase 0.55] [--seed 1] [--size 13]');
+  console.log('Usage: node bench-ppat.js [--model ppat-data-1623136.js] [--games 20] [--playouts 10] [--min-phase 0.55] [--seed 1] [--size 13]');
   process.exit(0);
 }
 const MODEL    = opts.model || path.join(__dirname, 'ppat-data-1623136.js');
 const GAMES    = parseInt(opts.games || '20', 10);
-const PLAYOUTS = parseInt(opts.playouts || '4', 10);
+const PLAYOUTS = parseInt(opts.playouts || '10', 10);
 const MIN_PHASE = parseFloat(opts['min-phase'] ?? '0.55');
 const SEED     = parseInt(opts.seed || '1', 10);
 const SIZE     = parseInt(opts.size || '13', 10);
