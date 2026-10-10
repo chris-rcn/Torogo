@@ -3,8 +3,9 @@
 // mc-ppat: a deliberately minimal agent whose ONLY decision input is the
 // ppat playout policy — built to measure playout quality directly.
 //
-// Each move: sample CANDIDATES legal non-eye moves uniformly at random, split
-// the PLAYOUTS budget evenly between them, and play the one with the best mean
+// Each move: sample CANDIDATES legal non-eye moves uniformly at random, give
+// them playouts round-robin until the time budget runs out (or split a fixed
+// PLAYOUTS total evenly between them), and play the one with the best mean
 // result (from the mover's perspective).  No tree, no priors, no RAVE.
 // PLAYOUTS is the TOTAL per decision, as in every other agent, so changing
 // CANDIDATES redistributes a fixed budget rather than inflating it.  With
@@ -18,8 +19,8 @@
 // movedetails output down to the same worst-case move choices.  Here the ppat
 // policy decides every move, so an A/B between two models measures the models.
 //
-// Cost is fixed per decision (PLAYOUTS) and independent of the time budget,
-// which is ignored.  Sized for fast head-to-heads on small boards.
+// Cost follows the time budget, or is fixed per decision by PLAYOUTS or
+// CAND_PLAYOUTS (the budget then ignored).
 //
 // ── Factory ──
 // create(cfg) -> { getMove }.  cfg is a Util.makeCfg reader (slot-aware env),
@@ -28,7 +29,9 @@
 //
 // Config:
 //   CANDIDATES    moves sampled per decision; 0 = all legal moves (default 0)
-//   PLAYOUTS      TOTAL playouts per decision, split evenly       (default 1)
+//   PLAYOUTS      TOTAL playouts per decision, split evenly; 0 = follow the
+//                 time budget (round-robin over the candidates, at least one
+//                 round)                                          (default 0)
 //   CAND_PLAYOUTS playouts PER CANDIDATE; overrides PLAYOUTS when > 0 (default 0)
 //                 The two conventions allocate to opposite ends of the game: a
 //                 fixed total gives each candidate more playouts as the move
@@ -81,6 +84,7 @@
 //   TRUNC_MAX_PHASE gate bound on the truncated ENDPOINT (default 0.55)
 
 const path = require('path');
+const { performance } = require('perf_hooks');
 const Util = require('../util.js');
 const { PASS, BLACK, EMPTY } = require('../game2.js');
 const { makeRng } = require('../xorshift.js');
@@ -93,7 +97,7 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const CANDIDATES = Math.max(0, cfg.int('CANDIDATES', 0));   // 0 = all legal non-eye moves
-  const PLAYOUTS   = Math.max(1, cfg.int('PLAYOUTS', 1));
+  const PLAYOUTS   = Math.max(0, cfg.int('PLAYOUTS', 0));   // 0 = the time budget
   const CAND_PLAYOUTS = Math.max(0, cfg.int('CAND_PLAYOUTS', 0));
 
   const ppatPath = cfg.str('PPAT_DATA', path.join(__dirname, '..', 'out', 'ppat-data-233162-best-ref-candidate.js'));
@@ -156,7 +160,7 @@ function create(cfg) {
   }
   console.log(`mc-ppat[${cfg.slot != null ? cfg.slot : '-'}]: ${model.weights.length} ppat weights ` +
               `from ${path.basename(ppatPath)}, ` +
-              (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : `${PLAYOUTS} playouts/move`) +
+              (CAND_PLAYOUTS > 0 ? `${CAND_PLAYOUTS} playouts/candidate` : PLAYOUTS > 0 ? `${PLAYOUTS} playouts/move` : `time budget`) +
               (FP_TOP > 0 ? ` over fp top-${FP_TOP}` : ` over ${CANDIDATES > 0 ? CANDIDATES : 'all'} candidates`) +
               (SIM_PHASE > 0 ? `  sims from phase ${SIM_PHASE}` : '') +
               (VPAT_PICK ? `  vpat-pick below the gate` : '') +
@@ -271,9 +275,13 @@ function create(cfg) {
     }
 
     // CAND_PLAYOUTS fixes the per-candidate count (total then scales with n);
-    // otherwise split the total budget evenly across the candidates actually
-    // found (n can be < CANDIDATES late), keeping per-decision cost at PLAYOUTS.
-    const per = CAND_PLAYOUTS > 0 ? CAND_PLAYOUTS : Math.max(1, Math.round(PLAYOUTS / n));
+    // a PLAYOUTS total is split evenly across the candidates actually found (n
+    // can be < CANDIDATES late), keeping per-decision cost at PLAYOUTS;
+    // otherwise playouts go round-robin until the time budget's deadline
+    // (per = Infinity, at least one round).
+    const timed = CAND_PLAYOUTS === 0 && PLAYOUTS === 0;
+    const per = CAND_PLAYOUTS > 0 ? CAND_PLAYOUTS : PLAYOUTS > 0 ? Math.max(1, Math.round(PLAYOUTS / n)) : Infinity;
+    const deadline = timed ? performance.now() + Math.max(0, timeBudgetMs || 0) : Infinity;
     const mover = game.current;
 
     // Sequential vote: blocks of VOTE_BLOCK sims per candidate, stopping as
@@ -283,7 +291,7 @@ function create(cfg) {
       const sum = new Float64Array(n), sq = new Float64Array(n);
       let done = 0;
       while (done < per) {
-        const b = Math.min(VOTE_BLOCK, per - done);
+        const b = Math.min(VOTE_BLOCK, per - done);   // per is Infinity when timed
         for (let c = 0; c < n; c++) {
           for (let p = 0; p < b; p++) {
             const g = game.clone();
@@ -294,6 +302,7 @@ function create(cfg) {
           }
         }
         done += b;
+        if (timed && performance.now() >= deadline) break;
         let li = 0, ri = 1;
         for (let c = 1; c < n; c++) if (sum[c] > sum[li]) li = c;
         ri = li === 0 ? 1 : 0;
@@ -306,22 +315,40 @@ function create(cfg) {
       for (let c = 1; c < n; c++) if (sum[c] + r.random() * 1e-9 > sum[li]) li = c;
       return { move: _cand[li], info: `wr=${(sum[li] / done).toFixed(3)} of ${n}x${done}` };
     }
+    // Fixed counts: each candidate's playouts in turn.  Timed: one playout
+    // per candidate per round until the deadline.
+    const wins = new Float64Array(n);
+    let rounds = 0;
+    if (!timed) {
+      for (let c = 0; c < n; c++) {
+        for (let p = 0; p < per; p++) {
+          const g = game.clone();
+          g.play(_cand[c]);
+          const res = playout(g, r);
+          wins[c] += mover === BLACK ? res : 1 - res;
+        }
+      }
+      rounds = per;
+    } else {
+      do {
+        for (let c = 0; c < n; c++) {
+          const g = game.clone();
+          g.play(_cand[c]);
+          const res = playout(g, r);
+          wins[c] += mover === BLACK ? res : 1 - res;
+        }
+        rounds++;
+      } while (performance.now() < deadline);
+    }
     let best = _cand[0], bestV = -1;
     for (let c = 0; c < n; c++) {
-      let wins = 0;
-      for (let p = 0; p < per; p++) {
-        const g = game.clone();
-        g.play(_cand[c]);
-        const res = playout(g, r);
-        wins += mover === BLACK ? res : 1 - res;
-      }
       // Fractional dither breaks exact ties randomly; it can never reorder
-      // distinct means (multiples of 1/per when playouts run to the end;
+      // distinct means (multiples of 1/rounds when playouts run to the end;
       // truncated returns are continuous, where a 1e-9 dither is still moot).
-      const v = wins / per + r.random() * 1e-9;
+      const v = wins[c] / rounds + r.random() * 1e-9;
       if (v > bestV) { bestV = v; best = _cand[c]; }
     }
-    return { move: best, info: `wr=${bestV.toFixed(3)} of ${n}x${per}` };
+    return { move: best, info: `wr=${bestV.toFixed(3)} of ${n}x${rounds}` };
   }
 
   // Position value oracle: mean outcome of PLAYOUTS standard playouts from
@@ -336,6 +363,7 @@ function create(cfg) {
       const deadline = Date.now() + options.budgetMs;
       do { wins += playout(game2.clone(), r); n++; } while (Date.now() < deadline);
     } else {
+      if (PLAYOUTS === 0) throw new Error('mc-ppat valueB: no budgetMs and PLAYOUTS is 0 — pass a budget or set PLAYOUTS');
       for (let p = 0; p < PLAYOUTS; p++) wins += playout(game2.clone(), r);
       n = PLAYOUTS;
     }
