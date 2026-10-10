@@ -164,11 +164,10 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   const pool      = loadPositions(opts.file);
   const windowed  = minPhase > 0 || maxPhase < 1;
   const positions = [];
-  let filtered = 0;
   for (let i = 0; i < pool.length && positions.length < limit; i++) {
     if (windowed) {
       const ph = replayPhase(pool[i]);
-      if (ph !== null && (ph < minPhase || ph > maxPhase)) { filtered++; continue; }
+      if (ph !== null && (ph < minPhase || ph > maxPhase)) continue;
     }
     positions.push({ ...pool[i], idx: i });
   }
@@ -229,7 +228,6 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   }
 
   printStats();
-  if (filtered) console.log(`\nfiltered ${filtered} position(s) outside phase [${minPhase},${maxPhase}] while selecting`);
   if (skipped) console.log(`\nskipped ${skipped} position(s) that did not replay legally`);
 
   if (n === 0) { console.error(`\nno positions scored (all filtered/skipped)`); process.exit(1); }
