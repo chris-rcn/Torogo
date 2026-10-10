@@ -797,20 +797,6 @@ function ppatMove(game, state, model, rng = Math) {
 // at the playout's start;  then each move  m = ppatMoveIncremental(game, inc,
 // model, rng);  incrementalPlay(game, inc, m).  The game must change only
 // through incrementalPlay between those calls.
-//
-// model.ppatCandidates = N (a runtime knob, like ppatMinPhase; 0 = all, the
-// exact policy): each move samples among only N random candidates (empty
-// points drawn by rejection until N of them are legal non-eye moves; local
-// features still apply to those drawn), while the empty points number at
-// least _CAND_RATIO x N.  NOT ppatMove's policy: the
-// softmax is over the subset, and an earlyPass model's pass logit competes
-// with the subset's.  Points left out stay dirty for later moves.
-// ppatCandidates: the subset is used only while the empty points number at
-// least _CAND_RATIO x N (below that, the exact scan), and gives up for the
-// exact scan after _CAND_DRAWS x N random draws.
-const _CAND_RATIO = 4;
-const _CAND_DRAWS = 4;
-
 function createIncremental(N) {
   const cap = N * N;
   return {
@@ -823,7 +809,6 @@ function createIncremental(N) {
     feat:   new Int32Array(16),
     moves:  new Int32Array(cap),
     lMark:  new Int32Array(cap), lStamp: 0,     // this move's local-feature points
-    cMark:  new Int32Array(cap), cStamp: 0,     // points already considered this move (ppatCandidates)
     gMark:  null, gStamp: 0,                     // chains already dirtied this play
   };
 }
@@ -922,48 +907,6 @@ function ppatMoveIncremental(game, inc, model, rng = Math) {
   if (_logits.length < ec) _logits = new Float32Array(ec * 2);
 
   let n = 0, max = -1e30;
-  const nc = model.ppatCandidates | 0;
-  let subset = nc > 0 && ec >= _CAND_RATIO * nc;
-  if (subset) {
-    // Empty points drawn uniformly at random (rejection: a drawn point already
-    // considered this move is skipped) until nc of them are candidates.  Each
-    // considered point is refreshed if dirty, and gets its local features if
-    // it has any.  Too many draws without filling the quota (mostly
-    // non-candidates) -> the exact scan below instead.
-    if (++inc.cStamp === 0x7fffffff) { inc.cMark.fill(0); inc.cStamp = 1; }
-    const cm = inc.cMark, cs = inc.cStamp;
-    const maxDraws = _CAND_DRAWS * nc;
-    let found = 0, draws = 0;
-    while (found < nc) {
-      if (++draws > maxDraws) { subset = false; break; }
-      const idx = emC[Math.floor(rng.random() * ec)];
-      if (cm[idx] === cs) continue;
-      cm[idx] = cs;
-      if (dirty[idx]) {
-        dirty[idx] = 0;
-        const nb = _baseFeat(game, X, idx, feat, 0, wantSa);
-        if (nb < 0) cand[idx] = 0;
-        else {
-          let v = 0;
-          for (let q = 0; q < nb; q++) v += weights[feat[q]];
-          base[idx] = v; saC[idx] = X.sa; cand[idx] = 1;
-        }
-      }
-      if (cand[idx] === 0) continue;
-      let v = base[idx];
-      if (lm[idx] === st) {
-        const nl = _localFeat(X, idx, saC[idx], feat, 0);
-        for (let q = 0; q < nl; q++) v += weights[feat[q]];
-      }
-      _logits[n] = v;
-      moves[n] = idx;
-      n++;
-      if (v > max) max = v;
-      found++;
-    }
-    if (!subset) { n = 0; max = -1e30; }
-  }
-  if (!subset)
   for (let ei = 0; ei < ec; ei++) {
     const idx = emC[ei];
     if (dirty[idx]) {
