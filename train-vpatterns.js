@@ -58,7 +58,8 @@ checkpoint is written at every print.
                     maxLibs 1 = presence only, or L = ladder-coded cells
                     (vlibpat 7-state tactical alphabet; game3 pass per
                     position, not incremental); trailing 'f' freezes that
-                    spec's loaded weights).  Default 1:6,2:6,3:6.  With
+                    spec's loaded weights).  Required unless --load names
+                    an existing checkpoint (its specs).  With
                     --load, --spec overrides the checkpoint's specs: shared
                     specs keep their trained weights, new ones start at zero
   --train-size N    self-play board size (default 13)
@@ -217,7 +218,8 @@ let komiSum = 0, komiSumGames = 0;   // per-interval avg komi (avgK column)
 // 1-4 or 34 (the 3×4/4×3 rectangle pair, both orientations under one tag);
 // maxLibs caps the per-cell liberty count (1 = presence only).  A trailing
 // 'f' freezes that spec's weights (loaded values stay fixed; gradient updates
-// skipped).  Default: sizes 1/2/3 at maxLibs 6.  With --load, --spec overrides
+// skipped).  Required unless --load names an existing checkpoint, whose specs
+// are then used.  With --load, --spec overrides
 // the checkpoint's specs: shared specs keep their trained weights (freeze the
 // carried-over ones with 'f' for a curriculum), new specs start at zero.
 let specs;
@@ -278,17 +280,16 @@ if (opts.spec) {
     if (frozen) FROZEN.add(specTag({ size, maxLibs }));
     return patBins > 1 ? { size, maxLibs, phaseBins: patBins } : { size, maxLibs };
   });
+} else if (!(LOAD_PATH && fs.existsSync(LOAD_PATH))) {
+  console.error('--spec is required (or --load an existing checkpoint, whose specs are used)');
+  process.exit(1);
 } else {
-  specs = [
-    { size: 1, maxLibs: 6 },
-    { size: 2, maxLibs: 6 },
-    { size: 3, maxLibs: 6 },
-  ];
+  specs = null;   // from the checkpoint, below
 }
 // --ladder-min-chain: given, it wins; else a --load model's own value (below), else 1.
 const LADDER_MIN_CHAIN_FLAG = opts['ladder-min-chain'] !== undefined ? parseInt(opts['ladder-min-chain'], 10) : null;
 if (LADDER_MIN_CHAIN_FLAG !== null && !(LADDER_MIN_CHAIN_FLAG >= 1)) { console.error('--ladder-min-chain must be a positive integer'); process.exit(1); }
-let prepSpecs = prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: LADDER_MIN_CHAIN_FLAG || 1 });
+let prepSpecs = specs ? prepareSpecs(specs, { health: HEALTH_PATH, ladderMinChain: LADDER_MIN_CHAIN_FLAG || 1 }) : null;   // null: the checkpoint's, below
 
 // ── Weight table ──────────────────────────────────────────────────────────────
 
