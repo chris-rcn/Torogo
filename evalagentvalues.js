@@ -26,7 +26,7 @@
 //
 //   --agent        ai agent name under ai/ (must export valueB)   (required)
 //   --file         evals file from gen-agent-evals.js             (required)
-//   --limit        score only the first n positions               (default: all)
+//   --limit        score only the first n positions inside the phase window (default: all)
 //   --oversample   score each position this many times            (default: 1)
 //   --seed         starting agent rng seed                        (default: 1)
 //   --show-phases P  print a P-row table of phase-band → RMS/bias, binning by
@@ -62,6 +62,14 @@ function loadPositions(filePath) {
     });
   }
   return out;
+}
+
+// The phase (fullness) of a position after replaying its moves; null if they
+// don't replay legally.
+function replayPhase(pos) {
+  const game = new Game2(pos.size, true);
+  for (const m of pos.moves) if (!game.play(parseMove(m, pos.size))) return null;
+  return game.phase();
 }
 
 // Sentinel: position replayed fine but its phase is outside [minPhase, maxPhase].
@@ -112,7 +120,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
                     options.budgetMs (search agents run time-limited unless
                     a fixed PLAYOUTS overrides; mc-ppat plays playouts until
                     the clock; static valueBs ignore it)
-  --limit N         score only the first N positions (default: all)
+  --limit N         score only the first N positions inside the phase window (default: all)
   --min-phase F     skip positions with board fullness < F (default 0)
   --max-phase F     skip positions with board fullness > F (default 1)
   --oversample N    score each position N times (stochastic valueBs;
@@ -149,9 +157,22 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
     process.exit(1);
   }
 
+  // --limit counts positions inside the phase window: scan the file in order,
+  // keeping each position whose replayed phase lies in [minPhase, maxPhase],
+  // until `limit` are kept.  A position that does not replay is kept, so the
+  // scoring loop reports it.  Each keeps its file index for the verbose rows.
   const pool      = loadPositions(opts.file);
-  const positions = pool.slice(0, limit);
-  if (positions.length === 0) { console.error(`no positions in ${opts.file}`); process.exit(1); }
+  const windowed  = minPhase > 0 || maxPhase < 1;
+  const positions = [];
+  let filtered = 0;
+  for (let i = 0; i < pool.length && positions.length < limit; i++) {
+    if (windowed) {
+      const ph = replayPhase(pool[i]);
+      if (ph !== null && (ph < minPhase || ph > maxPhase)) { filtered++; continue; }
+    }
+    positions.push({ ...pool[i], idx: i });
+  }
+  if (positions.length === 0) { console.error(`no positions in ${opts.file}${windowed ? ` inside phase [${minPhase},${maxPhase}]` : ''}`); process.exit(1); }
 
   const phaseWindow = (minPhase > 0 || maxPhase < 1) ? `  phase=[${minPhase},${maxPhase}]` : '';
   console.log(`agent=${agentName}  file=${opts.file}  positions=${positions.length}/${pool.length}${phaseWindow}  oversample=${oversample}`);
@@ -169,7 +190,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
 
   const startTime = performance.now();
   let printPeriodMs = 1000, lastPrintTime = startTime;
-  let sqSum = 0, absSum = 0, errSum = 0, n = 0, skipped = 0, filtered = 0;
+  let sqSum = 0, absSum = 0, errSum = 0, n = 0, skipped = 0;
 
   function printStats() {
     const elapsedMs = performance.now() - startTime;
@@ -190,14 +211,13 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
       const r = evalPosition(valueB, positions[i], minPhase, maxPhase);
       if (r === null) {
         skipped++;
-        if (skipped <= 5) console.error(`WARNING: position idx ${i} did not replay legally; skipping`);
+        if (skipped <= 5) console.error(`WARNING: position idx ${positions[i].idx} did not replay legally; skipping`);
         continue;
       }
-      if (r === FILTERED) { filtered++; continue; }
       sqSum += r.err * r.err; absSum += Math.abs(r.err); errSum += r.err; n++;
       if (showPhases !== null) { const b = bandOf(r.phase); bandSq[b] += r.err * r.err; bandErr[b] += r.err; bandN[b]++; }
       if (verbose) console.log(
-        `${String(i).padStart(6)}  ${String(positions[i].moves.length).padStart(4)}  ` +
+        `${String(positions[i].idx).padStart(6)}  ${String(positions[i].moves.length).padStart(4)}  ` +
         `${r.phase.toFixed(3).padStart(5)}  ${r.pred.toFixed(4).padStart(6)}  ` +
         `${r.target.toFixed(4).padStart(6)}  ${(r.err >= 0 ? '+' : '') + r.err.toFixed(4)}`.padStart(7));
 
@@ -209,7 +229,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   }
 
   printStats();
-  if (filtered) console.log(`\nfiltered ${filtered} position(s) outside phase [${minPhase},${maxPhase}]`);
+  if (filtered) console.log(`\nfiltered ${filtered} position(s) outside phase [${minPhase},${maxPhase}] while selecting`);
   if (skipped) console.log(`\nskipped ${skipped} position(s) that did not replay legally`);
 
   if (n === 0) { console.error(`\nno positions scored (all filtered/skipped)`); process.exit(1); }
