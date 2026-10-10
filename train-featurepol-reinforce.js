@@ -32,6 +32,8 @@ if (opts.help || (!opts.spec && !opts.load)) {
                                 vpat<n>: rank of the move under an external vpatterns value model
                                 (from FP_VPAT_DATA, or inherited from --load; never trained here;
                                  embedded into every save so inference needs no FP_VPAT_DATA)
+                                value<n>: rank of the move under FP_VALUE_AGENT's valueB (an ai/<name>.js;
+                                 recorded by name in every save, so it must stay frozen)
                                 amaf<n>:<P>: rank of the move by an aggregate all-moves-as-first
                                 win ratio over P uniform playouts (one batch ranks the whole board;
                                 deterministic, seeded from the position; no external model)
@@ -285,7 +287,7 @@ if (loaded) {
 // embedded into every save — the deployed featurepol file is self-contained and
 // needs no FP_VPAT_DATA at inference.  Source: FP_VPAT_DATA overrides; otherwise
 // inherit the model embedded in the --load checkpoint.
-if (weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) {
+if (weights.spec.usesVpat) {
   const vpatOverride = process.env.FP_VPAT_DATA;
   if (vpatOverride) {
     weights.vpatModel = VPatterns.loadWeights(vpatOverride);
@@ -296,6 +298,26 @@ if (weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) {
   } else {
     console.error('Error: the spec has vpat<n> but no vpat model is available — ' +
       'set FP_VPAT_DATA, or --load a checkpoint that embeds one.');
+    process.exit(1);
+  }
+  weights.rankTopN = -1;   // self-play ranks every candidate (whole board); eval toggles to EVAL_RANK_TOPN
+}
+
+// The value<n> feature ranks candidates by an agent's valueB.  The agent is
+// recorded by NAME in every save (an agent cannot be embedded), so inference
+// loads the same ai/<name>.js — it must stay frozen.  Source: FP_VALUE_AGENT
+// overrides; otherwise inherit the name the --load checkpoint records.
+if (weights.spec.usesValue) {
+  const agentOverride = process.env.FP_VALUE_AGENT;
+  if (agentOverride) {
+    weights.valueAgentName = agentOverride;
+    console.log(`value agent: ${agentOverride} (FP_VALUE_AGENT)`);
+  } else if (loaded && loaded.weights.valueAgentName) {
+    weights.valueAgentName = loaded.weights.valueAgentName;
+    console.log(`value agent: ${weights.valueAgentName} (inherited from ${LOAD_PATH})`);
+  } else {
+    console.error('Error: the spec has value<n> but no value agent is named — ' +
+      'set FP_VALUE_AGENT, or --load a checkpoint that records one.');
     process.exit(1);
   }
   weights.rankTopN = -1;   // self-play ranks every candidate (whole board); eval toggles to EVAL_RANK_TOPN

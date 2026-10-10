@@ -125,6 +125,15 @@
 //               incrementally (deltaZ); ladder-coded models (size:L) are
 //               supported but rank NON-incrementally — a full extraction on a
 //               clone per candidate, several times slower per position.
+//   value<n>    rank of the move under an external AGENT's valueB, like vpat<n>
+//               (mover-relative, cumulative, the same top-N and pos-ratio
+//               machinery): candidate m is scored by valueB(position + m), with
+//               an rng seeded from that position's hash (so a stochastic oracle
+//               still gives each position one rank) and featurepol's Game3 when
+//               it has one.  The agent is ai/<name>.js, named by FP_VALUE_AGENT
+//               at training and recorded by NAME in the featurepol file (not
+//               embedded: it must stay frozen); loaded lazily, Node only.  A
+//               spec may not combine vpat<n> and value<n> (one shared ranking).
 //   amaf<n>:<P>  rank of the move by an aggregate all-moves-as-first win ratio
 //               over P uniform first-play-wins playouts from the position (own
 //               moves full weight, opponent's at 0.3, first-play weight decaying
@@ -812,6 +821,66 @@ function _vpatPrepare(ctx) {
 // top-N split, the pos-ratio gate) keys on this, not on function identity.
 _vpatPrepare._isRank = true;
 
+// ── value: the rank feature — candidates scored by an agent's valueB ────────
+//
+// The agent is bound to the weights by name (weights.valueAgentName, from the
+// featurepol file or set by a trainer) and loaded on first use into
+// weights.valueAgent; it reaches the ranking through ctx.valueAgent.
+function _valueAgentOf(weights) {
+  if (weights.valueAgent) return weights.valueAgent;
+  const name = weights.valueAgentName;
+  if (!name) return null;
+  if (typeof require !== 'function' || typeof window !== 'undefined')
+    throw new Error(`featurepol: the value<n> feature's agent (${name}) can only be loaded in Node`);
+  const mod = require(require('path').join(__dirname, 'ai', name + '.js'));
+  const agent = typeof mod.create === 'function' ? mod.create(Util.makeCfg(null)) : mod;
+  if (typeof agent.valueB !== 'function') throw new Error(`featurepol: value<n> agent ${name} has no valueB`);
+  weights.valueAgent = agent;
+  return agent;
+}
+
+// The agent may itself run featurepol (fp-ply-vpat, fp-line-vpat), whose
+// extraction shares this module's scratch, so the scores and order live in
+// private arrays, the shortlist mask is captured up front, and the ranks are
+// written only after every valueB call.  (Other prepares' scratch is rerun
+// after the ranking by the callers: see spec.usesValue.)
+let _vScore = new Float64Array(0), _vOrder = new Int32Array(0);
+function _valuePrepare(ctx) {
+  const game = ctx.game, N = game.N, cap = N * N;
+  const agent = _valueAgentOf(ctx.valueWeights);
+  if (!agent) throw new Error('featurepol: the value<n> feature needs an agent, but none is named on the weights — ' +
+    'set FP_VALUE_AGENT when training, or load a featurepol file that records one.');
+  const mask = _rankMask, allow = _rankAllow;
+  if (_vScore.length < cap) { _vScore = new Float64Array(cap); _vOrder = new Int32Array(cap); }
+  const score = _vScore, ord = _vOrder;
+  const black = ctx.cur === BLACK;   // valueB is P(BLACK wins)
+  const g3 = ctx.game3;
+  const emC = game._emptyCells, ec = game.emptyCount;
+  const cand = [];
+  for (let ei = 0; ei < ec; ei++) {
+    const idx = emC[ei];
+    if (mask  !== null && mask[idx] === 0) continue;
+    if (allow !== null && !allow.has(idx)) continue;
+    if (!game.isLegal(idx) || game.isTrueEye(idx)) continue;
+    cand.push(idx);
+  }
+  let n = 0;
+  for (const idx of cand) {
+    const g = game.clone();
+    g.play(idx);
+    if (g3) g3.play(idx);
+    const v = agent.valueB(g, { rng: makeRng(g.hash() >>> 0 || 1), game3: g3 || undefined });
+    if (g3) g3.undo();
+    score[idx] = black ? v : 1 - v;               // mover-relative: higher = better
+    ord[n++] = idx;
+  }
+  const order = ord.subarray(0, n);
+  order.sort((a, b) => score[b] - score[a]);
+  _rankBlank(cap);                   // (re)size + zero the shared rank arrays
+  for (let r = 0; r < n; r++) _rank[order[r]] = r + 1;
+}
+_valuePrepare._isRank = true;
+
 // ── amaf: rank the whole board by an aggregate all-moves-as-first win ratio ──
 //
 // One batch of P uniform, first-play-wins playouts from the position scores
@@ -938,6 +1007,15 @@ function _makeTerm(str) {
       if (param === null || param < 1) throw new Error(`featurepol: vpat<n> needs a rank count n >= 1, got "${str}"`);
       const n = param;
       prepare = _vpatPrepare;
+      cumulative = true;
+      sizeFn = (ctx, idx) => { const r = _rank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
+      break;
+    }
+    case 'value': {
+      // Rank under the external agent's valueB, encoded exactly like vpat<n>.
+      if (param === null || param < 1) throw new Error(`featurepol: value<n> needs a rank count n >= 1, got "${str}"`);
+      const n = param;
+      prepare = _valuePrepare;
       cumulative = true;
       sizeFn = (ctx, idx) => { const r = _rank[idx]; return (r >= 1 && r <= n) ? (n + 1 - r) : 0; };
       break;
@@ -1445,8 +1523,12 @@ function parseSpec(specStr) {
   for (const sp of plainSpaces)
     for (const t of [...sp.baseTerms, ...sp.cumTerms]) if (!plainSlots.includes(t.slot)) plainSlots.push(t.slot);
   const rankMaxKeys = rankSpaces.reduce((a, sp) => a + sp.maxKeys, 0);
+  // Which ranking the rank spaces use: vpat<n> and value<n> share one rank array.
+  const usesVpat = prepares.includes(_vpatPrepare), usesValue = prepares.includes(_valuePrepare);
+  if (usesVpat && usesValue) throw new Error(`featurepol: "${str}" combines vpat<n> and value<n>, which share one ranking`);
   return { str, spaces, plainSpaces, rankSpaces, plainSlots, rankMaxKeys,
-           computers, numSlots: computers.length, prepares, maxKeysPerMove, boardMaxSpaces, needsLadder, needsT3, nearMax };
+           computers, numSlots: computers.length, prepares, maxKeysPerMove, boardMaxSpaces, needsLadder, needsT3, nearMax,
+           usesVpat, usesValue };
 }
 
 // ── Weights store (hash → dense idx → Float32 weight) ─────────────────────────
@@ -1646,6 +1728,9 @@ function _extractTopN(game, state, weights, ctx, spec, useRank) {
   const preps = spec.prepares;
   for (let i = 0; i < preps.length; i++) if (preps[i]._isRank) preps[i](ctx);
   _rankMask = null;
+  // value<n>: the agent's own featurepol extraction can overwrite the other
+  // prepares' module scratch (health, amaf), so rebuild it for this position.
+  if (spec.usesValue) for (let i = 0; i < preps.length; i++) if (!preps[i]._isRank) preps[i](ctx);
   for (let i = 0; i < n; i++) mask[moves[rank[i]]] = 0;   // O(n) clear, not O(board)
   const rKeys = state.rKeys, rCount = state.rCount, stride = spec.rankMaxKeys, numSlots = spec.numSlots;
   rCount.fill(0, 0, count);
@@ -1678,7 +1763,8 @@ function extractFeatures(game, state, weights, game3) {
   const spec = weights.spec;
   const spaces = spec.spaces, nSpaces = spaces.length;
   const memo = state.memo;
-  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, t3Sizes: null, memo, vpatModel: weights.vpatModel || null, game3: null };
+  const ctx = { game, cur: game.current, nearNbr: state.nearNbr, nearStride: state.nearStride, ladderSizes: null, t3Sizes: null, memo, vpatModel: weights.vpatModel || null,
+                valueWeights: spec.usesValue ? weights : null, game3: null };
   // Build one Game3 (synced to `game`) if featurepol's own ladder or tactics3
   // terms or the embedded vpat<n> ladder model needs one, and stash it on ctx
   // so the vpat rank prepare can reuse it per candidate instead of rebuilding.
@@ -1695,7 +1781,15 @@ function extractFeatures(game, state, weights, game3) {
   // Whole-position precomputes (e.g. the vpat ranking) -- once per position, before
   // any per-move term runs.
   const preps = spec.prepares;
+  // value<n>: the ranking runs first, so the agent's own featurepol extraction
+  // cannot overwrite the other prepares' scratch after they fill it.
+  if (preps && spec.usesValue) {
+    for (let i = 0; i < preps.length; i++) if (preps[i]._isRank) {
+      if (weights.rankTopN < 0 && useRank) preps[i](ctx); else _rankBlank(game.N * game.N);
+    }
+  }
   if (preps) for (let i = 0; i < preps.length; i++) {
+    if (spec.usesValue && preps[i]._isRank) continue;   // ran above
     // Non-rank precomputes always run.  The rank prepare runs only in whole-board
     // mode (rankTopN < 0); at rankTopN == 0 the feature is off, so the rank stays
     // blank and the rank spaces emit nothing.  (useRank gates it per position.)
@@ -2015,9 +2109,11 @@ function serialize(weights, meta = {}, saveZeros = false) {
   // was trained against — the sole source at inference.
   const vpatModel = meta.vpat || weights.vpatModel || null;
   const vpatLine = vpatModel ? `  const vpat = ${VPatterns.modelLiteral(vpatModel)};` : null;
-  const returnLine = vpatModel
-    ? "  return { spec, ema, totalUpdates, komi, ladderMinChain, t3MinChain, t3DepthLimit, t3NodeLimit, count, scale, keys, qvals, vpat };"
-    : "  return { spec, ema, totalUpdates, komi, ladderMinChain, t3MinChain, t3DepthLimit, t3NodeLimit, count, scale, keys, qvals };";
+  // A value<n> spec's agent is recorded by name (an agent cannot be embedded).
+  const valueAgentName = meta.valueAgent || weights.valueAgentName || null;
+  const valueLine = valueAgentName ? `  const valueAgent = ${JSON.stringify(valueAgentName)};` : null;
+  const returnLine = "  return { spec, ema, totalUpdates, komi, ladderMinChain, t3MinChain, t3DepthLimit, t3NodeLimit, count, scale, keys, qvals" +
+    (vpatModel ? ", vpat" : "") + (valueAgentName ? ", valueAgent" : "") + " };";
   return [
     "'use strict';",
     '// Auto-generated by a featurepol trainer — do not edit by hand.',
@@ -2040,6 +2136,7 @@ function serialize(weights, meta = {}, saveZeros = false) {
     "  const keys  = new Int32Array(buf, 0, count);",
     "  const qvals = new Int16Array(buf, count * 4, count);",
     ...(vpatLine ? [vpatLine] : []),
+    ...(valueLine ? [valueLine] : []),
     returnLine,
     "})();",
     "if (typeof module !== 'undefined') module.exports = featurepolModel;",
@@ -2070,6 +2167,8 @@ function loadModel({ name = 'featurepol', path: pathOverride } = {}) {
   // spec with vpat<n> but no embedded model errors at first ranking (in
   // _vpatPrepare), not silently.
   if (raw.vpat) weights.vpatModel = VPatterns.modelFromRaw(raw.vpat, undefined, { float32: true });   // read-only: inference table
+  // A value<n> spec's agent: by name, loaded on first ranking (_valueAgentOf).
+  if (raw.valueAgent) weights.valueAgentName = raw.valueAgent;
   return { weights, modelName, spec: weights.spec, ema: raw.ema || 0, totalUpdates: raw.totalUpdates || 0,
            komi: raw.komi === undefined ? null : raw.komi };
 }
