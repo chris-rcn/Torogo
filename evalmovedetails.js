@@ -248,21 +248,24 @@ const agent = (typeof _agentMod.create === 'function'
   // --index N evaluates only the position at 0-based index N, restoring the
   // agent rng seed it would have had in a full sweep so the result reproduces
   // that position exactly.
-  let positions;
+  let positions, fileIdx;   // fileIdx[i]: positions[i]'s 0-based index in the file
   if (index !== null) {
     if (isNaN(index) || index < 0 || index >= pool.length) {
       console.error(`--index must be in 0..${pool.length - 1}`); process.exit(1);
     }
     positions = [pool[index]];
+    fileIdx = [index];
     agentSeed = baseSeed + index;   // the seed position `index` gets in a baseSeed full sweep
   } else {
     // --min-phase/--max-phase: keep only positions whose board fullness is in
     // the band, then apply --limit to what survives.
-    const banded = bandActive ? pool.filter(p => {
-      const ph = positionPhase(p);
-      return ph >= minPhase && ph <= maxPhase;
-    }) : pool;
-    positions = banded.slice(0, limit);
+    const kept = [];
+    for (let i = 0; i < pool.length && kept.length < limit; i++) {
+      const ph = positionPhase(pool[i]);
+      if (!bandActive || (ph >= minPhase && ph <= maxPhase)) kept.push(i);
+    }
+    positions = kept.map(i => pool[i]);
+    fileIdx = kept;
     agentSeed = baseSeed;
   }
   // --seed pins the starting agent rng seed, overriding the random default and
@@ -309,9 +312,6 @@ const agent = (typeof _agentMod.create === 'function'
   const wIdx  = Math.max(3, String(pool.length - 1).length);   // 0-based file index
   const wMove = 5;
   const wWR   = 5;
-  // 0-based file index of positions[i]: --index pins a single position, else
-  // the slice starts at the file head so the array index is the file index.
-  const indexBase = index !== null ? index : 0;
 
   // Every verbose line starts with 'pos', so `grep '^pos'` extracts the table
   // (header and one row per position) from the progress output, for any agent.
@@ -341,7 +341,7 @@ const agent = (typeof _agentMod.create === 'function'
       phaseBandN[b]++;
 
       if (worst.length < WORST_N || gap > worst[worst.length - 1].gap) {
-        const rec = { index: indexBase + i, gap, hist: positions[i].history.length,
+        const rec = { index: fileIdx[i], gap, hist: positions[i].history.length,
                       top: topCand.m, topWR: topCand.winRatio,
                       agent: agentStr, agentWR: agentCand.winRatio, info: agentMove.info };
         let pos = worst.length;
@@ -351,7 +351,7 @@ const agent = (typeof _agentMod.create === 'function'
       }
 
       if (verbose) console.log(
-        `pos ${String(indexBase + i).padStart(wIdx)}  ` +
+        `pos ${String(fileIdx[i]).padStart(wIdx)}  ` +
         `${String(positions[i].history.length).padStart(4)}  ` +
         `${topCand.m.padEnd(wMove)} ${topCand.winRatio.toFixed(3).padStart(wWR)}  ` +
         `${agentStr.padEnd(wMove)} ${agentCand.winRatio.toFixed(3).padStart(wWR)}  ` +
