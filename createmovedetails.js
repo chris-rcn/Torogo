@@ -7,9 +7,9 @@
 // mirror pairs (a random move and its 180-degree rotation in the other colour,
 // so the opening is exactly balanced), then is played by the POSITION agent,
 // which only has to return moves, until it ends or its board fullness (phase)
-// first reaches 0.8;
-// later positions are never drawn.  One position with phase below 0.8 is then
-// drawn for deep analysis and checked for contestedness by the
+// first reaches --max-phase (default 0.8); later positions are never drawn,
+// nor are those below --min-phase (default 0).  One position with phase in
+// [--min-phase, --max-phase) is then drawn for deep analysis and checked for contestedness by the
 // VALUE agent: its win ratio must be within [0.3, 0.7], else the game is
 // discarded.  Phase bands
 // (--phase-buckets N equal-width bands of [0,1]) are kept level: the game's
@@ -40,8 +40,11 @@
 // Usage:
 //   node createmovedetails.js --position-agent <name> --value-agent <name>
 //                             [--budget 2000] [--size 13]
+//                             [--min-phase 0] [--max-phase 0.8]
 //                             [--phase-buckets 10] > out/movedetails-<name>.md
 //
+//   --min-phase      positions are drawn only at board fullness >= this (default 0)
+//   --max-phase      ... and < this; games stop there (default 0.8)
 //   --phase-buckets  equal-width phase bands kept level (default 10)
 
 const path = require('path');
@@ -52,13 +55,15 @@ const MD = require('./movedetails-format.js');
 const FeaturePol = require('./featurepol-lib.js');
 const { game3FromGame2 } = require('./game3.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['position-agent', 'value-agent', 'budget', 'size', 'phase-buckets']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['position-agent', 'value-agent', 'budget', 'size', 'phase-buckets', 'min-phase', 'max-phase']);
 
 if (opts.help || !opts['position-agent'] || !opts['value-agent']) {
-  console.log(`Usage: node createmovedetails.js --position-agent <name> --value-agent <name> [--budget <ms>] [--size <n>] [--phase-buckets <n>] > out.md
+  console.log(`Usage: node createmovedetails.js --position-agent <name> --value-agent <name> [--budget <ms>] [--size <n>] [--min-phase F] [--max-phase F] [--phase-buckets <n>] > out.md
   --position-agent  ai/<name>.js that plays the self-play games the positions come from (required)
   --value-agent     ai/<name>.js that judges a drawn position's contestedness and labels
                     every legal move of it; must return rootWinRatio (required)
+  --min-phase F     draw positions only at board fullness >= F (default 0)
+  --max-phase F     ... and < F; games stop there (default 0.8)
 A fixed-playout agent ignores --budget; PLAYOUTS in the env applies to both.`);
   process.exit(opts.help ? 0 : 1);
 }
@@ -68,10 +73,17 @@ const budget    = parseInt(opts.budget || '1', 10);
 const boardSize = parseInt(opts.size   || '13',   10);
 const PLAYOUTS  = process.env.PLAYOUTS || '';   // agent's fixed playout count, if set (overrides budget)
 const phaseBuckets = parseInt(opts['phase-buckets'] || '10', 10);
+// Positions are drawn only in [MIN_PHASE, MAX_PHASE) of board fullness
+// (phase = 1 − empty/area); the self-play game stops at MAX_PHASE.
+const MIN_PHASE = parseFloat(opts['min-phase'] ?? '0');
+const MAX_PHASE = parseFloat(opts['max-phase'] ?? '0.8');
 
 if (isNaN(budget) || budget < 1)       { console.error('--budget must be a positive integer'); process.exit(1); }
 if (isNaN(phaseBuckets) || phaseBuckets < 1) { console.error('--phase-buckets must be a positive integer'); process.exit(1); }
 if (isNaN(boardSize) || boardSize < 2) { console.error('--size must be >= 2'); process.exit(1); }
+if (!(MIN_PHASE >= 0 && MIN_PHASE < MAX_PHASE && MAX_PHASE <= 1)) {
+  console.error('--min-phase and --max-phase must satisfy 0 <= min < max <= 1'); process.exit(1);
+}
 
 // stdout is the data stream.  Agents print their load banners with
 // console.log, so from here on console.log goes to stderr with the status.
@@ -88,10 +100,6 @@ const valAgent = posAgentName === valAgentName ? posAgent : loadAgent(valAgentNa
 // A position is eligible for analysis only when |win ratio − 0.5| is within
 // this, keeping only contested positions in the dataset.
 const WR_DEV = 0.2;
-
-// ...and only in the opening/middle game: board fullness (phase = 1 −
-// empty/area) must be below this, skipping crowded late-game positions.
-const PHASE_MAX = 0.8;
 
 // Random mirror pairs opening each self-play game, before the position agent.
 const MIRROR_PAIRS = 2;
@@ -157,7 +165,7 @@ function playMirrorPair(game, record) {
   return false;
 }
 
-process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  phase-max=${PHASE_MAX}  mirror-pairs=${MIRROR_PAIRS}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  order-model=${orderModelName}  phase-buckets=${phaseBuckets}\n`);
+process.stdout.write(`# createmovedetails.js  position-agent=${posAgentName}  value-agent=${valAgentName}  budget=${budget}ms  PLAYOUTS=${PLAYOUTS || '(budget)'}  size=${boardSize}  wr-dev=${WR_DEV}  min-phase=${MIN_PHASE}  max-phase=${MAX_PHASE}  mirror-pairs=${MIRROR_PAIRS}  max-near-best=${MAX_NEAR_BEST}@${NEAR_BEST_DEV}  order-model=${orderModelName}  phase-buckets=${phaseBuckets}\n`);
 
 console.error(`position-agent=${posAgentName}  value-agent=${valAgentName}  size=${boardSize}  budget=${budget}ms`);
 console.error();
@@ -190,7 +198,7 @@ const bandCount = new Int32Array(phaseBuckets);   // samples written per phase b
 while (true) {
   const N = boardSize;
 
-  // Play the self-play game up to PHASE_MAX (nothing later is eligible),
+  // Play the self-play game up to MAX_PHASE (nothing later is eligible),
   // recording each move and which positions (identified by the number of
   // moves played before them) fall in each band.  The mirror pairs come
   // first; positions inside the opening are not eligible.
@@ -201,8 +209,8 @@ while (true) {
 
   while (!game.gameOver) {
     const phase = 1 - game.emptyCount / (N * N);
-    if (phase >= PHASE_MAX) break;
-    inBand[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
+    if (phase >= MAX_PHASE) break;
+    if (phase >= MIN_PHASE) inBand[Math.min(phaseBuckets - 1, Math.floor(phase * phaseBuckets))].push(moves.length);
     const advancingMove = posAgent(game, budget);
     moves.push(advancingMove.move);
     game.play(advancingMove.move);
