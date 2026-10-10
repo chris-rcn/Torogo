@@ -20,7 +20,7 @@ const { loadPositions, evalPositions } = require('./evalmovedetails.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
-  ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'entropy-beta',
+  ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'entropy-beta', 'ext', 'ext-ratio', 'imitation',
    'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights', 'limit']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
@@ -46,6 +46,13 @@ if (opts.help || (!opts.spec && !opts.load)) {
   --entropy-beta B  entropy bonus: each self-play move adds B·∂H/∂score_i, H the
                     entropy of the temperature-1 softmax, to the REINFORCE step,
                     whatever the outcome (default 0 = off)
+  --ext AGENT       ai/<name>.js that plays some self-play moves (either side)
+  --ext-ratio R     share of self-play moves played by --ext (default 0); its
+                    moves get no REINFORCE step
+  --imitation W     at each --ext move, a cross-entropy step toward its choice
+                    of weight W (gradient W·(1{i = ext move} − π_i), π the
+                    temperature-1 softmax); 0 = the --ext moves only shape the
+                    positions.  Required when --ext-ratio > 0
   --eval-rank-topn N  in EVAL games, rank the vpat<n> feature over only the best N
                     moves by the OTHER feature spaces (default 3; 0 = off,
                     N<0 = every candidate).  Top-N is the deployment setting:
@@ -121,6 +128,19 @@ const WEIGHT_DECAY = parseFloat(opts['weight-decay'] || '0.000002');
 const TEMPERATURE = Math.max(0, parseFloat(opts.temperature || '1'));
 const ENTROPY_BETA = parseFloat(opts['entropy-beta'] || '0');
 if (!(ENTROPY_BETA >= 0)) { console.error(`Error: --entropy-beta must be >= 0, got '${opts['entropy-beta']}'`); process.exit(1); }
+const EXT_AGENT = opts.ext || null;
+const EXT_RATIO = parseFloat(opts['ext-ratio'] || '0');
+const IMITATION = opts.imitation !== undefined ? parseFloat(opts.imitation) : null;
+if (!(EXT_RATIO >= 0 && EXT_RATIO <= 1)) { console.error(`Error: --ext-ratio must be in [0, 1], got '${opts['ext-ratio']}'`); process.exit(1); }
+if (EXT_RATIO > 0 && !EXT_AGENT) { console.error('Error: --ext-ratio > 0 needs --ext'); process.exit(1); }
+if (EXT_RATIO > 0 && IMITATION === null) { console.error('Error: --ext-ratio > 0 needs --imitation W (0 = the --ext moves only shape the positions)'); process.exit(1); }
+if (IMITATION !== null && !(IMITATION >= 0)) { console.error(`Error: --imitation must be >= 0, got '${opts.imitation}'`); process.exit(1); }
+if (EXT_RATIO === 0 && (EXT_AGENT || IMITATION !== null)) { console.error('Error: --ext / --imitation need --ext-ratio > 0'); process.exit(1); }
+// Built now (factory agents too) so its banner prints with the trainer's.
+const extGetMove = EXT_RATIO > 0 ? (() => {
+  const m = require(path.join(__dirname, 'ai', EXT_AGENT + '.js'));
+  return (typeof m.create === 'function' ? m.create(Util.makeCfg(null)) : m).getMove;
+})() : null;
 
 // β·∂H/∂score_i of the temperature-1 softmax over state's n candidates:
 // −β·π_i·(log π_i + H).  Pulls the favourite down and the rest up; zero when
@@ -458,6 +478,35 @@ function trainGame(N) {
   try {
   while (!game.gameOver && moves < maxMoves) {
     const player = game.current;
+    if (extGetMove && Math.random() < EXT_RATIO) {
+      // An --ext move: no REINFORCE step; with --imitation W > 0, a
+      // cross-entropy step toward it under the temperature-1 softmax (the
+      // REINFORCE form with advantage W).  A move featurepol does not list
+      // (a pass, a true eye) gets no step.
+      const m = extGetMove(game, 1).move;
+      if (IMITATION > 0) {
+        FeaturePol.extractFeatures(game, state, weights, needTac ? game3 : undefined);
+        const n = FeaturePol.computeSoftmax(state, weights, 1);
+        let ci = -1;
+        for (let i = 0; i < n; i++) if (state.moves[i] === m) { ci = i; break; }
+        if (ci >= 0) {
+          const nk = state.keyOff[n];
+          const keys = new Int32Array(nk);
+          keys.set(state.keys.subarray(0, nk));
+          const keyOff = new Int32Array(n + 1);
+          keyOff.set(state.keyOff.subarray(0, n + 1));
+          const probs = new Float64Array(n);
+          probs.set(state.probs.subarray(0, n));
+          steps.push({ player, chosenIndex: ci, count: n, keys, keyOff, probs, touched: state.touched, entGrad: null, ext: true });
+        }
+      }
+      if (!game.play(m)) throw new Error(`--ext ${EXT_AGENT} returned an illegal move (${m})`);
+      game3.play(m);
+      movePath.push(m);
+      moves++;
+      if (isMoveCycle(movePath)) break;
+      continue;
+    }
     const choice = FeaturePol.policyMove(game, state, weights, Math, needTac ? game3 : undefined, TEMPERATURE);
     if (choice.index >= 0) {
       const n = state.count;
@@ -499,6 +548,7 @@ function trainGame(N) {
   // reward magnitude of 1.  A small bias with no reason to exist, not a
   // catastrophe -- correcting it left measured win rate unchanged at size 7.
   for (const s of steps) {
+    if (s.ext) { weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, IMITATION, weights, LR, WEIGHT_DECAY, wStats) || 0; continue; }
     const sign = s.player === BLACK ? 1 : -1;
     const adv = REWARD_EMA > 0 ? sign * (outcomeBlack - ema) : sign * outcomeBlack;
     weightUpdates += FeaturePol.reinforceUpdate(s, s.chosenIndex, adv, weights, LR, WEIGHT_DECAY, wStats, s.entGrad) || 0;
@@ -506,9 +556,10 @@ function trainGame(N) {
   if (REWARD_EMA > 0 && steps.length > 0) ema = REWARD_EMA * ema + (1 - REWARD_EMA) * outcomeBlack;
 
   let maxProbSum = 0;
-  for (const s of steps) { let mx = 0; for (let i = 0; i < s.count; i++) if (s.probs[i] > mx) mx = s.probs[i]; maxProbSum += mx; }
+  let maxProbN = 0;
+  for (const s of steps) { if (s.ext) continue; let mx = 0; for (let i = 0; i < s.count; i++) if (s.probs[i] > mx) mx = s.probs[i]; maxProbSum += mx; maxProbN++; }
 
-  return { elapsedMs: Date.now() - tStart, moves, weightUpdates, maxProbSum, maxProbN: steps.length,
+  return { elapsedMs: Date.now() - tStart, moves, weightUpdates, maxProbSum, maxProbN,
            blackWon: outcomeBlack > 0 ? 1 : 0 };
 }
 
@@ -558,7 +609,8 @@ function evalVsReference(N, nGames, w) {
 console.log(`spec='${weights.spec.str}'  spaces=${weights.nSpaces}  needsLadder=${weights.spec.needsLadder}` +
             (weights.spec.needsLadder ? `  ladderMinChain=${weights.ladderMinChain}` : '') +
             (weights.spec.needsT3 ? `  t3MinChain=${weights.t3MinChain}  t3Limits=${weights.t3DepthLimit},${weights.t3NodeLimit}` : ''));
-console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}  entropy-beta=${ENTROPY_BETA}`);
+console.log(`lr=${LR}  reward-ema=${REWARD_EMA}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  weight-decay=${WEIGHT_DECAY}  temperature=${TEMPERATURE}  entropy-beta=${ENTROPY_BETA}` +
+            (EXT_RATIO > 0 ? `  ext=${EXT_AGENT}  ext-ratio=${EXT_RATIO}  imitation=${IMITATION}` : ''));
 console.log(`train-size=${TRAIN_SIZE}` + (EVAL_AGENT ? `  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}` : '  (no eval)'));
 console.log(`komi=${KOMI(TRAIN_SIZE)}${AUTO_KOMI ? ' (auto)' : ' (fixed)'}  eval-komi=${EVAL_KOMI} (fixed)`);
 if (EVAL_RANK_TOPN > 0 && weights.spec.rankSpaces && weights.spec.rankSpaces.length > 0) console.log(`eval-rank-topn=${EVAL_RANK_TOPN} (eval ranks the best ${EVAL_RANK_TOPN} moves; self-play ranks every candidate)`);
