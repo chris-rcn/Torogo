@@ -806,10 +806,9 @@ function ppatMove(game, state, model, rng = Math) {
 // softmax is over the subset, and an earlyPass model's pass logit competes
 // with the subset's.  Points left out stay dirty for later moves.
 // ppatCandidates: the subset is used only while the empty points number at
-// least _CAND_RATIO x N (below that the exact scan was as cheap; ratio 2 beat 3,
-// 4 and 6 at N = 5 and 10 from phase 0.55), and gives up for the exact scan
-// after _CAND_DRAWS x N random draws.
-const _CAND_RATIO = 2;
+// least _CAND_RATIO x N (below that, the exact scan), and gives up for the
+// exact scan after _CAND_DRAWS x N random draws.
+const _CAND_RATIO = 4;
 const _CAND_DRAWS = 4;
 
 function createIncremental(N) {
