@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'on-policy', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -77,10 +77,10 @@ checkpoint is written at every print.
                     window of ~g/4 games (about one status-row interval)
                     (default 0.9).  The EMA weights are what gets saved
   --epsilon F       share of moves played uniformly at random (default 0.1)
-  --on-policy F     share of the NON-random moves from this model's own
-                    search; the rest come from --ext (default 1)
-  --ext AGENT       ai/<name>.js supplying the off-policy moves; only
-                    consulted when --on-policy < 1
+  --ext-ratio R     share of the NON-random moves taken from --ext; the rest
+                    come from this model's own search (default 0)
+  --ext AGENT       ai/<name>.js supplying the off-policy moves; needed when
+                    --ext-ratio > 0
   --fp-width K      restrict the trainee's GREEDY move to featurepol's top-K
                     candidates (0 = off, default), in self-play and in the
                     --eval reference games — matches deploying the vpat as a
@@ -100,7 +100,7 @@ checkpoint is written at every print.
   --corpus-ratio R  share of training GAMES drawn from --corpus; the rest are
                     self-play (default 1).  Corpus games never feed the komi
                     controller, so at R = 1 komi stays at its start value.  R = 1
-                    refuses the self-play-only --epsilon, --on-policy, --ext,
+                    refuses the self-play-only --epsilon, --ext-ratio, --ext,
                     --start-phase
 
   --load PATH       resume from a checkpoint; periodic saves start once training
@@ -144,7 +144,9 @@ if (opts.bootstrap !== undefined && !(BOOTSTRAP >= 0)) {
   process.exit(1);
 }
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
-const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
+const EXT_RATIO  = parseFloat(opts['ext-ratio'] || '0');   // share of non-random moves from --ext (vs own search1ply)
+if (!(EXT_RATIO >= 0 && EXT_RATIO <= 1)) { console.error(`--ext-ratio must be in [0, 1] (got '${opts['ext-ratio']}')`); process.exit(1); }
+if (EXT_RATIO > 0 && !opts.ext) { console.error('--ext-ratio > 0 needs --ext'); process.exit(1); }
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
 const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'ref', 'ref-fp2-data.js');
 // random stones until this board phase, then normal training.  'uniform' draws a
@@ -163,7 +165,7 @@ if (CORPUS_FILE && !(CORPUS_RATIO > 0 && CORPUS_RATIO <= 1)) {
   console.error(`--corpus-ratio must be in (0, 1] (got '${opts['corpus-ratio']}')`); process.exit(1);
 }
 if (CORPUS_FILE && CORPUS_RATIO === 1) {
-  const selfPlayOnly = ['epsilon', 'on-policy', 'ext', 'start-phase'].filter(k => opts[k] !== undefined);
+  const selfPlayOnly = ['epsilon', 'ext-ratio', 'ext', 'start-phase'].filter(k => opts[k] !== undefined);
   if (selfPlayOnly.length) {
     console.error(`--corpus-ratio 1 plays no self-play games, so ${selfPlayOnly.map(k => '--' + k).join(', ')} would do nothing`); process.exit(1);
   }
@@ -408,7 +410,7 @@ function trainGame(N, epsilon = EPSILON, corpusGame = null) {
       move = corpusMoves[moves];
     } else if (Math.random() < epsilon) {
       move = game.randomLegalMove();                 // full-width exploration (coverage off the filter)
-    } else if (extGetMove && Math.random() > ON_POLICY) {
+    } else if (extGetMove && Math.random() < EXT_RATIO) {
       move = extGetMove(game).move;
     } else if (fpWeights) {
       const cand = fpTopK(game, FP_WIDTH);           // greedy only within the fp filter
@@ -682,7 +684,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  on-policy=${ON_POLICY}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
