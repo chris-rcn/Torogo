@@ -332,7 +332,12 @@ if (MAX_WEIGHTS > 0) {
   console.log(`max-weights: ${MAX_WEIGHTS} (new keys stop interning at the cap; existing keys keep training)`);
 }
 
-const evalGetMove = EVAL_AGENT ? require(path.join(__dirname, 'ai', EVAL_AGENT + '.js')).getMove : null;
+// A factory agent is built now, so its startup banner prints with the trainer's
+// rather than at the first eval move, inside the table.
+const evalGetMove = EVAL_AGENT ? (() => {
+  const mod = require(path.join(__dirname, 'ai', EVAL_AGENT + '.js'));
+  return (typeof mod.create === 'function' ? mod.create(Util.makeCfg(null)) : mod).getMove;
+})() : null;
 
 // ── Polyak averaging ──────────────────────────────────────────────────────────
 // emaVals shadows weights.vals by dense index (the same key table).  Keys
