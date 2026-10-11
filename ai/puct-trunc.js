@@ -3,8 +3,7 @@
 // puct-trunc: puct-ppat-fp with TRUNCATED playouts.  Truncation is a
 // per-decision choice made at the root: when the root phase is below
 // TRUNC_ROOT_PHASE, every playout runs for the prefix length set by
-// TRUNC_PHASE_DELTA (a move count, or a fullness advance under
-// LEGACY_PHASE_DELTA) and then its leaf value is a static vpatterns evaluation
+// TRUNC_PHASE_DELTA (a move count) and then its leaf value is a static vpatterns evaluation
 // (TRUNC_VPAT_DATA, a train-vpat-supervised checkpoint: V(s) = P(BLACK wins))
 // instead of the terminal score.  Otherwise every playout runs to the end.
 // The prefix moves still fill the RAVE trace either way.  (An averaged
@@ -151,12 +150,6 @@ function create(cfg) {
                           : (_deltaFromModel ? _truncMeta.delta : 0.2);
   // Prefix length in moves, set once per turn from the board size (getMove).
   let _prefixLen = 0;
-  // How the truncation prefix is measured.  Default: descend a fixed number of
-  // MOVES, ceil(TRUNC_PHASE_DELTA * area), so every truncated playout goes the
-  // same distance whatever it captures.  LEGACY_PHASE_DELTA=true restores the
-  // pre-2026-09-10 method: descend until the net empty count has dropped by
-  // that much, which captures push further away.
-  const LEGACY_PHASE_DELTA = cfg.bool('LEGACY_PHASE_DELTA', false);
   // Root-decision truncation: the whole decision truncates (every playout
   // substitutes the vpat value at its prefix endpoint) iff the ROOT phase is
   // below this; otherwise every playout runs full.  Deciding once at the root
@@ -178,7 +171,7 @@ function create(cfg) {
   const _vpatName = _isNode ? require('path').basename(_vpatPath) : 'window.truncVpatModel';
   console.error(`puct-trunc[${cfg.slot != null ? cfg.slot : '-'}]: ` +
     `${_vpatModel.weights.size} vpat weights (${VPat.specString(_vpatModel.specs)}) from ${_vpatName}, ` +
-    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (${LEGACY_PHASE_DELTA ? 'legacy fullness' : 'moves'}), ` +
+    `trunc-phase-delta: ${TRUNC_PHASE_DELTA}${_deltaFromModel ? ' (model)' : ''} (moves), ` +
     `trunc-root-phase: ${+TRUNC_ROOT_PHASE.toFixed(4)}, ` +
     `expand-work: ${EXPAND_WORK}, ` +
     `root-symmetry: ${ROOT_SYMMETRY ? 'on' : 'off'}`);
@@ -267,14 +260,10 @@ function create(cfg) {
 
     _ensurePpatInc(N);
 
-    // Truncation trigger, two methods — see LEGACY_PHASE_DELTA.  Both use the
-    // same magnitude, ceil(TRUNC_PHASE_DELTA * area); they differ only in what
-    // is counted.  MOVES: descend a fixed number of moves, so every truncated
-    // playout goes the same distance whatever it captures (a pass counts, as it
-    // must for a move count).  FULLNESS: descend until the net empty count has
-    // dropped by that much, which captures push further away.
+    // Truncation trigger: a fixed number of moves, ceil(TRUNC_PHASE_DELTA *
+    // area), so every truncated playout goes the same distance whatever it
+    // captures (a pass counts, as it must for a move count).
     const truncMoves = _prefixLen;
-    const truncEmpty = game2.emptyCount - _prefixLen;
     // Root-decision truncation: whether this decision truncates was decided once
     // from the root phase (runSearch, TRUNC_ROOT_PHASE).  Every playout in a
     // truncating decision substitutes the vpat value at its prefix endpoint,
@@ -309,8 +298,7 @@ function create(cfg) {
       }
       moves++;
       weight -= weightStep;
-      if (truncArmed && (LEGACY_PHASE_DELTA ? game2.emptyCount <= truncEmpty
-                                            : moves >= truncMoves)) {
+      if (truncArmed && moves >= truncMoves) {
         // The gate itself was decided at playout start (leaf-anchored draw).
         if (!game2.gameOver) { _lastPlayoutPpat = moves - uniformMoves; _lastPlayoutUniform = uniformMoves; _lastPlayoutTrunc = true; return vpatValueB(game2); }
         truncArmed = false;
