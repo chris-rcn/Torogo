@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'l1-games', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -73,10 +73,11 @@ checkpoint is written at every print.
 
   --lr F            step size for the TD update (default 0.1)
   --l1 L            L1 penalty strength: every update owes each weight L·lr
-                    toward zero; every 20 games every weight moves
+                    toward zero; every --l1-games games every weight moves
                     toward zero by what it is owed, stopping at zero, so
                     unhelpful weights become exactly 0 and drop out of the
                     saved model (nz).  Not with frozen specs (default 0 = off)
+  --l1-games N      training games between --l1 shrinks (default 1000)
   --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off.
                     auto (default): A = 1 - 400/g at game g of this run, a
                     window of ~g/4 games (about one status-row interval)
@@ -182,6 +183,8 @@ const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.1');
 const L1         = parseFloat(opts.l1 || '0');
 if (!(L1 >= 0)) { console.error(`--l1 must be >= 0 (got '${opts.l1}')`); process.exit(1); }
+const L1_GAMES   = parseInt(opts['l1-games'] || '1000', 10);
+if (!(L1_GAMES >= 1)) { console.error(`--l1-games must be a positive integer (got '${opts['l1-games']}')`); process.exit(1); }
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
 // Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
 // 'auto' (default) grows the window with the run: alpha = 1 - 4·EMA_PERIOD/g at
@@ -340,11 +343,9 @@ function absoluteOutcome(game) {
 }
 
 // --l1: a periodic proximal step.  Each update adds L1 · lr to the pull every
-// weight is owed; every L1_PERIOD games l1Shrink moves every weight toward
-// zero by that amount, stopping at zero, and clears it.  No per-key state.  A
-// pass over ~280K weights costs ~19 ms, so it runs every L1_PERIOD games, not
-// every game.
-const L1_PERIOD = 20;
+// weight is owed; every --l1-games training games l1Shrink moves every weight
+// toward zero by that amount, stopping at zero, and clears it.  No per-key
+// state.
 let l1Owed = 0;
 function l1Shrink() {
   if (!(L1 > 0) || l1Owed === 0) return;
@@ -715,7 +716,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}${L1 > 0 ? `  l1=${L1}` : ''}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}${L1 > 0 ? `  l1=${L1}  l1-games=${L1_GAMES}` : ''}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
@@ -793,7 +794,7 @@ while (true) {
       komiGames = 0; komiBlackWins = 0;
     }
   }
-  if (L1 > 0 && g % L1_PERIOD === 0) l1Shrink();   // before the EMA, which then averages the shrunk weights
+  if (L1 > 0 && g % L1_GAMES === 0) l1Shrink();   // before the EMA, which then averages the shrunk weights
   if (EMA_ON && g % EMA_PERIOD === 0) applyEMA(emaAlphaAt(g));
   intervalGames++;
   intervalMoves += moves;
