@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -72,6 +72,11 @@ checkpoint is written at every print.
   --limit N         stop after N games (default 0 = run indefinitely)
 
   --lr F            step size for the TD update (default 0.1)
+  --l1 L            L1 penalty strength: every update owes each weight L·lr
+                    toward zero; at each status print every weight moves
+                    toward zero by what it is owed, stopping at zero, so
+                    unhelpful weights become exactly 0 and drop out of the
+                    saved model (nz).  Not with frozen specs (default 0 = off)
   --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off.
                     auto (default): A = 1 - 400/g at game g of this run, a
                     window of ~g/4 games (about one status-row interval)
@@ -175,6 +180,8 @@ const LADDER_FILE     = opts['ladders']      || null;   // evalladders2 suite to
 const ACCURACY_FILE   = opts['accuracy-corpus']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.1');
+const L1         = parseFloat(opts.l1 || '0');
+if (!(L1 >= 0)) { console.error(`--l1 must be >= 0 (got '${opts.l1}')`); process.exit(1); }
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
 // Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
 // 'auto' (default) grows the window with the run: alpha = 1 - 4·EMA_PERIOD/g at
@@ -288,6 +295,10 @@ if (opts.spec) {
 } else {
   specs = null;   // from the checkpoint, below
 }
+if (L1 > 0 && FROZEN.size > 0) {
+  console.error('--l1 cannot be combined with frozen specs: the shrink visits every weight, and a key does not reveal its spec');
+  process.exit(1);
+}
 // --ladder-min-chain: given, it wins; else a --load model's own value (below), else 1.
 const LADDER_MIN_CHAIN_FLAG = opts['ladder-min-chain'] !== undefined ? parseInt(opts['ladder-min-chain'], 10) : null;
 if (LADDER_MIN_CHAIN_FLAG !== null && !(LADDER_MIN_CHAIN_FLAG >= 1)) { console.error('--ladder-min-chain must be a positive integer'); process.exit(1); }
@@ -328,9 +339,25 @@ function absoluteOutcome(game) {
   return game.calcWinner() === BLACK ? 1 : 0;
 }
 
+// --l1: a periodic proximal step.  Each update adds L1 · lr to the pull every
+// weight is owed; at each status print l1Shrink moves every weight toward
+// zero by that amount, stopping at zero, and clears it.  No per-key state.
+let l1Owed = 0;
+function l1Shrink() {
+  if (!(L1 > 0) || l1Owed === 0) return;
+  const t = l1Owed;
+  // Setting an existing key only rewrites its value, so it is safe inside forEach.
+  weights.forEach((k, w) => {
+    if (w > 0) weights.set(k, w > t ? w - t : 0);
+    else if (w < 0) weights.set(k, w < -t ? w + t : 0);
+  });
+  l1Owed = 0;
+}
+
 // Plain SGD:
 //   g_k  = (target − V) / n · polarity_k
 //   Δw_k = lr · g_k
+// --l1 owes each weight L1 · lr per update (paid by l1Shrink).
 function tdUpdate(features, target, lr) {
   const n = features.count;
   if (n === 0) return;
@@ -343,6 +370,7 @@ function tdUpdate(features, target, lr) {
     if (nActive === 0) return;
   }
   const step = lr * (target - features.val) / nActive;
+  if (L1 > 0) l1Owed += L1 * lr;
   for (let i = 0; i < n; i++) {
     if (hasFrozen && FROZEN.has(tags[i])) continue;
     const k = keys[i];
@@ -684,7 +712,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}${L1 > 0 ? `  l1=${L1}` : ''}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
@@ -771,6 +799,7 @@ while (true) {
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) nextPrintAt = 0;
 
   if (Date.now() >= nextPrintAt) {
+    l1Shrink();   // --l1: pay the owed L1 pull before measuring / saving
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
     let evalMatchMs = 0, evalSubjMs = 0, evalSubjMoves = 0, evalAccC = 0, evalAccN = 0, evalPredHit = 0, evalPredN = 0;
