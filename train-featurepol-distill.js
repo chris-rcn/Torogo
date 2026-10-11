@@ -17,7 +17,7 @@
 // Each status row reports the train loss, pair accuracy on train and holdout
 // records, and fp-recall.js recall/regret on the MD file, and saves the model.
 //
-// Usage: node train-featurepol-distill.js --data out/x.ndjson [--load ref/ref-fp2-data.js] [--save FILE] ...
+// Usage: node train-featurepol-distill.js --records out/x.ndjson [--load ref/ref-fp2-data.js] [--save FILE] ...
 
 const fs = require('fs');
 const path = require('path');
@@ -28,14 +28,14 @@ const { recallStats, loadMdRows } = require('./fp-recall.js');
 const { makeRng } = require('./xorshift.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['data', 'load', 'save', 'lr', 'decay', 'min-z', 'epochs', 'holdout', 'md-file', 'seed']);
-if (opts.help || !opts.data) {
-  console.log(`Usage: node train-featurepol-distill.js --data FILE [options]
+  ['records', 'load', 'save', 'lr', 'decay', 'min-z', 'epochs', 'holdout', 'md', 'seed']);
+if (opts.help || !opts['records']) {
+  console.log(`Usage: node train-featurepol-distill.js --records FILE [options]
 
 Fine-tunes a featurepol model on gen-fp-distill.js records with a pairwise
 ranking loss.
 
-  --data FILE      gen-fp-distill.js NDJSON records                  (required)
+  --records FILE   gen-fp-distill.js NDJSON records                  (required)
   --load FILE      starting model                         (default ref/ref-fp2-data.js)
   --save FILE      output model             (default out/featurepol-distill-<pid>.js)
   --lr F           learning rate                                      (default 0.5)
@@ -43,7 +43,7 @@ ranking loss.
   --min-z F        pairs need a gap of F standard errors              (default 2)
   --epochs N       passes over the training records                  (default 10)
   --holdout F      fraction of records held out for pair accuracy    (default 0.1)
-  --md-file FILE   MD positions for the recall columns      (default out/md-trunc30k)
+  --md FILE        MD positions for the recall columns      (default out/md-trunc30k)
   --seed N         shuffle seed                            (default: random, logged)
   --help           show this message`);
   process.exit(opts.help ? 0 : 1);
@@ -55,7 +55,7 @@ const DECAY   = parseFloat(opts.decay || '0');
 const MIN_Z   = parseFloat(opts['min-z'] || '2');
 const EPOCHS  = parseInt(opts.epochs || '10', 10);
 const HOLDOUT = parseFloat(opts.holdout || '0.1');
-const MD_FILE = opts['md-file'] || 'out/md-trunc30k';
+const MD_FILE = opts['md'] || 'out/md-trunc30k';
 const SEED    = opts.seed !== undefined ? parseInt(opts.seed, 10) : Util.randomSeed();
 const rng     = makeRng(SEED);
 if (!(LR > 0) || !(DECAY >= 0) || !(MIN_Z >= 0) || !(EPOCHS >= 1) || !(HOLDOUT >= 0 && HOLDOUT < 1)) {
@@ -83,7 +83,7 @@ function pairsOf(rec) {
   }
   return pairs;
 }
-const records = fs.readFileSync(opts.data, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+const records = fs.readFileSync(opts['records'], 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 const examples = [];
 for (let r = 0; r < records.length; r++) {
   const rec = records[r];
@@ -92,7 +92,7 @@ for (let r = 0; r < records.length; r++) {
   examples.push({ rec, pairs, holdout: (r * 2654435761 >>> 0) / 4294967296 < HOLDOUT });
 }
 const train = examples.filter(e => !e.holdout), held = examples.filter(e => e.holdout);
-if (train.length === 0) { console.error(`${opts.data}: no record has a pair above --min-z ${MIN_Z}`); process.exit(1); }
+if (train.length === 0) { console.error(`${opts['records']}: no record has a pair above --min-z ${MIN_Z}`); process.exit(1); }
 const mdRows = loadMdRows(MD_FILE);
 
 const states = new Map();
@@ -157,7 +157,7 @@ function save() {
 
 // ── Training loop ─────────────────────────────────────────────────────────────
 const nPairs = examples.reduce((s, e) => s + e.pairs.length / 3, 0);
-console.log(`data      ${opts.data}  (${records.length} records, ${examples.length} with pairs: ${train.length} train, ${held.length} holdout; ${nPairs} pairs at min-z ${MIN_Z})`);
+console.log(`data      ${opts['records']}  (${records.length} records, ${examples.length} with pairs: ${train.length} train, ${held.length} holdout; ${nPairs} pairs at min-z ${MIN_Z})`);
 console.log(`model     ${LOAD} (${weights.size} weights)  -> ${SAVE}`);
 console.log(`train     lr ${LR}, decay ${DECAY}, epochs ${EPOCHS}, seed ${SEED}; md ${MD_FILE} (${mdRows.length} positions)`);
 const header = 'epoch  records  trLoss   trAcc   hoAcc  mdBest  mdNear1  mdRegret  elapsed';

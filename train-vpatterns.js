@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-file', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-data', 'komi', 'ladder-file', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md-file', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -86,7 +86,7 @@ checkpoint is written at every print.
                     --eval reference games — matches deploying the vpat as a
                     re-ranker after an fp filter.  Epsilon exploration stays
                     full-width, for coverage of off-filter states
-  --fp-data PATH    featurepol weights for --fp-width (default ref/ref-fp2-data.js)
+  --fp-model PATH   featurepol weights for --fp-width (default ref/ref-fp2-data.js)
   --start-phase F   fill the board with random stones to this phase before
                     normal training moves begin (backward curriculum).
                     'uniform' draws a fresh random phase per game
@@ -115,15 +115,15 @@ checkpoint is written at every print.
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
   --budget MS       per-move time budget for the reference agent (default 1)
-  --md-file F       evalmovedetails positions, single full pass each print
+  --md F            evalmovedetails positions, single full pass each print
                     (mdMae column)
   --elo             estimate Elo each print (elo column): the saved model's
                     greedy moves on every position of the Elo map's MD file
                     (out/elo-map-trunc30k-827.json and its out/md-trunc30k-827.md)
-  --ladder-file F   evalladders2 suite scored each print (ladr column)
-  --accuracy-file F game corpus for winner-prediction accuracy each print
+  --ladders F       evalladders2 suite scored each print (ladr column)
+  --accuracy-corpus F game corpus for winner-prediction accuracy each print
                     (vacc column)
-  --accuracy-games N  games sampled from --accuracy-file (default 100)
+  --accuracy-games N  games sampled from --accuracy-corpus (default 100)
   --help            show this message`);
   process.exit(0);
 }
@@ -148,7 +148,7 @@ const EXT_RATIO  = parseFloat(opts['ext-ratio'] || '0');   // share of non-rando
 if (!(EXT_RATIO >= 0 && EXT_RATIO <= 1)) { console.error(`--ext-ratio must be in [0, 1] (got '${opts['ext-ratio']}')`); process.exit(1); }
 if (EXT_RATIO > 0 && !opts.ext) { console.error('--ext-ratio > 0 needs --ext'); process.exit(1); }
 const FP_WIDTH   = opts['fp-width'] !== undefined ? parseInt(opts['fp-width'], 10) : 0;   // 0 = off; featurepol top-K filter
-const FP_DATA    = opts['fp-data'] || path.join(__dirname, 'ref', 'ref-fp2-data.js');
+const FP_DATA    = opts['fp-model'] || path.join(__dirname, 'ref', 'ref-fp2-data.js');
 // random stones until this board phase, then normal training.  'uniform' draws a
 // fresh random target phase per game (see trainGame).
 const START_PHASE_UNIFORM = (opts['start-phase'] || '0') === 'uniform';
@@ -170,9 +170,9 @@ if (CORPUS_FILE && CORPUS_RATIO === 1) {
     console.error(`--corpus-ratio 1 plays no self-play games, so ${selfPlayOnly.map(k => '--' + k).join(', ')} would do nothing`); process.exit(1);
   }
 }
-const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdMae column
-const LADDER_FILE     = opts['ladder-file']      || null;   // evalladders2 suite to score each status print (the ladr column)
-const ACCURACY_FILE   = opts['accuracy-file']    || null;
+const MD_FILE         = opts['md']          || null;   // evalmovedetails positions for the single-pass mdMae column
+const LADDER_FILE     = opts['ladders']      || null;   // evalladders2 suite to score each status print (the ladr column)
+const ACCURACY_FILE   = opts['accuracy-corpus']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.1');
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
@@ -623,7 +623,7 @@ function bestFiltered(game, cand, w) {
 }
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the trainee
-// against --md-file at each status print (the `mdMae` column — mean win-ratio
+// against --md at each status print (the `mdMae` column — mean win-ratio
 // gap to the top move).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
@@ -639,7 +639,7 @@ if (opts.elo) {
 }
 
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
-// against --ladder-file at each status print (the `ladr` column).
+// against --ladders at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 // The model a save writes (saveSource), like every other test column.
 const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search(gm, { weights: saveSource(), specs, preparedSpecs: prepSpecs }) });

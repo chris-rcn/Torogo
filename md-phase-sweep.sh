@@ -9,8 +9,8 @@
 # reads only the band table and SUMMARY, which verbose output leaves intact.  An agent whose file already
 # holds a SUMMARY line is skipped, so the sweep can be resumed.
 #
-# usage: md-phase-sweep.sh [--file F] [--dir D] [--limit N] [agent ...]
-#   --file F    movedetails file (default movedetails_5059.md)
+# usage: md-phase-sweep.sh [--md F] [--dir D] [--limit N] [agent ...]
+#   --md F      movedetails file (default movedetails_5059.md)
 #   --dir D     output directory (default md-phase)
 #   --limit N   positions per agent (default: all)
 #   agent ...   restrict to these agents (default: the house fleet, in cost order)
@@ -18,7 +18,7 @@
 file=movedetails_5059.md; dir=md-phase; limit=
 while :; do
   case $1 in
-    --file)  file=$2; shift 2;;
+    --md)    file=$2; shift 2;;
     --dir)   dir=$2; shift 2;;
     --limit) limit="--limit $2"; shift 2;;
     *) break;;
@@ -52,6 +52,6 @@ for a in $agents; do
   f=$dir/$a.txt
   if grep -q '^SUMMARY' $f 2>/dev/null; then echo "skip $a (done)"; continue; fi
   echo "$(date +%H:%M) $a"
-  node evalmovedetails.js --file $file --agent $a $limit --show-phases --verbose > $f 2>&1
+  node evalmovedetails.js --md $file --agent $a $limit --show-phases --verbose > $f 2>&1
   grep '^SUMMARY' $f
 done

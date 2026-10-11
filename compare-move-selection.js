@@ -4,7 +4,7 @@
 // compare-move-selection.js — compare the move selection of two agents, scored
 // against an oracle.  Two position/oracle sources:
 //
-//   --file <movedetails>  fixed, pre-rated positions (createmovedetails.js):
+//   --md <movedetails>    fixed, pre-rated positions (createmovedetails.js):
 //                         each chosen move is charged the win-prob gap to the
 //                         file's top-rated candidate.  Controlled, reproducible.
 //   --referee <agent>     LIVE: play games where each move is taken from a
@@ -18,7 +18,7 @@
 //   Δ = mean over decisions of [ value(p2's move) - value(p1's move) ]
 // (the oracle's "best" cancels in the difference).  Positive => p1 gives up
 // more, i.e. p2 is the better mover by that margin.  Same-move decisions are
-// exact zeros: kept as-is in --file mode; in --referee mode the referee is
+// exact zeros: kept as-is in --md mode; in --referee mode the referee is
 // skipped for them (they're still counted for the agreement rate).  The se
 // column is Δ's standard error over decisions.
 //
@@ -33,9 +33,9 @@
 //
 // Usage:
 //   node compare-move-selection.js --p1 <name> --p2 <name>
-//        (--file <path> | --referee <name>) [--budget MS] [--min-phase F]
+//        (--md <path> | --referee <name>) [--budget MS] [--min-phase F]
 //        [--max-phase F] [--limit N] [--seed N]
-//        (--file only:) [--oversample N]
+//        (--md only:) [--oversample N]
 //        (--referee only:) [--size N] [--rand-moves N] [--sample F]
 
 const fs   = require('fs');
@@ -47,11 +47,11 @@ const Util = require('./util.js');
 const MD   = require('./movedetails-format.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['p1', 'p2', 'file', 'referee', 'budget', 'referee-budget', 'limit', 'oversample', 'seed',
+  ['p1', 'p2', 'md', 'referee', 'budget', 'referee-budget', 'limit', 'oversample', 'seed',
    'min-phase', 'max-phase', 'size', 'rand-moves', 'sample']);
 
-if (opts.help || !opts.p1 || !opts.p2 || (!opts.file && !opts.referee)) {
-  console.error(`Usage: node compare-move-selection.js --p1 <name> --p2 <name> (--file <path> | --referee <name>) [options]
+if (opts.help || !opts.p1 || !opts.p2 || (!opts['md'] && !opts.referee)) {
+  console.error(`Usage: node compare-move-selection.js --p1 <name> --p2 <name> (--md <path> | --referee <name>) [options]
 
 Compare two agents' move selection, scored against an oracle.  Headline is the
 paired mean win-prob difference Δ(p2-p1): positive => p2 (the challenger) is the
@@ -61,8 +61,8 @@ are interleaved per decision (shared load).
 
   --p1 NAME         ai/<name>.js for slot 1 (needs getMove()); P1_* env config
   --p2 NAME         ai/<name>.js for slot 2; P2_* env config
-  --file PATH       fixed pre-rated positions (createmovedetails.js).  One of
-                    --file / --referee is required (mutually exclusive)
+  --md PATH         fixed pre-rated positions (createmovedetails.js).  One of
+                    --md / --referee is required (mutually exclusive)
   --referee NAME    LIVE mode: generate positions by mixed p1/p2 play (each
                     move from a random agent) and score each move by this
                     referee's valueB() (P(BLACK wins)).  Slot 'R' config (PR_*)
@@ -71,10 +71,10 @@ are interleaved per decision (shared load).
                     --budget, so the oracle out-searches the agents)
   --min-phase F     restrict to board fullness >= F (default 0)
   --max-phase F     restrict to board fullness <= F (default 1)
-  --limit N         --file: first N positions; --referee: stop after N labelled
+  --limit N         --md: first N positions; --referee: stop after N labelled
                     (disagreeing) decisions (default: all / run until killed)
   --seed N          starting rng seed (default: random, logged at startup)
-  --oversample N    (--file only) evaluate each position N times (default 1)
+  --oversample N    (--md only) evaluate each position N times (default 1)
   --size N          (--referee only) board size for generated games (default 13)
   --rand-moves N    (--referee only) random opening moves per game (default 4)
   --sample F        (--referee only) fraction of decisions sampled (default 1 = all)
@@ -84,9 +84,9 @@ are interleaved per decision (shared load).
 
 const p1Name   = opts.p1;
 const p2Name   = opts.p2;
-const FILE_MODE = !!opts.file;
+const FILE_MODE = !!opts['md'];
 const REF_MODE  = !!opts.referee;
-if (FILE_MODE && REF_MODE) { console.error('--file and --referee are mutually exclusive'); process.exit(1); }
+if (FILE_MODE && REF_MODE) { console.error('--md and --referee are mutually exclusive'); process.exit(1); }
 
 const budgetMs = opts.budget !== undefined ? parseInt(opts.budget, 10) : 1000;
 const limit    = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
@@ -107,7 +107,7 @@ if (FILE_MODE && (opts.size !== undefined || opts['rand-moves'] !== undefined ||
   console.error('--size/--rand-moves/--sample/--referee-budget apply only with --referee'); process.exit(1);
 }
 if (REF_MODE && opts.oversample !== undefined) {
-  console.error('--oversample applies only with --file'); process.exit(1);
+  console.error('--oversample applies only with --md'); process.exit(1);
 }
 const bandActive = minPhase > 0 || maxPhase < 1;
 
@@ -140,7 +140,7 @@ const sgn = v => (v >= 0 ? '+' : '-') + r4(Math.abs(v));
 // sum of squares (agreeing decisions are zeros).
 const seOf = (sum, sumSq, n) => n > 1 ? Math.sqrt(Math.max(0, sumSq - sum * sum / n) / (n - 1) / n) : NaN;
 const seCell = (sum, sumSq, n) => { const se = seOf(sum, sumSq, n); return Number.isFinite(se) ? r4(se) : '-'; };
-// --file with --oversample: a position's repeats are correlated, so the SE of
+// --md with --oversample: a position's repeats are correlated, so the SE of
 // the mean over decisions is clustered by position — per position i, S_i (sum
 // of its differences) and n_i (its decisions):
 //   Var(mean) = C/(C-1) · Σ_i (S_i − n_i·mean)² / N²   (C positions, N decisions)
@@ -158,7 +158,7 @@ function clusterSeCell(posS, posN) {
 if (FILE_MODE) runFileMode();
 else           runRefereeMode();
 
-// ── --file: fixed pre-rated positions ──────────────────────────────────────────
+// ── --md: fixed pre-rated positions ──────────────────────────────────────────
 function runFileMode() {
   const oversample = opts.oversample !== undefined ? parseInt(opts.oversample, 10) : 1;
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
@@ -168,12 +168,12 @@ function runFileMode() {
   const loadPositions = fp => fs.readFileSync(fp, 'utf8').split('\n').map(MD.parseRow).filter(Boolean);
   const positionPhase = position => position.phase;
 
-  const pool = loadPositions(opts.file);
+  const pool = loadPositions(opts['md']);
   const positions = (bandActive
     ? pool.filter(p => { const ph = positionPhase(p); return ph >= minPhase && ph <= maxPhase; })
     : pool).slice(0, limit);
   if (positions.length === 0) {
-    console.error(`no positions${bandActive ? ` in band [${minPhase}, ${maxPhase}]` : ''} in ${opts.file}`); process.exit(1);
+    console.error(`no positions${bandActive ? ` in band [${minPhase}, ${maxPhase}]` : ''} in ${opts['md']}`); process.exit(1);
   }
 
   // One agent's chosen move + its win-prob gap to the file's top-rated move.

@@ -21,19 +21,19 @@
 //
 // The saved map records the MD file it was fitted on (path and an order-free
 // fingerprint of its positions); evalmovedetails shows Elo only on that file,
-// unfiltered.  The file comes from the outputs' file= header, or --md-file for
+// unfiltered.  The file comes from the outputs' file= header, or --md for
 // outputs that predate it.
 //
-// Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md-file F]
+// Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md F]
 
 const fs   = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'save', 'md-file']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['dir', 'save', 'md']);
 if (opts.help) {
-  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md-file F]
+  console.log(`Usage: node md-phase-fit.js [--dir md-phase] [--save PATH] [--md F]
 
 Fit elo = a - sum_b w_b * mae_b, with the band weights on one log-linear
 curve w_b = A * exp(k * phase_b), over the agents whose
@@ -42,7 +42,7 @@ share one per-band position count (same positions for every agent).
   --dir    directory of md-phase-sweep.sh outputs (default md-phase)
   --save   write the fitted mapping as JSON, for evalmovedetails --elo-map;
            it records the MD file the outputs were measured on
-  --md-file  that MD file, for outputs whose header has no file= (older runs)`);
+  --md       that MD file, for outputs whose header has no file= (older runs)`);
   process.exit(0);
 }
 const dir  = opts.dir || 'md-phase';
@@ -152,14 +152,14 @@ for (let j = 0; j < kinds.length; j++)
   if (bestKs[j] <= K_LO || bestKs[j] >= K_HI) console.log(`  note: ${kinds[j]} k is at the grid bound [${K_LO}, ${K_HI}]`);
 
 if (opts.save) {
-  // The MD file: every output that names one must name the same; --md-file
+  // The MD file: every output that names one must name the same; --md
   // supplies it for outputs that predate the header field.
   const named = [...new Set(agents.map(a => a.file).filter(Boolean))];
   if (named.length > 1) { console.error(`outputs name different MD files: ${named.join(', ')}; not one sweep`); process.exit(1); }
-  const mdFile = opts['md-file'] || named[0];
-  if (!mdFile) { console.error('--save: the outputs name no MD file (file= header); pass --md-file'); process.exit(1); }
-  if (named.length && opts['md-file'] && path.resolve(named[0]) !== path.resolve(opts['md-file'])) {
-    console.error(`--md-file ${opts['md-file']} differs from the outputs' ${named[0]}`); process.exit(1);
+  const mdFile = opts['md'] || named[0];
+  if (!mdFile) { console.error('--save: the outputs name no MD file (file= header); pass --md'); process.exit(1); }
+  if (named.length && opts['md'] && path.resolve(named[0]) !== path.resolve(opts['md'])) {
+    console.error(`--md ${opts['md']} differs from the outputs' ${named[0]}`); process.exit(1);
   }
   const { loadPositions, mdFingerprint } = require('./evalmovedetails.js');
   const nPos = loadPositions(mdFile).length;

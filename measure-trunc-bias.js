@@ -38,12 +38,12 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'null'],
-  ['file', 'games', 'vpat', 'ppat', 'ppat-min-phase', 'delta', 'ref-playouts', 'limit',
+  ['evals', 'games', 'vpat', 'ppat', 'ppat-min-phase', 'delta', 'ref-playouts', 'limit',
    'min-phase', 'max-phase', 'null-playouts', 'seed', 'emit']);
 
-if (opts.help || (!opts.file && !opts.games) || (opts.file && opts.games) ||
+if (opts.help || (!opts['evals'] && !opts.games) || (opts['evals'] && opts.games) ||
     (!opts.vpat && !opts.null && !opts.emit)) {
-  console.log(`Usage: node measure-trunc-bias.js (--file <evals> | --games <games>) --vpat <model.js> [options]
+  console.log(`Usage: node measure-trunc-bias.js (--evals <evals> | --games <games>) --vpat <model.js> [options]
 
 Measures the truncation bias floor E[b^2] (and the prefix-noise variance
 sigma_eps^2) of a vpat evaluator by paired truncated returns against split
@@ -51,9 +51,9 @@ full-playout references, per TRUNC_PHASE_DELTA value.  See the header for
 the estimator; the phase band should cover the PLAYOUT-START positions of the config
 under study (start < B - delta) (e.g. [0, B - delta]).
 
-  --file PATH        eval-format positions file, either format (labels are
+  --evals PATH       eval-format positions file, either format (labels are
                      ignored — only the positions matter)
-  --games PATH       gen-games file ("<size> <moves>") instead of --file:
+  --games PATH       gen-games file ("<size> <moves>") instead of --evals:
                      one playout-start position is reservoir-sampled per
                      game from the plies inside the band, so any band is
                      reachable from one unlabeled corpus
@@ -181,7 +181,7 @@ function prefixMoves(g0, need, state) {
 // from a games file.  Both yield { size, moves } replayed below; games are
 // streamed lazily (files can be GB and only --limit positions are needed).
 function* positionSource() {
-  if (opts.file) { yield* loadPositions(opts.file); return; }
+  if (opts['evals']) { yield* loadPositions(opts['evals']); return; }
   const fd = fs.openSync(opts.games, 'r');
   const buf = Buffer.alloc(1 << 22);
   let rem = '';
@@ -216,7 +216,7 @@ function* positionSource() {
   }
   fs.closeSync(fd);
 }
-console.log(opts.file ? `positions: from ${opts.file}` : `positions: band-sampled from games in ${opts.games}`);
+console.log(opts['evals'] ? `positions: from ${opts['evals']}` : `positions: band-sampled from games in ${opts.games}`);
 
 // Per-delta accumulators.
 const acc = DELTAS.map(() => ({ n: 0, prod: 0, dsq: 0, bias: 0 }));
@@ -232,7 +232,7 @@ if (EMIT_PATH) {
   emitFd = fs.openSync(EMIT_PATH, 'w');
   fs.writeSync(emitFd, `# bias-pairs: delta: ${DELTAS[0]} ref-playouts: ${REF_K} ` +
     `ppat: ${opts.ppat || 'default-233162'} ppat-min-phase: ${ppatModel.ppatMinPhase} ` +
-    `seed: ${SEED} source: ${opts.file || opts.games} start-band: [${MIN_PH}, ${MAX_PH}] ` +
+    `seed: ${SEED} source: ${opts['evals'] || opts.games} start-band: [${MIN_PH}, ${MAX_PH}] ` +
     `date: ${new Date().toISOString().slice(0, 10)}\n`);
   fs.writeSync(emitFd, `# format: size endpointPhase startMoves movesToE1 movesToE2 pa pb\n`);
 }

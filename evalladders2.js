@@ -12,7 +12,7 @@
 // A result line (the problem line plus " result=... played=...", written by
 // --verbose) is ignored, so verbose output loads as a case file.
 //
-// Usage: node evalladders2.js --file cases.txt [--agent npat] [--budget 1] [--oversample 1]
+// Usage: node evalladders2.js --ladders cases.txt [--agent npat] [--budget 1] [--oversample 1]
 
 const fs = require('fs');
 const path = require('path');
@@ -78,15 +78,15 @@ module.exports = { loadCases, evalCases };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'file', 'limit', 'oversample', 'verbose']);
-  if (opts.help || !opts.file) {
-    console.log(`Usage: node evalladders2.js --file <cases.txt> [options]
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose'], ['agent', 'budget', 'ladders', 'limit', 'oversample', 'verbose']);
+  if (opts.help || !opts['ladders']) {
+    console.log(`Usage: node evalladders2.js --ladders <cases.txt> [options]
 
 Runs a ladder case file against an AI agent and reports, per case, how often
 the agent played one of the required moves.  Unlike evalladders.js the cases
 come from a file rather than being hardcoded.
 
-  --file FILE       case file to run                            (required)
+  --ladders FILE    case file to run                            (required)
   --agent NAME      ai/<name>.js to evaluate                    (default random)
   --budget MS       time budget per move, milliseconds          (default 1)
   --limit N         run only the first N cases                  (default: all)
@@ -112,9 +112,9 @@ print: loadCases(file) then evalCases(cases, getMove, { budgetMs, oversample })`
 const agent = (typeof _agentMod.create === 'function'
     ? _agentMod.create(Util.makeCfg(null)) : _agentMod).getMove;
 
-  const all   = loadCases(opts.file);
+  const all   = loadCases(opts['ladders']);
   const cases = all.slice(0, limit);
-  console.log(`file: ${opts.file}  cases: ${cases.length}${cases.length < all.length ? `/${all.length}` : ''}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
+  console.log(`file: ${opts['ladders']}  cases: ${cases.length}${cases.length < all.length ? `/${all.length}` : ''}  agent: ${agentName}  budget: ${budgetMs}ms  oversample: ${oversample}\n`);
   const t0 = performance.now();
   const { passed, total, byType } = evalCases(cases, agent, { budgetMs, oversample, verbose });
   for (const [type, a] of byType) {

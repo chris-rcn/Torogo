@@ -27,7 +27,7 @@ const Util = require('./util.js');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladder-file', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['no-add', 'help'], ['smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'komi', 'ladders', 'limit', 'load', 'lr', 'md', 'momentum', 'on-policy', 'save', 'size', 'spec', 'train-size']);
 if (opts.help) {
   console.log(`Usage: node train-hpatterns.js [options]
 
@@ -69,8 +69,8 @@ indefinitely unless --limit is given; the checkpoint is written at every print.
 
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
-  --ladder-file F   evalladders2 suite scored each print (ladr column)
-  --md-file F       evalmovedetails positions scored each print (mdRms column)
+  --ladders F       evalladders2 suite scored each print (ladr column)
+  --md F            evalmovedetails positions scored each print (mdRms column)
   --help            show this message`);
   process.exit(0);
 }
@@ -86,8 +86,8 @@ const LOAD_PATH  = opts.load  || null;
 const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';   // empty disables in-training reference test games
 const EXT_AGENT  = opts.ext  || '';   // off-policy move source: 80% of moves come from this agent
-const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite for the ladr column
-const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions for the mdRms column
+const LADDER_FILE = opts['ladders'] || null;   // evalladders2 suite for the ladr column
+const MD_FILE     = opts['md'] || null;       // evalmovedetails positions for the mdRms column
 const EPSILON    = Math.min(parseFloat(opts.epsilon   || '0.1'),  1);
 const ON_POLICY  = Math.min(parseFloat(opts['on-policy'] || '1'), 1);  // share of non-random moves from own search1ply (vs --ext)
 const LR         = parseFloat(opts.lr               || '0.3');
@@ -540,13 +540,13 @@ function saveEvalW() {
 }
 
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax against
-// --ladder-file at each status print (the `ladr` column).
+// --ladders at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the
-// trainee's 1-ply argmax against --md-file at each status print (the `mdRms`
+// trainee's 1-ply argmax against --md at each status print (the `mdRms`
 // column — RMS win-ratio gap to the top move).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 const mdAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, undefined, saveEvalW()) });
@@ -650,14 +650,14 @@ while (true) {
 
     intervalTrainMs = 0;
 
-    // Ladder suite score (trainee's own 1-ply argmax vs --ladder-file).
+    // Ladder suite score (trainee's own 1-ply argmax vs --ladders).
     let ladrRatio = null;
     if (ladderCases) {
       const { passed, total } = evalCases(ladderCases, ladderAgent, { budgetMs: 1, oversample: 1 });
       ladrRatio = total ? passed / total : 0;
     }
 
-    // Move-quality RMS: one full pass of evalmovedetails over --md-file.
+    // Move-quality RMS: one full pass of evalmovedetails over --md.
     let mdRms = null;
     if (mdPositions) {
       mdRms = evalPositions(mdAgent, mdPositions, 0).rmsErr;
@@ -687,7 +687,7 @@ while (true) {
     // Schedule the next print.  Keep the geometric growth on total elapsed
     // time, but also require the next interval to spend at least as long
     // TRAINING as this test cycle took — otherwise a slow test (e.g. a large
-    // --md-file pass) outruns the geometric target and forces one training
+    // --md pass) outruns the geometric target and forces one training
     // game per print.  tTestMs is measured after the full test, so it captures
     // the ref/ladder/md eval cost the premature schedule used to miss.
     const nowMs = Date.now();

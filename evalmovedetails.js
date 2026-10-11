@@ -11,11 +11,11 @@
 // Status is printed at an exponentially increasing interval (× 1.5 each time).
 //
 // Usage:
-//   node evalmovedetails.js --agent <name> [--file <path>] [--budget <ms>]
+//   node evalmovedetails.js --agent <name> [--md <path>] [--budget <ms>]
 //                           [--limit <n>] [--index <n>] [--oversample <n>] [--verbose]
 //
 //   --agent       ai agent name under ai/                   (required)
-//   --file        positions file from createmovedetails.js  (default out/md-trunc30k-827.md)
+//   --md          positions file from createmovedetails.js  (default out/md-trunc30k-827.md)
 //   --budget      ms per move                               (default: 1000)
 //   --limit       evaluate only the first n positions       (default: all)
 //   --index       evaluate only the position at 0-based index n, with the
@@ -164,17 +164,17 @@ function evalPositionsSample(agent, pool, n, budgetMs) {
 }
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'file', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'elo-map', 'min-phase', 'max-phase', 'verbose']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'verbose', 'show-phases'], ['agent', 'budget', 'md', 'index', 'limit', 'oversample', 'seed', 'show-phases', 'phase-buckets', 'elo-map', 'min-phase', 'max-phase', 'verbose']);
 
   if (opts.help || !opts.agent) {
-    console.log(`Usage: node evalmovedetails.js --agent <name> [--file <path>] [options]
+    console.log(`Usage: node evalmovedetails.js --agent <name> [--md <path>] [options]
 
 Evaluate an agent against pre-computed move details (createmovedetails.js
 output): replay each position, ask the agent for a move, and charge it the
 win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
 
   --agent NAME      ai/<name>.js (required)
-  --file PATH       positions file from createmovedetails.js
+  --md PATH         positions file from createmovedetails.js
                     (default out/md-trunc30k-827.md)
   --budget MS       per-move budget (default 1000)
   --limit N         evaluate only the first N positions (default: all)
@@ -191,7 +191,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
   --elo-map PATH    estimate CGOS Elo from the per-band mae with the mapping
                     md-phase-fit.js --save wrote (its bucket count applies);
                     elo= joins SUMMARY (default out/elo-map-trunc30k-827.json,
-                    fitted on the default --file).  Only for the map's own MD
+                    fitted on the default --md).  Only for the map's own MD
                     file (any row order), unfiltered: with another file,
                     --min/--max-phase, --limit or --index, elo=- and stderr
                     says why
@@ -203,7 +203,7 @@ win-ratio gap to the file's top-rated move.  Reports the mean gap (mae).
 
   const agentName  = opts.agent;
   // The default positions file, shown relative to the cwd as a user would type it.
-  const mdFile     = opts.file || path.relative(process.cwd(), path.join(__dirname, 'out', 'md-trunc30k-827.md'));
+  const mdFile     = opts['md'] || path.relative(process.cwd(), path.join(__dirname, 'out', 'md-trunc30k-827.md'));
   const budgetMs   = parseInt(opts.budget     || '1000', 10);
   const limit      = opts.limit !== undefined ? parseInt(opts.limit, 10) : Infinity;
   const index      = opts.index !== undefined ? parseInt(opts.index, 10) : null;   // 0-based file/array index

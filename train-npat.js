@@ -34,7 +34,7 @@ const Util = require('./util.js');
 
 const opts       = Util.parseArgs(process.argv.slice(2),
   ['help', 'use-p1', 'use-p5', 'use-p8', 'use-p9', 'use-p12', 'use-p13', 'captures'],
-  ['size', 'train-size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'eval', 'eval-agent', 'ladder-file', 'md-file', 'load', 'save']);
+  ['size', 'train-size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'eval', 'eval-agent', 'ladders', 'md', 'load', 'save']);
 const TRAIN_SIZE = parseInt(opts['train-size'] || opts.size || '13', 10);
 const EVAL_SIZE  = parseInt(opts['eval-size']  || opts.size || '13', 10);
 const LR         = parseFloat(opts.lr || '0.02');
@@ -49,8 +49,8 @@ const USE_P12    = !!opts['use-p12'];                          // enable 12-cell
 const USE_P13    = !!opts['use-p13'];                          // enable p1 × p12
 const USE_CAPTURES = !!opts['captures'];                       // size-graded capture buckets (10 weights, sizes 1..10)
 const EVAL_AGENT = opts.eval || opts['eval-agent'] || 'random';
-const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite to score each status print
-const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions for the single-pass mdRms column
+const LADDER_FILE = opts['ladders'] || null;   // evalladders2 suite to score each status print
+const MD_FILE     = opts['md'] || null;       // evalmovedetails positions for the single-pass mdRms column
 const SAVE_PATH  = opts.save || `out/npat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 
@@ -290,8 +290,8 @@ if (opts.help) {
   --captures       enable size-graded capture buckets (10 weights, one per
                    capture size 1..10; size >=10 fires the 10th bucket) (default off)
   --eval-agent S   reference agent in ai/ (default random)
-  --ladder-file P  evalladders2 suite scored each status print (ladr column)
-  --md-file P      evalmovedetails positions scored each status print; RMS gap
+  --ladders P      evalladders2 suite scored each status print (ladr column)
+  --md P           evalmovedetails positions scored each status print; RMS gap
                    of the greedy npat policy to best (mdRms column)
   --load PATH      resume from saved weights
   --save PATH      where to save (default out/npat-<rand>.js)
@@ -319,7 +319,7 @@ console.log(`features: p1=${USE_P1 ? 'ON' : 'off'}  p5=${USE_P5 ? 'ON' : 'off'} 
 console.log(`train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 
-// Ladder test: when --ladder-file is given, score the trainee's greedy npat
+// Ladder test: when --ladders is given, score the trainee's greedy npat
 // policy against the evalladders2 suite at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const _ladderStates = new Map();
@@ -331,7 +331,7 @@ function npatLadderMove(game) {
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the trainee's
-// greedy npat policy against --md-file at each status print (the `mdRms` column).
+// greedy npat policy against --md at each status print (the `mdRms` column).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 console.log();
@@ -418,7 +418,7 @@ while (true) {
       ladrStr = Util.fmtRatio4(total ? passed / total : 0);
     }
 
-    // Move-quality RMS: one full pass of evalmovedetails over --md-file, scoring
+    // Move-quality RMS: one full pass of evalmovedetails over --md, scoring
     // the trainee's greedy npat policy (gap-to-best in win-ratio units).
     let mdRmsStr = null;
     if (mdPositions) {

@@ -4,21 +4,21 @@
 // relied on Game2(N,true)); the new history holds EVERY stone and replays from
 // an empty board, so the centre stone is prepended as an explicit first move.
 //
-// Usage: node convert-movedetails.js --in <old> [--out <new.md>]
+// Usage: node convert-movedetails.js --md <old> [--out <new.md>]
 
 const fs = require('fs');
 const { Game2, parseMove } = require('./game2.js');
 const MD = require('./movedetails-format.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out']);
-if (opts.help || !opts.in) {
-  console.error('Usage: node convert-movedetails.js --in <old> [--out <new.md>]');
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['md', 'out']);
+if (opts.help || !opts['md']) {
+  console.error('Usage: node convert-movedetails.js --md <old> [--out <new.md>]');
   process.exit(opts.help ? 0 : 1);
 }
-const outPath = opts.out || opts.in.replace(/\.[^.]+$/, '') + '.md';
+const outPath = opts.out || opts['md'].replace(/\.[^.]+$/, '') + '.md';
 
-const lines = fs.readFileSync(opts.in, 'utf8').split('\n');
+const lines = fs.readFileSync(opts['md'], 'utf8').split('\n');
 const out = [];
 let n = 0;
 for (const line of lines) {
@@ -37,4 +37,4 @@ for (const line of lines) {
   n++;
 }
 fs.writeFileSync(outPath, out.join('\n') + '\n');
-console.error(`converted ${n} positions: ${opts.in} -> ${outPath}`);
+console.error(`converted ${n} positions: ${opts['md']} -> ${outPath}`);

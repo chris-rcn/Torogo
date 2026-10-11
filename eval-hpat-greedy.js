@@ -13,7 +13,7 @@ const opt = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i
 const N      = parseInt(opt('size', '8'), 10);
 const GAMES  = parseInt(opt('games', '2000'), 10);
 const REF    = opt('ref', 'ref-npat-softmax');
-const DATA   = opt('data', 'out/hpat-s8-spec3.js');
+const DATA   = opt('model', 'out/hpat-s8-spec3.js');
 
 const refGetMove = require('./ai/' + REF + '.js').getMove;
 const raw   = require(require('path').resolve(DATA));

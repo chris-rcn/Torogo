@@ -8,20 +8,20 @@
 // Reports mean and stddev of |ΔV| across all positions.
 //
 // Usage:
-//   node eval-uniform.js --file <datafile> [--N <n>] [--position-limit <n>]
+//   node eval-uniform.js --md <datafile> [--N <n>] [--position-limit <n>]
 
 const fs = require('fs');
 const { Game2, PASS, parseMove } = require('./game2.js');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['file', 'N', 'position-limit']);
-if (opts.help || !opts.file) {
-  console.error('Usage: node eval-uniform.js --file <datafile> [--N <n>] [--position-limit <n>]');
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['md', 'N', 'position-limit']);
+if (opts.help || !opts['md']) {
+  console.error('Usage: node eval-uniform.js --md <datafile> [--N <n>] [--position-limit <n>]');
   process.exit(1);
 }
 
-const dataFile      = opts.file;
+const dataFile      = opts['md'];
 const N             = opts.N             !== undefined ? parseInt(opts.N, 10)            : 50;
 const positionLimit = opts['position-limit'] !== undefined ? parseInt(opts['position-limit'], 10) : Infinity;
 

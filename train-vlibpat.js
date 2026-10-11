@@ -42,7 +42,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-file', 'accuracy-games', 'budget', 'smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladder-file', 'lambda', 'limit', 'load', 'lr', 'md-file', 'momentum', 'on-policy', 'positions-file', 'positions-n', 'save', 'size', 'spec', 'tactics', 'train-size']);
+const opts       = Util.parseArgs(process.argv.slice(2), [], ['accuracy-corpus', 'accuracy-games', 'budget', 'smooth-weights', 'epsilon', 'eval', 'eval-size', 'ext', 'ladders', 'lambda', 'limit', 'load', 'lr', 'md', 'momentum', 'on-policy', 'sample-md', 'positions-n', 'save', 'size', 'spec', 'tactics', 'train-size']);
 const TRAIN_SIZE = parseInt(opts['train-size']  || opts.size || '13',  10);
 const EVAL_SIZE  = parseInt(opts['eval-size']   || opts.size || '13', 10);
 const SAVE_PATH  = opts.save  || `out/vlibpat-${Math.random().toString(36).slice(2, 10)}.js`;
@@ -52,17 +52,17 @@ const EXT_AGENT  = opts.ext   || '';     // off-policy move source: (1-epsilon) 
 const LIMIT_GAMES = opts.limit !== undefined ? parseInt(opts.limit, 10) : 0;
 const EPSILON    = parseFloat(opts.epsilon      || '0.1');
 const ON_POLICY  = parseFloat(opts['on-policy'] || '1');   // share of non-random moves from own search1ply (vs --ext)
-const POSITIONS_FILE  = opts['positions-file']   || null;
+const POSITIONS_FILE  = opts['sample-md']   || null;
 const POSITIONS_N     = parseInt(opts['positions-n'] || '0', 10);
-const MD_FILE         = opts['md-file']          || null;   // evalmovedetails positions for the single-pass mdRms column
-const ACCURACY_FILE   = opts['accuracy-file']    || null;
+const MD_FILE         = opts['md']          || null;   // evalmovedetails positions for the single-pass mdRms column
+const ACCURACY_FILE   = opts['accuracy-corpus']    || null;
 const ACCURACY_GAMES  = parseInt(opts['accuracy-games'] || '100', 10);
 const LR         = parseFloat(opts['lr']       || '0.3');
 const MOMENTUM   = parseFloat(opts['momentum'] || '0.0');
 const EMA_ALPHA  = parseFloat(opts['smooth-weights'] || '0.9');  // Polyak EMA every EMA_PERIOD games; 0 = off
 const BUDGET     = parseFloat(opts['budget']   || '1');
 const LAMBDA     = parseFloat(opts['lambda']   || '0.0');
-const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite for the ladr column
+const LADDER_FILE = opts['ladders'] || null;   // evalladders2 suite for the ladr column
 const EVAL_DITHER = 0.002;
 
 // ── Features ───────────────────────────
@@ -336,7 +336,7 @@ if (POSITIONS_FILE) {
 }
 
 // Move-quality suite (evalmovedetails): a single full pass scoring the trainee's
-// value head against --md-file at each status print (the `mdRms` column).
+// value head against --md at each status print (the `mdRms` column).
 const mdPositions = MD_FILE ? loadPositions(MD_FILE) : null;
 if (mdPositions) console.log(`md positions: ${MD_FILE} (${mdPositions.length} positions)`);
 
@@ -370,7 +370,7 @@ console.log(`Tactics: ${tacticsOpts.tactics}`);
 console.log();
 
 // Ladder suite (evalladders2): score the trainee's own 1-ply argmax (search1ply)
-// against --ladder-file at each status print (the `ladr` column).
+// against --ladders at each status print (the `ladr` column).
 const ladderCases = LADDER_FILE ? loadCases(LADDER_FILE) : null;
 const ladderAgent = gm => ({ move: gm.gameOver ? PASS : search1ply(gm, game3FromGame2(gm)) });
 if (ladderCases) console.log(`ladder suite: ${LADDER_FILE} (${ladderCases.length} cases)`);
@@ -470,7 +470,7 @@ while (true) {
       rmsAvgCell = Util.fmt4(rmsAvg);
     }
     // Ladder suite (evalladders2): the live weights' own 1-ply argmax on the
-    // --ladder-file cases — whether the value can RANK moves at tactical points,
+    // --ladders cases — whether the value can RANK moves at tactical points,
     // not just score positions (the two dissociate).
     let ladrRatio = null;
     if (ladderCases) {
@@ -478,7 +478,7 @@ while (true) {
       ladrRatio = total ? passed / total : 0;
     }
 
-    // Move-quality RMS: one full pass of evalmovedetails over --md-file.
+    // Move-quality RMS: one full pass of evalmovedetails over --md.
     let mdRmsCell = null;
     if (mdPositions) {
       const { rmsErr } = evalPositions(game => ({ move: evalMove(game) }), mdPositions, 0);

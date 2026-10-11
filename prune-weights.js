@@ -6,27 +6,27 @@
 // format, so it loads anywhere the original did (spec/komi/ema metadata carried
 // over).
 //
-// Usage: node prune-weights.js --in <model.js> --out <model.js> --keep F
+// Usage: node prune-weights.js --model <model.js> --save <model.js> --keep F
 
 const path = require('path');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out', 'keep']);
-if (opts.help || !opts.in) {
-  console.error(`Usage: node prune-weights.js --in <model.js> [--out <model.js>] [--keep F]
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'save', 'keep']);
+if (opts.help || !opts['model']) {
+  console.error(`Usage: node prune-weights.js --model <model.js> [--save <model.js>] [--keep F]
 
 Keep the most extreme |weight| fraction of a featurepol or vpatterns checkpoint
 (family auto-detected).  For hpatterns files use filter-hpat-extreme.js.
 
-  --in PATH       checkpoint to prune (required)
-  --out PATH      pruned checkpoint to write (default: <in>-pruned.js,
+  --model PATH    checkpoint to prune (required)
+  --save PATH     pruned checkpoint to write (default: <model>-pruned.js,
                   echoed on start)
   --keep F        keep the most extreme |weight| fraction F, 0 < F < 1 (default 0.5)
   --help          show this message`);
   process.exit(opts.help ? 0 : 1);
 }
-const IN = path.resolve(opts.in);
-const OUT = opts.out || opts.in.replace(/\.js$/, '') + '-pruned.js';
+const IN = path.resolve(opts['model']);
+const OUT = opts['save'] || opts['model'].replace(/\.js$/, '') + '-pruned.js';
 const KEEP = opts.keep !== undefined ? parseFloat(opts.keep) : 0.5;
 if (!(KEEP > 0 && KEEP < 1)) { console.error('--keep must be in (0, 1)'); process.exit(1); }
 

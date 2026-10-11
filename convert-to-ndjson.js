@@ -12,18 +12,18 @@
 // Multiple inputs (comma-separated) are concatenated; board size is read from each file's header,
 // so mixed-size outputs are fine (the trainer reads size per record).
 //
-// Usage:  node convert-to-ndjson.js --in OLD[,OLD...] --out NEW.ndjson
+// Usage:  node convert-to-ndjson.js --point-diffs OLD[,OLD...] --out NEW.ndjson
 
 const fs = require('fs');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out']);
-if (opts.help || !opts.in || !opts.out) {
-  console.log('Usage: node convert-to-ndjson.js --in OLD[,OLD...] --out NEW.ndjson');
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['point-diffs', 'out']);
+if (opts.help || !opts['point-diffs'] || !opts.out) {
+  console.log('Usage: node convert-to-ndjson.js --point-diffs OLD[,OLD...] --out NEW.ndjson');
   process.exit(opts.help ? 0 : 1);
 }
 
-const FILES = opts.in.split(',').map(s => s.trim()).filter(Boolean);
+const FILES = opts['point-diffs'].split(',').map(s => s.trim()).filter(Boolean);
 const q2 = x => Math.round(x * 100) / 100;
 const fd = fs.openSync(opts.out, 'w');
 let total = 0;

@@ -10,7 +10,7 @@
 //   --agent <name>   AI agent in ai/ folder (required)
 //   --size  <n>      Board size (default: 13)
 //   --budget <ms>    Time budget per agent call in ms (required)
-//   --in    <path>   Book file to read from (default: none)
+//   --book  <path>   Book file to read from (default: none)
 //   --out   <path>   Book file to write to (default: book.json)
 //   --help
 //
@@ -38,7 +38,7 @@ const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? ar
 const has  = (flag) => args.includes(flag);
 
 if (has('--help') || has('-h')) {
-  console.log('Usage: node build-book.js --agent <name> [--budget <ms>] [--size <n>] [--in <book.json>] [--out <book.json>]');
+  console.log('Usage: node build-book.js --agent <name> [--budget <ms>] [--size <n>] [--book <book.json>] [--out <book.json>]');
   process.exit(0);
 }
 
@@ -46,14 +46,14 @@ const agentName = get('--agent', null);
 if (!agentName) { console.error('--agent is required'); process.exit(1); }
 const boardSize = parseInt(get('--size', 13), 10);
 const budgetMs  = parseInt(get('--budget', 5000), 10);
-const inFile    = get('--in',  null);
+const inFile    = get('--book',  null);
 const outFile   = get('--out', path.join('out', `book-${Date.now()}.js`));
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 
 const { getMove } = require(path.join(__dirname, 'ai', agentName + '.js'));
 
-// Load existing book from --in if provided.
+// Load existing book from --book if provided.
 let book = new Map();
 book.minEmptyCount = Infinity;
 if (inFile) {

@@ -16,7 +16,7 @@ const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['file', 'max-wr-dev', 'min-wr-dev', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
+  ['evals', 'max-wr-dev', 'min-wr-dev', 'min-phase', 'max-phase', 'value-cap', 'value-buckets', 'seed']);
 if (opts.help) {
   console.log(`Usage: node filter-evals.js [options] > out.txt
 
@@ -33,7 +33,7 @@ unmodified, so a mixed input yields a mixed output.  The phase filters
 read the current format's phase column directly; legacy lines must be
 replayed, which costs far more.
 
-  --file PATH        input file (default: stdin)
+  --evals PATH       input file (default: stdin)
   --max-wr-dev D     keep only |winRatio - 0.5| <= D (drop value extremes;
                      D = 0.5 - f is train_ppat's --no-extreme f)  (default 0.5 = off)
   --min-wr-dev D     keep only |winRatio - 0.5| >= D (drop near-even
@@ -50,7 +50,7 @@ replayed, which costs far more.
   --seed N           RNG seed (subsampling + output shuffle)    (default 1)
 
 Examples:
-  node filter-evals.js --file evals.txt --max-wr-dev 0.49 --value-cap 3 --value-buckets 20 > out.txt
+  node filter-evals.js --evals evals.txt --max-wr-dev 0.49 --value-cap 3 --value-buckets 20 > out.txt
   cat evals.txt | node filter-evals.js --value-cap 2 > out.txt`);
   process.exit(0);
 }
@@ -110,7 +110,7 @@ function processLine(line) {
   kept.push({ line, w });
 }
 
-const fd = opts.file ? fs.openSync(opts.file, 'r') : 0;   // default: stdin
+const fd = opts['evals'] ? fs.openSync(opts['evals'], 'r') : 0;   // default: stdin
 const buf = Buffer.alloc(1 << 22);   // 4MB chunks (whole-file reads overflow
 let rem = '';                        // Node's string cap on multi-GB inputs)
 for (;;) {

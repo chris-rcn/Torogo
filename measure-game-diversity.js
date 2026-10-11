@@ -13,7 +13,7 @@
 // Board size comes from each record; mixed-size corpora work (positions can
 // only collide within a size).
 //
-// Usage: node measure-game-diversity.js (--file <games.txt> | --agent <name>) [options]
+// Usage: node measure-game-diversity.js (--corpus <games.txt> | --agent <name>) [options]
 
 const fs = require('fs');
 const path = require('path');
@@ -21,19 +21,19 @@ const { Game2, parseMove, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help'],
-  ['file', 'agent', 'games', 'size', 'rand-open', 'max-ply']);
-if (opts.help || (!opts.file && !opts.agent) || (opts.file && opts.agent)) {
-  console.error(`Usage: node measure-game-diversity.js --file <games.txt> [options]
+  ['corpus', 'agent', 'games', 'size', 'rand-open', 'max-ply']);
+if (opts.help || (!opts['corpus'] && !opts.agent) || (opts['corpus'] && opts.agent)) {
+  console.error(`Usage: node measure-game-diversity.js --corpus <games.txt> [options]
 
 Duplicate-position rate by ply: for a few ply points up to --max-ply, the
 fraction of games whose board (at that ply) repeats an earlier game's.
 
-  --file PATH       gen-games corpus ("<size> <move1,...>" lines)
+  --corpus PATH     gen-games corpus ("<size> <move1,...>" lines)
   --agent NAME      ai/<name>.js — self-play the games in-process instead of
-                    reading a file (exactly one of --file/--agent; env config
+                    reading a file (exactly one of --corpus/--agent; env config
                     reaches the agent as usual)
   --games N         games: self-play count with --agent (default 200), or
-                    a cap on games read with --file (default: all)
+                    a cap on games read with --corpus (default: all)
   --size N          board size for --agent games (default 13)
   --rand-open N     random opening moves per --agent game (default 0 — the
                     bare-agent diversity measurement; gen-games production
@@ -56,10 +56,10 @@ const PLY_POINTS = (() => {
 })();
 
 let lines;
-if (opts.file) {
-  lines = fs.readFileSync(opts.file, 'utf8').split('\n')
+if (opts['corpus']) {
+  lines = fs.readFileSync(opts['corpus'], 'utf8').split('\n')
     .filter(l => l && l[0] !== '#').slice(0, FILE_CAP);
-  if (lines.length === 0) { console.error('no games in ' + opts.file); process.exit(1); }
+  if (lines.length === 0) { console.error('no games in ' + opts['corpus']); process.exit(1); }
 } else {
   const GAMES = parseInt(opts.games || '200', 10);
   const SIZE = parseInt(opts.size || '13', 10);

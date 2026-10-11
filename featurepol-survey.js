@@ -23,7 +23,7 @@
 //   keys    distinct keys this space emitted over the run
 //
 // Usage:
-//   node featurepol-survey.js --data <featurepol.js> [--games N]   (no --games: run forever)
+//   node featurepol-survey.js --model <featurepol.js> [--games N]  (no --games: run forever)
 //
 //   Reports fire on an EXPONENTIAL cadence: the threshold of scored positions
 //   doubles after each report, plus one final table at the end.
@@ -35,9 +35,9 @@ const { game3FromGame2 } = require('./game3.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['data', 'games']);
-if (opts.help || !opts.data) {
-  console.log(`Usage: node featurepol-survey.js --data <featurepol.js> [options]
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games']);
+if (opts.help || !opts['model']) {
+  console.log(`Usage: node featurepol-survey.js --model <featurepol.js> [options]
 
 Rank a featurepol model's spec spaces by how much each one actually
 influences move SELECTION, to surface the least useful term.  Plays softmax
@@ -54,7 +54,7 @@ Columns, averaged over positions with >1 candidate:
   |dev|   mean abs deviation of that partial logit from its per-position mean
   keys    distinct keys the space emitted over the run
 
-  --data PATH     featurepol model to survey (required)
+  --model PATH    featurepol model to survey (required)
   --games N       self-play games to run (default: run forever); the final
                   table prints when the games are exhausted
   --help          show this message`);
@@ -65,7 +65,7 @@ const MAXGAMES = opts.games !== undefined ? parseInt(opts.games, 10) : Infinity;
 const SEED     = 1;
 const MTEMP    = 1;   // softmax temperature (must be > 0 for KL)
 
-const { weights: model } = FP.loadModel({ name: 'featurepol-survey', path: opts.data });
+const { weights: model } = FP.loadModel({ name: 'featurepol-survey', path: opts['model'] });
 const rng        = makeRng(SEED);
 const modelState = FP.createState(N, model.spec);
 const needLadder = model.spec.needsLadder;
@@ -182,7 +182,7 @@ function report(tag) {
   console.log(`spec: ${rows.map(r => r.str).reverse().join(',')}`);
 }
 
-console.error(`featurepol-survey: model ${model.size}w, ${spaces.length} spaces from ${path.basename(opts.data)}  size=${N} seed=${SEED}`);
+console.error(`featurepol-survey: model ${model.size}w, ${spaces.length} spaces from ${path.basename(opts['model'])}  size=${N} seed=${SEED}`);
 
 let nextReport = 1000;
 for (let g = 0; g < MAXGAMES; g++) {

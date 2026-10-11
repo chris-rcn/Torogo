@@ -21,11 +21,11 @@
 // a deterministic value() should score ~0 RMS.
 //
 // Usage:
-//   node evalagentvalues.js --agent <name> --file <path> [--limit <n>]
+//   node evalagentvalues.js --agent <name> --evals <path> [--limit <n>]
 //                           [--oversample <n>] [--seed <n>] [--show-phases <P>] [--verbose]
 //
 //   --agent        ai agent name under ai/ (must export valueB)   (required)
-//   --file         evals file from gen-agent-evals.js             (required)
+//   --evals        evals file from gen-agent-evals.js             (required)
 //   --limit        score only the first n positions inside the phase window (default: all)
 //   --oversample   score each position this many times            (default: 1)
 //   --seed         starting agent rng seed                        (default: 1)
@@ -96,10 +96,10 @@ function evalPosition(valueB, pos, minPhase = 0, maxPhase = 1) {
 if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2),
     ['help', 'verbose'],
-    ['agent', 'file', 'budget', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase']);
+    ['agent', 'evals', 'budget', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase']);
 
-  if (opts.help || !opts.file || !opts.agent) {
-    console.log(`Usage: node evalagentvalues.js --agent <name> --file <path> [options]
+  if (opts.help || !opts['evals'] || !opts.agent) {
+    console.log(`Usage: node evalagentvalues.js --agent <name> --evals <path> [options]
 
 Score an agent's valueB() against a file of labeled positions: replay each
 record, ask the agent for P(BLACK wins), convert to P(side-to-move wins),
@@ -115,7 +115,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   --agent NAME      ai/<name>.js — must export valueB(game, opts) ->
                     P(BLACK wins), e.g. mc-ppat (PLAYOUTS env), vpatsearch
                     (VPAT_DATA env), puct-ppat-fp (required)
-  --file PATH       labeled positions file (required)
+  --evals PATH      labeled positions file (required)
   --budget MS       per-position time budget, passed to valueB as
                     options.budgetMs (search agents run time-limited unless
                     a fixed PLAYOUTS overrides; mc-ppat plays playouts until
@@ -161,7 +161,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   // keeping each position whose replayed phase lies in [minPhase, maxPhase],
   // until `limit` are kept.  A position that does not replay is kept, so the
   // scoring loop reports it.  Each keeps its file index for the verbose rows.
-  const pool      = loadPositions(opts.file);
+  const pool      = loadPositions(opts['evals']);
   const windowed  = minPhase > 0 || maxPhase < 1;
   const positions = [];
   for (let i = 0; i < pool.length && positions.length < limit; i++) {
@@ -171,10 +171,10 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
     }
     positions.push({ ...pool[i], idx: i });
   }
-  if (positions.length === 0) { console.error(`no positions in ${opts.file}${windowed ? ` inside phase [${minPhase},${maxPhase}]` : ''}`); process.exit(1); }
+  if (positions.length === 0) { console.error(`no positions in ${opts['evals']}${windowed ? ` inside phase [${minPhase},${maxPhase}]` : ''}`); process.exit(1); }
 
   const phaseWindow = (minPhase > 0 || maxPhase < 1) ? `  phase=[${minPhase},${maxPhase}]` : '';
-  console.log(`agent=${agentName}  file=${opts.file}  positions=${positions.length}/${pool.length}${phaseWindow}  oversample=${oversample}`);
+  console.log(`agent=${agentName}  file=${opts['evals']}  positions=${positions.length}/${pool.length}${phaseWindow}  oversample=${oversample}`);
   console.log();
   console.log(['pos'.padStart(6), 'elapsed'.padStart(7), 'valMs'.padStart(6), 'rms'.padStart(6)].join('  '));
 

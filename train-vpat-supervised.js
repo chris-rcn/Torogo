@@ -34,18 +34,18 @@ const Util = require('./util.js');
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
 const opts = Util.parseArgs(process.argv.slice(2), ['no-add', 'help', 'no-cache-features'],
-  ['data', 'test-file', 'test-pos', 'train-pos', 'bias-file', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
-   'ladder-file', 'ladder-min-chain', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md-file', 'save', 'spec', 'delta']);
-if (opts.help || !opts.data) {
-  console.log(`Usage: node train-vpat-supervised.js --data <file> [options]
+  ['evals', 'test-evals', 'test-pos', 'train-pos', 'bias', 'min-phase', 'max-phase', 'smooth-weights', 'eval', 'eval-size',
+   'ladders', 'ladder-min-chain', 'epochs', 'load', 'lr', 'lr-decay', 'max-weights', 'md', 'save', 'spec', 'delta']);
+if (opts.help || !opts['evals']) {
+  console.log(`Usage: node train-vpat-supervised.js --evals <file> [options]
 
 Supervised trainer: fits vpatterns weights to the playout-value labels of a
 gen-agent-evals data file (logistic regression on P(BLACK wins)).  Runs
 indefinitely unless --epochs is given; the checkpoint is written at every
 print, and each new best teMSE also writes the -best checkpoint.
 
-  --data FILE       gen-agent-evals data file (required)
-  --bias-file F     bias test set (measure-trunc-bias --emit): per print,
+  --evals FILE      gen-agent-evals data file (required)
+  --bias F          bias test set (measure-trunc-bias --emit): per print,
                     the EMA weights are scored over its cached endpoint
                     pairs, adding b2 and bias columns — the truncation bias
                     floor E[b^2] and its shared lean, the deployment
@@ -56,17 +56,17 @@ print, and each new best teMSE also writes the -best checkpoint.
                     puct-trunc / mc-ppat read it as a default).  The
                     recorded prefixes are truncated to ceil(D*area) moves past
                     the start; the bias file's header delta is only its MAXIMUM,
-                    D must not exceed it.  Required with --bias-file
-  --test-file F     data file supplying the held-out test set (band-filtered);
-                    all of --data is the train pool.  This is the ONLY source of
-                    the test set / teMSE — without --test-file there is none
-  --test-pos N      cap the --test-file test set to N records (default: all);
-                    requires --test-file
+                    D must not exceed it.  Required with --bias
+  --test-evals F    data file supplying the held-out test set (band-filtered);
+                    all of --evals is the train pool.  This is the ONLY source of
+                    the test set / teMSE — without --test-evals there is none
+  --test-pos N      cap the --test-evals test set to N records (default: all);
+                    requires --test-evals
   --train-pos N     cap the training pool to the first N records (default: all)
   --min-phase F     train only on records with phase >= F (default: --delta
                     if given, else 0 — the endpoint phase is never below delta)
   --max-phase F     train only on records with phase <= F (default 1);
-                    the band filters the train pool and the --test-file set
+                    the band filters the train pool and the --test-evals set
   --epochs N        stop after N full passes over the train pool
                     (default 0 = run indefinitely)
 
@@ -103,21 +103,21 @@ print, and each new best teMSE also writes the -best checkpoint.
   --eval AGENT      ai/<name>.js played as the reference in test games
                     (default: none, which disables the test games)
   --eval-size N     evaluation board size (default 13)
-  --ladder-file F   evalladders2 suite scored each print (ladr column)
-  --md-file F       evalmovedetails positions scored each print (mdRms column)
+  --ladders F       evalladders2 suite scored each print (ladr column)
+  --md F            evalmovedetails positions scored each print (mdRms column)
   --help            show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 
-const DATA_PATH  = opts.data;
-const TEST_FILE  = opts['test-file'] || null;
+const DATA_PATH  = opts['evals'];
+const TEST_FILE  = opts['test-evals'] || null;
 const EVAL_SIZE  = parseInt(opts['eval-size'] || '13', 10);
 const SAVE_PATH  = opts.save || `out/vpat-${Math.random().toString(36).slice(2, 10)}.js`;
 const LOAD_PATH  = opts.load || null;
 const NO_ADD     = opts['no-add'] === true;
 const EVAL_AGENT = opts.eval || '';
-const LADDER_FILE = opts['ladder-file'] || null;
-const MD_FILE     = opts['md-file'] || null;
+const LADDER_FILE = opts['ladders'] || null;
+const MD_FILE     = opts['md'] || null;
 let LR           = parseFloat(opts.lr       || '0.2');
 const LR_DECAY   = parseFloat(opts['lr-decay'] || '1');
 // --smooth-weights: train-vpatterns' Polyak rule, counted in positions.
@@ -134,13 +134,13 @@ const emaAlphaAt = n => EMA_AUTO ? Math.max(0, 1 - 4 * EMA_PERIOD / n) : EMA_ALP
 const EMA_LABEL  = EMA_AUTO ? 'auto' : EMA_ALPHA;
 const MAX_WEIGHTS = opts['max-weights'] !== undefined ? parseInt(opts['max-weights'], 10) : 0;
 const EPOCHS     = opts.epochs !== undefined ? parseInt(opts.epochs, 10) : 0;
-// The test set comes only from --test-file; --test-pos caps it (default: all).
+// The test set comes only from --test-evals; --test-pos caps it (default: all).
 const TEST_POS_RAW = opts['test-pos'] !== undefined ? parseInt(opts['test-pos'], 10) : Infinity;
-if (opts['test-pos'] !== undefined && !opts['test-file']) {
-  console.error('--test-pos requires --test-file (the test set comes only from --test-file)');
+if (opts['test-pos'] !== undefined && !opts['test-evals']) {
+  console.error('--test-pos requires --test-evals (the test set comes only from --test-evals)');
   process.exit(1);
 }
-// --train-pos caps the number of training positions used (default: all of --data).
+// --train-pos caps the number of training positions used (default: all of --evals).
 const TRAIN_POS_RAW = opts['train-pos'] !== undefined ? parseInt(opts['train-pos'], 10) : Infinity;
 if (opts['train-pos'] !== undefined && !(TRAIN_POS_RAW >= 1)) {
   console.error(`--train-pos must be a positive integer, got ${opts['train-pos']}`);
@@ -150,15 +150,15 @@ if (opts['train-pos'] !== undefined && !(TRAIN_POS_RAW >= 1)) {
 // into saved checkpoints' 'trunc' block.  The bias artifact is emitted at a
 // MAXIMUM delta (its header); any D up to that is valid — the recorded prefixes
 // are truncated to ceil(D*area) moves past the start, exactly as the deployed
-// agent does.  Required with --bias-file.
+// agent does.  Required with --bias.
 const DELTA = opts.delta !== undefined ? parseFloat(opts.delta) : null;
-if (opts['bias-file'] && DELTA === null) {
-  console.error("--bias-file requires --delta: the deployment delta to measure the bias at " +
+if (opts['bias'] && DELTA === null) {
+  console.error("--bias requires --delta: the deployment delta to measure the bias at " +
                 "(the bias file's header delta is only its maximum)");
   process.exit(1);
 }
-if (DELTA !== null && !opts['bias-file']) {
-  console.error('--delta only applies with --bias-file'); process.exit(1);
+if (DELTA !== null && !opts['bias']) {
+  console.error('--delta only applies with --bias'); process.exit(1);
 }
 if (DELTA !== null && !(DELTA >= 0 && DELTA < 1)) {
   console.error('--delta: expected 0 <= D < 1'); process.exit(1);
@@ -353,7 +353,7 @@ function loadRecords(filePath) {
   return recs;
 }
 
-// All of --data is the train pool; the test set comes only from --test-file.
+// All of --evals is the train pool; the test set comes only from --test-evals.
 const records = loadRecords(DATA_PATH);
 const trainRecs = records.slice(0, TRAIN_POS_RAW);
 const _testAll = TEST_FILE ? loadRecords(TEST_FILE) : null;
@@ -398,7 +398,7 @@ function replayRecord(rec) {
 // ── Bias test set (measure-trunc-bias --emit artifact) ───────────────────────
 // Endpoint features are model-independent given the spec: replay + extract
 // once at load, then each print is just 2n evaluateFeatures passes.
-const BIAS_FILE = opts['bias-file'] || null;
+const BIAS_FILE = opts['bias'] || null;
 let biasPairs = null;
 let biasInfo = null;   // { dropped, secs, ppat, minPhase, source } for the startup banner
 let biasHeaders = [];  // the artifact's '#' lines, for provenance

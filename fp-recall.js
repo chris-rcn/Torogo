@@ -9,7 +9,7 @@
 //   near d      some move rated within d of the best is inside the top K
 //   regret      best rated win ratio minus the best kept move's
 //
-// Usage: node fp-recall.js [--model A.js,B.js,...] [--baseline FILE] [--by-phase] [--md-file out/md-trunc30k]
+// Usage: node fp-recall.js [--model A.js,B.js,...] [--baseline FILE] [--by-phase] [--md out/md-trunc30k]
 //   Each model's recall and mean regret (± SE).  With --baseline, each model's
 //   regret is also paired against the baseline's position by position (± SE).
 // Library: recallStats(weights, mdRows, opts) -> { n, bestKept, near1, near2, meanRegret, regretSE, regrets, byBand }
@@ -81,7 +81,7 @@ module.exports = { recallStats, loadMdRows };
 if (require.main === module) {
   const Util = require('./util.js');
   const path = require('path');
-  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'by-phase'], ['model', 'baseline', 'md-file']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help', 'by-phase'], ['model', 'baseline', 'md']);
   if (opts.help) {
     console.log(`Usage: node fp-recall.js [--model A.js,B.js,...] [--baseline FILE] [options]
 
@@ -92,12 +92,12 @@ win ratio pruning costs (regret), for each model.
   --baseline FILE  pair every model's regret against this model, position by
                    position (± SE); it is reported on its own row too
   --by-phase       add each model's phase-band breakdown
-  --md-file FILE   movedetails positions                 (default out/md-trunc30k)
+  --md FILE        movedetails positions                 (default out/md-trunc30k)
   --help           show this message`);
     process.exit(0);
   }
   const models = (opts.model || 'ref/ref-fp2-data.js').split(',').map(x => x.trim()).filter(Boolean);
-  const mdFile = opts['md-file'] || 'out/md-trunc30k';
+  const mdFile = opts['md'] || 'out/md-trunc30k';
   const rows = loadMdRows(mdFile);
   const run = file => recallStats(FP.loadModel({ path: file }).weights, rows);
   const base = opts.baseline ? { file: opts.baseline, r: run(opts.baseline) } : null;

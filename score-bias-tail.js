@@ -22,7 +22,7 @@
 // bias, i.e. the decomposition of (varB + noise) by error size.
 //
 // Usage:
-//   node score-bias-tail.js --model <vpat.js> --file <bias.txt> [--file ...]
+//   node score-bias-tail.js --model <vpat.js> --bias <bias.txt> [--bias ...]
 //        [--thresholds 0.1,0.2,0.3] [--bin 0.1]
 
 const fs = require('fs');
@@ -30,9 +30,9 @@ const { Game2, PASS } = require('./game2.js');
 const VPat = require('./vpatterns.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'file', 'thresholds', 'bin', 'min-phase', 'max-phase', 'bin-by', 'delta']);
-if (opts.help || !opts.model || !opts.file) {
-  console.error(`Usage: node score-bias-tail.js --model <vpat.js> --file <bias-pairs.txt> [options]
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'bias', 'thresholds', 'bin', 'min-phase', 'max-phase', 'bin-by', 'delta']);
+if (opts.help || !opts.model || !opts['bias']) {
+  console.error(`Usage: node score-bias-tail.js --model <vpat.js> --bias <bias-pairs.txt> [options]
 
 Tail analysis of the truncation bias: per phase bin and pooled, the fraction
 of positions whose offset-corrected bias estimate exceeds each threshold,
@@ -40,7 +40,7 @@ that tail's share of the total squared bias, and the same fractions for the
 noise null (what a bias-free evaluator would show).
 
   --model PATH        vpat model to score (required)
-  --file PATH         bias-pair artifact; repeat to pool several (required)
+  --bias PATH         bias-pair artifact; repeat to pool several (required)
   --thresholds LIST   |b| thresholds (default 0.1,0.2,0.3)
   --bin W             phase bin width (default 0.1)
   --min-phase F / --max-phase F  phase band to include (default all), in the
@@ -85,7 +85,7 @@ if (DELTA !== null && BIN_BY !== 'start') {
   console.error('--delta bins by start (the recorded endpointPhase belongs to the artifact\'s own delta)');
   process.exit(1);
 }
-const files = Array.isArray(opts.file) ? opts.file : [opts.file];
+const files = Array.isArray(opts['bias']) ? opts['bias'] : [opts['bias']];
 
 const model = VPat.loadWeights(opts.model);
 console.log(`model: ${opts.model}`);

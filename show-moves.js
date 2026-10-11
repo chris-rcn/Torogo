@@ -3,9 +3,9 @@
 
 // show-moves.js — replay games and show the agent's chosen move at every Nth position.
 //
-// Usage: node show-moves.js --file <games> --agent <name> [--interval <N>] [--budget <ms>]
+// Usage: node show-moves.js --corpus <games> --agent <name> [--interval <N>] [--budget <ms>]
 //
-//   --file      game records file (required)
+//   --corpus    game records file (required)
 //   --agent     agent name under ai/ (default: rave-bad)
 //   --interval  show move at every Nth position (default: 31)
 //   --budget    ms per move (default: 500)
@@ -17,13 +17,13 @@ const { Game2, PASS, BLACK } = require('./game2.js');
 const args = process.argv.slice(2);
 const get  = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const file      = get('--file', null);
+const file      = get('--corpus', null);
 const agentName = get('--agent', null);
 const interval  = parseInt(get('--interval', '31'), 10);
 const budgetMs  = parseInt(get('--budget', '1'), 10);
 const showPass  = args.includes('--show-pass');
 
-if (!file || !agentName) { process.stderr.write('Usage: node show-moves.js --file <games> --agent <name> [--interval <N>] [--budget <ms>]\n'); process.exit(1); }
+if (!file || !agentName) { process.stderr.write('Usage: node show-moves.js --corpus <games> --agent <name> [--interval <N>] [--budget <ms>]\n'); process.exit(1); }
 
 const { getMove } = require(path.join(__dirname, 'ai', agentName + '.js'));
 

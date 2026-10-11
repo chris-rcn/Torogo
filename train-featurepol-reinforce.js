@@ -21,7 +21,7 @@ const Util = require('./util.js');
 
 const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'save-zeros'],
   ['spec', 'train-size', 'size', 'eval-size', 'lr', 'reward-ema', 'weight-decay', 'temperature', 'entropy-beta', 'ext', 'ext-ratio', 'imitation',
-   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladder-file', 'md-file', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights', 'limit']);
+   'eval', 'eval-agent', 'komi', 'eval-rank-topn', 'rank-pos-ratio', 'sl-train-keep', 'ladders', 'md', 'load', 'ladder-min-chain', 't3-min-chain', 't3-limits', 'max-weights', 'save', 'smooth-weights', 'limit']);
 if (opts.help || (!opts.spec && !opts.load)) {
   console.log(`Usage: node train-featurepol-reinforce.js --spec '<spec>' [options]
   --spec S          feature spec; ',' = independent spaces, '+' = conjunction
@@ -86,8 +86,8 @@ if (opts.help || (!opts.spec && !opts.load)) {
                     fixed pre-controller value, so the winRatio column stays
                     comparable across a run.
   --eval-agent S    reference agent in ai/ for eval games; if omitted, eval is skipped
-  --ladder-file P   evalladders2 suite scored each status print (ladr column)
-  --md-file P       evalmovedetails positions scored each status print; greedy
+  --ladders P       evalladders2 suite scored each status print (ladr column)
+  --md P            evalmovedetails positions scored each status print; greedy
                     move-quality mean gap to best (mdMae column)
   --load PATH       resume from saved weights
   --ladder-min-chain N  smallest chain the ladder terms read: 2 skips single
@@ -160,8 +160,8 @@ function entropyGrad(state, n) {
   return p;
 }
 const EVAL_AGENT  = opts.eval || opts['eval-agent'] || null;   // no default — eval is skipped unless given
-const LADDER_FILE = opts['ladder-file'] || null;   // evalladders2 suite scored each status print (ladr column)
-const MD_FILE     = opts['md-file'] || null;       // evalmovedetails positions scored each status print (mdMae column)
+const LADDER_FILE = opts['ladders'] || null;   // evalladders2 suite scored each status print (ladr column)
+const MD_FILE     = opts['md'] || null;       // evalmovedetails positions scored each status print (mdMae column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
 // --smooth-weights: train-vpatterns' Polyak rule.  'auto' sets the decay at

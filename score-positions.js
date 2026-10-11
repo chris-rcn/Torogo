@@ -13,7 +13,7 @@
 // when optimizing a pattern-based playout policy.
 //
 // Usage:
-//   node score-positions.js --file <games-file> --playouts <n>
+//   node score-positions.js --corpus <games-file> --playouts <n>
 //
 // Input format (one game per line):
 //   <size>,<move>,<move>,...
@@ -31,11 +31,11 @@ const { Game2, PASS, BLACK } = require('./game2.js');
 const args  = process.argv.slice(2);
 const get   = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const file     = get('--file', null);
+const file     = get('--corpus', null);
 const playouts = parseInt(get('--playouts', '0'), 10);
 
 if (!file || playouts <= 0) {
-  process.stderr.write('Usage: node score-positions.js --file <path> --playouts <n>\n');
+  process.stderr.write('Usage: node score-positions.js --corpus <path> --playouts <n>\n');
   process.exit(1);
 }
 

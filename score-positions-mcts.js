@@ -10,7 +10,7 @@
 // territory estimate from the search tree.
 //
 // Usage:
-//   node score-positions-mcts.js --file <games-file> --budget <ms>
+//   node score-positions-mcts.js --corpus <games-file> --budget <ms>
 //
 // Input format (one game per line):
 //   <size>,<move>,<move>,...
@@ -28,11 +28,11 @@ const { getMove } = require('./ai/mcts-terr.js');
 const args   = process.argv.slice(2);
 const get    = (flag, def) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : def; };
 
-const file   = get('--file', null);
+const file   = get('--corpus', null);
 const budget = parseInt(get('--budget', '1'), 10);
 
 if (!file || budget <= 0) {
-  process.stderr.write('Usage: node score-positions-mcts.js --file <path> --budget <ms>\n');
+  process.stderr.write('Usage: node score-positions-mcts.js --corpus <path> --budget <ms>\n');
   process.exit(1);
 }
 

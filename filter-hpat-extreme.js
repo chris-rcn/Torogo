@@ -7,22 +7,22 @@ const path = require('path');
 
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'out', 'keep']);
-if (opts.help || !opts.in || !opts.out) {
-  console.log(`Usage: node filter-hpat-extreme.js --in <model.js> --out <model.js> [--keep F]
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'save', 'keep']);
+if (opts.help || !opts['model'] || !opts['save']) {
+  console.log(`Usage: node filter-hpat-extreme.js --model <model.js> --save <model.js> [--keep F]
 
 Keep only the most extreme |weight| fraction of an hpatterns save file and
 drop the entries closest to zero.  Output is the same int16-quantised format,
 so it loads anywhere the original did (spec, komi, trainMs carried over).
 
-  --in PATH     hpatterns checkpoint to filter (required)
-  --out PATH    filtered checkpoint to write (required)
+  --model PATH  hpatterns checkpoint to filter (required)
+  --save PATH   filtered checkpoint to write (required)
   --keep F      fraction of entries to KEEP, ranked by |weight| (default 0.5)
   --help        show this message`);
   process.exit(opts.help ? 0 : 1);
 }
-const IN   = opts.in;
-const OUT  = opts.out;
+const IN   = opts['model'];
+const OUT  = opts['save'];
 const KEEP = parseFloat(opts.keep || '0.5');   // fraction of entries to KEEP
 
 const raw = require(path.resolve(IN));

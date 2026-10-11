@@ -29,6 +29,20 @@
   many MOVES get ranked within such a position (0 = every candidate). Never
   write a bare "rate", "ratio" or "N" where either could be meant.
 
+## CLI file flags
+
+- **Name a file flag after the KIND of file it takes**, the same in every tool:
+  `--md` (movedetails positions), `--evals` (gen-agent-evals value labels),
+  `--corpus` (gen-games corpus), `--ladders` (evalladders2 suite), `--bias`
+  (bias artifact), `--model` (the model a tool reads, inspects or transforms),
+  `--records` (gen-fp-distill NDJSON).  A second file of the same kind gets a
+  role prefix (`--test-evals`, `--accuracy-corpus`, `--sample-md`); a helper
+  model of a given kind is `--fp-model` / `--vpat-model` / `--ppat-model`.
+- **Outputs:** `--save` for any model (and trainer checkpoints, with `--load`
+  to resume); `--out` for a data file.  Never `--file`, `--data` or `--in`
+  (retired 2026-10-10; util.js's `_RETIRED_FLAGS` points old commands at the
+  new names).  `--games` is a COUNT, never a file.
+
 ## Workflow
 
 - **Never use `pkill`.** To stop a process, kill specific PIDs (e.g. track

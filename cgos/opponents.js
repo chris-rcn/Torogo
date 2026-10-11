@@ -4,13 +4,13 @@
 // ladder: games and win% from the player's perspective, most games first.
 //
 // Usage:
-//   node cgos/opponents.js --p <player> [--top 10] [--size <n>] [--data <dir>]
+//   node cgos/opponents.js --p <player> [--top 10] [--size <n>] [--data-dir <dir>]
 
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const Util = require('../util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['p', 'top', 'size', 'data']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['p', 'top', 'size', 'data-dir']);
 if (opts.help || !opts.p) {
   console.log(`Usage: node cgos/opponents.js --p <player> [options]
 
@@ -22,14 +22,14 @@ including any suffix it joined under).
   --p NAME       ladder player name (required)
   --top N        opponents to list (default 10)
   --size N       board size / ladder to read (default 13)
-  --data DIR     server data directory (default cgos/data/<size>x<size>)
+  --data-dir DIR server data directory (default cgos/data/<size>x<size>)
   --help         show this message`);
   process.exit(opts.help ? 0 : 1);
 }
 const player  = opts.p;
 const top     = opts.getInt('top', 10);
 const size    = opts.getInt('size', 13);
-const dataDir = path.resolve(opts.get('data', path.join(__dirname, 'data', `${size}x${size}`)));
+const dataDir = path.resolve(opts.get('data-dir', path.join(__dirname, 'data', `${size}x${size}`)));
 const db = new DatabaseSync(path.join(dataDir, 'cgos.state'), { readOnly: true });
 db.exec('PRAGMA busy_timeout = 2000');   // wait out server writes instead of SQLITE_BUSY
 

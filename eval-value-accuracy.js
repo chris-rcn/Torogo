@@ -8,10 +8,10 @@
 // V(s) ≥ 0.5 ↔ BLACK wins.
 //
 // Usage:
-//   node eval-value-accuracy.js --file <path> --model <path.js>
+//   node eval-value-accuracy.js --corpus <path> --model <path.js>
 //                               [--games <n>] [--sample <rate>]
 //
-//   --file    path to games file (e.g. games-1000.tmp)
+//   --corpus  path to games file (e.g. games-1000.tmp)
 //   --model   path to weights JS file (as written by saveWeights)
 //   --games   number of games to evaluate (random selection; default: all)
 //   --sample  fraction of positions to evaluate per game (default: 0.1)
@@ -88,10 +88,10 @@ module.exports = { evalValueAccuracy };
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['file', 'games', 'model', 'sample']);
+  const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['corpus', 'games', 'model', 'sample']);
 
-  if (opts.help || !opts.file || !opts.model) {
-    console.error('Usage: node eval-value-accuracy.js --file <path> --model <path.js> [--games <n>] [--sample <rate>]');
+  if (opts.help || !opts['corpus'] || !opts.model) {
+    console.error('Usage: node eval-value-accuracy.js --corpus <path> --model <path.js> [--games <n>] [--sample <rate>]');
     process.exit(opts.help ? 0 : 1);
   }
 
@@ -99,6 +99,6 @@ if (require.main === module) {
   const sampleRate = opts.sample ? parseFloat(opts.sample)   : 0.1;
   const model     = loadWeights(opts.model);
 
-  const { correct, total, accuracy } = evalValueAccuracy(opts.file, model, { nGames, sampleRate });
+  const { correct, total, accuracy } = evalValueAccuracy(opts['corpus'], model, { nGames, sampleRate });
   console.log(`correct=${correct}  total=${total}  accuracy=${(100 * accuracy).toFixed(2)}%`);
 }

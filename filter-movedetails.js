@@ -3,21 +3,21 @@
 
 // filter-movedetails.js — filter a movedetails (ndjson) file by sample.
 //
-// Reads --in, applies filters to each position sample, and writes the surviving
+// Reads --md, applies filters to each position sample, and writes the surviving
 // samples to stdout (original line text, no reserialization).  '#' header/comment
 // lines are passed through unchanged, and a provenance comment recording the
 // filter is appended.  Filter stats go to stderr so stdout stays pure data:
-//   node filter-movedetails.js --in f.ndjson --min-phase 0.3 > out.ndjson
+//   node filter-movedetails.js --md f.ndjson --min-phase 0.3 > out.ndjson
 //
 // Phase = board fullness (1 − emptyCount/area) ∈ [0,1] — the codebase's
 // canonical game phase — computed by replaying each sample's history (captures
 // make this differ from move count).
 //
 // Usage:
-//   node filter-movedetails.js --in <file> [--min-phase F] [--max-phase F]
+//   node filter-movedetails.js --md <file> [--min-phase F] [--max-phase F]
 //                              [--phase-cap K] [--phase-buckets N]
 //
-//   --in             input movedetails file (required)
+//   --md             input movedetails file (required)
 //   --min-phase      keep samples with phase >= F   (default 0)
 //   --max-phase      keep samples with phase <= F   (default 1)
 //   --phase-cap      then keep at most K samples per phase band, chosen evenly
@@ -29,9 +29,9 @@ const fs = require('fs');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['in', 'max-phase', 'min-phase', 'phase-cap', 'phase-buckets']);
-if (opts.help || !opts.in) {
-  console.error(`Usage: node filter-movedetails.js --in <file> [options] > out.ndjson
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['md', 'max-phase', 'min-phase', 'phase-cap', 'phase-buckets']);
+if (opts.help || !opts['md']) {
+  console.error(`Usage: node filter-movedetails.js --md <file> [options] > out.ndjson
 
 Filter a movedetails (ndjson) file by sample: surviving lines go to stdout
 verbatim (no reserialization), '#' header lines pass through, and a
@@ -39,7 +39,7 @@ provenance comment recording the filter is appended.  Stats go to stderr so
 stdout stays pure data.  Phase = board fullness (1 - emptyCount/area),
 computed by replaying each sample's history.
 
-  --in PATH        input movedetails file (required)
+  --md PATH        input movedetails file (required)
   --min-phase F    keep samples with phase >= F (default 0)
   --max-phase F    keep samples with phase <= F (default 1)
   --phase-cap K    then keep at most K samples per phase band, evenly spaced
@@ -58,7 +58,7 @@ const phaseBuckets = opts['phase-buckets'] !== undefined ? parseInt(opts['phase-
 if (isNaN(phaseCap) || phaseCap < 0)       { console.error('--phase-cap must be a non-negative integer'); process.exit(1); }
 if (isNaN(phaseBuckets) || phaseBuckets < 1) { console.error('--phase-buckets must be a positive integer'); process.exit(1); }
 
-const lines = fs.readFileSync(opts.in, 'utf8').split('\n');
+const lines = fs.readFileSync(opts['md'], 'utf8').split('\n');
 const out = [];
 const rows = [];   // { line, phase } surviving the phase filter, in file order
 let total = 0;
@@ -96,6 +96,6 @@ if (phaseCap > 0) {
 for (const r of rows) out.push(r.line);   // emit the original line text unchanged
 const kept = rows.length;
 
-out.push(`# filter-movedetails: in=${opts.in} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}  kept ${kept}/${total}`);
+out.push(`# filter-movedetails: in=${opts['md']} min-phase=${minPhase} max-phase=${maxPhase}${capMsg}  kept ${kept}/${total}`);
 process.stdout.write(out.join('\n') + '\n');
 console.error(`kept ${kept}/${total} samples  (phase in [${minPhase}, ${maxPhase}]${capMsg})`);

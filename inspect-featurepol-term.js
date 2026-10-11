@@ -7,7 +7,7 @@
 // produced the key) and that key's learned logit (the model weight).
 //
 // Usage:
-//   node inspect-featurepol-term.js --data <featurepol.js> --term '<spec term>'
+//   node inspect-featurepol-term.js --model <featurepol.js> --term '<spec term>'
 //        [--size 13] [--games 50] [--max-keys 100] [--seed 1] [--temp 1]
 //
 //   --term   a SINGLE spec space, e.g. 'capture9', 'adjLib4', 'stones8+lib4'
@@ -20,9 +20,9 @@ const { game3FromGame2 } = require('./game3.js');
 const { makeRng } = require('./xorshift.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['data', 'games', 'max-keys', 'seed', 'size', 'temp', 'term']);
-if (opts.help || !opts.data || !opts.term) {
-  console.log("Usage: node inspect-featurepol-term.js --data <featurepol.js> --term '<spec term>' [--size 13] [--games 50] [--max-keys 100] [--seed 1] [--temp 1]");
+const opts = Util.parseArgs(process.argv.slice(2), ['help'], ['model', 'games', 'max-keys', 'seed', 'size', 'temp', 'term']);
+if (opts.help || !opts['model'] || !opts.term) {
+  console.log("Usage: node inspect-featurepol-term.js --model <featurepol.js> --term '<spec term>' [--size 13] [--games 50] [--max-keys 100] [--seed 1] [--temp 1]");
   process.exit(opts.help ? 0 : 1);
 }
 const N        = parseInt(opts.size || '13', 10);
@@ -32,7 +32,7 @@ const SEED     = parseInt(opts.seed || '1', 10);
 const TEMP     = opts.temp !== undefined ? parseFloat(opts.temp) : 1;
 const TERM     = String(opts.term).trim();
 
-const { weights: model } = FP.loadModel({ name: 'inspect', path: opts.data });
+const { weights: model } = FP.loadModel({ name: 'inspect', path: opts['model'] });
 
 const termSpec = FP.parseSpec(TERM);
 if (termSpec.spaces.length !== 1) {
@@ -56,7 +56,7 @@ const seen = new Set();
 const idx2hash = new Map();
 let lastTermSize = 0, shown = 0;
 
-console.error(`inspect: model ${model.size}w from ${path.basename(opts.data)}  term='${TERM}'  size=${N}  temp=${TEMP}  seed=${SEED}`);
+console.error(`inspect: model ${model.size}w from ${path.basename(opts['model'])}  term='${TERM}'  size=${N}  temp=${TEMP}  seed=${SEED}`);
 
 outer:
 for (let g = 0; g < MAXGAMES; g++) {

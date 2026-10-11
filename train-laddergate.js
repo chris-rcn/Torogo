@@ -27,7 +27,7 @@ const { extractFeatures, evaluateFeatures, prepareSpecs, loadWeights, saveWeight
 const { loadCases } = require('./evalladders2.js');
 const Util = require('./util.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-gate'], ['epsilon', 'ext', 'games', 'ladder-file', 'load', 'lr', 'no-gate', 'save', 'size', 'spec', 'subsample', 'tactics']);
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'no-gate'], ['epsilon', 'ext', 'games', 'ladders', 'load', 'lr', 'no-gate', 'save', 'size', 'spec', 'subsample', 'tactics']);
 if (opts.help) {
   console.log('Usage: node train-laddergate.js [--size 11] [--lr 0.3] [--spec 2,3] ' +
               '[--ext ref-npat-softmax] [--games N] [--load model.js] [--save out.js]');
@@ -42,7 +42,7 @@ const GATE      = opts['no-gate'] === undefined;   // --no-gate → plain TD(2) 
 const EPSILON   = parseFloat(opts.epsilon !== undefined ? opts.epsilon : '0.1');   // exploration: random move fraction
 const LOAD_PATH = opts.load || null;
 const SAVE_PATH = opts.save || `out/laddergate-${Math.random().toString(36).slice(2, 10)}.js`;
-const LADDER_FILE = opts['ladder-file'] || 'out/ladders.txt';   // gate suite (evalladders2 format)
+const LADDER_FILE = opts['ladders'] || 'out/ladders.txt';   // gate suite (evalladders2 format)
 const SUBSAMPLE   = parseInt(opts.subsample || '0', 10);        // random cases per type×size cell per gate check
 
 let specs = opts.spec

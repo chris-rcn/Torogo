@@ -62,6 +62,23 @@ const Util = (() => {
   // flag names — when given, parsing is STRICT: any token that isn't a recognised --flag
   // (or its value) fails with a clean stderr message + exit, instead of being silently
   // swallowed (so a typo'd --var or a stray -p2 errors rather than vanishing).
+  // File flags retired 2026-10-10 when input flags were named after the KIND of
+  // file they take (--md, --evals, --corpus, --ladders, --bias, --model, ...);
+  // shown when one is passed to a tool that no longer knows it.
+  const _RETIRED_FLAGS = {
+    'file':           'renamed by file kind: --md, --evals, --corpus, --ladders or --bias — see --help',
+    'in':             'renamed by file kind: --model, --md, --book or --point-diffs — see --help',
+    'data':           'renamed by file kind: --model, --evals, --records or --data-dir — see --help',
+    'out':            'model outputs are now --save — see --help',
+    'md-file':        'renamed to --md',
+    'ladder-file':    'renamed to --ladders',
+    'test-file':      'renamed to --test-evals',
+    'bias-file':      'renamed to --bias',
+    'fp-data':        'renamed to --fp-model',
+    'accuracy-file':  'renamed to --accuracy-corpus',
+    'positions-file': 'renamed to --sample-md',
+  };
+
   function parseArgs(argv, boolFlags, knownFlags) {
     const bools = boolFlags instanceof Set ? boolFlags : new Set(boolFlags || []);
     const known = knownFlags ? (knownFlags instanceof Set ? knownFlags : new Set(knownFlags)) : null;
@@ -79,7 +96,8 @@ const Util = (() => {
       }
       const eq = a.indexOf('=');
       const key = eq !== -1 ? a.slice(2, eq) : a.slice(2);
-      if (known && !known.has(key) && !bools.has(key)) fail(`error: unknown flag "--${key}"`);
+      if (known && !known.has(key) && !bools.has(key))
+        fail(`error: unknown flag "--${key}"` + (_RETIRED_FLAGS[key] ? ` (${_RETIRED_FLAGS[key]})` : ''));
       if (eq !== -1) { opts[key] = a.slice(eq + 1); continue; }
       if (bools.has(key)) { opts[key] = true; continue; }
       opts[key] = argv[++i];

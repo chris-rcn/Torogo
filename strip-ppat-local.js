@@ -18,10 +18,10 @@
 // commented out produces at runtime.
 //
 // Usage:
-//   node strip-ppat-local.js --in <file.js> [--out <file.js>] [--dry-run]
+//   node strip-ppat-local.js --model <file.js> [--save <file.js>] [--dry-run]
 //
-//   --in FILE     ppat weights file to read                        (required)
-//   --out FILE    where to write (default: alongside, "-nolocal.js")
+//   --model FILE  ppat weights file to read                        (required)
+//   --save FILE   where to write (default: alongside, "-nolocal.js")
 //   --dry-run     report what would change; write nothing
 //   --help        show this message
 
@@ -30,22 +30,22 @@ const path = require('path');
 const Util = require('./util.js');
 const PPat = require('./ppat-lib.js');
 
-const opts = Util.parseArgs(process.argv.slice(2), ['help', 'dry-run'], ['in', 'out']);
-if (opts.help || !opts.in) {
-  console.error('Usage: node strip-ppat-local.js --in <file.js> [--out <file.js>] [--dry-run]');
+const opts = Util.parseArgs(process.argv.slice(2), ['help', 'dry-run'], ['model', 'save']);
+if (opts.help || !opts['model']) {
+  console.error('Usage: node strip-ppat-local.js --model <file.js> [--save <file.js>] [--dry-run]');
   process.exit(opts.help ? 0 : 1);
 }
 
-const inPath = path.resolve(opts.in);
+const inPath = path.resolve(opts['model']);
 const raw = require(inPath);
-if (!raw || !raw.weights) { console.error(`${opts.in}: not a ppat weights file`); process.exit(1); }
+if (!raw || !raw.weights) { console.error(`${opts['model']}: not a ppat weights file`); process.exit(1); }
 
 const phases  = raw.phases || 1;
 const adjLib  = raw.adjLib != null ? raw.adjLib : (raw.libCap != null ? raw.libCap : 2);   // legacy field: libCap
 const nPat    = raw.numPatterns != null ? raw.numPatterns : (PPat.totalWeights(phases, adjLib) - phases * 7) / phases;
 const expected = PPat.totalWeights(phases, adjLib);
 if (raw.weights.length !== expected) {
-  console.error(`${opts.in}: weights length ${raw.weights.length} but ${expected} expected ` +
+  console.error(`${opts['model']}: weights length ${raw.weights.length} but ${expected} expected ` +
                 `(phases ${phases}, adjLib ${adjLib}, numPatterns ${nPat}) — refusing to guess the layout`);
   process.exit(1);
 }
@@ -60,7 +60,7 @@ for (let i = localStart; i < w.length; i++) {
   w[i] = 0;
 }
 
-console.log(`${opts.in}: ${w.length} weights = ${phases} phase(s) x ${nPat} patterns + ${phases} x 7 local`);
+console.log(`${opts['model']}: ${w.length} weights = ${phases} phase(s) x ${nPat} patterns + ${phases} x 7 local`);
 console.log(`  local block [${localStart}..${w.length - 1}]: ${nonZero} non-zero, max |w| ${maxAbs.toFixed(4)}`);
 for (let p = 0; p < phases; p++) {
   const vals = Array.from(raw.weights.slice(localStart + p * 7, localStart + p * 7 + 7));
@@ -69,8 +69,8 @@ for (let p = 0; p < phases; p++) {
 
 if (opts['dry-run']) { console.log('  --dry-run: nothing written'); process.exit(0); }
 
-const outPath = opts.out
-  ? path.resolve(opts.out)
+const outPath = opts['save']
+  ? path.resolve(opts['save'])
   : inPath.replace(/(\.js)?$/, '-nolocal.js').replace('.js-nolocal.js', '-nolocal.js');
 const meta = [`phases: ${phases}`, `numPatterns: ${nPat}`, `adjLib: ${adjLib}`];
 const src = [
