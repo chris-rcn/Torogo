@@ -73,7 +73,7 @@ checkpoint is written at every print.
 
   --lr F            step size for the TD update (default 0.1)
   --l1 L            L1 penalty strength: every update owes each weight L·lr
-                    toward zero; at each status print every weight moves
+                    toward zero; every 20 games every weight moves
                     toward zero by what it is owed, stopping at zero, so
                     unhelpful weights become exactly 0 and drop out of the
                     saved model (nz).  Not with frozen specs (default 0 = off)
@@ -340,8 +340,11 @@ function absoluteOutcome(game) {
 }
 
 // --l1: a periodic proximal step.  Each update adds L1 · lr to the pull every
-// weight is owed; at each status print l1Shrink moves every weight toward
-// zero by that amount, stopping at zero, and clears it.  No per-key state.
+// weight is owed; every L1_PERIOD games l1Shrink moves every weight toward
+// zero by that amount, stopping at zero, and clears it.  No per-key state.  A
+// pass over ~280K weights costs ~19 ms, so it runs every L1_PERIOD games, not
+// every game.
+const L1_PERIOD = 20;
 let l1Owed = 0;
 function l1Shrink() {
   if (!(L1 > 0) || l1Owed === 0) return;
@@ -790,6 +793,7 @@ while (true) {
       komiGames = 0; komiBlackWins = 0;
     }
   }
+  if (L1 > 0 && g % L1_PERIOD === 0) l1Shrink();   // before the EMA, which then averages the shrunk weights
   if (EMA_ON && g % EMA_PERIOD === 0) applyEMA(emaAlphaAt(g));
   intervalGames++;
   intervalMoves += moves;
@@ -799,7 +803,6 @@ while (true) {
   if (LIMIT_GAMES > 0 && g >= LIMIT_GAMES) nextPrintAt = 0;
 
   if (Date.now() >= nextPrintAt) {
-    l1Shrink();   // --l1: pay the owed L1 pull before measuring / saving
     const tTestStart = Date.now();
     let latestWR = null, avgWR = null, resultsBatchLen = 0, evalHalf = 0;
     let evalMatchMs = 0, evalSubjMs = 0, evalSubjMoves = 0, evalAccC = 0, evalAccN = 0, evalPredHit = 0, evalPredN = 0;
