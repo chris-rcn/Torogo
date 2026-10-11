@@ -22,7 +22,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { isTrueEye } = _isNode ? require('./game2.js') : window.Game2;
-const { makeIntFloat64Map } = _isNode ? require('./int-map.js') : window.IntMap;
+const { makeWeights } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const { getAllLadderStatuses } = _isNode ? require('./ladder2.js') : window.Ladder2;
 
@@ -44,17 +44,6 @@ function ladderStateByGid(game3) {
     else                       s = info.color === cur ? 2 : 1;
     m.set(info.gid, s);
   }
-  return m;
-}
-
-// Weight tables are open-addressing int32→float64 maps (int-map.js): far
-// cheaper get/set than a V8 Map at large sizes, same get/set/size surface,
-// plus forEach(k, v) and clone().  Key 0 is the empty-slot sentinel; a
-// canonical key of exactly 0 (a ~2^-31 hash coincidence) is silently
-// dropped — the same class of accepted risk as any collision.
-function makeWeights(minCap) {
-  const m = makeIntFloat64Map(minCap || 1024);
-  m.suppressZeroWarning();
   return m;
 }
 
@@ -994,7 +983,6 @@ function modelLiteral(h) {
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 const HealthLib = {
-  makeWeights,
   modelLiteral,
   uh,
   xh4,

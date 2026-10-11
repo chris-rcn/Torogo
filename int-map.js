@@ -16,6 +16,8 @@
 //                               no table to train in: an SGD step below half the
 //                               float32 spacing at the weight (~6e-8 at |w| 0.5)
 //                               is lost.  Build it from a trained table.
+// and makeWeights(minCap), the float64 map with key 0 dropped silently: the
+// pattern weight tables.
 //
 // Classes, not closures: state lives in fields, so V8 inlines get() with
 // plain field loads.  The closure version kept the arrays in mutable context
@@ -251,7 +253,17 @@ function makeIntMap(minCap)        { return new IntIntMap(minCap); }
 function makeIntFloat64Map(minCap) { return new IntFloatMap(minCap); }
 function makeIntFloat32Map(minCap) { return new IntFloat32Map(minCap); }
 
-const IntMap = { makeIntMap, makeIntFloat64Map, makeIntFloat32Map };
+// Pattern weight tables (vpatterns, chain health): an int32→float64 map —
+// far cheaper get/set than a V8 Map at large sizes.  A canonical key of
+// exactly 0 (a ~2^-31 hash coincidence) is silently dropped — the same
+// class of accepted risk as any collision.
+function makeWeights(minCap) {
+  const m = makeIntFloat64Map(minCap || 1024);
+  m.suppressZeroWarning();
+  return m;
+}
+
+const IntMap = { makeIntMap, makeIntFloat64Map, makeIntFloat32Map, makeWeights };
 
 if (typeof module !== 'undefined') {
   module.exports = IntMap;

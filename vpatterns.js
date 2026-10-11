@@ -9,7 +9,7 @@
 const _isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
 const { BLACK, EMPTY, PASS, isTrueEye } = _isNode ? require('./game2.js') : window.Game2;
-const { makeIntFloat64Map, makeIntFloat32Map } = _isNode ? require('./int-map.js') : window.IntMap;
+const { makeIntFloat64Map, makeIntFloat32Map, makeWeights } = _isNode ? require('./int-map.js') : window.IntMap;
 const { game3FromGame2 } = _isNode ? require('./game3.js') : window.Game3;
 const VLibPat = _isNode ? require('./vlibpat.js') : window.VlibPat;
 
@@ -21,7 +21,7 @@ let _warnedLadderRebuild = false;
 // Chain health lives in health-lib.js — see the note at its head for why the
 // ninecell hash and its x-hash primitives went with it.
 const HL = _isNode ? require('./health-lib.js') : window.HealthLib;
-const { makeWeights, uh, xh4, ninecellId,
+const { uh, xh4, ninecellId,
         chainsOf, chainHealthAll, resolveHealthModel } = HL;
 
 
