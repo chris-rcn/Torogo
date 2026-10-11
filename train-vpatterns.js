@@ -31,7 +31,7 @@
 
 const path = require('path');
 const { Game2, BLACK, PASS, setKomi, KOMI } = require('./game2.js');
-const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag, specString, needsGame3 } = require('./vpatterns.js');
+const { evaluateFeatures, extractFeatures, prepareSpecs, deltaZ, loadWeights, saveWeights, makeWeights, specTag, specString, needsGame3, savedWeightCount } = require('./vpatterns.js');
 const { search } = require('./ai/vpatsearch.js');
 const FeaturePol = require('./featurepol-lib.js');
 const { game3FromGame2 } = require('./game3.js');
@@ -717,6 +717,7 @@ console.log([
   'tElp'.padStart(5),
   'tMv '.padStart(5),
   'nWts'.padStart(4),
+  'nz'.padStart(4),
   'avgL'.padStart(4),
   'avgW'.padStart(6),
   'tTran'.padStart(5),
@@ -839,6 +840,7 @@ while (true) {
       Util.fmtMs(elapsedMs),
       Util.fmtMs(tMvMs),
       Util.fmt4i(weights.size),
+      Util.fmt4i(savedWeightCount(saveSource())),   // weights a save writes (non-zero after quantization)
       Util.fmt4(avgLen),
       wAvg.toFixed(4).padStart(6),
       Util.fmtMs(trainMs),

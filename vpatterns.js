@@ -1214,10 +1214,17 @@ function modelFromRaw(raw, health, opts = {}) {
 // Map is capped at 2^24 entries by V8 and parses slowly; this has no cap short
 // of the 512M-character string limit (~50M weights).  c/vpat.c reads both.
 const _LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
-function _encodeWeightsQ6(weights) {
-  if (!_LITTLE_ENDIAN) throw new Error('vpatterns: weightsQ6 encoding assumes a little-endian host');
+// How many weights a save writes: those that do not quantize to zero in the
+// weightsQ6 encoding (micro-units, the rule _encodeWeightsQ6 applies).
+function savedWeightCount(weights) {
   let n = 0;
   weights.forEach((k, v) => { if (Math.round(+v.toFixed(6) * 1e6) !== 0) n++; });
+  return n;
+}
+
+function _encodeWeightsQ6(weights) {
+  if (!_LITTLE_ENDIAN) throw new Error('vpatterns: weightsQ6 encoding assumes a little-endian host');
+  const n = savedWeightCount(weights);
   const keys = new Int32Array(n), q = new Int32Array(n);
   let i = 0;
   weights.forEach((k, v) => {
@@ -1309,6 +1316,7 @@ const Patterns = {
   componentValues,
   evaluate,
   deltaZ,
+  savedWeightCount,
   loadWeights,
   modelFromRaw,
   modelLiteral,
