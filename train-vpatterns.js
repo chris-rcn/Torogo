@@ -44,7 +44,7 @@ const fs = require('fs');
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
-const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'l1-games', 'load', 'weight-limit', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
+const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'l1-games', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
   console.log(`Usage: node train-vpatterns.js [options]
 
@@ -78,9 +78,6 @@ checkpoint is written at every print.
                     unhelpful weights become exactly 0 and drop out of the
                     saved model (nz).  Not with frozen specs (default 0 = off)
   --l1-games N      training games between --l1 shrinks (default 1000)
-  --weight-limit N  stop adding new keys once the table holds N weights (K/M
-                    suffixes allowed); the weights already held keep training.
-                    50M is about the most a save can write (default 50M)
   --smooth-weights A  Polyak EMA decay, applied every 100 games; 0 = off.
                     auto (default): A = 1 - 400/g at game g of this run, a
                     window of ~g/4 games (about one status-row interval)
@@ -187,13 +184,6 @@ const LR         = parseFloat(opts['lr']       || '0.1');
 const L1         = parseFloat(opts.l1 || '0');
 if (!(L1 >= 0)) { console.error(`--l1 must be >= 0 (got '${opts.l1}')`); process.exit(1); }
 const L1_GAMES   = parseInt(opts['l1-games'] || '1000', 10);
-// --weight-limit: a count with an optional K / M suffix.
-const WEIGHT_LIMIT = (() => {
-  const v = opts['weight-limit'] ?? '50M', m = /^(\d+(?:\.\d+)?)([KkMm]?)$/.exec(v);
-  if (!m) { console.error(`--weight-limit expects a count like 50M or 2000000 (got '${v}')`); process.exit(1); }
-  return Math.round(parseFloat(m[1]) * (m[2] === '' ? 1 : /[Kk]/.test(m[2]) ? 1e3 : 1e6));
-})();
-if (!(WEIGHT_LIMIT >= 1)) { console.error(`--weight-limit must be >= 1`); process.exit(1); }
 if (!(L1_GAMES >= 1)) { console.error(`--l1-games must be a positive integer (got '${opts['l1-games']}')`); process.exit(1); }
 // Polyak EMA, applied every EMA_PERIOD games; 0 = off.
 // Window ≈ EMA_PERIOD/(1-alpha) games: --smooth-weights 0.9 ≈ 1k games, 0.99 ≈ 10k.
@@ -394,7 +384,7 @@ function tdUpdate(features, target, lr) {
     if (hasFrozen && FROZEN.has(tags[i])) continue;
     const k = keys[i];
     const cur = weights.get(k);
-    if (cur === undefined && (NO_ADD || weights.size >= WEIGHT_LIMIT)) continue;   // a new key under --no-add or at --weight-limit: skip, don't intern
+    if (NO_ADD && cur === undefined) continue;   // key not in the loaded model: skip, don't intern
     const w = (cur ?? 0) + pols[i] * step;
     weights.set(k, w);
     wAbsSum += Math.abs(w);
@@ -731,7 +721,7 @@ if (LOAD_PATH) {
 if (NO_ADD) console.log(`no-add: key set frozen at ${weights.size} loaded weights (unknown keys skipped, no update)`);
 
 
-console.log(`LR=${LR}${L1 > 0 ? `  l1=${L1}  l1-games=${L1_GAMES}` : ''}  weight-limit=${Util.fmt4i(WEIGHT_LIMIT).trim()}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
+console.log(`LR=${LR}${L1 > 0 ? `  l1=${L1}  l1-games=${L1_GAMES}` : ''}  epsilon=${EPSILON}  ext-ratio=${EXT_RATIO}  smooth-weights=${EMA_AUTO ? 'auto' : EMA_ALPHA}  start-phase=${START_PHASE_UNIFORM ? 'uniform' : START_PHASE}  train-size=${TRAIN_SIZE}  eval-size=${EVAL_SIZE}  ref=${EVAL_AGENT || '(none)'}  ext=${EXT_AGENT || '(none)'}${FP_WIDTH > 0 ? `  fp-filter=top${FP_WIDTH} (${path.basename(FP_DATA)})` : ''}`);
 console.log(`Out: ${SAVE_PATH}${LOAD_PATH ? `  (resumed from ${LOAD_PATH})` : ''}`);
 console.log(`Specs: ${specString(specs)}${FROZEN.size > 0 ? `  frozen: [${specString(specs.filter(sp => FROZEN.has(specTag(sp))))}]` : ''}` +
             (prepSpecs.hasLadder ? `  ladder-min-chain: ${prepSpecs.ladderMinChain}` : ''));
