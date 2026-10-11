@@ -154,9 +154,9 @@ function create(cfg) {
   // substitutes the vpat value at its prefix endpoint) iff the ROOT phase is
   // below this; otherwise every playout runs full.  Deciding once at the root
   // keeps a search self-consistent — no truncated/full mix within one tree, so
-  // no per-leaf gate seam.  Default 0.35 is the champion threshold (its old
-  // gate B 0.55 minus delta 0.20 — the point at which the shallowest possible
-  // endpoint, root + delta, would reach the trusted-evaluator band edge).
+  // no per-leaf gate seam.  Default 0.30 (0.35 until 9e02935: the old gate B
+  // 0.55 minus delta 0.20, where the shallowest possible endpoint, root +
+  // delta, would reach the trusted-evaluator band edge).
   const TRUNC_ROOT_PHASE = cfg.float('TRUNC_ROOT_PHASE', 0.30);
   // Set per decision in runSearch: rootPhase < TRUNC_ROOT_PHASE.
   let _truncActive = false;
