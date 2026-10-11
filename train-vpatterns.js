@@ -354,17 +354,22 @@ function absoluteOutcome(game) {
 
 // --l1: a periodic proximal step.  Each update adds L1 · lr to the pull every
 // weight is owed; every --l1-games training games l1Shrink moves every weight
-// toward zero by that amount, stopping at zero, and clears it.  No per-key
-// state.
+// (raw and smoothed) toward zero by that amount, stopping at zero, and clears
+// it.  No per-key state.
 let l1Owed = 0;
 function l1Shrink() {
   if (!(L1 > 0) || l1Owed === 0) return;
   const t = l1Owed;
   // Setting an existing key only rewrites its value, so it is safe inside forEach.
-  weights.forEach((k, w) => {
-    if (w > 0) weights.set(k, w > t ? w - t : 0);
-    else if (w < 0) weights.set(k, w < -t ? w + t : 0);
+  const shrink = m => m.forEach((k, w) => {
+    if (w > 0) m.set(k, w > t ? w - t : 0);
+    else if (w < 0) m.set(k, w < -t ? w + t : 0);
   });
+  shrink(weights);
+  // The smoothed copy too: it is what gets saved, and without this a weight L1
+  // has zeroed lingers there as a slowly decaying tail (an EMA time constant of
+  // ~30K games late in a run), so nz and the file would overstate the sparsity.
+  if (EMA_ON && weightsEMAInit) shrink(weightsEMA);
   l1Owed = 0;
 }
 
