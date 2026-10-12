@@ -164,7 +164,7 @@ const LADDER_FILE = opts['ladders'] || null;   // evalladders2 suite scored each
 const MD_FILE     = opts['md'] || null;       // evalmovedetails positions scored each status print (mdMae column)
 const SAVE_PATH   = opts.save || `out/featurepol-${Math.random().toString(36).slice(2, 10)}.js`;
 const SAVE_ZEROS  = !!opts['save-zeros'];   // keep zero-quantized keys (see usage)
-// --smooth-weights: train-vpatterns' Polyak rule.  'auto' sets the decay at
+// --smooth-weights: train-vpat-td's Polyak rule.  'auto' sets the decay at
 // game g of this run to 1 - 4*EMA_PERIOD/g (0 below 400 games): a window of
 // ~g/4 games, about one x1.4 status-row interval.
 const EMA_PERIOD = 100;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// train-vpatterns.js — learn pattern weights via TD(0) self-play.
+// train-vpat-td.js — learn pattern weights via TD(0) self-play.
 //
 // Value function (absolute, P(BLACK wins)):
 //   V(s) = σ( Σ  polarity_i · w[key_i] )
@@ -46,7 +46,7 @@ const fs = require('fs');
 
 const opts       = Util.parseArgs(process.argv.slice(2), ['help', 'no-add', 'elo'], ['accuracy-corpus', 'accuracy-games', 'budget', 'epsilon', 'eval', 'eval-size', 'ext', 'fp-width', 'fp-model', 'komi', 'ladders', 'ladder-min-chain', 'limit', 'l1', 'l1-games', 'load', 'lr', 'smooth-weights', 'md', 'ext-ratio', 'save', 'size', 'spec', 'start-phase', 'train-size', 'bootstrap', 'corpus', 'corpus-ratio']);
 if (opts.help) {
-  console.log(`Usage: node train-vpatterns.js [options]
+  console.log(`Usage: node train-vpat-td.js [options]
 
 TD(0) self-play trainer for vpatterns value weights (V(s) = P(BLACK
 wins), 2-ply lookahead).  Runs indefinitely unless --limit is given; the

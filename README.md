@@ -111,7 +111,7 @@ Each model has its own trainer; all print a live progress table.
   `c/train-ppat-parallel <workers> <evals-file> [args]`. Reports `trMSE`,
   `directWR` (vs a fixed reference), and `mdMae` (mc-ppat move-selection regret
   vs a labelled movedetails file).
-- **vpat** — `node train-vpatterns.js --eval <ref> --spec '<spec>' [args]`
+- **vpat** — `node train-vpat-td.js --eval <ref> --spec '<spec>' [args]`
   (TD self-play), or `train-vpat-supervised.js` (from a labelled corpus).
   `--bootstrap <N>` runs N random games first to seed the value table and
   greatly speeds convergence; `--start-phase <f|uniform>` trains a phase band.

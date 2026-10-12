@@ -120,7 +120,7 @@ const LADDER_FILE = opts['ladders'] || null;
 const MD_FILE     = opts['md'] || null;
 let LR           = parseFloat(opts.lr       || '0.2');
 const LR_DECAY   = parseFloat(opts['lr-decay'] || '1');
-// --smooth-weights: train-vpatterns' Polyak rule, counted in positions.
+// --smooth-weights: train-vpat-td's Polyak rule, counted in positions.
 // 'auto' sets the decay at position n of this run to 1 - 4*EMA_PERIOD/n: a
 // window of ~n/4 positions, about one x1.4 status-row interval.
 const EMA_PERIOD = 1000;   // positions between applyEMA folds
@@ -176,7 +176,7 @@ const EVAL_KOMI = KOMI(EVAL_SIZE);
 
 // ── Specs ─────────────────────────────────────────────────────────────────────
 
-// vpatterns spec grammar: "size:maxLibs[f]" (see train-vpatterns).
+// vpatterns spec grammar: "size:maxLibs[f]" (see train-vpat-td).
 let specs;
 const FROZEN = new Set();   // spec tags ((maxLibs << 3) | size) excluded from updates
 // Health model for health-coded specs / the C survival attribute; the library

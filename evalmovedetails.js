@@ -39,7 +39,7 @@ const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 
 // Fixed default seeds so the exported helpers (evalPositions/…, used by
-// train-vpatterns) are reproducible.  The CLI overrides agentSeed with a random
+// train-vpat-td) are reproducible.  The CLI overrides agentSeed with a random
 // base by default (see --seed below).  Each agent invocation gets a fresh rng
 // seeded from a counter: a time-budgeted search then replays the same playout
 // sequence every run, so a wall-clock difference only perturbs the marginal

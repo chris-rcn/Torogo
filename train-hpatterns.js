@@ -422,7 +422,7 @@ function trainGame(N) {
 
     // Move source: EPSILON random; of the (1-epsilon) remainder, ON_POLICY share
     // from own search1ply and the rest from --ext.  Independent draws, so
-    // ON_POLICY acts on the remainder (consistent with train-vpatterns/vlibpat).
+    // ON_POLICY acts on the remainder (consistent with train-vpat-td/vlibpat).
     let move;
     if (Math.random() < EPSILON) {
       move = game.randomLegalMove();

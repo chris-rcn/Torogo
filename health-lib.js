@@ -911,7 +911,7 @@ function resolveHealthModel(pathOrModel) {
   throw new Error('health-lib: health-coded specs (size:H<N>) need a health model, and none ' +
                   'was supplied.  From the trainers, set ' +
                   'HEALTH_DATA to a train-health.js save file (e.g. HEALTH_DATA=out/health-xxxx.js ' +
-                  'node train-vpatterns.js ...); featurepol reads FP_HEALTH_DATA.  In code, pass ' +
+                  'node train-vpat-td.js ...); featurepol reads FP_HEALTH_DATA.  In code, pass ' +
                   'prepareSpecs(specs, { health: <path or model> }) or loadWeights(file, health).');
 }
 
