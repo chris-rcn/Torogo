@@ -2,7 +2,7 @@
 
 // ref-mux-ply8-e2u6-1k — frozen reference: phase-mux with
 // PHASE_MUX_A=ref-ply8, PHASE_MUX_B=ref-puct-ppat-fp-e2-u6-1k and the switch at
-// phase 0.7.  ref-ply8 plays every move below the switch,
+// phase 0.6.  ref-ply8 plays every move below the switch,
 // ref-puct-ppat-fp-e2-u6-1k every move at and above it.  A thin wrapper: both
 // components are themselves frozen references, and the mux rule is copied
 // here rather than loaded from ai/phase-mux.js, so neither can drift.
@@ -10,7 +10,7 @@
 // Frozen once fielded: any strength-affecting change gets a new name.
 // All parameters are hardcoded.  This script reads no environment variables.
 
-const SWITCH_PHASE = 0.7;
+const SWITCH_PHASE = 0.6;
 
 function create() {
   const a = require('./ref-ply8.js').create();
