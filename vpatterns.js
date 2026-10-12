@@ -1215,10 +1215,16 @@ function modelFromRaw(raw, health, opts = {}) {
 // of the 512M-character string limit (~50M weights).  c/vpat.c reads both.
 const _LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 // How many weights a save writes: those that do not quantize to zero in the
-// weightsQ6 encoding (micro-units, the rule _encodeWeightsQ6 applies).
+// weightsQ6 encoding (micro-units, the rule _encodeWeightsQ6 applies).  The
+// rule's toFixed costs ~0.4 us a weight, so it runs only for |v| within
+// [4e-7, 6e-7), around the 5e-7 rounding edge; |v| outside that band is
+// decided by magnitude alone (NaN, outside both comparisons, takes the rule).
 function savedWeightCount(weights) {
   let n = 0;
-  weights.forEach((k, v) => { if (Math.round(+v.toFixed(6) * 1e6) !== 0) n++; });
+  weights.forEach((k, v) => {
+    const a = Math.abs(v);
+    if (a >= 6e-7 || (!(a < 4e-7) && Math.round(+v.toFixed(6) * 1e6) !== 0)) n++;
+  });
   return n;
 }
 
