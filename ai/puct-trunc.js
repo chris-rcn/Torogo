@@ -269,6 +269,12 @@ function create(cfg) {
     // truncating decision substitutes the vpat value at its prefix endpoint,
     // wherever that endpoint's phase lands.
     let truncArmed = _truncActive;
+    // Delta 0: truncate at the leaf itself, zero moves (the in-loop check runs
+    // after a move, so it could not stop short of one).
+    if (truncArmed && truncMoves === 0 && !game2.gameOver) {
+      _lastPlayoutPpat = 0; _lastPlayoutUniform = 0; _lastPlayoutTrunc = true;
+      return vpatValueB(game2);
+    }
 
     const ubp = _model.ppatMinPhase;   // moves below this fullness skip extraction (uniform)
     const moveLimit = 3 * game2.emptyCount + 20;
