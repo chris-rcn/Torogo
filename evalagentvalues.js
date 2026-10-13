@@ -72,6 +72,38 @@ function replayPhase(pos) {
   return game.phase();
 }
 
+// --calibrate: the least-squares fit of target ~ sigmoid(a + b*logit(pred)),
+// by Levenberg-Marquardt from the identity (a 0, b 1).  logit clamps pred to
+// [1e-6, 1-1e-6]: a valueB of exactly 0 or 1 (a finished game) has no logit.
+const sigmoid = z => 1 / (1 + Math.exp(-z));
+const logitOf = p => { const q = Math.min(1 - 1e-6, Math.max(1e-6, p)); return Math.log(q / (1 - q)); };
+function fitLogitAffine(preds, targets) {
+  const x = preds.map(logitOf), n = x.length;
+  const sse = (a, b) => { let s = 0; for (let i = 0; i < n; i++) { const e = sigmoid(a + b * x[i]) - targets[i]; s += e * e; } return s; };
+  let a = 0, b = 1, cur = sse(a, b), lambda = 1e-3;
+  for (let it = 0; it < 200; it++) {
+    let haa = 0, hab = 0, hbb = 0, ga = 0, gb = 0;
+    for (let i = 0; i < n; i++) {
+      const s = sigmoid(a + b * x[i]), r = s - targets[i], d = s * (1 - s);
+      haa += d * d; hab += d * d * x[i]; hbb += d * d * x[i] * x[i];
+      ga += d * r; gb += d * r * x[i];
+    }
+    const m11 = haa * (1 + lambda), m22 = hbb * (1 + lambda), det = m11 * m22 - hab * hab;
+    const da = -(m22 * ga - hab * gb) / det, db = -(m11 * gb - hab * ga) / det;
+    const next = sse(a + da, b + db);
+    if (next < cur) {
+      a += da; b += db;
+      const done = cur - next < 1e-14 * Math.max(1, cur);
+      cur = next; lambda /= 3;
+      if (done) break;
+    } else {
+      lambda *= 3;
+      if (lambda > 1e12) break;
+    }
+  }
+  return { a, b };
+}
+
 // Sentinel: position replayed fine but its phase is outside [minPhase, maxPhase].
 const FILTERED = { filtered: true };
 
@@ -95,7 +127,7 @@ function evalPosition(valueB, pos, minPhase = 0, maxPhase = 1) {
 
 if (require.main === module) {
   const opts = Util.parseArgs(process.argv.slice(2),
-    ['help', 'verbose'],
+    ['help', 'verbose', 'calibrate'],
     ['agent', 'evals', 'budget', 'limit', 'oversample', 'seed', 'show-phases', 'min-phase', 'max-phase']);
 
   if (opts.help || !opts['evals'] || !opts.agent) {
@@ -127,6 +159,9 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
                     default 1)
   --seed N          starting agent rng seed (default 1)
   --show-phases P   append a P-row table of phase-band -> RMS/bias
+  --calibrate       also report the errors after fitting a + b*logit(pred) to the
+                    labels (least squares, in-sample): the agent's value
+                    currency removed
   --verbose         per-position pred/target/err table
   --help            show this message`);
     process.exit(opts.help ? 0 : 1);
@@ -140,6 +175,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   const minPhase   = opts['min-phase'] !== undefined ? parseFloat(opts['min-phase']) : 0;
   const maxPhase   = opts['max-phase'] !== undefined ? parseFloat(opts['max-phase']) : 1;
   const verbose    = !!opts.verbose;
+  const calibrate  = !!opts.calibrate;
 
   if (isNaN(limit) || limit < 1)           { console.error('--limit must be a positive integer'); process.exit(1); }
   if (isNaN(oversample) || oversample < 1) { console.error('--oversample must be a positive integer'); process.exit(1); }
@@ -190,6 +226,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   const startTime = performance.now();
   let printPeriodMs = 1000, lastPrintTime = startTime;
   let sqSum = 0, absSum = 0, errSum = 0, n = 0, skipped = 0;
+  const calPred = [], calTarget = [];   // --calibrate: every scored (pred, target)
 
   function printStats() {
     const elapsedMs = performance.now() - startTime;
@@ -214,6 +251,7 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
         continue;
       }
       sqSum += r.err * r.err; absSum += Math.abs(r.err); errSum += r.err; n++;
+      if (calibrate) { calPred.push(r.pred); calTarget.push(r.target); }
       if (showPhases !== null) { const b = bandOf(r.phase); bandSq[b] += r.err * r.err; bandErr[b] += r.err; bandN[b]++; }
       if (verbose) console.log(
         `${String(positions[i].idx).padStart(6)}  ${String(positions[i].moves.length).padStart(4)}  ` +
@@ -233,6 +271,15 @@ gen_evals one ("<size> <moves> <winRatio> [pass]").
   if (n === 0) { console.error(`\nno positions scored (all filtered/skipped)`); process.exit(1); }
   const mse = sqSum / n, rms = Math.sqrt(mse), mae = absSum / n, bias = errSum / n;
   console.log(`\nscored ${n} evals in ${Util.fmtMs(performance.now() - startTime)}   MSE ${mse.toFixed(5)}   RMS ${rms.toFixed(5)}   MAE ${mae.toFixed(5)}   bias ${(bias >= 0 ? '+' : '') + bias.toFixed(5)}   (win-prob [0,1] units)`);
+  if (calibrate) {
+    const { a, b } = fitLogitAffine(calPred, calTarget);
+    let cSq = 0, cAbs = 0, cErr = 0;
+    for (let i = 0; i < n; i++) {
+      const e = sigmoid(a + b * logitOf(calPred[i])) - calTarget[i];
+      cSq += e * e; cAbs += Math.abs(e); cErr += e;
+    }
+    console.log(`calibrated a: ${a >= 0 ? '+' : ''}${a.toFixed(4)}  b: ${b.toFixed(4)}   MSE ${(cSq / n).toFixed(5)}   RMS ${Math.sqrt(cSq / n).toFixed(5)}   MAE ${(cAbs / n).toFixed(5)}   bias ${(cErr / n >= 0 ? '+' : '') + (cErr / n).toFixed(5)}`);
+  }
 
   if (showPhases !== null) {
     console.log(`\nPhase bands:`);
