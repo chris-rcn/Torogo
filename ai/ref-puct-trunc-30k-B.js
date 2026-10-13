@@ -457,6 +457,15 @@ function create() {
     // Root-decision truncation: this decision truncates iff the root phase is
     // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout.
     _truncActive = (1 - game2.emptyCount / (N * N)) < TRUNC_ROOT_PHASE;
+    // Prefix length in MOVES, fixed for the whole tree at the start of the
+    // search (here, not in getMove, so valueB gets it too).  TRUNC_PHASE_DELTA
+    // is expressed as a fullness delta only so that one number carries across
+    // board sizes; once the size is known the
+    // descent should be a constant number of moves, not a fullness check
+    // repeated after every move.  Under the old rule a capture pushed the
+    // trigger further away and different playouts descended different
+    // distances; now every truncated playout plays exactly this many.
+    _prefixLen = Math.ceil(TRUNC_PHASE_DELTA * N * N);
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
@@ -495,15 +504,6 @@ function create() {
     const N          = game.cells ? game.N : game.boardSize;
     const game2      = game.cells ? game.clone() : game.toGame2();
     const rootPlayer = game2.current;
-
-    // Prefix length in MOVES, fixed for the whole tree at the start of the
-    // turn.  TRUNC_PHASE_DELTA is expressed as a fullness delta only so that
-    // one number carries across board sizes; once the size is known the
-    // descent should be a constant number of moves, not a fullness check
-    // repeated after every move.  Under the old rule a capture pushed the
-    // trigger further away and different playouts descended different
-    // distances; now every truncated playout plays exactly this many.
-    _prefixLen = Math.ceil(TRUNC_PHASE_DELTA * N * N);
 
     if (game2.consecutivePasses > 0 && game2.calcWinner() === rootPlayer) {
       return { type: 'pass', move: PASS, info: 'obvious pass: already winning', rootWinRatio: 1 };
