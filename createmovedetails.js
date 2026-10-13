@@ -17,8 +17,8 @@
 // this run is taken (ties at random), and one of its positions is drawn at
 // random.  Then every legal move
 // is enumerated, the game is cloned, the move is made, then the VALUE
-// agent's getMove is called with the full budget.  The rootWinRatio is flipped to the
-// original player's perspective and recorded as kwr (× 1000).  A FLAT position
+// agent's valueB is called with the full budget.  P(BLACK wins) is converted to
+// the original player's perspective and recorded as kwr (× 1000).  A FLAT position
 // — more than MAX_NEAR_BEST other moves rated within NEAR_BEST_DEV of the best
 // — is discarded and does not count toward its band, so the band keeps
 // being drawn: flat positions barely separate agents of different strength
@@ -49,7 +49,7 @@
 
 const path = require('path');
 const { performance } = require('perf_hooks');
-const { Game2, PASS, coordStr } = require('./game2.js');
+const { Game2, PASS, BLACK, coordStr } = require('./game2.js');
 const Util = require('./util.js');
 const MD = require('./movedetails-format.js');
 const FeaturePol = require('./featurepol-lib.js');
@@ -61,7 +61,7 @@ if (opts.help || !opts['position-agent'] || !opts['value-agent']) {
   console.log(`Usage: node createmovedetails.js --position-agent <name> --value-agent <name> [--budget <ms>] [--size <n>] [--min-phase F] [--max-phase F] [--phase-buckets <n>] > out.md
   --position-agent  ai/<name>.js that plays the self-play games the positions come from (required)
   --value-agent     ai/<name>.js that judges a drawn position's contestedness and labels
-                    every legal move of it; must return rootWinRatio (required)
+                    every legal move of it; must export valueB (required)
   --min-phase F     draw positions only at board fullness >= F (default 0)
   --max-phase F     ... and < F; games stop there (default 0.8)
 A fixed-playout agent ignores --budget; PLAYOUTS in the env applies to both.`);
@@ -89,13 +89,21 @@ if (!(MIN_PHASE >= 0 && MIN_PHASE < MAX_PHASE && MAX_PHASE <= 1)) {
 // console.log, so from here on console.log goes to stderr with the status.
 console.log = console.error;
 // create(cfg)-style agents (phase-mux, the puct family) instantiate with a
-// plain env reader; bare { getMove } modules are used directly.
+// plain env reader; bare modules are used directly.  The position agent plays
+// through getMove; the value agent rates through valueB (P(BLACK wins)).
 function loadAgent(name) {
   const mod = require(path.join(__dirname, 'ai', name + '.js'));
-  return (typeof mod.create === 'function' ? mod.create(Util.makeCfg(null)) : mod).getMove;
+  return typeof mod.create === 'function' ? mod.create(Util.makeCfg(null)) : mod;
 }
-const posAgent = loadAgent(posAgentName);
-const valAgent = posAgentName === valAgentName ? posAgent : loadAgent(valAgentName);
+const posInst = loadAgent(posAgentName);
+const valInst = posAgentName === valAgentName ? posInst : loadAgent(valAgentName);
+const posAgent = posInst.getMove;
+if (typeof valInst.valueB !== 'function') { console.error(`value agent ${valAgentName} does not export valueB`); process.exit(1); }
+// P(the side to move in `game` wins), from the value agent's valueB.
+const valueToMove = game => {
+  const pBlack = valInst.valueB(game, { budgetMs: budget });
+  return game.current === BLACK ? pBlack : 1 - pBlack;
+};
 
 // A position is eligible for analysis only when |win ratio − 0.5| is within
 // this, keeping only contested positions in the dataset.
@@ -229,9 +237,7 @@ while (true) {
   const k = inBand[band][Math.floor(Math.random() * inBand[band].length)];
   const probe = new Game2(boardSize, false);
   for (let j = 0; j < k; j++) probe.play(moves[j]);
-  const v = valAgent(probe, budget);
-  if (v.rootWinRatio === undefined) { console.error('value agent did not return rootWinRatio'); process.exit(1); }
-  if (Math.abs(v.rootWinRatio - 0.5) > WR_DEV) continue;
+  if (Math.abs(valueToMove(probe) - 0.5) > WR_DEV) continue;
   const position = new Game2(boardSize, false);
   for (let i = 0; i < k; i++) position.play(moves[i]);
   const history = moves.slice(0, k).map(m => coordStr(m, N));
@@ -252,12 +258,7 @@ while (true) {
       continue;
     }
 
-    const oppResponseMove = valAgent(clone, budget);
-    if (oppResponseMove.rootWinRatio === undefined) {
-      console.error('value agent did not return rootWinRatio');
-      process.exit(1);
-    }
-    const wr = 1 - oppResponseMove.rootWinRatio;
+    const wr = 1 - valueToMove(clone);   // the opponent is to move in clone
     moveInfos.push({ m: coordStr(move, N), winRatio: wr });
 
     const wk = kwr(wr);
