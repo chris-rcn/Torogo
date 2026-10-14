@@ -13,11 +13,12 @@
 //   const v = pw.playout(seed, minPhase);      // then P(BLACK wins) in {0,1};
 //   pw.trace(); pw.ppatMoves; pw.uniformMoves  // its RAVE trace (a view) and move counts
 //
-// The module's only imports are the five WASI calls its C runtime keeps for
-// fatal-error messages and malloc: fd_write prints (stderr via console.error),
-// proc_exit throws with the message printed before it, and fd_close /
-// fd_seek / random_get are stubs.  Read pw.memory.buffer afresh after any
-// call into the module: a memory growth replaces the ArrayBuffer.
+// Fatal errors in the C code (bad board size, bad adjLib, out of memory) call
+// the env.torogo_fatal import (c/fatal.h), which fills in the message's %d's
+// and throws.  Any WASI calls the C runtime still imports get a minimal shim:
+// fd_write prints (stderr via console.error), proc_exit throws, the rest are
+// stubs.  Read pw.memory.buffer afresh after any call into the module: a
+// memory growth replaces the ArrayBuffer.
 
 (function () {
 
@@ -135,13 +136,28 @@ function wrap(instance, shim) {
   };
 }
 
-function imports(shim) { return { wasi_snapshot_preview1: shim.imports }; }
+// c/fatal.h's hook: fmt is a C string in the module's memory with up to
+// three %d's for a, b, c.
+function fatalImport(getMemory) {
+  return function torogo_fatal(fmtPtr, a, b, c) {
+    const mem = new Uint8Array(getMemory().buffer);
+    let end = fmtPtr;
+    while (mem[end] !== 0) end++;
+    const args = [a, b, c];
+    const msg = new TextDecoder().decode(mem.subarray(fmtPtr, end)).replace(/%d/g, () => String(args.shift())).trim();
+    throw new Error(`ppat-wasm: ${msg}`);
+  };
+}
+
+function imports(shim, getMemory) {
+  return { wasi_snapshot_preview1: shim.imports, env: { torogo_fatal: fatalImport(getMemory) } };
+}
 
 // Synchronous: Node (or a small module where the host allows sync compilation).
 function instantiateSync(bytes) {
   let memory = null;
   const shim = wasiShim(() => memory);
-  const instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), imports(shim));
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), imports(shim, () => memory));
   memory = instance.exports.memory;
   return wrap(instance, shim);
 }
@@ -149,7 +165,7 @@ function instantiateSync(bytes) {
 async function instantiate(bytes) {
   let memory = null;
   const shim = wasiShim(() => memory);
-  const { instance } = await WebAssembly.instantiate(bytes, imports(shim));
+  const { instance } = await WebAssembly.instantiate(bytes, imports(shim, () => memory));
   memory = instance.exports.memory;
   return wrap(instance, shim);
 }

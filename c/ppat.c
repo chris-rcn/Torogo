@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "fatal.h"
 
 /* ── Canon table ───────────────────────────────────────────────────────────── */
 
@@ -64,8 +65,7 @@ static void ppat_build_t12(void) {
         t12_table[raw] = id_of[min_v];
     }
     if (next_id != PPAT_T12_PATTERNS) {
-        fprintf(stderr, "ppat: twelvecell orbits %d != %d\n", next_id, PPAT_T12_PATTERNS);
-        exit(1);
+        FATAL("ppat: twelvecell orbits %d != %d\n", next_id, PPAT_T12_PATTERNS);
     }
 
     /* Mode 2's JOINT table: positions 0-3 are the diagonals (NE, SE, SW, NW),
@@ -100,8 +100,7 @@ static void ppat_build_t12(void) {
             t12b_table[raw] = id_of8[min_v];
         }
         if (next8 != PPAT_T12B_PATTERNS) {
-            fprintf(stderr, "ppat: twelvecell2 orbits %d != %d\n", next8, PPAT_T12B_PATTERNS);
-            exit(1);
+            FATAL("ppat: twelvecell2 orbits %d != %d\n", next8, PPAT_T12B_PATTERNS);
         }
     }
     t12_built = true;
@@ -137,9 +136,7 @@ static int encode8(const int *v, int R) {
 void ppat_init(int adj_lib) {
     ppat_build_t12();                          /* cheap, idempotent, cap-independent */
     if (adj_lib < PPAT_MIN_ADJ_LIB || adj_lib > PPAT_MAX_ADJ_LIB) {
-        fprintf(stderr, "ppat_init: adj_lib %d out of range [%d,%d]\n",
-                adj_lib, PPAT_MIN_ADJ_LIB, PPAT_MAX_ADJ_LIB);
-        exit(1);
+        FATAL("ppat_init: adj_lib %d out of range [%d,%d]\n", adj_lib, PPAT_MIN_ADJ_LIB, PPAT_MAX_ADJ_LIB);
     }
     if (ppat_adj_lib == adj_lib) return;      /* already active */
 
@@ -155,8 +152,7 @@ void ppat_init(int adj_lib) {
     const int raw_size = R * R * R * R * 81;  /* R^4 * 3^4 */
     int16_t *table = malloc((size_t)raw_size * sizeof(int16_t));
     if (!table) {
-        fprintf(stderr, "ppat_init: out of memory for adjLib %d (%d entries)\n", adj_lib, raw_size);
-        exit(1);
+        FATAL("ppat_init: out of memory for adjLib %d (%d entries)\n", adj_lib, raw_size);
     }
 
     /* Map: minVariant → assigned dense ID.  Static (not stack): at cap 3 this is

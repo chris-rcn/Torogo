@@ -4,6 +4,7 @@
 #include "game2.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include "fatal.h"
 #include <stddef.h>
 
 /* RNG is now an explicit Rng passed by callers (see game2.h) — no global state. */
@@ -15,8 +16,7 @@ int32_t g2_dnbr[MAX_CAP * 4];
 
 void g2_init_topology(int N) {
     if (N > MAX_BOARD_SIZE) {
-        fprintf(stderr, "g2_init_topology: N=%d exceeds MAX_BOARD_SIZE=%d\n", N, MAX_BOARD_SIZE);
-        exit(1);
+        FATAL("g2_init_topology: N=%d exceeds MAX_BOARD_SIZE=%d\n", N, MAX_BOARD_SIZE);
     }
     for (int y = 0; y < N; y++) {
         for (int x = 0; x < N; x++) {
