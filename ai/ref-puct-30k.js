@@ -4,7 +4,8 @@
 // (2026-10-14) at a fixed 30000 playouts per move (any time budget is
 // ignored), with puct-ppat-fp's defaults of that date hardcoded: C_PUCT 0.5,
 // RAVE_K 400, TOP_K 10 -> 40 by phase, N_EXPAND 2, uniform playout moves below
-// fullness 0.6, ppat = ref/ref-puct-30k-ppat.js (copy of ppat-data.js),
+// fullness 0.55, incremental ppat, ppat = ref/ref-puct-30k-ppat.js (copy of
+// out/ppat-data-1623136.js, puct-trunc's playout model),
 // featurepol = ref/ref-puct-30k-fp.js (copy of ref/ref-fp-fast.js).  No
 // truncation: every playout runs to the end, so its values share one currency
 // at every phase (the MD oracle role).  Reads no environment variables.
@@ -45,7 +46,7 @@ const { makeRng }            = Util.load('./xorshift.js', 'XorShift');
 const FeaturePol            = Util.load('./featurepol-lib.js', 'FeaturePol');
 const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
-const { createState, ppatMove, loadWeights } = _ppat;
+const { loadWeights, createIncremental, incrementalReset, incrementalPlay, ppatMoveIncremental } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
   ? window.performance : require('perf_hooks').performance;
@@ -88,7 +89,7 @@ function create() {
   const PLAYOUTS   = 30000;
 
   // ppat playout policy weights: the frozen ref/ref-puct-30k-ppat.js (a copy of
-  // the root ppat-data.js); window.PPATWeights in the browser.  Hard failure, not a fallback: this agent's strength IS its
+  // out/ppat-data-1623136.js); window.PPATWeights in the browser.  Hard failure, not a fallback: this agent's strength IS its
   // ppat playouts, so silently running uniform (e.g. a relative PPAT_DATA that
   // misses under a different cwd) fields a wrong engine under the right name.
   const _ppatPath = _isNode
@@ -108,7 +109,7 @@ function create() {
   // Use uniform-random playout moves while board fullness < this fraction [0,1]
   // (0 = off).  Skips ppat feature extraction in the early game, where the
   // policy is ≈ uniform.
-  _model.ppatMinPhase = 0.6;
+  _model.ppatMinPhase = 0.55;
 
   // featurepol policy model (priors + top-K pruning): the frozen
   // ref/ref-puct-30k-fp.js (browser: window.featurepolModel).
@@ -122,10 +123,11 @@ function create() {
   if (fpWeights.spec.rankSpaces && fpWeights.spec.rankSpaces.length > 0) fpWeights.rankTopN = 3;
   console.error(`ref-puct-30k: ${PLAYOUTS} playouts/move (budget ignored), ${_model.weights.length} ppat weights from ${_ppatName}, ${fpWeights.size} featurepol weights from ${fpModel.modelName}${fpWeights.rankTopN > 0 ? `, rank-topn ${fpWeights.rankTopN}` : ''}`);
 
-  let _ppatState = null;
-  function _ensurePpatState(N) {
-    if (_ppatState === null || _ppatState.moves.length < N * N)
-      _ppatState = createState(N);
+  // ppat's incremental playout cache (ppat-lib): the same policy as ppatMove,
+  // bit for bit, without re-extracting every candidate each move.
+  let _ppatInc = null;
+  function _ensurePpatInc(N) {
+    if (_ppatInc === null || _ppatInc.N !== N) _ppatInc = createIncremental(N);
   }
 
   const stateByN = new Map();
@@ -152,20 +154,32 @@ function create() {
     const N   = game2.N;
     const cap = N * N;
 
-    _ensurePpatState(N);
+    _ensurePpatInc(N);
 
+    const ubp = _model.ppatMinPhase;   // moves below this fullness skip extraction (uniform)
     const moveLimit = 3 * game2.emptyCount + 20;
     const weightStep = 1 / cap;
     let moves = 0;
     let weight = 1.0;
+    // The ppat cache goes live at the playout's first ppat move; before that
+    // (uniform moves below ubp) it is skipped, and from then on every move goes
+    // through it to keep it in sync.
+    let incLive = false;
 
     while (!game2.gameOver && moves < moveLimit) {
       const current = game2.current;
-      const idx = ppatMove(game2, _ppatState, _model, rng);
+      let idx;
+      if (!incLive && ubp > 0 && (cap - game2.emptyCount) / cap < ubp) {
+        idx = game2.randomLegalMove(rng);   // ppatMove's uniform fast path
+        game2.play(idx);
+      } else {
+        if (!incLive) { incrementalReset(_ppatInc); incLive = true; }
+        idx = ppatMoveIncremental(game2, _ppatInc, _model, rng);
+        incrementalPlay(game2, _ppatInc, idx);
+      }
       if (idx !== PASS && weight > 0 && played[idx] === 0) {
         played[idx] = current === BLACK ? weight : -weight;
       }
-      game2.play(idx);
       moves++;
       weight -= weightStep;
     }
