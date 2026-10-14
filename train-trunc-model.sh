@@ -1,0 +1,50 @@
+#!/bin/sh
+# Retrain a truncation vpat model each time its eval set has grown, and score
+# each retrained model on move choice.
+#
+# The eval set is the concatenation of its chunk files (<EVALS>-NN, written by
+# gen-agent-evals runs still in progress).  Whenever the concatenation has grown
+# by more than 1/8 since the last round: hash-split it 8:1 into -train / -test,
+# train MODEL from scratch on it, then compare puct-trunc with MODEL (p2) against
+# default puct-trunc (p1) on MD_FILE.  Each round prints one line: the record
+# count (thousands), the hash-split summary, the trainer's last best (*) row,
+# and the compare-move-selection summary.  Runs until killed.
+#
+# usage: train-trunc-model.sh
+
+LABEL_PLAYOUTS=2000                       # playouts of the labelling search (ppf<N> in the file names)
+SPEC=tp9,2:4,3:4
+MODEL=out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js
+EVALS=out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS
+EPOCHS=30
+TEST_NTH=9                                # hash-split: every 9th record goes to the test set
+MD_FILE=out/md-30ph35
+MAX_PHASE=0.35
+BUDGET_MS=2000
+P2_ROOT_PHASE=0.35
+POLL_SECONDS=9
+
+echo "$MODEL"
+last_count=1
+while :; do
+  # Wait until the concatenated chunks hold more than 9/8 of last round's records.
+  while :; do
+    cat "$EVALS"-?? > "$EVALS"
+    count=$(wc -l < "$EVALS")
+    [ "$count" -gt "$((last_count * 9 / 8))" ] && break
+    sleep "$POLL_SECONDS"
+  done
+
+  printf "%4sk:  Train: " $((count / 1000))
+  ./hash-split.py "$EVALS" "$TEST_NTH" 2>/dev/null
+
+  best_row=$(node train-vpat-supervised.js --evals "$EVALS-train" --test-evals "$EVALS-test" \
+               --epochs "$EPOCHS" --spec "$SPEC" --save "$MODEL" | grep '\*' | tail -1)
+  printf "%s  Move: " "$best_row"
+
+  P2_TRUNC_VPAT_DATA="$MODEL" P2_TRUNC_ROOT_PHASE="$P2_ROOT_PHASE" \
+    node compare-move-selection.js --md "$MD_FILE" --p1 puct-trunc --p2 puct-trunc \
+      --max-phase "$MAX_PHASE" --budget "$BUDGET_MS" 2>&1 | tail -1
+
+  last_count=$count
+done
