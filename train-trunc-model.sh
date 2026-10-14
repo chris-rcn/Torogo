@@ -9,7 +9,9 @@
 # checkpoint MODEL_BEST on MD_FILE (evalmovedetails: the mean gap to each
 # position's best move).  Each round prints one line: the record count
 # (thousands), the hash-split summary, the trainer's last best (*) row, and the
-# evalmovedetails SUMMARY.  Runs until killed.
+# evalmovedetails SUMMARY.  Runs until killed; with MAX_RECORDS set, the
+# training set is the first MAX_RECORDS data records of the concatenation, and
+# the round that reaches the cap is the last.
 #
 # Example eval generation (one chunk per process; run several in parallel):
 #   p=2000; PLAYOUTS=$p node gen-agent-evals.js --position-agent ref-ply8 --value-agent puct-ppat-fp --min-phase 0.00 --max-phase 0.35 --prefix-delta 0.2 --komi 0.5 >> out/eval-s13-rp8-00ph35-d20-ppf$p-$(printf '%02d\n' $((RANDOM % 100))) &
@@ -26,6 +28,7 @@ MODEL=${MODEL:-out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js}
 MODEL_BEST=${MODEL_BEST:-${MODEL%.js}-best.js} # the trainer's best-teMSE checkpoint (the '*' row)
 EVALS=${EVALS:-out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS}
 EPOCHS=${EPOCHS:-30}
+MAX_RECORDS=${MAX_RECORDS:-}              # cap on data records, applied before the split (empty = no cap)
 DELTA=${DELTA:-0.2}                       # baked into the model; must match the evals' --prefix-delta
 TEST_NTH=${TEST_NTH:-9}                   # hash-split: every 9th record goes to the test set
 MD_FILE=${MD_FILE:-out/md-trunc30k_all-1976.md}
@@ -35,15 +38,23 @@ SEARCH_PLAYOUTS=${SEARCH_PLAYOUTS:-10000} # puct-trunc playouts per move when sc
 ROOT_PHASE=${ROOT_PHASE:-0.35}            # puct-trunc's TRUNC_ROOT_PHASE
 POLL_SECONDS=${POLL_SECONDS:-9}
 
-echo "train: evals: $EVALS  test-nth: $TEST_NTH  spec: $SPEC  delta: $DELTA  epochs: $EPOCHS  model: $MODEL"
+echo "train: evals: $EVALS  max-records: ${MAX_RECORDS:-none}  test-nth: $TEST_NTH  spec: $SPEC  delta: $DELTA  epochs: $EPOCHS  model: $MODEL"
 echo "test:  md: $MD_FILE  max-phase: $MAX_PHASE  limit: $TEST_LIMIT  playouts: $SEARCH_PLAYOUTS  root-phase: $ROOT_PHASE"
 last_count=1
 while :; do
-  # Wait until the concatenated chunks hold more than 9/8 of last round's records.
+  # Wait until the concatenated chunks (the first MAX_RECORDS data records of
+  # them, comment lines kept, when capped) hold more than 9/8 of last round's
+  # records, or have reached the cap.
   while :; do
-    cat "$EVALS"-?? > "$EVALS"
+    if [ -n "$MAX_RECORDS" ]; then
+      cat "$EVALS"-?? | awk -v cap="$MAX_RECORDS" '/^#/ { print; next } n < cap { print; n++ }' > "$EVALS"
+    else
+      cat "$EVALS"-?? > "$EVALS"
+    fi
     count=$(wc -l < "$EVALS")
-    [ "$count" -gt "$((last_count * 9 / 8))" ] && break
+    at_cap=0
+    [ -n "$MAX_RECORDS" ] && [ "$(grep -vc '^#' "$EVALS")" -ge "$MAX_RECORDS" ] && at_cap=1
+    [ "$count" -gt "$((last_count * 9 / 8))" ] || [ "$at_cap" = 1 ] && break
     sleep "$POLL_SECONDS"
   done
 
@@ -58,5 +69,6 @@ while :; do
     node evalmovedetails.js --agent puct-trunc --md "$MD_FILE" \
       --max-phase "$MAX_PHASE" --limit "$TEST_LIMIT" 2>&1 | grep SUMMARY
 
+  [ "$at_cap" = 1 ] && exit 0   # capped: more data cannot change the training set
   last_count=$count
 done
