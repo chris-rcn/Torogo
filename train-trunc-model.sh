@@ -5,8 +5,8 @@
 # The eval set is the concatenation of its chunk files (<EVALS>-NN, written by
 # gen-agent-evals runs still in progress).  Whenever the concatenation has grown
 # by more than 1/8 since the last round: hash-split it 8:1 into -train / -test,
-# train MODEL from scratch on it, then compare puct-trunc with MODEL (p2) against
-# default puct-trunc (p1) on MD_FILE.  Each round prints one line: the record
+# train MODEL from scratch on it, then compare puct-trunc with its best-teMSE
+# checkpoint MODEL_BEST (p2) against default puct-trunc (p1) on MD_FILE.  Each round prints one line: the record
 # count (thousands), the hash-split summary, the trainer's last best (*) row,
 # and the compare-move-selection summary.  Runs until killed.
 #
@@ -22,6 +22,7 @@
 LABEL_PLAYOUTS=2000                       # playouts of the labelling search (ppf<N> in the file names)
 SPEC=tp9,2:4,3:4
 MODEL=out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js
+MODEL_BEST=${MODEL%.js}-best.js            # the trainer's best-teMSE checkpoint (the '*' row)
 EVALS=out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS
 EPOCHS=30
 TEST_NTH=9                                # hash-split: every 9th record goes to the test set
@@ -49,7 +50,7 @@ while :; do
                --epochs "$EPOCHS" --spec "$SPEC" --save "$MODEL" | grep '\*' | tail -1)
   printf "%s  Move: " "$best_row"
 
-  P2_TRUNC_VPAT_DATA="$MODEL" P2_TRUNC_ROOT_PHASE="$P2_ROOT_PHASE" \
+  P2_TRUNC_VPAT_DATA="$MODEL_BEST" P2_TRUNC_ROOT_PHASE="$P2_ROOT_PHASE" \
     node compare-move-selection.js --md "$MD_FILE" --p1 puct-trunc --p2 puct-trunc \
       --max-phase "$MAX_PHASE" --budget "$BUDGET_MS" 2>&1 | tail -1
 
