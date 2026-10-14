@@ -35,7 +35,6 @@ SEARCH_PLAYOUTS=10000                     # puct-trunc playouts per move when sc
 ROOT_PHASE=0.35                           # puct-trunc's TRUNC_ROOT_PHASE
 POLL_SECONDS=9
 
-echo "$MODEL"
 last_count=1
 while :; do
   # Wait until the concatenated chunks hold more than 9/8 of last round's records.
