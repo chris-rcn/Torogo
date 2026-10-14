@@ -1015,6 +1015,9 @@ int ppat_inc_extract(const Game2 *g, PpatInc *inc, const float *weights, PpatSta
 }
 
 /* ── Weight file I/O ───────────────────────────────────────────────────────── */
+/* -DPPAT_NO_FILE_IO leaves it out (the browser WebAssembly build, which takes
+ * its weights from JS: c/wasm_ppat.c). */
+#ifndef PPAT_NO_FILE_IO
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1228,6 +1231,7 @@ float *ppat_load_model(const char *path, bool *out_early_pass, float *out_pass_w
     load_adopt_features = 0;
     return w;
 }
+#endif /* PPAT_NO_FILE_IO */
 
 PpatEncoding ppat_get_encoding(void) {
     return (PpatEncoding){ ppat_adj_lib, ppat_phase_count, ppat_twelvecell, ppat_self_atari,
