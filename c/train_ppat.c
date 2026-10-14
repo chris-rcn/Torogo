@@ -417,6 +417,9 @@ static long   cfg_test_from;           /* --test-from: pin the position where te
 
 /* Scratch buffers */
 static PpatState rollout_feat_st;
+/* rollout()'s incremental feature cache: reset at each rollout's start (theta
+ * changes only between rollouts, in update_theta). */
+static PpatInc   rollout_inc;
 static float    *rollout_grad_buf;
 static float    *g_buf;
 static float    *batch_buf;
@@ -749,16 +752,10 @@ static int replay_position(const Position *pos, Game2 *g, int *bad_move_idx) {
 #define RUN_EARLY_PASS 1
 
 static int policy_select(Game2 *g) {
-    ppat_extract(g, &rollout_feat_st);
-    int n = rollout_feat_st.count;
+    /* rollout_feat_st's keys and their logits, as ppat_extract plus a sum over
+     * each candidate's keys would give, from the incremental cache. */
+    int n = ppat_inc_extract(g, &rollout_inc, theta, &rollout_feat_st, rollout_logits);
     if (n == 0) return PICK_NO_MOVES;
-
-    for (int i = 0; i < n; i++) {
-        float v = 0;
-        for (int fi = rollout_feat_st.feat_start[i]; fi < rollout_feat_st.feat_start[i + 1]; fi++)
-            v += theta[rollout_feat_st.feat[fi]];
-        rollout_logits[i] = v;
-    }
 
     /* Softmax, including the pass at logit 0 when the run trains for it. */
     float mx = rollout_logits[0];
@@ -791,6 +788,7 @@ static int policy_select(Game2 *g) {
 static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out_steps) {
     Game2 sim;
     g2_clone(&sim, game);
+    ppat_inc_reset(&rollout_inc);
     int steps = 0;
 
     int passed_yet = 0, rejected_pass = 0, reject_first = 0;
@@ -799,7 +797,7 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
         int chosen = policy_select(&sim);
         if (chosen == PICK_NO_MOVES) {
             /* Nothing to choose between — no decision, so no gradient. */
-            g2_play(&sim, PASS);
+            ppat_inc_play(&sim, &rollout_inc, PASS);
             continue;
         }
 
@@ -856,15 +854,15 @@ static float rollout(const Game2 *game, int8_t player, float *grad_acc, int *out
                     r2 *= tot;
                     int alt = n - 1;
                     for (int i = 0; i < n; i++) { r2 -= rollout_probs[i]; if (r2 <= 0) { alt = i; break; } }
-                    g2_play(&sim, rollout_feat_st.moves[alt]);
+                    ppat_inc_play(&sim, &rollout_inc, rollout_feat_st.moves[alt]);
                     continue;
                 }
             }
-            g2_play(&sim, PASS);
+            ppat_inc_play(&sim, &rollout_inc, PASS);
             continue;
         }
         int32_t mv = rollout_feat_st.moves[chosen];
-        g2_play(&sim, mv);
+        ppat_inc_play(&sim, &rollout_inc, mv);
     }
 
     /* Pass-weight control loop.  Only rollouts the policy played to the end and

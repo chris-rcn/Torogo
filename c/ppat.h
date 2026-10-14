@@ -166,7 +166,11 @@ int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights,
 /* ── Incremental playouts (port of ppat-lib.js's incremental path) ─────────────
  *
  * The same policy as ppat_policy_move, bit for bit, without re-extracting every
- * candidate each move.  Per side to move, each point caches its candidacy,
+ * candidate each move.  Bit for bit means the same float sums in the same
+ * order; build.sh's -ffast-math lets the compiler reassociate the two paths'
+ * sums differently, so there a logit can differ in its last bit (measured: no
+ * move ever changed in bench_ppat; train_ppat's weights moved by <= 5e-8, and
+ * were identical without -ffast-math).  Per side to move, each point caches its candidacy,
  * self-atari size and BASE logit (the float sum of its non-local feature
  * weights, in emission order).  A move dirties, for both sides, every point
  * whose base features can change: within Manhattan distance 2 of a changed
@@ -182,8 +186,11 @@ int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights,
  * cache is keyed to the active encoding: switch encodings (ppat_set_encoding)
  * only between playouts, with a reset.  Until the playout's first ppat move
  * (uniform moves below ppat_min_phase), ppat_inc_play is a plain g2_play. */
+#define PPAT_MAX_BASE_FEAT 8   /* pattern, twelvecell, self-atari, capture, cs, atari, xa */
 typedef struct {
     float        base[2][MAX_CAP];   /* [0] = black to move, [1] = white */
+    int32_t      bkeys[2][MAX_CAP][PPAT_MAX_BASE_FEAT];   /* the base keys base[] sums */
+    uint8_t      nbase[2][MAX_CAP];
     uint8_t      cand[2][MAX_CAP];
     int16_t      sa[2][MAX_CAP];
     uint8_t      dirty[2][MAX_CAP];
@@ -199,6 +206,12 @@ void    ppat_inc_reset      (PpatInc *inc);
 bool    ppat_inc_play       (Game2 *g, PpatInc *inc, int32_t move);   /* g2_play's result */
 int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
                              bool early_pass, float pass_logit, Rng *rng);
+/* For callers that need every candidate's keys (train_ppat's gradient
+ * rollouts): fills st exactly as ppat_extract would, and logits[i] with the
+ * float sum of weights over candidate i's keys in order — the value a loop over
+ * st's keys computes, bit for bit (up to -ffast-math reassociation, above).  No uniform gate.  Returns the count. */
+int     ppat_inc_extract    (const Game2 *g, PpatInc *inc, const float *weights,
+                             PpatState *st, float *logits);
 
 /* ── Weight file I/O (JS-compatible format) ────────────────────────────────── */
 

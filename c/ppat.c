@@ -919,13 +919,14 @@ bool ppat_inc_play(Game2 *g, PpatInc *inc, int32_t move) {
     return ok;
 }
 
-int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
-                             bool early_pass, float pass_logit, Rng *rng) {
-    if (ppat_min_phase > 0) {
-        float fullness = (float)(g->cap - g->empty_count) / g->cap;
-        if (fullness < ppat_min_phase) return g2_random_legal_move(g, rng);
-    }
-
+/* The incremental scan shared by ppat_inc_policy_move and ppat_inc_extract:
+ * refresh the dirty points' cached base keys and logits for the side to move,
+ * then write every candidate's logit (cached base plus its local keys, summed
+ * in emission order as ppat_extract's keys would be) into logits[0..n), the
+ * candidates into inc->moves, and — when st is given — the full key lists into
+ * st exactly as ppat_extract writes them.  Returns n; *mx_out is the max. */
+static int inc_scan(const Game2 *g, PpatInc *inc, const float *weights, PpatState *st,
+                    float *logits, float *mx_out) {
     static PpatCtx X;
     ctx_setup(g, &X);
     if (inc->weights != weights) {   /* cached base logits are sums of these */
@@ -947,39 +948,66 @@ int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
     /* sa is cached for any later move's locals, so always computed (ppat_extract
      * skips it only when no feature can read it, which leaves its keys
      * unchanged). */
-    uint8_t *dirty = inc->dirty[ci], *cand = inc->cand[ci];
+    uint8_t *dirty = inc->dirty[ci], *cand = inc->cand[ci], *nbase = inc->nbase[ci];
     float *base = inc->base[ci];
     int16_t *saC = inc->sa[ci];
-    int32_t feat[PPAT_MAX_FEAT];
-    int n = 0;
+    int32_t (*bkeys)[PPAT_MAX_BASE_FEAT] = inc->bkeys[ci];
+    int32_t loc[PPAT_MAX_FEAT];
+    int n = 0, nf = 0;
     float mx = -1e30f;
     for (int ei = 0; ei < g->empty_count; ei++) {
         const int32_t idx = g->empty_cells[ei];
         if (dirty[idx]) {
             dirty[idx] = 0;
             int sa;
-            const int nb = base_feat(g, &X, idx, feat, 0, true, &sa);
+            const int nb = base_feat(g, &X, idx, bkeys[idx], 0, true, &sa);
             if (nb < 0) cand[idx] = 0;
             else {
                 float v = 0;
-                for (int k = 0; k < nb; k++) v += weights[feat[k]];
-                base[idx] = v; saC[idx] = (int16_t)sa; cand[idx] = 1;
+                for (int k = 0; k < nb; k++) v += weights[bkeys[idx][k]];
+                base[idx] = v; saC[idx] = (int16_t)sa; nbase[idx] = (uint8_t)nb; cand[idx] = 1;
             }
         }
         if (!cand[idx]) continue;
         float v = base[idx];
-        if (lm[idx] == stamp) {
-            const int nl = local_feat(&X, idx, saC[idx], feat, 0);
-            for (int k = 0; k < nl; k++) v += weights[feat[k]];
+        if (st) {
+            st->moves[n] = idx;
+            st->feat_start[n] = nf;
+            for (int k = 0; k < nbase[idx]; k++) st->feat[nf++] = bkeys[idx][k];
         }
-        logits_buf[n] = v;
+        if (lm[idx] == stamp) {
+            const int nl = local_feat(&X, idx, saC[idx], loc, 0);
+            for (int k = 0; k < nl; k++) {
+                v += weights[loc[k]];
+                if (st) st->feat[nf++] = loc[k];
+            }
+        }
+        logits[n] = v;
         inc->moves[n] = idx;
         n++;
         if (v > mx) mx = v;
     }
+    if (st) { st->feat_start[n] = nf; st->count = n; }
+    *mx_out = mx;
+    return n;
+}
+
+int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
+                             bool early_pass, float pass_logit, Rng *rng) {
+    if (ppat_min_phase > 0) {
+        float fullness = (float)(g->cap - g->empty_count) / g->cap;
+        if (fullness < ppat_min_phase) return g2_random_legal_move(g, rng);
+    }
+    float mx;
+    const int n = inc_scan(g, inc, weights, NULL, logits_buf, &mx);
     if (n == 0) return PASS;
     const int chosen = sample_logits(n, mx, early_pass, pass_logit, rng);
     return chosen < 0 ? PASS : inc->moves[chosen];
+}
+
+int ppat_inc_extract(const Game2 *g, PpatInc *inc, const float *weights, PpatState *st, float *logits) {
+    float mx;
+    return inc_scan(g, inc, weights, st, logits, &mx);
 }
 
 /* ── Weight file I/O ───────────────────────────────────────────────────────── */
