@@ -37,7 +37,7 @@ struct PuctSearch {
     int       path_len, cap_path;
     Game2     sim;
     FpolState fp;
-    PpatState pp;
+    PpatInc   inc;                   /* incremental ppat cache, reset per playout */
     float     played[MAX_CAP];
 };
 
@@ -61,12 +61,14 @@ void puct_free(PuctSearch *s) {
 
 static double phase_of(const Game2 *g) { return 1.0 - (double)g->empty_count / (g->N * g->N); }
 
-/* ppatMove with the agent's PPAT_MIN_PHASE gate; ppat.h's own gate held off. */
+/* ppatMove with the agent's PPAT_MIN_PHASE gate; ppat.h's own gate held off.
+ * The ppat moves come from the incremental path (bit-identical to
+ * ppat_policy_move; see ppat.h). */
 static int32_t playout_move(PuctSearch *s, Game2 *g, Rng *rng) {
     const PuctCfg *c = &s->cfg;
     if (!c->ppat_w || (c->ppat_min_phase > 0 && phase_of(g) < c->ppat_min_phase))
         return g2_random_legal_move_js(g, rng);
-    return ppat_policy_move(g, &s->pp, c->ppat_w, c->early_pass, c->pass_weight, rng);
+    return ppat_inc_policy_move(g, &s->inc, c->ppat_w, c->early_pass, c->pass_weight, rng);
 }
 
 /* Returns P(BLACK wins) in {0,1}; fills s->played with the colour-signed
@@ -79,12 +81,13 @@ static double playout(PuctSearch *s, Game2 *g, Rng *rng) {
     memset(s->played, 0, sizeof s->played);
     const float saved_gate = ppat_min_phase;
     ppat_min_phase = 0;
+    ppat_inc_reset(&s->inc);   /* every move below goes through the cache */
     for (int moves = 0; !g->game_over && moves < move_limit; moves++) {
         const int8_t cur = g->current;
         const int32_t idx = playout_move(s, g, rng);
         if (idx != PASS && weight > 0 && s->played[idx] == 0)
             s->played[idx] = cur == BLACK ? (float)weight : (float)-weight;
-        g2_play(g, idx);
+        ppat_inc_play(g, &s->inc, idx);
         weight -= step;
     }
     ppat_min_phase = saved_gate;
