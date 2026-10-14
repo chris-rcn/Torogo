@@ -10,6 +10,13 @@
 # count (thousands), the hash-split summary, the trainer's last best (*) row,
 # and the compare-move-selection summary.  Runs until killed.
 #
+# Example eval generation (one chunk per process; run several in parallel):
+#   p=2000; PLAYOUTS=$p node gen-agent-evals.js --position-agent ref-ply8 --value-agent puct-ppat-fp --min-phase 0.00 --max-phase 0.35 --prefix-delta 0.2 --komi 0.5 >> out/eval-s13-rp8-00ph35-d20-ppf$p-$(printf '%02d\n' $((RANDOM % 100))) &
+# The value agent's labels must share one currency across the target phase
+# range: it must either always truncate or never truncate there (puct-ppat-fp
+# never does; a puct-trunc labeller whose TRUNC_ROOT_PHASE falls inside the
+# range mixes truncated and full-playout labels).
+#
 # usage: train-trunc-model.sh
 
 LABEL_PLAYOUTS=2000                       # playouts of the labelling search (ppf<N> in the file names)
