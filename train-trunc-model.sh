@@ -18,22 +18,22 @@
 # never does; a puct-trunc labeller whose TRUNC_ROOT_PHASE falls inside the
 # range mixes truncated and full-playout labels).
 #
-# usage: train-trunc-model.sh
+# usage: [NAME=value ...] train-trunc-model.sh   (any setting below can be set from outside)
 
-LABEL_PLAYOUTS=2000                       # playouts of the labelling search (ppf<N> in the file names)
-SPEC=tp9,2:4,3:4
-MODEL=out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js
-MODEL_BEST=${MODEL%.js}-best.js            # the trainer's best-teMSE checkpoint (the '*' row)
-EVALS=out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS
-EPOCHS=30
-DELTA=0.2                                 # baked into the model; must match the evals' --prefix-delta
-TEST_NTH=9                                # hash-split: every 9th record goes to the test set
-MD_FILE=out/md-trunc30k_all-1976.md
-MAX_PHASE=0.35
-TEST_LIMIT=200                            # score only the first N positions inside the phase window (same set every round)
-SEARCH_PLAYOUTS=10000                     # puct-trunc playouts per move when scoring (fixed, not timed)
-ROOT_PHASE=0.35                           # puct-trunc's TRUNC_ROOT_PHASE
-POLL_SECONDS=9
+LABEL_PLAYOUTS=${LABEL_PLAYOUTS:-2000}    # playouts of the labelling search (ppf<N> in the file names)
+SPEC=${SPEC:-tp9,2:4,3:4}
+MODEL=${MODEL:-out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js}
+MODEL_BEST=${MODEL_BEST:-${MODEL%.js}-best.js} # the trainer's best-teMSE checkpoint (the '*' row)
+EVALS=${EVALS:-out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS}
+EPOCHS=${EPOCHS:-30}
+DELTA=${DELTA:-0.2}                       # baked into the model; must match the evals' --prefix-delta
+TEST_NTH=${TEST_NTH:-9}                   # hash-split: every 9th record goes to the test set
+MD_FILE=${MD_FILE:-out/md-trunc30k_all-1976.md}
+MAX_PHASE=${MAX_PHASE:-0.35}
+TEST_LIMIT=${TEST_LIMIT:-200}             # score only the first N positions inside the phase window (same set every round)
+SEARCH_PLAYOUTS=${SEARCH_PLAYOUTS:-10000} # puct-trunc playouts per move when scoring (fixed, not timed)
+ROOT_PHASE=${ROOT_PHASE:-0.35}            # puct-trunc's TRUNC_ROOT_PHASE
+POLL_SECONDS=${POLL_SECONDS:-9}
 
 echo "train: evals: $EVALS  test-nth: $TEST_NTH  spec: $SPEC  delta: $DELTA  epochs: $EPOCHS  model: $MODEL"
 echo "test:  md: $MD_FILE  max-phase: $MAX_PHASE  limit: $TEST_LIMIT  playouts: $SEARCH_PLAYOUTS  root-phase: $ROOT_PHASE"
