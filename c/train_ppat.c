@@ -1617,9 +1617,11 @@ static double puct_scale = 1.0;
 /* The model's playout-policy cost: COST_GAMES self-play games of the model
  * against itself on the deployment board (growing COST_GROWTH per printed
  * row, as the matches grow), uniform below the deployment gate as in a
- * playout, and only the ppat moves at or past it timed.  Returns
- * microseconds of THREAD CPU time per ppat move, so machine load (parallel
- * workers) inflates it less than wall clock would.  Fixed seed per game. */
+ * playout, and only the ppat moves at or past it timed — on the incremental
+ * path the playouts use: the move choice plus the cache's dirty-marking after
+ * the move (g2_play itself is not timed, as before), two clock reads per move.  Returns microseconds of
+ * THREAD CPU time per ppat move, so machine load (parallel workers) inflates it
+ * less than wall clock would.  Fixed seed per game. */
 #define COST_GAMES  1000   /* first row's games */
 #define COST_GROWTH 1.1
 static double cost_scale = 1.0;
@@ -1630,26 +1632,43 @@ static double policy_cost_us(void) {
     const float gate = ppat_min_phase;
     ppat_min_phase = 0.0f;           /* the gate is applied here, untimed side */
     g2_init_topology(DEPLOY_BOARD_SIZE);
-    static PpatState st;
+    static PpatInc inc;
     Rng rng;
     double cpu_s = 0;
     long moves = 0;
+    struct timespec a, b;
+    #define COST_ADD() (cpu_s += (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) * 1e-9)
+    /* Two clock reads per ppat move: each timed span is the previous move's
+     * dirty-marking (pending, noted before the board changes again) plus this
+     * move's choice; g2_play stays outside it. */
+    int32_t pend_mv = 0, pend_ko = 0; bool pend_ok = false, pending = false;
+    #define NOTE_PENDING() do { if (pending) { ppat_inc_note(&game, &inc, pend_mv, pend_ko, pend_ok); pending = false; } } while (0)
     for (int gi = 0; gi < games; gi++) {
         rng_seed(&rng, 0xc057L + gi);
         Game2 game;
         g2_new(&game, DEPLOY_BOARD_SIZE);
+        ppat_inc_reset(&inc);
         while (!game.game_over) {
             const float ph = (float)(game.cap - game.empty_count) / game.cap;   /* ppat.c's fullness */
-            if (ph < gate) { g2_play(&game, g2_random_legal_move(&game, &rng)); continue; }
-            struct timespec a, b;
+            if (ph < gate) {
+                if (pending) { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &a); NOTE_PENDING(); clock_gettime(CLOCK_THREAD_CPUTIME_ID, &b); COST_ADD(); }
+                ppat_inc_play(&game, &inc, g2_random_legal_move(&game, &rng));
+                continue;
+            }
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &a);
-            const int32_t mv = ppat_policy_move(&game, &st, theta, RUN_EARLY_PASS, run_pass_weight, &rng);
+            NOTE_PENDING();
+            const int32_t mv = ppat_inc_policy_move(&game, &inc, theta, RUN_EARLY_PASS, run_pass_weight, &rng);
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &b);
-            cpu_s += (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) * 1e-9;
+            COST_ADD();
             moves++;
-            g2_play(&game, mv);
+            pend_mv = mv; pend_ko = game.ko;
+            pend_ok = g2_play(&game, mv);
+            pending = true;
         }
+        if (pending) { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &a); NOTE_PENDING(); clock_gettime(CLOCK_THREAD_CPUTIME_ID, &b); COST_ADD(); }
     }
+    #undef NOTE_PENDING
+    #undef COST_ADD
     ppat_min_phase = gate;
     g2_init_topology(topo_size);
     return moves ? 1e6 * cpu_s / moves : 0.0;
