@@ -56,7 +56,8 @@ print, and each new best teMSE also writes the -best checkpoint.
                     puct-trunc / mc-ppat read it as a default).  The
                     recorded prefixes are truncated to ceil(D*area) moves past
                     the start; the bias file's header delta is only its MAXIMUM,
-                    D must not exceed it.  Required with --bias
+                    D must not exceed it.  Required with --bias; alone, it is
+                    only baked
   --test-evals F    data file supplying the held-out test set (band-filtered);
                     all of --evals is the train pool.  This is the ONLY source of
                     the test set / teMSE — without --test-evals there is none
@@ -150,15 +151,13 @@ if (opts['train-pos'] !== undefined && !(TRAIN_POS_RAW >= 1)) {
 // into saved checkpoints' 'trunc' block.  The bias artifact is emitted at a
 // MAXIMUM delta (its header); any D up to that is valid — the recorded prefixes
 // are truncated to ceil(D*area) moves past the start, exactly as the deployed
-// agent does.  Required with --bias.
+// agent does.  Required with --bias; without it, D is only baked (and sets the
+// --min-phase default).
 const DELTA = opts.delta !== undefined ? parseFloat(opts.delta) : null;
 if (opts['bias'] && DELTA === null) {
   console.error("--bias requires --delta: the deployment delta to measure the bias at " +
                 "(the bias file's header delta is only its maximum)");
   process.exit(1);
-}
-if (DELTA !== null && !opts['bias']) {
-  console.error('--delta only applies with --bias'); process.exit(1);
 }
 if (DELTA !== null && !(DELTA >= 0 && DELTA < 1)) {
   console.error('--delta: expected 0 <= D < 1'); process.exit(1);

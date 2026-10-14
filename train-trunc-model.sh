@@ -26,6 +26,7 @@ MODEL=out/vpat-trunc00ph35d20-$LABEL_PLAYOUTS.js
 MODEL_BEST=${MODEL%.js}-best.js            # the trainer's best-teMSE checkpoint (the '*' row)
 EVALS=out/eval-s13-rp8-00ph35-d20-ppf$LABEL_PLAYOUTS
 EPOCHS=30
+DELTA=0.2                                 # baked into the model; must match the evals' --prefix-delta
 TEST_NTH=9                                # hash-split: every 9th record goes to the test set
 MD_FILE=out/md-trunc30k_all-1976.md
 MAX_PHASE=0.35
@@ -48,7 +49,7 @@ while :; do
   ./hash-split.py "$EVALS" "$TEST_NTH" 2>/dev/null
 
   best_row=$(node train-vpat-supervised.js --evals "$EVALS-train" --test-evals "$EVALS-test" \
-               --epochs "$EPOCHS" --spec "$SPEC" --save "$MODEL" | grep '\*' | tail -1)
+               --epochs "$EPOCHS" --spec "$SPEC" --delta "$DELTA" --save "$MODEL" | grep '\*' | tail -1)
   printf "%s  Move: " "$best_row"
 
   P2_TRUNC_VPAT_DATA="$MODEL_BEST" P2_TRUNC_ROOT_PHASE="$P2_ROOT_PHASE" \
