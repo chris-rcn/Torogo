@@ -30,6 +30,7 @@ DELTA=0.2                                 # baked into the model; must match the
 TEST_NTH=9                                # hash-split: every 9th record goes to the test set
 MD_FILE=out/md-trunc30k_all-1976.md
 MAX_PHASE=0.35
+TEST_LIMIT=300                            # score only the first N positions inside the phase window (same set every round)
 SEARCH_PLAYOUTS=20000                     # puct-trunc playouts per move when scoring (fixed, not timed)
 ROOT_PHASE=0.35                           # puct-trunc's TRUNC_ROOT_PHASE
 POLL_SECONDS=9
@@ -54,7 +55,7 @@ while :; do
 
   TRUNC_VPAT_DATA="$MODEL_BEST" TRUNC_ROOT_PHASE="$ROOT_PHASE" PLAYOUTS="$SEARCH_PLAYOUTS" \
     node evalmovedetails.js --agent puct-trunc --md "$MD_FILE" \
-      --max-phase "$MAX_PHASE" 2>&1 | grep SUMMARY
+      --max-phase "$MAX_PHASE" --limit "$TEST_LIMIT" 2>&1 | grep SUMMARY
 
   last_count=$count
 done
