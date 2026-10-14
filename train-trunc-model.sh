@@ -5,11 +5,11 @@
 # The eval set is the concatenation of its chunk files (<EVALS>-NN, written by
 # gen-agent-evals runs still in progress).  Whenever the concatenation has grown
 # by more than 1/8 since the last round: hash-split it 8:1 into -train / -test,
-# train MODEL from scratch on it, then compare puct-trunc with its best-teMSE
-# checkpoint MODEL_BEST (p2) against default puct-trunc (p1) on MD_FILE.  Each
-# round prints one line: the record count (thousands), the hash-split summary,
-# the trainer's last best (*) row, and the compare-move-selection summary.  Runs
-# until killed.
+# train MODEL from scratch on it, then score puct-trunc with its best-teMSE
+# checkpoint MODEL_BEST on MD_FILE (evalmovedetails: the mean gap to each
+# position's best move).  Each round prints one line: the record count
+# (thousands), the hash-split summary, the trainer's last best (*) row, and the
+# evalmovedetails SUMMARY.  Runs until killed.
 #
 # Example eval generation (one chunk per process; run several in parallel):
 #   p=2000; PLAYOUTS=$p node gen-agent-evals.js --position-agent ref-ply8 --value-agent puct-ppat-fp --min-phase 0.00 --max-phase 0.35 --prefix-delta 0.2 --komi 0.5 >> out/eval-s13-rp8-00ph35-d20-ppf$p-$(printf '%02d\n' $((RANDOM % 100))) &
@@ -31,7 +31,7 @@ TEST_NTH=9                                # hash-split: every 9th record goes to
 MD_FILE=out/md-trunc30k_all-1976.md
 MAX_PHASE=0.35
 BUDGET_MS=2000
-P2_ROOT_PHASE=0.35
+ROOT_PHASE=0.35                           # puct-trunc's TRUNC_ROOT_PHASE
 POLL_SECONDS=9
 
 echo "$MODEL"
@@ -52,9 +52,9 @@ while :; do
                --epochs "$EPOCHS" --spec "$SPEC" --delta "$DELTA" --save "$MODEL" | grep '\*' | tail -1)
   printf "%s  Move: " "$best_row"
 
-  P2_TRUNC_VPAT_DATA="$MODEL_BEST" P2_TRUNC_ROOT_PHASE="$P2_ROOT_PHASE" \
-    node compare-move-selection.js --md "$MD_FILE" --p1 puct-trunc --p2 puct-trunc \
-      --max-phase "$MAX_PHASE" --budget "$BUDGET_MS" 2>&1 | tail -1
+  TRUNC_VPAT_DATA="$MODEL_BEST" TRUNC_ROOT_PHASE="$ROOT_PHASE" \
+    node evalmovedetails.js --agent puct-trunc --md "$MD_FILE" \
+      --max-phase "$MAX_PHASE" --budget "$BUDGET_MS" 2>&1 | grep SUMMARY
 
   last_count=$count
 done
