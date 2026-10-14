@@ -6,9 +6,10 @@
 # gen-agent-evals runs still in progress).  Whenever the concatenation has grown
 # by more than 1/8 since the last round: hash-split it 8:1 into -train / -test,
 # train MODEL from scratch on it, then compare puct-trunc with its best-teMSE
-# checkpoint MODEL_BEST (p2) against default puct-trunc (p1) on MD_FILE.  Each round prints one line: the record
-# count (thousands), the hash-split summary, the trainer's last best (*) row,
-# and the compare-move-selection summary.  Runs until killed.
+# checkpoint MODEL_BEST (p2) against default puct-trunc (p1) on MD_FILE.  Each
+# round prints one line: the record count (thousands), the hash-split summary,
+# the trainer's last best (*) row, and the compare-move-selection summary.  Runs
+# until killed.
 #
 # Example eval generation (one chunk per process; run several in parallel):
 #   p=2000; PLAYOUTS=$p node gen-agent-evals.js --position-agent ref-ply8 --value-agent puct-ppat-fp --min-phase 0.00 --max-phase 0.35 --prefix-delta 0.2 --komi 0.5 >> out/eval-s13-rp8-00ph35-d20-ppf$p-$(printf '%02d\n' $((RANDOM % 100))) &
