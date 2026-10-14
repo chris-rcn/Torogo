@@ -10,7 +10,7 @@
  * --playouts ppat playouts run to the end (or 3*empty + 20 moves), every move
  * by the ppat policy (ppat_min_phase 0), from one seeded rng.
  *
- * Only the playouts are timed (process CPU time).  The checksum (FNV-1a over every playout move)
+ * Only the playouts are timed (process CPU time; wall time under WASI or -DBENCH_WALL).  The checksum (FNV-1a over every playout move)
  * is identical for two implementations of the same policy given the same
  * arguments — the exactness check for an optimisation.  --incremental runs the
  * playouts on ppat's incremental path (ppat_inc_policy_move / ppat_inc_play),
@@ -34,22 +34,51 @@ static int arg_flag(int argc, char **argv, const char *flag) {
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], flag)) return 1;
     return 0;
 }
-/* Process CPU time, not wall time: robust to sharing the machine with other jobs. */
-static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+/* Process CPU time, robust to sharing the machine with other jobs — except
+ * under WASI, which has no process clock (wasi-libc's clock() emulation reads
+ * the wall clock), and with -DBENCH_WALL, which times wall-clock natively too
+ * for a like-for-like comparison with a WASI build. */
+#if defined(__wasi__) || defined(BENCH_WALL)
+#define BENCH_CLOCK CLOCK_MONOTONIC
+#define BENCH_TIMER "wall"
+#else
+#define BENCH_CLOCK CLOCK_PROCESS_CPUTIME_ID
+#define BENCH_TIMER "process CPU"
+#endif
+static double now_ms(void) { struct timespec t; clock_gettime(BENCH_CLOCK, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
-#define MAX_STARTS 200000
-static Game2 *starts;
-static int n_starts = 0;
+/* Grown by doubling: a fixed worst-case array would be ~1 GB, which native
+ * builds never touch but a WebAssembly memory would have to commit. */
+static Game2 *starts = NULL;
+static int n_starts = 0, cap_starts = 0;
 
 static void add_start(const Game2 *g) {
-    if (n_starts >= MAX_STARTS) { fprintf(stderr, "bench_ppat: more than %d start positions\n", MAX_STARTS); exit(1); }
+    if (n_starts == cap_starts) {
+        cap_starts = cap_starts ? 2 * cap_starts : 1024;
+        starts = realloc(starts, sizeof(Game2) * (size_t)cap_starts);
+        if (!starts) { fprintf(stderr, "bench_ppat: out of memory at %d start positions\n", n_starts); exit(1); }
+    }
     g2_clone(&starts[n_starts++], g);
 }
 
 static void load_starts(const char *path, int size) {
+    static char line[16384];
+    /* Two passes, allocating between them: count, reserve, then parse with the
+     * file open and no allocation.  Under Node 22's WASI, a realloc of the
+     * ~13 MB array between fgets calls crashed the process (a 20-line repro
+     * needs only that; reading first or allocating first is fine). */
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "bench_ppat: cannot open %s\n", path); exit(1); }
-    static char line[16384];
+    int lines = 0;
+    while (fgets(line, sizeof line, f)) if (line[0] != '#' && line[0] != '\n') lines++;
+    fclose(f);
+    if (lines > cap_starts) {
+        cap_starts = lines;
+        starts = realloc(starts, sizeof(Game2) * (size_t)cap_starts);
+        if (!starts) { fprintf(stderr, "bench_ppat: out of memory for %d start positions\n", lines); exit(1); }
+    }
+    f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "bench_ppat: cannot open %s\n", path); exit(1); }
     while (fgets(line, sizeof line, f)) {
         if (line[0] == '#' || line[0] == '\n') continue;
         char *p = line;
@@ -90,7 +119,6 @@ int main(int argc, char **argv) {
     float *w = ppat_load_model(model_path, &early_pass, &pass_w);
     if (!w) return 1;
 
-    starts = malloc(sizeof(Game2) * MAX_STARTS);
     static PpatState st;
     if (starts_f) load_starts(starts_f, size);
     else {
@@ -128,8 +156,8 @@ int main(int argc, char **argv) {
         }
     }
     const double ms = now_ms() - t0;
-    printf("model: %s, start positions: %d%s, playouts per position: %d, seed: %ld, path: %s\n",
-           model_path, n_starts, starts_f ? " (from file)" : "", playouts, seed, incremental ? "incremental" : "full");
+    printf("model: %s, start positions: %d%s, playouts per position: %d, seed: %ld, path: %s, timer: %s\n",
+           model_path, n_starts, starts_f ? " (from file)" : "", playouts, seed, incremental ? "incremental" : "full", BENCH_TIMER);
     printf("us/move: %.3f, moves/s: %.0f, checksum: %08x\n", 1000.0 * ms / n_moves, n_moves / (ms / 1000.0), h);
     free(w); free(starts);
     return 0;
