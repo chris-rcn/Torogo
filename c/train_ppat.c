@@ -1465,7 +1465,9 @@ static float direct_match_wr(int games) {
     /* Deployment-size board for the match; the training size's topology is
      * restored on exit for the other monitor instruments. */
     g2_init_topology(DEPLOY_BOARD_SIZE);
-    static PpatState st;
+    /* One incremental cache per model (each is keyed to its own encoding and
+     * weights); every move, whoever chose it, is noted in both. */
+    static PpatInc inc_run, inc_ref;
     Rng rng;
     const double t0 = wall_now();
     int wins = 0, played = 0;
@@ -1492,6 +1494,8 @@ static float direct_match_wr(int games) {
         const int cur_is_black = (g & 1) == 0;   /* the pair's two colour assignments */
         Game2 game;
         g2_new(&game, DEPLOY_BOARD_SIZE);
+        ppat_inc_reset(&inc_run);
+        ppat_inc_reset(&inc_ref);
         while (!game.game_over) {
             const int black_to_move = (game.current == BLACK);
             const float ph = (float)(game.cap - game.empty_count) / (float)game.cap;
@@ -1515,7 +1519,11 @@ static float direct_match_wr(int games) {
              * RUN_EARLY_PASS is the subject's switch, not a global one. */
             const bool  ep = (w == theta) && RUN_EARLY_PASS;
             const float pw = (w == theta) ? run_pass_weight : 0.0f;
-            g2_play(&game, ppat_policy_move(&game, &st, w, ep, pw, &rng));
+            const int32_t mv = ppat_inc_policy_move(&game, w == theta ? &inc_run : &inc_ref, w, ep, pw, &rng);
+            const int32_t old_ko = game.ko;
+            const bool ok = g2_play(&game, mv);
+            ppat_inc_note(&game, &inc_run, mv, old_ko, ok);
+            ppat_inc_note(&game, &inc_ref, mv, old_ko, ok);
         }
         const int won = (g2_estimate_winner(&game) == BLACK) == cur_is_black;
         wins += won; pair_wins += won;

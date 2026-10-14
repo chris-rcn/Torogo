@@ -204,6 +204,10 @@ typedef struct {
 
 void    ppat_inc_reset      (PpatInc *inc);
 bool    ppat_inc_play       (Game2 *g, PpatInc *inc, int32_t move);   /* g2_play's result */
+/* ppat_inc_play's dirty-marking alone, for a move already played on g
+ * (old_ko: g->ko before it; ok: g2_play's result) — so one move can update
+ * several caches, e.g. one per model when two models share a game. */
+void    ppat_inc_note       (const Game2 *g, PpatInc *inc, int32_t move, int32_t old_ko, bool ok);
 int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
                              bool early_pass, float pass_logit, Rng *rng);
 /* For callers that need every candidate's keys (train_ppat's gradient

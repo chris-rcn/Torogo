@@ -888,10 +888,15 @@ static void inc_around(PpatInc *inc, int32_t c) {
 bool ppat_inc_play(Game2 *g, PpatInc *inc, int32_t move) {
     const int32_t old_ko = g->ko;
     const bool ok = g2_play(g, move);
-    if (!inc->live) return ok;   /* everything is still dirty from the reset */
+    ppat_inc_note(g, inc, move, old_ko, ok);
+    return ok;
+}
+
+void ppat_inc_note(const Game2 *g, PpatInc *inc, int32_t move, int32_t old_ko, bool ok) {
+    if (!inc->live) return;   /* everything is still dirty from the reset */
     if (old_ko != PASS) inc_dirty(inc, old_ko);
     if (g->ko != PASS) inc_dirty(inc, g->ko);
-    if (move == PASS || !ok) return ok;
+    if (move == PASS || !ok) return;
     if (++inc->gstamp == 0x7fffffff) { memset(inc->gmark, 0, sizeof inc->gmark); inc->gstamp = 1; }
     const int8_t mover = g->cells[move];
     inc_around(inc, move);
@@ -916,7 +921,6 @@ bool ppat_inc_play(Game2 *g, PpatInc *inc, int32_t move) {
             if (g->cells[n] != EMPTY) inc_mark_libs(g, inc, g->gid[n]);
         }
     }
-    return ok;
 }
 
 /* The incremental scan shared by ppat_inc_policy_move and ppat_inc_extract:
