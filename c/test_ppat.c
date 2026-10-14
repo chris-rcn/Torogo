@@ -479,6 +479,53 @@ static void test_save_load_weights(void) {
     remove(path);
 }
 
+/* The incremental path must choose exactly the move the full path chooses,
+ * every move of every playout, from the same rng stream: every optional
+ * feature on, random nonzero weights, early pass, with and without the uniform
+ * fast path below ppat_min_phase. */
+static void test_incremental_matches_full(void) {
+    const PpatEncoding saved = ppat_get_encoding();
+    const float saved_min_phase = ppat_min_phase;
+    static PpatState st;
+    static PpatInc inc;
+    int mismatches = 0, moves = 0;
+    const int phase_counts[2] = { 1, 3 };          /* 3: the phase changes mid-playout */
+    const float min_phases[2] = { 0.0f, 0.3f };
+    for (int pc = 0; pc < 2; pc++) {
+        const PpatEncoding all_on = { 3, phase_counts[pc], 2, 1, PPAT_ATARI_MAX, PPAT_XA_MAX, PPAT_CAP_MAX, PPAT_CS_MAX };
+        ppat_set_encoding(&all_on);
+        const int total = ppat_total_weights();
+        float *w = malloc(total * sizeof(float));
+        Rng wr; rng_seed(&wr, 12345 + pc);
+        for (int i = 0; i < total; i++) w[i] = 4.0f * (rng_float(&wr) - 0.5f);
+        for (int mp = 0; mp < 2; mp++) {
+            ppat_min_phase = min_phases[mp];
+            for (int trial = 0; trial < 40; trial++) {
+                Game2 gf, gi;
+                g2_new(&gf, 9);
+                Rng rs; rng_seed(&rs, 1000 + trial);
+                for (int k = 0; k < (2 * trial) % 30 && !gf.game_over; k++) g2_play(&gf, g2_random_legal_move(&gf, &rs));
+                g2_clone(&gi, &gf);
+                Rng rf, ri; rng_seed(&rf, 77 + trial); rng_seed(&ri, 77 + trial);
+                ppat_inc_reset(&inc);
+                for (int ply = 0; !gf.game_over && ply < 400; ply++) {
+                    const int32_t mf = ppat_policy_move(&gf, &st, w, true, 0.5f, &rf);
+                    const int32_t mi = ppat_inc_policy_move(&gi, &inc, w, true, 0.5f, &ri);
+                    moves++;
+                    if (mf != mi) { mismatches++; break; }
+                    g2_play(&gf, mf);
+                    ppat_inc_play(&gi, &inc, mi);
+                }
+            }
+        }
+        free(w);
+    }
+    printf("  incremental vs full: %d moves compared\n", moves);
+    check("incremental: same move as full path, every move", mismatches == 0);
+    ppat_min_phase = saved_min_phase;
+    ppat_set_encoding(&saved);
+}
+
 /* ── Performance benchmark ─────────────────────────────────────────────────── */
 
 static void bench_extract(void) {
@@ -540,6 +587,7 @@ int main(void) {
     test_policy_move();
     test_consistency_with_js();
     test_save_load_weights();
+    test_incremental_matches_full();
 
     printf("\n%d passed, %d failed\n\n", passed, failed);
 

@@ -442,31 +442,53 @@ static int self_atari_size(const Game2 *g, int32_t idx, int b4, int8_t cur) {
 
 /* ── Extract features ──────────────────────────────────────────────────────── */
 
-void ppat_extract(const Game2 *g, PpatState *st) {
-    int8_t cur = g->current;
-    int8_t foe = -cur;
-    int32_t prev = g->last_move;
-    bool has_prev = (prev != PASS);
-    int32_t my_ko_stone = g->ko_stone[cur + 1];
+/* Per-position context shared by ppat_extract and the incremental path: the
+ * feature-block offsets for this position's phase, plus the previous-move
+ * pre-scan (friendly strings put in atari by prev, their save-by-capture
+ * cells, prev's 8-neighbourhood, and ko-solve libs). */
+typedef struct {
+    int8_t  cur, foe;
+    bool    has_prev;
+    int32_t ko;
+    int     phase;
+    int     pat_offset, prev_offset, t12_offset, sa_offset, at_offset, xa_offset, cap_offset, cs_offset;
+    int32_t atari_gids[8];
+    int32_t atari_libs[8];  /* single liberty for each atari group */
+    int     n_atari;
+    int32_t sbc_cells[MAX_CAP];
+    int     n_sbc;
+    int32_t prev_n8[8];
+    int     n_prev_n8;
+    int32_t ko_solve_libs[4];
+    int     n_ko_solve;
+} PpatCtx;
+
+static void ctx_setup(const Game2 *g, PpatCtx *X) {
+    const int8_t cur = g->current, foe = -cur;
+    const int32_t prev = g->last_move;
+    const bool has_prev = (prev != PASS);
+    const int32_t my_ko_stone = g->ko_stone[cur + 1];
+    X->cur = cur; X->foe = foe; X->has_prev = has_prev; X->ko = g->ko;
 
     const int phase = ppat_phase_count * (g->cap - g->empty_count) / g->cap;
-    const int pat_offset = phase * ppat_num_patterns;
-    const int prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
-    const int t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * ppat_t12_block();
-    const int sa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block()) + phase * PPAT_SA_N;
-    const int at_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
-                                               (ppat_self_atari ? PPAT_SA_N : 0)) + phase * ppat_atari_n;
-    const int xa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
-                                               (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n)
-                         + phase * ppat_xa_n * ppat_xa_n;
-    const int cap_offset = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
-                                               (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
-                                               ppat_xa_n * ppat_xa_n)
-                         + phase * ppat_capture_n;
-    const int cs_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
-                                               (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
-                                               ppat_xa_n * ppat_xa_n + ppat_capture_n)
-                         + phase * ppat_cs_n * ppat_cs_n;
+    X->phase = phase;
+    X->pat_offset = phase * ppat_num_patterns;
+    X->prev_offset = ppat_phase_count * ppat_num_patterns + phase * 7;
+    X->t12_offset = ppat_phase_count * (ppat_num_patterns + 7) + phase * ppat_t12_block();
+    X->sa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block()) + phase * PPAT_SA_N;
+    X->at_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                        (ppat_self_atari ? PPAT_SA_N : 0)) + phase * ppat_atari_n;
+    X->xa_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                        (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n)
+                  + phase * ppat_xa_n * ppat_xa_n;
+    X->cap_offset = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                        (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
+                                        ppat_xa_n * ppat_xa_n)
+                  + phase * ppat_capture_n;
+    X->cs_offset  = ppat_phase_count * (ppat_num_patterns + 7 + ppat_t12_block() +
+                                        (ppat_self_atari ? PPAT_SA_N : 0) + ppat_atari_n +
+                                        ppat_xa_n * ppat_xa_n + ppat_capture_n)
+                  + phase * ppat_cs_n * ppat_cs_n;
 
     /* Previous-move SAVE features re-enabled (2026-09-14): slots 1
      * (save-atari-by-capture) and 3 (save-atari-by-extension) only.  The
@@ -477,9 +499,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
      * feature, and the rest lost their A/B.  KNOWN LIMITATION (as before):
      * strings at 1 liberty adjacent to prev are treated as "new" ataris
      * without verifying prev caused them. */
-    int32_t atari_gids[8];
     int n_atari = 0;
-    int32_t atari_libs[8];  /* single liberty for each atari group */
     if (has_prev) {
         int pb4 = prev * 4;
         for (int d = 0; d < 4; d++) {
@@ -489,36 +509,33 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             int32_t gid = g->gid[ni];
             if (g->ls[gid] == 1) {
                 bool dup = false;
-                for (int j = 0; j < n_atari; j++) if (atari_gids[j] == gid) { dup = true; break; }
-                if (!dup && n_atari < 8) atari_gids[n_atari++] = gid;
+                for (int j = 0; j < n_atari; j++) if (X->atari_gids[j] == gid) { dup = true; break; }
+                if (!dup && n_atari < 8) X->atari_gids[n_atari++] = gid;
             }
         }
         for (int i = 0; i < n_atari; i++)
-            atari_libs[i] = first_lib(atari_gids[i], g);
+            X->atari_libs[i] = first_lib(X->atari_gids[i], g);
     }
+    X->n_atari = n_atari;
 
     /* Precompute save-by-capture cells */
-    int32_t sbc_cells[MAX_CAP];
-    int n_sbc = 0;
-    if (n_atari > 0)
-        n_sbc = precompute_save_by_capture(atari_gids, n_atari, g, foe, sbc_cells);
+    X->n_sbc = n_atari > 0 ? precompute_save_by_capture(X->atari_gids, n_atari, g, foe, X->sbc_cells) : 0;
 
     /* Contiguity (slot 0): the 8-neighborhood of prev, computed as eight
      * indices once — no per-state set to clear. */
-    int32_t prev_n8[8];
     int n_prev_n8 = 0;
     if (has_prev) {
         int pb4 = prev * 4;
         for (int d = 0; d < 4; d++) {
-            prev_n8[n_prev_n8++] = g2_nbr[pb4 + d];
-            prev_n8[n_prev_n8++] = g2_dnbr[pb4 + d];
+            X->prev_n8[n_prev_n8++] = g2_nbr[pb4 + d];
+            X->prev_n8[n_prev_n8++] = g2_dnbr[pb4 + d];
         }
     }
+    X->n_prev_n8 = n_prev_n8;
 
     /* Ko-solve pre-scan (slot 5): liberty cells that would capture an enemy
      * group adjacent to our ko stone — resolving the ko by removing the
      * recapture. */
-    int32_t ko_solve_libs[4];
     int n_ko_solve = 0;
     if (my_ko_stone != PASS) {
         int ks4 = my_ko_stone * 4;
@@ -528,220 +545,233 @@ void ppat_extract(const Game2 *g, PpatState *st) {
             int32_t egid = g->gid[ni];
             if (g->ls[egid] == 1) {
                 int32_t lib = first_lib(egid, g);
-                if (lib >= 0) ko_solve_libs[n_ko_solve++] = lib;
+                if (lib >= 0) X->ko_solve_libs[n_ko_solve++] = lib;
             }
         }
     }
+    X->n_ko_solve = n_ko_solve;
+}
+
+/* One point's candidacy and base (non-local) features.  Returns -1 when idx is
+ * not a candidate (illegal or eyelike), else writes its base keys into
+ * feat[nf..] and returns the new end; *sa_out is its self-atari size (computed
+ * when want_sa, else 0). */
+static inline int base_feat(const Game2 *g, const PpatCtx *X, int32_t idx, int32_t *feat, int nf,
+                            bool want_sa, int *sa_out) {
+    const int8_t cur = X->cur;
+    int b4 = idx * 4;
+
+    /* ── Single pass over 4 orthogonal neighbors ─────────────────────── */
+    int32_t ni0 = g2_nbr[b4], ni1 = g2_nbr[b4+1], ni2 = g2_nbr[b4+2], ni3 = g2_nbr[b4+3];
+    int8_t c0 = g->cells[ni0], c1 = g->cells[ni1], c2 = g->cells[ni2], c3 = g->cells[ni3];
+
+    /* Fast legality: if any neighbor is empty, legal unless ko */
+    int any_empty = (c0 == EMPTY) | (c1 == EMPTY) | (c2 == EMPTY) | (c3 == EMPTY);
+    if (any_empty) {
+        if (idx == X->ko && g2_is_ko(g, idx, cur)) return -1;
+    } else {
+        if (g2_is_single_suicide(g, idx, cur)) return -1;
+        if (g2_is_multi_suicide(g, idx, cur)) return -1;
+        if (idx == X->ko && g2_is_ko(g, idx, cur)) return -1;
+    }
+
+    /* Combined true-eye check + adj_val computation.
+     * Reads gid and ls only once per neighbor. */
+    /* Diagonals are read BEFORE the eye check, which needs the hostile
+     * count: these are the same four reads the pattern index needs below,
+     * so sharing them costs nothing but the handful of eye points that used
+     * to skip out first. */
+    int vNE = diag_val(g2_dnbr[b4 + 1], g, cur);
+    int vSE = diag_val(g2_dnbr[b4 + 3], g, cur);
+    int vSW = diag_val(g2_dnbr[b4 + 2], g, cur);
+    int vNW = diag_val(g2_dnbr[b4],     g, cur);
+
+    int vN, vS, vW, vE;
+    bool eye;
+    int empty_nbr_count = 0;   /* mode-2 twelvecell trigger */
+    {
+        int friend_count = 0, empty_count_e = 0;
+        int32_t first_gid = -2, same_group = 0;
+        /* Mirrors adj_val() exactly (slot = cap+1-lib, ascending in liberties)
+         * but reads gid/ls once per neighbour and folds in the true-eye counts. */
+        const int _cap = ppat_adj_lib;
+        #define CHECK_AND_ADJ(c, ni, vout) do { \
+            if ((c) == EMPTY) { \
+                empty_count_e++; \
+                vout = 0; \
+            } else { \
+                int32_t _gid = g->gid[(ni)]; \
+                int _lib = g->ls[_gid]; if (_lib > _cap) _lib = _cap; \
+                int _slot = _cap + 1 - _lib; \
+                if ((c) == cur) { \
+                    friend_count++; \
+                    if (first_gid == -2) { first_gid = _gid; same_group = 1; } \
+                    else if (_gid == first_gid) same_group++; \
+                    vout = _slot; \
+                } else { \
+                    vout = _cap + _slot; \
+                } \
+            } \
+        } while(0)
+        CHECK_AND_ADJ(c0, ni0, vN);
+        CHECK_AND_ADJ(c1, ni1, vS);
+        CHECK_AND_ADJ(c2, ni2, vW);
+        CHECK_AND_ADJ(c3, ni3, vE);
+        #undef CHECK_AND_ADJ
+        empty_nbr_count = empty_count_e;
+        eye = g2_is_eyelike(friend_count, empty_count_e, same_group,
+                            (vNE == 2) + (vSE == 2) + (vSW == 2) + (vNW == 2));
+    }
+    /* THE playout eye rule lives in g2_is_eyelike; the counts above are
+     * handed to it so it need not rescan.  Playouts prune MORE than a root
+     * generator may: g2_is_eyelike adds the multi-chain wall with one
+     * hostile diagonal, which g2_is_true_eye leaves legal because it cannot
+     * prove it is never a move.  This used to be an inlined copy that had
+     * drifted, which made the playout fill multi-chain eyes and kill live
+     * groups. */
+    if (eye) return -1;
+
+    const int _R = 2 * ppat_adj_lib + 1;
+    int raw = vN + _R*(vE + _R*(vS + _R*(vW + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
+
+    /* Pattern feature */
+    feat[nf++] = X->pat_offset + ppat_canon_id[raw];
+
+    /* Twelvecell extension: an all-empty ninecell (raw 0 — every cell codes
+     * 0 when empty) gets a second key for the four distance-2 orthogonals. */
+    if (ppat_twelvecell == 1 ? raw == 0
+                             : ppat_twelvecell == 2 && empty_nbr_count == 4) {
+        const int8_t a0 = g->cells[g2_nbr[ni0 * 4 + 0]];
+        const int8_t a1 = g->cells[g2_nbr[ni3 * 4 + 3]];
+        const int8_t a2 = g->cells[g2_nbr[ni1 * 4 + 1]];
+        const int8_t a3 = g->cells[g2_nbr[ni2 * 4 + 2]];
+        const int w0 = a0 == EMPTY ? 0 : a0 == cur ? 1 : 2;
+        const int w1 = a1 == EMPTY ? 0 : a1 == cur ? 1 : 2;
+        const int w2 = a2 == EMPTY ? 0 : a2 == cur ? 1 : 2;
+        const int w3 = a3 == EMPTY ? 0 : a3 == cur ? 1 : 2;
+        if (ppat_twelvecell == 1) {
+            feat[nf++] = X->t12_offset +
+                ppat_t12_canon[w0 + 3*(w1 + 3*(w2 + 3*w3))];
+        } else {
+            /* Diagonals first (NE, SE, SW, NW), then the arms — jointly
+             * canonicalised so their relative placement survives. */
+            feat[nf++] = X->t12_offset +
+                ppat_t12b_canon[vNE + 3*(vSE + 3*(vSW + 3*(vNW +
+                                3*(w0 + 3*(w1 + 3*(w2 + 3*w3))))))];
+        }
+    }
+
+    /* Computed once; feeds the graded feature (when on), the save-slot
+     * split and the two interaction grids, so it is needed whenever any of
+     * them can fire (ppat-lib.js: selfAtari || hasPrev). */
+    const int sa = want_sa ? self_atari_size(g, idx, b4, cur) : 0;
+    *sa_out = sa;
+    if (ppat_self_atari && sa > 0)
+        feat[nf++] = X->sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
+
+    /* Gives-atari: the largest adjacent enemy chain this move reduces to
+     * one liberty (an adjacent empty point is always one of its
+     * liberties, so ls == 2 is the exact condition). */
+    if (ppat_atari_n || ppat_xa_n || ppat_capture_n || ppat_cs_n) {
+        int biggest = 0, cap_sum = 0;
+        int16_t cap_gids[4]; int n_cap_gids = 0;
+        for (int d = 0; d < 4; d++) {
+            const int32_t ni = g2_nbr[b4 + d];
+            if (g->cells[ni] != cur && g->cells[ni] != EMPTY) {
+                const int16_t eg = g->gid[ni];
+                if (g->ls[eg] == 2 && g->ss[eg] > biggest) biggest = g->ss[eg];
+                else if ((ppat_capture_n || ppat_cs_n) && g->ls[eg] == 1) {
+                    int dup = 0;
+                    for (int k = 0; k < n_cap_gids; k++) dup |= (cap_gids[k] == eg);
+                    if (!dup) { cap_gids[n_cap_gids++] = eg; cap_sum += g->ss[eg]; }
+                }
+            }
+        }
+        if (ppat_capture_n && cap_sum > 0) {
+            const int b = cap_sum < ppat_capture_n ? cap_sum : ppat_capture_n;
+            feat[nf++] = X->cap_offset + b - 1;
+        }
+        /* Ko-take / snapback family: captures while ending in atari. */
+        if (ppat_cs_n && sa > 0 && cap_sum > 0) {
+            const int bs = sa < ppat_cs_n ? sa : ppat_cs_n;
+            const int bc = cap_sum < ppat_cs_n ? cap_sum : ppat_cs_n;
+            feat[nf++] = X->cs_offset + (bs - 1) * ppat_cs_n + (bc - 1);
+        }
+        if (ppat_atari_n && biggest > 0) {
+            const int b = biggest < ppat_atari_n ? biggest : ppat_atari_n;
+            feat[nf++] = X->at_offset + b - 1;
+        }
+        /* Mutual atari: both in danger — the (own, victim) size grid. */
+        if (ppat_xa_n && sa > 0 && biggest > 0) {
+            const int bs = sa < ppat_xa_n ? sa : ppat_xa_n;
+            const int ba = biggest < ppat_xa_n ? biggest : ppat_xa_n;
+            feat[nf++] = X->xa_offset + (bs - 1) * ppat_xa_n + (ba - 1);
+        }
+    }
+    return nf;
+}
+
+/* One candidate's local (previous-move) keys, appended at feat[nf..]; returns
+ * the new end.  sa is the candidate's self-atari size. */
+static inline int local_feat(const PpatCtx *X, int32_t idx, int sa, int32_t *feat, int nf) {
+    const int nf_locals = nf;   /* for the slot-0 piggyback below */
+    const int prev_offset = X->prev_offset;
+
+    /* Save-atari features: capture (slots 1/2) takes priority over
+     * extension (slots 3/4), split by whether the rescue itself is a
+     * self-atari — the interaction the additive pair cannot express, and
+     * free now that `sa` is already computed for the graded feature. */
+    if (X->n_atari > 0) {
+        bool feat2 = false;
+        for (int si = 0; si < X->n_sbc; si++)
+            if (X->sbc_cells[si] == idx) { feat2 = true; break; }
+        if (feat2) feat[nf++] = prev_offset + (sa > 0 ? 2 : 1);
+        else {
+            for (int i = 0; i < X->n_atari; i++)
+                if (X->atari_libs[i] == idx) { feat[nf++] = prev_offset + (sa > 0 ? 4 : 3); break; }
+        }
+    }
+
+    /* Ko-solve (slot 5) */
+    for (int ki = 0; ki < X->n_ko_solve; ki++)
+        if (idx == X->ko_solve_libs[ki]) { feat[nf++] = prev_offset + 5; break; }
+
+    /* Contiguity (slot 0): within prev's 8-neighborhood, or — the
+     * original piggyback — any tactical local (slots 1-6) fired. */
+    if (X->has_prev) {
+        bool local = nf > nf_locals;
+        for (int k = 0; !local && k < X->n_prev_n8; k++) local = (X->prev_n8[k] == idx);
+        if (local) feat[nf++] = prev_offset + 0;
+    }
+    return nf;
+}
+
+void ppat_extract(const Game2 *g, PpatState *st) {
+    static PpatCtx X;
+    ctx_setup(g, &X);
+    const bool want_sa = ppat_self_atari || X.has_prev || ppat_xa_n || ppat_cs_n;
 
     int count = 0;
     int nf = 0;  /* index into st->feat[] */
-
-    const int32_t ko = g->ko;
-
     for (int ei = 0; ei < g->empty_count; ei++) {
-        int32_t idx = g->empty_cells[ei];
-        int b4 = idx * 4;
-
-        /* ── Single pass over 4 orthogonal neighbors ─────────────────────── */
-        int32_t ni0 = g2_nbr[b4], ni1 = g2_nbr[b4+1], ni2 = g2_nbr[b4+2], ni3 = g2_nbr[b4+3];
-        int8_t c0 = g->cells[ni0], c1 = g->cells[ni1], c2 = g->cells[ni2], c3 = g->cells[ni3];
-
-        /* Fast legality: if any neighbor is empty, legal unless ko */
-        int any_empty = (c0 == EMPTY) | (c1 == EMPTY) | (c2 == EMPTY) | (c3 == EMPTY);
-        if (any_empty) {
-            if (idx == ko && g2_is_ko(g, idx, cur)) continue;
-        } else {
-            if (g2_is_single_suicide(g, idx, cur)) continue;
-            if (g2_is_multi_suicide(g, idx, cur)) continue;
-            if (idx == ko && g2_is_ko(g, idx, cur)) continue;
-        }
-
-        /* Combined true-eye check + adj_val computation.
-         * Reads gid and ls only once per neighbor. */
-        /* Diagonals are read BEFORE the eye check, which needs the hostile
-         * count: these are the same four reads the pattern index needs below,
-         * so sharing them costs nothing but the handful of eye points that used
-         * to skip out first. */
-        int vNE = diag_val(g2_dnbr[b4 + 1], g, cur);
-        int vSE = diag_val(g2_dnbr[b4 + 3], g, cur);
-        int vSW = diag_val(g2_dnbr[b4 + 2], g, cur);
-        int vNW = diag_val(g2_dnbr[b4],     g, cur);
-
-        int vN, vS, vW, vE;
-        bool eye;
-        int empty_nbr_count = 0;   /* mode-2 twelvecell trigger */
-        {
-            int friend_count = 0, empty_count_e = 0;
-            int32_t first_gid = -2, same_group = 0;
-            /* Mirrors adj_val() exactly (slot = cap+1-lib, ascending in liberties)
-             * but reads gid/ls once per neighbour and folds in the true-eye counts. */
-            const int _cap = ppat_adj_lib;
-            #define CHECK_AND_ADJ(c, ni, vout) do { \
-                if ((c) == EMPTY) { \
-                    empty_count_e++; \
-                    vout = 0; \
-                } else { \
-                    int32_t _gid = g->gid[(ni)]; \
-                    int _lib = g->ls[_gid]; if (_lib > _cap) _lib = _cap; \
-                    int _slot = _cap + 1 - _lib; \
-                    if ((c) == cur) { \
-                        friend_count++; \
-                        if (first_gid == -2) { first_gid = _gid; same_group = 1; } \
-                        else if (_gid == first_gid) same_group++; \
-                        vout = _slot; \
-                    } else { \
-                        vout = _cap + _slot; \
-                    } \
-                } \
-            } while(0)
-            CHECK_AND_ADJ(c0, ni0, vN);
-            CHECK_AND_ADJ(c1, ni1, vS);
-            CHECK_AND_ADJ(c2, ni2, vW);
-            CHECK_AND_ADJ(c3, ni3, vE);
-            #undef CHECK_AND_ADJ
-            empty_nbr_count = empty_count_e;
-            eye = g2_is_eyelike(friend_count, empty_count_e, same_group,
-                                (vNE == 2) + (vSE == 2) + (vSW == 2) + (vNW == 2));
-        }
-        /* THE playout eye rule lives in g2_is_eyelike; the counts above are
-         * handed to it so it need not rescan.  Playouts prune MORE than a root
-         * generator may: g2_is_eyelike adds the multi-chain wall with one
-         * hostile diagonal, which g2_is_true_eye leaves legal because it cannot
-         * prove it is never a move.  This used to be an inlined copy that had
-         * drifted, which made the playout fill multi-chain eyes and kill live
-         * groups. */
-        if (eye) continue;
-
-        const int _R = 2 * ppat_adj_lib + 1;
-        int raw = vN + _R*(vE + _R*(vS + _R*(vW + _R*(vNE + 3*(vSE + 3*(vSW + 3*vNW))))));
-
+        const int32_t idx = g->empty_cells[ei];
+        int sa;
+        const int nb = base_feat(g, &X, idx, st->feat, nf, want_sa, &sa);
+        if (nb < 0) continue;
         st->moves[count] = idx;
         st->feat_start[count] = nf;
-
-        /* Pattern feature */
-        st->feat[nf++] = pat_offset + ppat_canon_id[raw];
-
-        /* Twelvecell extension: an all-empty ninecell (raw 0 — every cell codes
-         * 0 when empty) gets a second key for the four distance-2 orthogonals. */
-        if (ppat_twelvecell == 1 ? raw == 0
-                                 : ppat_twelvecell == 2 && empty_nbr_count == 4) {
-            const int8_t a0 = g->cells[g2_nbr[ni0 * 4 + 0]];
-            const int8_t a1 = g->cells[g2_nbr[ni3 * 4 + 3]];
-            const int8_t a2 = g->cells[g2_nbr[ni1 * 4 + 1]];
-            const int8_t a3 = g->cells[g2_nbr[ni2 * 4 + 2]];
-            const int w0 = a0 == EMPTY ? 0 : a0 == cur ? 1 : 2;
-            const int w1 = a1 == EMPTY ? 0 : a1 == cur ? 1 : 2;
-            const int w2 = a2 == EMPTY ? 0 : a2 == cur ? 1 : 2;
-            const int w3 = a3 == EMPTY ? 0 : a3 == cur ? 1 : 2;
-            if (ppat_twelvecell == 1) {
-                st->feat[nf++] = t12_offset +
-                    ppat_t12_canon[w0 + 3*(w1 + 3*(w2 + 3*w3))];
-            } else {
-                /* Diagonals first (NE, SE, SW, NW), then the arms — jointly
-                 * canonicalised so their relative placement survives. */
-                st->feat[nf++] = t12_offset +
-                    ppat_t12b_canon[vNE + 3*(vSE + 3*(vSW + 3*(vNW +
-                                    3*(w0 + 3*(w1 + 3*(w2 + 3*w3))))))];
-            }
-        }
-
-        /* Computed once; feeds the graded feature (when on), the save-slot
-         * split and the two interaction grids, so it is needed whenever any of
-         * them can fire (ppat-lib.js: selfAtari || hasPrev). */
-        const int sa = (ppat_self_atari || has_prev || ppat_xa_n || ppat_cs_n)
-                     ? self_atari_size(g, idx, b4, cur) : 0;
-        if (ppat_self_atari && sa > 0)
-            st->feat[nf++] = sa_offset + (sa < PPAT_SA_N ? sa : PPAT_SA_N) - 1;
-
-        /* Gives-atari: the largest adjacent enemy chain this move reduces to
-         * one liberty (an adjacent empty point is always one of its
-         * liberties, so ls == 2 is the exact condition). */
-        if (ppat_atari_n || ppat_xa_n || ppat_capture_n || ppat_cs_n) {
-            int biggest = 0, cap_sum = 0;
-            int16_t cap_gids[4]; int n_cap_gids = 0;
-            for (int d = 0; d < 4; d++) {
-                const int32_t ni = g2_nbr[b4 + d];
-                if (g->cells[ni] != cur && g->cells[ni] != EMPTY) {
-                    const int16_t eg = g->gid[ni];
-                    if (g->ls[eg] == 2 && g->ss[eg] > biggest) biggest = g->ss[eg];
-                    else if ((ppat_capture_n || ppat_cs_n) && g->ls[eg] == 1) {
-                        int dup = 0;
-                        for (int k = 0; k < n_cap_gids; k++) dup |= (cap_gids[k] == eg);
-                        if (!dup) { cap_gids[n_cap_gids++] = eg; cap_sum += g->ss[eg]; }
-                    }
-                }
-            }
-            if (ppat_capture_n && cap_sum > 0) {
-                const int b = cap_sum < ppat_capture_n ? cap_sum : ppat_capture_n;
-                st->feat[nf++] = cap_offset + b - 1;
-            }
-            /* Ko-take / snapback family: captures while ending in atari. */
-            if (ppat_cs_n && sa > 0 && cap_sum > 0) {
-                const int bs = sa < ppat_cs_n ? sa : ppat_cs_n;
-                const int bc = cap_sum < ppat_cs_n ? cap_sum : ppat_cs_n;
-                st->feat[nf++] = cs_offset + (bs - 1) * ppat_cs_n + (bc - 1);
-            }
-            if (ppat_atari_n && biggest > 0) {
-                const int b = biggest < ppat_atari_n ? biggest : ppat_atari_n;
-                st->feat[nf++] = at_offset + b - 1;
-            }
-            /* Mutual atari: both in danger — the (own, victim) size grid. */
-            if (ppat_xa_n && sa > 0 && biggest > 0) {
-                const int bs = sa < ppat_xa_n ? sa : ppat_xa_n;
-                const int ba = biggest < ppat_xa_n ? biggest : ppat_xa_n;
-                st->feat[nf++] = xa_offset + (bs - 1) * ppat_xa_n + (ba - 1);
-            }
-        }
-
-        const int nf_locals = nf;   /* for the slot-0 piggyback below */
-
-        /* Save-atari features: capture (slots 1/2) takes priority over
-         * extension (slots 3/4), split by whether the rescue itself is a
-         * self-atari — the interaction the additive pair cannot express, and
-         * free now that `sa` is already computed for the graded feature. */
-        if (n_atari > 0) {
-            bool feat2 = false;
-            for (int si = 0; si < n_sbc; si++)
-                if (sbc_cells[si] == idx) { feat2 = true; break; }
-            if (feat2) st->feat[nf++] = prev_offset + (sa > 0 ? 2 : 1);
-            else {
-                for (int i = 0; i < n_atari; i++)
-                    if (atari_libs[i] == idx) { st->feat[nf++] = prev_offset + (sa > 0 ? 4 : 3); break; }
-            }
-        }
-
-        /* Ko-solve (slot 5) */
-        for (int ki = 0; ki < n_ko_solve; ki++)
-            if (idx == ko_solve_libs[ki]) { st->feat[nf++] = prev_offset + 5; break; }
-
-
-        /* Contiguity (slot 0): within prev's 8-neighborhood, or — the
-         * original piggyback — any tactical local (slots 1-6) fired. */
-        if (has_prev) {
-            bool local = nf > nf_locals;
-            for (int k = 0; !local && k < n_prev_n8; k++) local = (prev_n8[k] == idx);
-            if (local) st->feat[nf++] = prev_offset + 0;
-        }
-
+        nf = local_feat(&X, idx, sa, st->feat, nb);
         count++;
     }
 
     st->feat_start[count] = nf;
     st->count = count;
-
-//    /* Clear prevNeighborSet for reuse */
-//    if (has_prev) {
-//        int pb4 = prev * 4;
-//        for (int d = 0; d < 4; d++) {
-//            st->prev_neighbor_set[g2_nbr[pb4 + d]]  = 0;
-//            st->prev_neighbor_set[g2_dnbr[pb4 + d]] = 0;
-//        }
-//    }
 }
 
 /* ── Policy move ───────────────────────────────────────────────────────────── */
 
 static float logits_buf[MAX_CAP];
+static int sample_logits(int n, float mx, bool early_pass, float pass_logit, Rng *rng);
 
 /* Fast approximate exp for softmax sampling.
  * Uses the classic Schraudolph IEEE-754 trick: interpret float bits. */
@@ -778,7 +808,14 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights,
         logits_buf[i] = v;
         if (v > mx) mx = v;
     }
+    const int chosen = sample_logits(n, mx, early_pass, pass_logit, rng);
+    return chosen < 0 ? PASS : st->moves[chosen];
+}
 
+/* The sampling pass shared by both paths: softmax over logits_buf[0..n) (and
+ * PASS when early_pass), max mx already known.  Returns the chosen candidate's
+ * index, or -1 for PASS. */
+static int sample_logits(int n, float mx, bool early_pass, float pass_logit, Rng *rng) {
     /* PASS as a candidate, at logit 0, only when the model was trained for it
      * (early_pass, which travels with the weights; ppat-lib.js gates on the same
      * flag, read from the file).
@@ -802,13 +839,147 @@ int32_t ppat_policy_move(const Game2 *g, PpatState *st, const float *weights,
     sum += e_pass;
 
     float r = rng_float(rng) * sum;
-    if (early_pass) { r -= e_pass; if (r <= 0) return PASS; }
+    if (early_pass) { r -= e_pass; if (r <= 0) return -1; }
     int chosen = n - 1;
     for (int i = 0; i < n; i++) {
         r -= logits_buf[i];
         if (r <= 0) { chosen = i; break; }
     }
-    return st->moves[chosen];
+    return chosen;
+}
+
+/* ── Incremental playouts (see ppat.h) ─────────────────────────────────────── */
+
+void ppat_inc_reset(PpatInc *inc) {
+    memset(inc->dirty, 1, sizeof inc->dirty);
+    inc->phase[0] = inc->phase[1] = -1;
+    inc->live = false;
+}
+
+static inline void inc_dirty(PpatInc *inc, int32_t p) { inc->dirty[0][p] = inc->dirty[1][p] = 1; }
+
+/* Dirty every liberty of chain gid, once per play. */
+static void inc_mark_libs(const Game2 *g, PpatInc *inc, int gid) {
+    if (inc->gmark[gid] == inc->gstamp) return;
+    inc->gmark[gid] = inc->gstamp;
+    const uint32_t *lw = &g->lw[gid * g->W];
+    for (int wi = 0; wi < g->W; wi++) {
+        uint32_t bits = lw[wi];
+        while (bits) {
+            const int p = (wi << 5) + __builtin_ctz(bits);
+            bits &= bits - 1;
+            if (p < g->cap) inc_dirty(inc, p);
+        }
+    }
+}
+
+/* Dirty c and every cell within Manhattan distance 2 of it. */
+static void inc_around(PpatInc *inc, int32_t c) {
+    const int b = c * 4;
+    inc_dirty(inc, c);
+    for (int d = 0; d < 4; d++) {
+        const int32_t n = g2_nbr[b + d];
+        inc_dirty(inc, n);
+        inc_dirty(inc, g2_nbr[n * 4 + d]);
+        inc_dirty(inc, g2_dnbr[b + d]);
+    }
+}
+
+bool ppat_inc_play(Game2 *g, PpatInc *inc, int32_t move) {
+    const int32_t old_ko = g->ko;
+    const bool ok = g2_play(g, move);
+    if (!inc->live) return ok;   /* everything is still dirty from the reset */
+    if (old_ko != PASS) inc_dirty(inc, old_ko);
+    if (g->ko != PASS) inc_dirty(inc, g->ko);
+    if (move == PASS || !ok) return ok;
+    if (++inc->gstamp == 0x7fffffff) { memset(inc->gmark, 0, sizeof inc->gmark); inc->gstamp = 1; }
+    const int8_t mover = g->cells[move];
+    inc_around(inc, move);
+    /* The mover's merged chain: identity, size and liberties all changed. */
+    inc_mark_libs(g, inc, g->gid[move]);
+    /* An adjacent enemy chain lost exactly one liberty and kept its identity
+     * and size.  Features see a chain's liberties only through
+     * min(ls, PPAT_MAX_ADJ_LIB), ls 1 / 2, ls >= 3 and the exact liberty set
+     * when ls <= 2, so its liberties' features can change only if it now has
+     * ls < PPAT_MAX_ADJ_LIB. */
+    for (int d = 0; d < 4; d++) {
+        const int32_t n = g2_nbr[move * 4 + d];
+        if (g->cells[n] == -mover && g->ls[g->gid[n]] < PPAT_MAX_ADJ_LIB) inc_mark_libs(g, inc, g->gid[n]);
+    }
+    /* Captured stones: their cells, and the chains around them (all the
+     * mover's, which gained liberties). */
+    for (int k = 0; k < g->last_capture_count; k++) {
+        const int32_t c = g->last_captures[k];
+        inc_around(inc, c);
+        for (int d = 0; d < 4; d++) {
+            const int32_t n = g2_nbr[c * 4 + d];
+            if (g->cells[n] != EMPTY) inc_mark_libs(g, inc, g->gid[n]);
+        }
+    }
+    return ok;
+}
+
+int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
+                             bool early_pass, float pass_logit, Rng *rng) {
+    if (ppat_min_phase > 0) {
+        float fullness = (float)(g->cap - g->empty_count) / g->cap;
+        if (fullness < ppat_min_phase) return g2_random_legal_move(g, rng);
+    }
+
+    static PpatCtx X;
+    ctx_setup(g, &X);
+    if (inc->weights != weights) {   /* cached base logits are sums of these */
+        memset(inc->dirty, 1, sizeof inc->dirty);
+        inc->weights = weights;
+    }
+    const int ci = X.cur > 0 ? 0 : 1;
+    if (inc->phase[ci] != X.phase) { memset(inc->dirty[ci], 1, sizeof inc->dirty[ci]); inc->phase[ci] = X.phase; }
+    inc->live = true;
+
+    /* The points local features can fire on this move. */
+    if (++inc->lstamp == 0x7fffffff) { memset(inc->lmark, 0, sizeof inc->lmark); inc->lstamp = 1; }
+    int32_t *lm = inc->lmark; const int32_t stamp = inc->lstamp;
+    for (int k = 0; k < X.n_prev_n8; k++) lm[X.prev_n8[k]] = stamp;
+    for (int k = 0; k < X.n_atari; k++) if (X.atari_libs[k] >= 0) lm[X.atari_libs[k]] = stamp;
+    for (int k = 0; k < X.n_sbc; k++) lm[X.sbc_cells[k]] = stamp;
+    for (int k = 0; k < X.n_ko_solve; k++) lm[X.ko_solve_libs[k]] = stamp;
+
+    /* sa is cached for any later move's locals, so always computed (ppat_extract
+     * skips it only when no feature can read it, which leaves its keys
+     * unchanged). */
+    uint8_t *dirty = inc->dirty[ci], *cand = inc->cand[ci];
+    float *base = inc->base[ci];
+    int16_t *saC = inc->sa[ci];
+    int32_t feat[PPAT_MAX_FEAT];
+    int n = 0;
+    float mx = -1e30f;
+    for (int ei = 0; ei < g->empty_count; ei++) {
+        const int32_t idx = g->empty_cells[ei];
+        if (dirty[idx]) {
+            dirty[idx] = 0;
+            int sa;
+            const int nb = base_feat(g, &X, idx, feat, 0, true, &sa);
+            if (nb < 0) cand[idx] = 0;
+            else {
+                float v = 0;
+                for (int k = 0; k < nb; k++) v += weights[feat[k]];
+                base[idx] = v; saC[idx] = (int16_t)sa; cand[idx] = 1;
+            }
+        }
+        if (!cand[idx]) continue;
+        float v = base[idx];
+        if (lm[idx] == stamp) {
+            const int nl = local_feat(&X, idx, saC[idx], feat, 0);
+            for (int k = 0; k < nl; k++) v += weights[feat[k]];
+        }
+        logits_buf[n] = v;
+        inc->moves[n] = idx;
+        n++;
+        if (v > mx) mx = v;
+    }
+    if (n == 0) return PASS;
+    const int chosen = sample_logits(n, mx, early_pass, pass_logit, rng);
+    return chosen < 0 ? PASS : inc->moves[chosen];
 }
 
 /* ── Weight file I/O ───────────────────────────────────────────────────────── */

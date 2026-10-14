@@ -163,6 +163,43 @@ void     ppat_extract     (const Game2 *g, PpatState *st);
 int32_t  ppat_policy_move (const Game2 *g, PpatState *st, const float *weights,
                            bool early_pass, float pass_logit, Rng *rng);
 
+/* ── Incremental playouts (port of ppat-lib.js's incremental path) ─────────────
+ *
+ * The same policy as ppat_policy_move, bit for bit, without re-extracting every
+ * candidate each move.  Per side to move, each point caches its candidacy,
+ * self-atari size and BASE logit (the float sum of its non-local feature
+ * weights, in emission order).  A move dirties, for both sides, every point
+ * whose base features can change: within Manhattan distance 2 of a changed
+ * cell (the placed stone and any captured stones), the liberties of every chain
+ * touching a changed cell (an adjacent enemy chain only when left with fewer
+ * than PPAT_MAX_ADJ_LIB liberties), and the old and new ko points.  The local
+ * (previous-move) features are added after the base ones, at the few points
+ * they can fire on; sampling is ppat_policy_move's own pass in empty-cell order.
+ *
+ * Per playout:  ppat_inc_reset(inc) at its start;  then each move
+ *   m = ppat_inc_policy_move(g, inc, weights, ...);  ppat_inc_play(g, inc, m);
+ * The game must change only through ppat_inc_play between those calls.  The
+ * cache is keyed to the active encoding: switch encodings (ppat_set_encoding)
+ * only between playouts, with a reset.  Until the playout's first ppat move
+ * (uniform moves below ppat_min_phase), ppat_inc_play is a plain g2_play. */
+typedef struct {
+    float        base[2][MAX_CAP];   /* [0] = black to move, [1] = white */
+    uint8_t      cand[2][MAX_CAP];
+    int16_t      sa[2][MAX_CAP];
+    uint8_t      dirty[2][MAX_CAP];
+    int          phase[2];
+    const float *weights;            /* the weights the cached base logits sum */
+    bool         live;               /* a ppat move has scanned since the reset */
+    int32_t      moves[MAX_CAP];
+    int32_t      lmark[MAX_CAP], lstamp;   /* this move's local-feature points */
+    int32_t      gmark[MAX_G],   gstamp;   /* chains already dirtied this play */
+} PpatInc;
+
+void    ppat_inc_reset      (PpatInc *inc);
+bool    ppat_inc_play       (Game2 *g, PpatInc *inc, int32_t move);   /* g2_play's result */
+int32_t ppat_inc_policy_move(Game2 *g, PpatInc *inc, const float *weights,
+                             bool early_pass, float pass_logit, Rng *rng);
+
 /* ── Weight file I/O (JS-compatible format) ────────────────────────────────── */
 
 /* Save weights to a JS module file.  comment is optional (NULL ok).  Returns

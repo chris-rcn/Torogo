@@ -8,6 +8,7 @@ $CC $CFLAGS -o test_game2.bin           game2.c test_game2.c -lm
 $CC $CFLAGS -o test_game3.bin           game2.c game3.c test_game3.c -lm
 $CC $CFLAGS -o test_ladder2.bin         game2.c game3.c ladder2.c test_ladder2.c -lm
 $CC $CFLAGS -o test_ppat.bin            game2.c ppat.c test_ppat.c -lm
+$CC $CFLAGS -o bench_ppat.bin           game2.c ppat.c bench_ppat.c -lm
 $CC $CFLAGS -o test_rave.bin            game2.c rave.c test_rave.c -lm
 $CC $CFLAGS -o gen_evals.bin            game2.c rave.c gen_evals.c -lm
 $CC $CFLAGS -o eval_compare.bin         game2.c rave.c eval_compare.c -lm
@@ -21,4 +22,4 @@ $CC $CFLAGS -o test_puct.bin            game2.c fpol.c ppat.c puct.c test_puct.c
 $CC $CFLAGS -o ppat_match.bin          game2.c fpol.c ppat.c puct.c match.c ppat_match.c -lm
 $CC $CFLAGS -o test_match.bin          game2.c fpol.c ppat.c puct.c test_match.c -lm
 
-echo "built 16 binaries"
+echo "built 17 binaries"
