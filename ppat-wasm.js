@@ -10,6 +10,8 @@
 //   pw.setModel(PPat.loadWeights(file));       // a ppat-lib.js model object
 //   pw.setRoot(game);                          // once per decision: a JS Game2
 //   pw.descend(path, n);                       // per playout: the leaf = root + path
+//   const v = pw.playout(seed, minPhase);      // then P(BLACK wins) in {0,1};
+//   pw.trace(); pw.ppatMoves; pw.uniformMoves  // its RAVE trace (a view) and move counts
 //
 // The module's only imports are the five WASI calls its C runtime keeps for
 // fatal-error messages and malloc: fd_write prints (stderr via console.error),
@@ -67,11 +69,16 @@ function wasiShim(getMemory) {
 function wrap(instance, shim) {
   const X = instance.exports;
   X._initialize();
-  let weightsPtr = 0;
+  let weightsPtr = 0, boardArea = 0, traceView = null, countsView = null;
+  const counts = () => {
+    if (countsView === null || countsView.buffer !== X.memory.buffer)
+      countsView = new Int32Array(X.memory.buffer, X.wasm_counts_buf(), 2);
+    return countsView;
+  };
   return {
     exports: X,
     memory: X.memory,
-    init(N) { X.wasm_init(N); },
+    init(N) { X.wasm_init(N); boardArea = N * N; traceView = null; },
     // Copy a ppat-lib.js model into the module and adopt its encoding; throws
     // when the weight count does not match the encoding's expected total.
     setModel(model) {
@@ -102,6 +109,27 @@ function wrap(instance, shim) {
       for (let i = 0; i < n; i++) buf[i] = path[i];
       const rc = X.wasm_descend(n);
       if (rc !== 0) throw new Error(`ppat-wasm: descent move ${-rc - 1} (${path[-rc - 1]}) is illegal`);
+    },
+    // One playout from the leaf (descend first): puct-trunc's untruncated loop
+    // with uniform moves below minPhase.  seed: a 32-bit integer from the
+    // agent's rng.  Sets ppatMoves / uniformMoves; trace() is its RAVE trace.
+    playout(seed, minPhase) {
+      const v = X.wasm_playout(seed >>> 0, minPhase);
+      if (v < 0) throw new Error('ppat-wasm: playout without a model (setModel first)');
+      const c = counts();
+      this.ppatMoves = c[0];
+      this.uniformMoves = c[1];
+      return v;
+    },
+    ppatMoves: 0,
+    uniformMoves: 0,
+    // The last playout's colour-signed first-occupancy RAVE trace: a
+    // Float32Array view of the module's buffer, valid until the next playout
+    // (and re-taken whenever the memory has grown).
+    trace() {
+      if (traceView === null || traceView.buffer !== X.memory.buffer)
+        traceView = new Float32Array(X.memory.buffer, X.wasm_trace_buf(), boardArea);
+      return traceView;
     },
     lastError: shim.lastError,
   };
