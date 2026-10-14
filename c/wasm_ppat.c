@@ -8,9 +8,14 @@
  * Fatal errors (bad board size, bad adjLib) still print and exit; ppat-wasm.js
  * turns those into JS exceptions.
  *
+ * Positions: the search's root is sent once per decision (wasm_set_root: the
+ * cells plus the game-state scalars, rebuilt here), and each playout's leaf is
+ * reached by replaying the tree-descent path from it (wasm_descend), so a
+ * playout never pays for a full rebuild.
+ *
  * -DWASM_PPAT_TEST adds wasm_test_bench, bench_ppat.c's playout loop, so a
  * hand-off module can be checked against bench_ppat.wasm (the file-loader
- * build) for an identical move checksum.
+ * build) for an identical move checksum, and readers of the descended board.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -26,8 +31,56 @@ static float model_pass_weight = 0;
 EXPORT("wasm_alloc") void *wasm_alloc(int bytes) { return malloc((size_t)bytes); }
 EXPORT("wasm_free")  void  wasm_free(void *p)    { free(p); }
 
+/* ── Positions ──────────────────────────────────────────────────────────── */
+
+#define WASM_MAX_PATH 1024
+static int     board_n = 0;
+static int8_t  cells_buf[MAX_CAP];          /* JS writes the root's cells here */
+static int32_t path_buf[WASM_MAX_PATH];     /* ... and each playout's descent path here */
+static Game2   root, sim;
+
 /* Board size for everything after: neighbour tables. */
-EXPORT("wasm_init") void wasm_init(int N) { g2_init_topology(N); }
+EXPORT("wasm_init") void wasm_init(int N) { g2_init_topology(N); board_n = N; }
+
+EXPORT("wasm_cells_buf") int8_t  *wasm_cells_buf(void) { return cells_buf; }
+EXPORT("wasm_path_buf")  int32_t *wasm_path_buf(void)  { return path_buf; }
+EXPORT("wasm_path_cap")  int      wasm_path_cap(void)  { return WASM_MAX_PATH; }
+
+/* The root, from cells_buf and JS Game2's state: the stones are replayed in
+ * index order with current set to each stone's colour — legal and
+ * capture-free for any position reachable by legal play (CLAUDE.md's replay
+ * invariant) — then the state restored.  Returns 0, or -(i+1) when stone i is
+ * rejected or captures (an unreachable position). */
+EXPORT("wasm_set_root")
+int wasm_set_root(int current, int ko, int last_move, int ko_stone_white, int ko_stone_black,
+                  int consecutive_passes, int move_count) {
+    g2_new_empty(&root, board_n);
+    for (int i = 0; i < root.cap; i++) {
+        if (cells_buf[i] == EMPTY) continue;
+        root.current = cells_buf[i];
+        if (!g2_play(&root, i) || root.last_capture_count != 0) return -(i + 1);
+    }
+    root.current = (int8_t)current;
+    root.ko = (int16_t)ko;
+    root.last_move = (int16_t)last_move;
+    root.ko_stone[0] = (int16_t)ko_stone_white;   /* indexed colour + 1 */
+    root.ko_stone[2] = (int16_t)ko_stone_black;
+    root.consecutive_passes = (int16_t)consecutive_passes;
+    root.game_over = consecutive_passes >= 2 || move_count >= 4 * root.cap;
+    root.move_count = (int16_t)move_count;
+    root.last_capture_count = 0;
+    return 0;
+}
+
+/* The leaf: the root with path_buf[0..n) played.  Returns 0, or -(i+1) when
+ * move i is illegal. */
+EXPORT("wasm_descend")
+int wasm_descend(int n) {
+    if (n < 0 || n > WASM_MAX_PATH) return -(WASM_MAX_PATH + 1);
+    g2_clone(&sim, &root);
+    for (int i = 0; i < n; i++) if (!g2_play(&sim, path_buf[i])) return -(i + 1);
+    return 0;
+}
 
 /* Adopt a model: its encoding (ppat-lib.js's loadWeights fields) and its n
  * weights, already copied to w.  Returns 0, or the weight count this encoding
@@ -47,6 +100,23 @@ int wasm_set_model(const float *w, int n, int adj_lib, int phases, int twelvecel
 }
 
 #ifdef WASM_PPAT_TEST
+/* The descended board, for checking it against JS. */
+EXPORT("wasm_sim_cells") const int8_t *wasm_sim_cells(void) { return sim.cells; }
+/* Liberties of the chain at idx, -1 when empty. */
+EXPORT("wasm_sim_libs") int wasm_sim_libs(int idx) { return sim.cells[idx] == EMPTY ? -1 : sim.ls[sim.gid[idx]]; }
+/* 0 current, 1 ko, 2 empty count, 3 consecutive passes, 4 game over, 5 last move,
+ * 6 white's ko stone, 7 black's ko stone, 8 move count. */
+EXPORT("wasm_sim_info") int wasm_sim_info(int k) {
+    switch (k) {
+        case 0: return sim.current;            case 1: return sim.ko;
+        case 2: return sim.empty_count;        case 3: return sim.consecutive_passes;
+        case 4: return sim.game_over;          case 5: return sim.last_move;
+        case 6: return sim.ko_stone[0];        case 7: return sim.ko_stone[2];
+        case 8: return sim.move_count;
+    }
+    return -999;
+}
+
 /* bench_ppat.c's loop: n_starts positions, start i replayed from an empty board
  * by moves[offsets[i] .. offsets[i+1]), each given `playouts` incremental
  * playouts from one rng seeded seed + 1.  Returns the FNV-1a move checksum. */

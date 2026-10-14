@@ -8,6 +8,8 @@
 //   const pw = await PpatWasm.load(url?);      // Node or browser (fetch; default 'ppat-playout.wasm')
 //   pw.init(13);                               // board size
 //   pw.setModel(PPat.loadWeights(file));       // a ppat-lib.js model object
+//   pw.setRoot(game);                          // once per decision: a JS Game2
+//   pw.descend(path, n);                       // per playout: the leaf = root + path
 //
 // The module's only imports are the five WASI calls its C runtime keeps for
 // fatal-error messages and malloc: fd_write prints (stderr via console.error),
@@ -82,6 +84,24 @@ function wrap(instance, shim) {
                                         model.selfAtari ? 1 : 0, model.atariN, model.xaN, model.captureN,
                                         model.csN, model.earlyPass ? 1 : 0, model.passWeight || 0);
       if (expected !== 0) throw new Error(`ppat-wasm: model has ${n} weights, its encoding expects ${expected}`);
+    },
+    // The search root, once per decision: a JS Game2 (cells plus its state)
+    // rebuilt in the module.  Throws on a position not reachable by legal play.
+    setRoot(game) {
+      const n = game.N * game.N;
+      new Int8Array(X.memory.buffer, X.wasm_cells_buf(), n).set(game.cells.subarray(0, n));
+      const rc = X.wasm_set_root(game.current, game.ko, game.lastMove, game.koStone[0], game.koStone[2],
+                                 game.consecutivePasses, game.moveCount);
+      if (rc !== 0) throw new Error(`ppat-wasm: setRoot rejected the stone at ${-rc - 1} (unreachable position)`);
+    },
+    // A leaf: the root with path[0..n) played (the tree descent).  Throws on an
+    // illegal move or a path longer than the module's buffer.
+    descend(path, n = path.length) {
+      if (n > X.wasm_path_cap()) throw new Error(`ppat-wasm: descent path of ${n} moves exceeds ${X.wasm_path_cap()}`);
+      const buf = new Int32Array(X.memory.buffer, X.wasm_path_buf(), n);
+      for (let i = 0; i < n; i++) buf[i] = path[i];
+      const rc = X.wasm_descend(n);
+      if (rc !== 0) throw new Error(`ppat-wasm: descent move ${-rc - 1} (${path[-rc - 1]}) is illegal`);
     },
     lastError: shim.lastError,
   };
