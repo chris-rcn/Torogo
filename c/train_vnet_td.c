@@ -10,16 +10,18 @@
  * fully random.  Games are played in rounds of 2 x --threads, in parallel, with
  * the weights fixed; each game's moves depend only on its seed and the weights.
  *
- * Targets, 2-ply TD(0) as train-vpat-td: every position s_t moves toward
- * V(s_t+2), the next position with the same player to move, evaluated with the
- * current weights when the sample is drawn; a game's last two positions move
- * toward its outcome.  V is P(side to move wins), so no flip.  Loss:
+ * Targets, 1-ply TD(0): every position s_t moves toward 1 - V(s_t+1) (V is
+ * P(side to move wins), and the opponent is to move at s_t+1), evaluated with
+ * the current weights when the sample is drawn; a game's last position moves
+ * toward its outcome.  No target crosses an --epsilon move: a position whose
+ * move was one is not a sample (--bootstrap games' moves are not epsilon
+ * moves, so they are).  Loss:
  * cross-entropy against the target (no gradient through it).  Optimiser: Adam.
  *
  * Positions go into a window of the last --window; after each round the
- * trainer owes --reuse samples per new position and pays them in batches of
- * --batch, each sample drawn uniformly (with replacement) from the window with
- * a random board symmetry.
+ * trainer owes --reuse samples per new sample position and pays them in
+ * batches of --batch, each drawn uniformly (with replacement) from the
+ * window's sample positions with a random board symmetry.
  *
  * Rows (games geometric x1.4, and the last game of a --games run): play% is
  * the interval's wall time spent in self-play; komi the scoring komi; bWin% and
@@ -67,6 +69,8 @@
 #include "vnet_tool.h"
 
 #define KOMI_WINDOW 500
+#define NEXT -1.0f   /* wout: bootstrap from the next slot */
+#define NONE -2.0f   /* wout: not a sample */
 #define PUCT_PPAT_MIN_PHASE 0.55   /* puct-ppat-fp's PPAT_MIN_PHASE */
 
 enum { EXT_NONE, EXT_RANDOM, EXT_FP, EXT_PUCT };
@@ -90,6 +94,7 @@ typedef struct {
 typedef struct {
     int8_t *code;          /* n * area */
     VnetMeta *meta;
+    uint8_t *eps;          /* the move played there was an --epsilon move */
     int n, cap;
     int8_t winner;
 } GameRec;
@@ -137,11 +142,14 @@ static void play_game(uint32_t seed, int random_only, const float *w, Thread *T,
             R->cap = R->cap ? 2 * R->cap : 256;
             R->code = realloc(R->code, (size_t)R->cap * area);
             R->meta = realloc(R->meta, sizeof(VnetMeta) * (size_t)R->cap);
+            R->eps = realloc(R->eps, (size_t)R->cap);
         }
         vnet_compact(&g, T->g3, R->code + (size_t)R->n * area, &R->meta[R->n]);
         R->n++;
         int32_t mv;
-        if (random_only || rng_float(&r) < epsilon) mv = g2_random_legal_move(&g, &r);
+        R->eps[R->n - 1] = 0;
+        if (random_only) mv = g2_random_legal_move(&g, &r);
+        else if (rng_float(&r) < epsilon) { mv = g2_random_legal_move(&g, &r); R->eps[R->n - 1] = 1; }
         else if (ext != EXT_NONE && rng_float(&r) < ext_ratio) {
             if (ext == EXT_RANDOM) mv = g2_random_legal_move(&g, &r);
             else if (ext == EXT_FP) { fpol_eval(&g, &T->fs, 1.0); mv = fpol_sample(&T->fs, &r); }
@@ -273,12 +281,13 @@ int main(int argc, char **argv) {
     const int round_games = 2 * threads;
     GameRec *rec = calloc(round_games, sizeof(GameRec));
 
-    /* The window: position k at slot k % window; a slot's TD successor is the
-     * slot two on (same game), or its outcome when out[slot] >= 0. */
+    /* The window: position k at slot k % window.  wout[slot]: the outcome
+     * target (0 / 1), NEXT (the TD successor is the next slot, same game) or
+     * NONE (its move was an epsilon move: not a sample). */
     int8_t *wcode = malloc((size_t)window * area);
     VnetMeta *wmeta = malloc(sizeof(VnetMeta) * (size_t)window);
     float *wout = malloc(sizeof(float) * (size_t)window);
-    long total_pos = 0;
+    long total_pos = 0, n_samples = 0;   /* n_samples: window slots that are samples */
 
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, threads, seed);
@@ -315,18 +324,19 @@ int main(int argc, char **argv) {
             play_game(mix(seed, (uint32_t)gi), gi < bootstrap, w, &TH[t], &rec[i]);
         }
         iv_play += wall_s() - p0;
-        long new_pos = 0;
+        long new_pos = 0;   /* new samples */
         for (int i = 0; i < ng; i++) {
             const GameRec *R = &rec[i];
             for (int p = 0; p < R->n; p++) {
                 const long slot = total_pos % window;
+                if (total_pos >= window && wout[slot] != NONE) n_samples--;   /* overwritten */
                 memcpy(wcode + (size_t)slot * area, R->code + (size_t)p * area, area);
                 wmeta[slot] = R->meta[p];
                 const int8_t mover = R->meta[p].black_to_move ? BLACK : WHITE;
-                wout[slot] = p + 2 < R->n ? -1.0f : (R->winner == mover ? 1.0f : 0.0f);
+                wout[slot] = R->eps[p] ? NONE : p + 1 < R->n ? NEXT : (R->winner == mover ? 1.0f : 0.0f);
+                if (wout[slot] != NONE) { n_samples++; new_pos++; }
                 total_pos++;
             }
-            new_pos += R->n;
             iv_moves += R->n; iv_bwins += R->winner == BLACK;
             if (auto_komi && games + i >= bootstrap) {
                 komi_games++; komi_bwins += R->winner == BLACK;
@@ -339,10 +349,11 @@ int main(int argc, char **argv) {
         }
         games += ng; iv_games += ng;
 
-        /* Training: --reuse samples per new position, in whole batches. */
+        /* Training: --reuse samples per new sample position, in whole
+         * batches, drawn uniformly from the window's samples (by redrawing). */
         owed += reuse * new_pos;
         const long filled = total_pos < window ? total_pos : window;
-        while (owed >= batch) {
+        while (owed >= batch && n_samples > 0) {
             owed -= batch;
             double loss = 0, se = 0, fcpu = 0; long nf = 0;
             #pragma omp parallel for schedule(static) reduction(+:loss, se, fcpu, nf)
@@ -351,14 +362,15 @@ int main(int argc, char **argv) {
 #ifdef _OPENMP
                 t = omp_get_thread_num();
 #endif
-                const uint32_t h = mix(mix(seed, 0x7d1u), (uint32_t)(step * batch + i));
-                const long slot = h % (uint32_t)filled;
+                uint32_t h = mix(mix(seed, 0x7d1u), (uint32_t)(step * batch + i));
+                long slot = h % (uint32_t)filled;
+                while (wout[slot] == NONE) { h = mix(h, 0x9e37u); slot = h % (uint32_t)filled; }
                 float target = wout[slot];
-                if (target < 0) {
-                    const long j = (slot + 2) % window;
+                if (target == NEXT) {
+                    const long j = (slot + 1) % window;
                     const double c0 = thread_cpu_s();
                     vnet_encode_compact(wcode + (size_t)j * area, &wmeta[j], area, NULL, vnet_work_input(WK[t]));
-                    target = vnet_forward(&L, w, nbr9, area, WK[t]);
+                    target = 1 - vnet_forward(&L, w, nbr9, area, WK[t]);   /* the opponent is to move at s_t+1 */
                     fcpu += thread_cpu_s() - c0; nf++;
                 }
                 const int sy = (int)(mix(h, 0x51u) & 7);
