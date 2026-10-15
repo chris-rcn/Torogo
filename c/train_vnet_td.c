@@ -45,7 +45,7 @@
  *
  *   train_vnet_td.bin [--size 13] [--channels 32] [--blocks 6] [--hidden 32]
  *       [--load PATH] [--save PATH] [--games N] [--bootstrap N] [--epsilon 0.1]
- *       [--rand-open 0]       [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
+ *       [--rand-open 3] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
  *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (arg_flag(argc, argv, "--help")) {
         fprintf(stderr, "usage: train_vnet_td.bin [--size 13] [--channels 32] [--blocks 6] [--hidden 32] [--load PATH] [--save PATH]\n"
-                        "         [--games N] [--bootstrap N] [--epsilon 0.1] [--rand-open 0] [--ext random|fp|puct --ext-ratio R]\n"
+                        "         [--games N] [--bootstrap N] [--epsilon 0.1] [--rand-open 3] [--ext random|fp|puct --ext-ratio R]\n"
                         "         [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
     const int threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const long games_limit = atol(arg_str(argc, argv, "--games", "0")), bootstrap = atol(arg_str(argc, argv, "--bootstrap", "0"));
     epsilon = atof(arg_str(argc, argv, "--epsilon", "0.1"));
-    rand_open = atoi(arg_str(argc, argv, "--rand-open", "0"));
+    rand_open = atoi(arg_str(argc, argv, "--rand-open", "3"));
     const char *ext_s = arg_str(argc, argv, "--ext", NULL);
     ext = parse_ext(ext_s);
     ext_ratio = atof(arg_str(argc, argv, "--ext-ratio", "0"));
