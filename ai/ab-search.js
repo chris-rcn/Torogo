@@ -10,12 +10,13 @@
 // estimateWinner.  Game2 clones per child.
 //
 // Config (cfg reader, slot-aware):
-//   AB_DEPTH    plies of lookahead (1 = score own moves' results) (default 2)
-//   AB_WIDTH    fp candidates searched per node: one number for every ply, or
-//               a comma list with one entry per ply from the root (exactly
-//               AB_DEPTH of them), e.g. 7,5,3; 0 = every candidate (default 4)
-//               A width-1 ply extends the principal line rather than
-//               branching.
+//   AB_WIDTH    fp candidates searched per node, one entry per ply from the
+//               root, e.g. 7,5,3; the entry count IS the depth (7 alone = 1
+//               ply); 0 = every candidate.  A width-1 ply extends the
+//               principal line rather than branching.        (default 4,4)
+//   AB_DEPTH    plies of lookahead when AB_WIDTH is not given, each 4 wide
+//               (1 = score own moves' results); given with AB_WIDTH it must
+//               match the entry count                         (default 2)
 //   FPOL_DATA   featurepol weights          (default featurepol-cbk7wa32.js)
 //   FPOL_RANK_TOPN  for a model with a vpat<n> ranking term (fp-heavy), rank
 //               over its top N candidates, as ref-fp-heavy does; 0 = off; no
@@ -53,18 +54,20 @@ const Symmetry = require('../symmetry.js');
 function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
-  const AB_DEPTH = Math.max(1, cfg.int('AB_DEPTH', 2));
-  const AB_WIDTH = cfg.str('AB_WIDTH', '4');
+  const depthSet = cfg.has('AB_DEPTH'), depthGiven = cfg.int('AB_DEPTH', 2);
+  if (!(depthGiven >= 1)) throw new Error(`ab-search: AB_DEPTH must be >= 1, got ${cfg.str('AB_DEPTH')}`);
+  const AB_WIDTH = cfg.str('AB_WIDTH', Array(depthGiven).fill(4).join(','));
   const WIDTHS = AB_WIDTH.split(',').map(t => {
     const v = t.trim() === '' ? NaN : Number(t);
     if (!Number.isInteger(v) || v < 0) throw new Error(`ab-search: AB_WIDTH entries must be integers >= 0, got '${AB_WIDTH}'`);
     return v === 0 ? Infinity : v;   // 0 = unlimited
   });
-  if (WIDTHS.length !== 1 && WIDTHS.length !== AB_DEPTH)
-    throw new Error(`ab-search: AB_WIDTH lists ${WIDTHS.length} widths for AB_DEPTH ${AB_DEPTH} (one per ply, or a single width)`);
+  const AB_DEPTH = WIDTHS.length;   // one width per ply
+  if (depthSet && depthGiven !== AB_DEPTH)
+    throw new Error(`ab-search: AB_DEPTH ${depthGiven} disagrees with AB_WIDTH '${AB_WIDTH}' (${AB_DEPTH} plies)`);
   // ply 0 is the root; a node reached with `depth` remaining sits at
   // AB_DEPTH - depth.
-  function widthAt(ply) { return WIDTHS.length === 1 ? WIDTHS[0] : WIDTHS[ply]; }
+  function widthAt(ply) { return WIDTHS[ply]; }
   const WIDTH = widthAt(0);
   const DITHER   = cfg.float('DITHER', 0.001);
   const AB_TEMP  = cfg.float('AB_TEMP', 0.003);
