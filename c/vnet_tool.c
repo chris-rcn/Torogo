@@ -74,37 +74,83 @@ static int32_t parse_move(const char *s, int N) {
 }
 
 /* Load gen-agent-evals records "<size> <phase> <moves> <winRatio>" (comment
- * lines skipped).  One board size per run; a record that does not replay is
- * reported, counted and dropped, never trained on. */
-void load_set(const char *path, Set *S, int *size, int limit) {
+ * lines skipped).  One board size per run; a record that does not parse or
+ * replay is reported, counted and dropped, never trained on.  Lines are read
+ * in chunks on this thread; each chunk's replays and vnet_compact (the ladder
+ * reads) run on `threads` threads, kept in file order. */
+#define LOAD_CHUNK 16384
+typedef struct { long moves; int lineno; float label; } Pending;   /* moves: arena offset, -1 = did not parse */
+
+void load_set(const char *path, Set *S, int *size, int limit, int threads) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "%s: cannot open %s\n", vt_prog, path); exit(1); }
     static char line[16384], moves[16384];
-    int lineno = 0, bad = 0;
-    Game3 *g3 = NULL;   /* ladder-read scratch for vnet_compact */
-    while (fgets(line, sizeof line, f) && (limit <= 0 || S->n < limit)) {
-        lineno++;
-        if (line[0] == '#' || line[0] == '\n') continue;
-        int n; double label;
-        if (sscanf(line, "%d %*s %16383s %lf", &n, moves, &label) != 3) {
-            if (++bad <= 5) fprintf(stderr, "%s: %s line %d: not '<size> <phase> <moves> <winRatio>'\n", vt_prog, path, lineno);
-            continue;
+    int lineno = 0, bad = 0, eof = 0;
+    Pending *pend = malloc(sizeof(Pending) * LOAD_CHUNK);
+    unsigned char *ok = malloc(LOAD_CHUNK);
+    size_t arena_cap = 1 << 22;
+    char *arena = malloc(arena_cap);
+    Game3 **g3 = calloc(threads, sizeof(Game3 *));   /* ladder-read scratch for vnet_compact, per thread */
+    while (!eof && (limit <= 0 || S->n < limit)) {
+        int np = 0;
+        size_t used = 0;
+        while (np < LOAD_CHUNK) {
+            if (!fgets(line, sizeof line, f)) { eof = 1; break; }
+            lineno++;
+            if (line[0] == '#' || line[0] == '\n') continue;
+            int n; double label;
+            Pending *P = &pend[np++];
+            P->lineno = lineno;
+            if (sscanf(line, "%d %*s %16383s %lf", &n, moves, &label) != 3) { P->moves = -1; continue; }
+            if (*size == 0) { *size = n; g2_init_topology(n); }
+            else if (n != *size) { fprintf(stderr, "%s: %s line %d: size %d, run is size %d\n", vt_prog, path, lineno, n, *size); exit(1); }
+            const size_t L = strlen(moves) + 1;
+            if (used + L > arena_cap) { while (used + L > arena_cap) arena_cap *= 2; arena = realloc(arena, arena_cap); }
+            memcpy(arena + used, moves, L);
+            P->moves = (long)used; P->label = (float)label;
+            used += L;
         }
-        if (*size == 0) { *size = n; g2_init_topology(n); }
-        else if (n != *size) { fprintf(stderr, "%s: %s line %d: size %d, run is size %d\n", vt_prog, path, lineno, n, *size); exit(1); }
-        Game2 g; g2_new(&g, n);
-        int ok = 1;
-        for (char *tok = strtok(moves, ","); tok; tok = strtok(NULL, ","))
-            if (!g2_play(&g, parse_move(tok, n))) { ok = 0; break; }
-        if (!ok) { if (++bad <= 5) fprintf(stderr, "%s: %s line %d: an illegal move on replay\n", vt_prog, path, lineno); continue; }
-        if (S->n == S->cap) { S->cap = S->cap ? 2 * S->cap : 65536; S->r = realloc(S->r, sizeof(Record) * (size_t)S->cap); }
-        Record *R = &S->r[S->n++];
-        if (!g3) g3 = g3_new(n);
-        vnet_compact(&g, g3, R->code, &R->meta);
-        R->label = (float)label;
+        if (np == 0) break;
+        if (S->n + np > S->cap) { while (S->n + np > S->cap) S->cap = S->cap ? 2 * S->cap : 65536; S->r = realloc(S->r, sizeof(Record) * (size_t)S->cap); }
+        const int N = *size, base = S->n;
+        /* Replay and compact into the slots after the records so far; the
+         * in-order pass below closes the gaps the dropped ones leave. */
+        #pragma omp parallel for schedule(dynamic, 64) num_threads(threads)
+        for (int i = 0; i < np; i++) {
+            int t = 0;
+#ifdef _OPENMP
+            t = omp_get_thread_num();
+#endif
+            ok[i] = 0;
+            if (pend[i].moves < 0) continue;
+            Game2 g; g2_new(&g, N);
+            const char *m = arena + pend[i].moves;
+            int good = 1;
+            while (*m) {
+                if (!g2_play(&g, parse_move(m, N))) { good = 0; break; }
+                while (*m && *m != ',') m++;
+                if (*m == ',') m++;
+            }
+            if (!good) continue;
+            if (!g3[t]) g3[t] = g3_new(N);
+            Record *R = &S->r[base + i];
+            vnet_compact(&g, g3[t], R->code, &R->meta);
+            R->label = pend[i].label;
+            ok[i] = 1;
+        }
+        for (int i = 0; i < np && (limit <= 0 || S->n < limit); i++) {
+            if (!ok[i]) {
+                if (++bad <= 5) fprintf(stderr, pend[i].moves < 0 ? "%s: %s line %d: not '<size> <phase> <moves> <winRatio>'\n"
+                                                                   : "%s: %s line %d: an illegal move on replay\n", vt_prog, path, pend[i].lineno);
+                continue;
+            }
+            if (S->n != base + i) S->r[S->n] = S->r[base + i];
+            S->n++;
+        }
     }
     fclose(f);
-    if (g3) g3_free(g3);
+    for (int t = 0; t < threads; t++) if (g3[t]) g3_free(g3[t]);
+    free(g3); free(pend); free(ok); free(arena);
     if (bad) fprintf(stderr, "%s: %s: %d record(s) dropped (see above)\n", vt_prog, path, bad);
     if (S->n == 0) { fprintf(stderr, "%s: no records in %s\n", vt_prog, path); exit(1); }
 }

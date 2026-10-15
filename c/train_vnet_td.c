@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
     Set te = {0};
     if (test_f) {
         int sz = N;
-        load_set(test_f, &te, &sz, test_cap);
+        load_set(test_f, &te, &sz, test_cap, threads);
     }
     MdTest *md = elo_f ? md_test_open(elo_f, md_f, N, test_fp_width) : NULL;
     static int32_t sym[8 * MAX_CAP]; vnet_sym_map(N, sym);

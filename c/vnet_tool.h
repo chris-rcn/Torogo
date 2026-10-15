@@ -31,8 +31,8 @@ typedef struct { int8_t code[MAX_CAP]; VnetMeta meta; float label; } Record;
 typedef struct { Record *r; int n, cap; } Set;
 /* One board size per run (*size 0 = take the file's, and init the topology);
  * a record that does not replay is reported, counted and dropped.  limit 0 =
- * every record. */
-void load_set(const char *path, Set *S, int *size, int limit);
+ * every record.  Replays and encodes on `threads` threads, in file order. */
+void load_set(const char *path, Set *S, int *size, int limit, int threads);
 
 /* Adam (beta1 0.9, beta2 0.999, eps 1e-8) over the flat parameter array. */
 typedef struct { float *m, *v; long step; int n; } Adam;

@@ -98,8 +98,8 @@ int main(int argc, char **argv) {
     int N = 0;
     Set tr = {0}, te = {0};
     const double t_load = wall_s();
-    load_set(train_f, &tr, &N, train_cap);
-    load_set(test_f, &te, &N, test_cap);
+    load_set(train_f, &tr, &N, train_cap, threads);
+    load_set(test_f, &te, &N, test_cap, threads);
     const int area = N * N;
     int32_t nbr9[MAX_CAP * 9]; vnet_topology(N, nbr9);
     if (test_fp_width > 0) fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
