@@ -1,7 +1,7 @@
 'use strict';
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
-// fp-ply: fp-ply-vpat with an AGENT as the evaluator.  Featurepol filters the
+// fp-ply: the former fp-ply-vpat with an AGENT as the evaluator.  Featurepol filters the
 // root moves, a featurepol-weighted one-ply expectation values each one.
 // Featurepol's top PL_WIDTH moves are the candidates.  Each is played, and the
 // resulting position is valued by valueB: the mean of VALUE_AGENT's

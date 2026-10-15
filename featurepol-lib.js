@@ -839,7 +839,7 @@ function _valueAgentOf(weights) {
   return agent;
 }
 
-// The agent may itself run featurepol (fp-ply-vpat, fp-line-vpat), whose
+// The agent may itself run featurepol (fp-ply, fp-line-vpat), whose
 // extraction shares this module's scratch, so the scores and order live in
 // private arrays, the shortlist mask is captured up front, and the ranks are
 // written only after every valueB call.  (Other prepares' scratch is rerun
