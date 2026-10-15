@@ -22,7 +22,7 @@
  * of the net as a player on the map's own MD file (its mdFile); --md FILE
  * runs the test on another MD file instead.  The test: at every MD position
  * (movedetails, *.md) each legal move except filling one's own true eye (or,
- * with --test-fp-width W > 0, default 5, featurepol's top W of them, the
+ * with --test-fp-width W > 0, default 7, featurepol's top W of them, the
  * --fp-model; 0 = all) is
  * played and valued 1 - V(child) (the opponent is to move there), and the best
  * is charged its gap to the file's top move — the worst rated candidate when it
@@ -41,7 +41,7 @@
  *   train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
- *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 5] [--fp-model FILE]
+ *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
-                        "         [--test-fp-width 5] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
+                        "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
         return 1;
     }
     const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
     const char *test_fp_s = arg_str(argc, argv, "--test-fp-width", NULL);
-    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "5");
+    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "7");
     const char *fp_f = arg_str(argc, argv, "--fp-model", "ref/ref-fp-stone8AdjLib3.js");
     args_check(argc, argv);
     if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet_supervised: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }

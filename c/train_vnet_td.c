@@ -32,7 +32,7 @@
  * infer the CPU time of one target evaluation (compact encoding + forward);
  * mdMae / elo the MD 1-ply test, as train_vnet_supervised's (--elo-map / --md,
  * the same 20% wall-time gate; --test-fp-width W > 0 values featurepol's top W
- * only, default 5; 0 = full width, independent of --fp-width).  The checkpoint
+ * only, default 7; 0 = full width, independent of --fp-width).  The checkpoint
  * is written at every row.
  *
  * --komi K: the scoring komi, default the game's (3.5 on 13x13), the currency
@@ -49,7 +49,7 @@
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
  *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
- *       [--test-fp-width 5]
+ *       [--test-fp-width 7]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
                         "         [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
-                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 5]\n");
+                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 7]\n");
         return 1;
     }
     N = atoi(arg_str(argc, argv, "--size", "13"));
@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
     const char *test_fp_s = arg_str(argc, argv, "--test-fp-width", NULL);
-    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "5");
+    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "7");
     args_check(argc, argv);
     if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet_td: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-td-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
