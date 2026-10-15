@@ -145,7 +145,23 @@ if (KOMI_ARG !== null) {
   for (let n = 5; n <= 19; n++) setKomi(n, KOMI_ARG);
 }
 
-const agent = require(path.join(__dirname, 'ai', agentName + '.js'));
+// The value agent, built through its create(cfg) factory (the instance its
+// module default would build) with a cfg reader that records every knob it
+// reads that the environment sets: the header's provenance of the labels.
+const agentMod = require(path.join(__dirname, 'ai', agentName + '.js'));
+const agentKnobs = new Map();
+function recordingCfg() {
+  const c = Util.makeCfg();
+  const note = k => { if (c.has(k)) agentKnobs.set(k, c.str(k)); };
+  return { ...c,
+    has:   k      => { note(k); return c.has(k); },
+    str:   (k, d) => { note(k); return c.str(k, d); },
+    int:   (k, d) => { note(k); return c.int(k, d); },
+    float: (k, d) => { note(k); return c.float(k, d); },
+    bool:  (k, d) => { note(k); return c.bool(k, d); } };
+}
+const agentHasCreate = typeof agentMod.create === 'function';
+const agent = agentHasCreate ? agentMod.create(recordingCfg()) : agentMod;
 if (typeof agent.valueB !== 'function') {
   console.error(`Agent '${agentName}' does not export a valueB() method`);
   process.exit(1);
@@ -195,6 +211,9 @@ process.stdout.write(`# format: bsize phase moves winRatio\n`);
 process.stdout.write(GAME_MODE
   ? `# position-agent: ${gameAgentName} size: ${GAME_SIZE} rand-open: ${randOpen}\n`
   : `# corpus: ${corpusPath} (${corpus.length} games)${ORDERED ? ' ordered (eval k seeded by k)' : ''}\n`);
+process.stdout.write(`# value-agent: ${agentName}` + (!agentHasCreate ? '  (no create(cfg): its knobs not recorded)'
+  : agentKnobs.size ? '  ' + [...agentKnobs].map(([k, v]) => `${k}: ${v}`).join('  ') + '  (other knobs at their defaults)'
+  : '  (every knob at its default)') + '\n');
 process.stdout.write(`# komi: ${KOMI_ARG !== null ? KOMI_ARG : '3.5 (default)'}\n`);
 if (PREFIX_DELTA !== null) process.stdout.write(
   `# prefix-delta: ${PREFIX_DELTA} (standard-playout prefix from each sampled ply; endpoint labeled)\n`);
