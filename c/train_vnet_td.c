@@ -197,6 +197,7 @@ int main(int argc, char **argv) {
     if (md_f && !elo_f) elo_f = "out/elo-map-trunc30k-827.json";   /* --md alone: the default map */
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
+    args_check(argc, argv);
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-td-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
 
     if (N < 3 || N > MAX_BOARD_SIZE || C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || window < 3) {

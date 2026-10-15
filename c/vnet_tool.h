@@ -18,6 +18,9 @@ const char *arg_str(int argc, char **argv, const char *flag, const char *def);
 /* A flag whose value is optional: def when given bare, NULL when absent. */
 const char *arg_opt(int argc, char **argv, const char *flag, const char *def);
 int         arg_flag(int argc, char **argv, const char *flag);
+/* After every arg_* call: exits on a flag none of them asked about, or a
+ * stray argument that is no flag's value. */
+void        args_check(int argc, char **argv);
 double      wall_s(void);
 double      cpu_s(void);               /* process CPU time */
 const char *fmt_time(double s, char *buf);   /* "850us" / "2.2ms" / "1.3s" (buf: 16 bytes) */

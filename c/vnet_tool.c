@@ -11,7 +11,18 @@
 
 const char *vt_prog = "vnet";
 
+/* Every flag the program asked about, for args_check. */
+enum { ARG_VALUE, ARG_OPTIONAL, ARG_BARE };
+static struct { const char *flag; int kind; } known[128];
+static int n_known;
+static void note_flag(const char *flag, int kind) {
+    for (int i = 0; i < n_known; i++) if (!strcmp(known[i].flag, flag)) return;
+    if (n_known == (int)(sizeof known / sizeof known[0])) { fprintf(stderr, "%s: too many flags for args_check\n", vt_prog); exit(1); }
+    known[n_known].flag = flag; known[n_known++].kind = kind;
+}
+
 const char *arg_str(int argc, char **argv, const char *flag, const char *def) {
+    note_flag(flag, ARG_VALUE);
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], flag)) {
             if (i + 1 >= argc || !strncmp(argv[i + 1], "--", 2)) {
@@ -22,13 +33,27 @@ const char *arg_str(int argc, char **argv, const char *flag, const char *def) {
     return def;
 }
 const char *arg_opt(int argc, char **argv, const char *flag, const char *def) {
+    note_flag(flag, ARG_OPTIONAL);
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], flag)) return (i + 1 < argc && strncmp(argv[i + 1], "--", 2)) ? argv[i + 1] : def;
     return NULL;
 }
 int arg_flag(int argc, char **argv, const char *flag) {
+    note_flag(flag, ARG_BARE);
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], flag)) return 1;
     return 0;
+}
+void args_check(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        int k = -1;
+        for (int j = 0; j < n_known; j++) if (!strcmp(known[j].flag, argv[i])) { k = j; break; }
+        if (k < 0) {
+            if (!strncmp(argv[i], "--", 2)) fprintf(stderr, "%s: unknown flag %s (see --help)\n", vt_prog, argv[i]);
+            else fprintf(stderr, "%s: unexpected argument '%s' (see --help)\n", vt_prog, argv[i]);
+            exit(1);
+        }
+        if (known[k].kind == ARG_VALUE || (known[k].kind == ARG_OPTIONAL && i + 1 < argc && strncmp(argv[i + 1], "--", 2))) i++;
+    }
 }
 double wall_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 double cpu_s(void)  { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
