@@ -13,8 +13,9 @@
  * same split — and infer, one test record's forward pass (encoding included)
  * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
  * trained over total elapsed time, test passes included.  The checkpoint is
- * written at every row and -best on a new best teMSE.  Without --test-evals
- * there is no teMSE column and no -best, and infer is timed on the interval's
+ * written at every row, and -best on a new best mdMae when the MD test runs
+ * (rows it skips cannot be best), else on a new best teMSE.  Without
+ * --test-evals there is no teMSE column, and infer is timed on the interval's
  * training forwards (encoding included, augmentation's symmetry map too).
  *
  * --elo-map [FILE] (default out/elo-map-trunc30k-827.json) adds a 1-ply test
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
     printf("size %d  [%.1fs to load]\n", N, wall_s() - t_load);
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
-    if (test_f) printf("save: %s (best: %s)\n", save_f, best_f);
+    if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, md ? "mdMae" : "teMSE", best_f);
     else printf("save: %s\n", save_f);
     if (md) md_test_describe(md);
     printf("\n%10s %6s %9s %7s %8s %8s%s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", test_f ? "    teMSE " : "", "infer",
@@ -189,12 +190,14 @@ int main(int argc, char **argv) {
                 const double infer = test_f ? (cpu_s() - c0) / te.n : iv_fcpu / iv_n;
                 const double temse = test_f ? tse / te.n : 0, el = wall_s() - t0;
                 char ibuf[16], tcol[16] = "";
-                const int is_best = test_f && temse < best;
-                if (is_best) { best = temse; vnet_save(best_f, &L, w); }
-                if (test_f) snprintf(tcol, sizeof tcol, " %8.5f%s", temse, is_best ? "*" : " ");
+                /* -best: by mdMae when the MD test runs, else by teMSE */
+                const int te_best = !md && test_f && temse < best;
+                if (te_best) { best = temse; vnet_save(best_f, &L, w); }
+                if (test_f) snprintf(tcol, sizeof tcol, " %8.5f%s", temse, te_best ? "*" : " ");
                 vnet_save(save_f, &L, w);
                 char mdcol[40] = "";
-                if (md) md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, mdcol);
+                if (md && md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, &best, mdcol))
+                    vnet_save(best_f, &L, w);
                 printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
                        done / el, iv_loss / iv_n, iv_se / iv_n, tcol, fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
@@ -203,6 +206,6 @@ int main(int argc, char **argv) {
             }
         }
     }
-    if (test_f) printf("\nbest teMSE %.5f  (%s)\n", best, best_f);
+    if (best < 1e30) printf("\nbest %s %.5f  (%s)\n", md ? "mdMae" : "teMSE", best, best_f);
     return 0;
 }

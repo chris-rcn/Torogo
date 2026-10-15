@@ -56,8 +56,9 @@ void    md_test_describe(const MdTest *T);   /* the "md: ..." header line */
  * when it keeps its share of the run's wall time (now, seconds) within 20%,
  * its cost estimated as its evaluations x infer (CPU seconds per forward) /
  * threads, scaled by how far the last run's actual time was off its estimate;
- * otherwise '-'.  WK and G3: one per thread. */
-void    md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
-                    VnetWork **WK, Game3 **G3, int threads, double infer, double now, char *col);
+ * otherwise '-'.  WK and G3: one per thread.  best (NULL = not tracked): the
+ * lowest mdMae so far; a run below it updates it, stars the cell and returns 1. */
+int     md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
+                    VnetWork **WK, Game3 **G3, int threads, double infer, double now, double *best, char *col);
 
 #endif

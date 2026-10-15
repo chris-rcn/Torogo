@@ -396,7 +396,7 @@ int main(int argc, char **argv) {
             }
             vnet_save(save_f, &L, w);
             char mdcol[40] = "";
-            if (md && infer > 0) md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, mdcol);
+            if (md && infer > 0) md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, NULL, mdcol);
             else if (md) snprintf(mdcol, sizeof mdcol, "  %6s %6s", "-", "-");   /* no cost estimate yet */
             const double now = wall_s();
             char ibuf[16], lbuf[16], mbuf[16];

@@ -423,10 +423,10 @@ void md_test_describe(const MdTest *T) {
     printf("md: %s (%d positions, %s: %ld net evaluations per test), elo map: %s%s\n", T->md_f, T->md.n, fw, T->md.evals, T->elo_f, T->elo_valid ? "" : " (not this MD file: elo -)");
 }
 
-void md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
-                 VnetWork **WK, Game3 **G3, int threads, double infer, double now, char *col) {
+int md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
+                VnetWork **WK, Game3 **G3, int threads, double infer, double now, double *best, char *col) {
     const double raw = T->md.evals * infer / threads, est = raw * T->scale;
-    if (T->total + est > 0.20 * (now + est)) { snprintf(col, 40, "  %6s %6s", "-", "-"); return; }
+    if (T->total + est > 0.20 * (now + est)) { snprintf(col, 40, "  %6s %6s", "-", "-"); return 0; }
     const double m0 = wall_s();
     double bs[16]; int bn[16];
     const EloMap *E = &T->elo;
@@ -437,9 +437,12 @@ void md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *
         if (bn[b] == 0) have = 0;
         else e -= E->A * exp(E->k * (E->lo[j] + E->hi[j]) / 2) * (bs[b] / bn[b]);
     }
-    if (have) snprintf(col, 40, "  %6.4f %6.0f", mae, e);
-    else snprintf(col, 40, "  %6.4f      -", mae);
+    const int is_best = best && mae < *best;
+    if (is_best) *best = mae;
+    if (have) snprintf(col, 40, "  %6.4f%c%6.0f", mae, is_best ? '*' : ' ', e);
+    else snprintf(col, 40, "  %6.4f%c     -", mae, is_best ? '*' : ' ');
     const double took = wall_s() - m0;
     T->total += took;
     if (raw > 0) T->scale = took / raw;
+    return is_best;
 }
