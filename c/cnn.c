@@ -1,5 +1,6 @@
 /* cnn.c — the toroidal residual value network (see cnn.h). */
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -410,15 +411,21 @@ void vnet_backward(const VnetLayout *L, const float *w, const int32_t *nbr9, int
     else conv_bwd(k->x, P, k->dpre, C, NULL, G + L->stem_w, G + L->stem_b, NULL, nbr9, area);   /* no input gradient */
 }
 
+/* Atomic: written to <path>.tmp, then renamed over path, so a reader or a
+ * crash mid-write never sees a partial file.  On failure the previous file
+ * stays and the tmp is removed. */
 int vnet_save(const char *path, const VnetLayout *L, const float *w) {
-    FILE *f = fopen(path, "wb");
-    if (!f) { fprintf(stderr, "vnet_save: cannot open %s\n", path); return 0; }
+    char tmp[1024];
+    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) { fprintf(stderr, "vnet_save: path too long: %s\n", path); return 0; }
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { fprintf(stderr, "vnet_save: cannot open %s: %s\n", tmp, strerror(errno)); return 0; }
     const int32_t hdr[5] = { L->C, L->B, L->H, P, L->n_params };
     int ok = fwrite("VNET1", 1, 5, f) == 5 && fwrite(hdr, sizeof hdr, 1, f) == 1 &&
              fwrite(w, sizeof(float), (size_t)L->n_params, f) == (size_t)L->n_params;
     ok &= fclose(f) == 0;
-    if (!ok) fprintf(stderr, "vnet_save: write to %s failed\n", path);
-    return ok;
+    if (!ok) { fprintf(stderr, "vnet_save: write to %s failed; %s not updated\n", tmp, path); remove(tmp); return 0; }
+    if (rename(tmp, path) != 0) { fprintf(stderr, "vnet_save: rename %s -> %s failed: %s\n", tmp, path, strerror(errno)); remove(tmp); return 0; }
+    return 1;
 }
 
 float *vnet_load(const char *path, VnetLayout *L) {

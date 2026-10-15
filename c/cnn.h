@@ -92,6 +92,7 @@ void vnet_backward(const VnetLayout *L, const float *params, const int32_t *nbr9
                    VnetWork *w, float dy, float *grad);
 
 /* Binary save / load: "VNET1", C, B, H, planes, n_params, then the floats.
+ * vnet_save is atomic (<path>.tmp, then rename).
  * vnet_load fills *L and returns a malloc'd parameter array (NULL on error,
  * after a message). */
 int    vnet_save(const char *path, const VnetLayout *L, const float *params);
