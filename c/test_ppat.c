@@ -357,7 +357,10 @@ static void test_feature6_ko_solve(void) {
     check("F6c: bit 5 set (ko-solve capture)", mask != -1 && (mask & 32));
 }
 
-static void test_feature7_semeai(void) {
+/* The semeai local (slot 6) was removed (59f6daa: null at the highest cost);
+ * its slot stays reserved in the layout and must never fire.  These are the
+ * positions it used to fire on. */
+static void test_feature7_semeai_removed(void) {
     /* 7a: B@31 2 libs. W@30 2 libs. lastMove=W@40. c=39 gives W@30 atari. */
     {
         Game2 g; g2_new_empty(&g, 9);
@@ -367,7 +370,7 @@ static void test_feature7_semeai(void) {
         check("F7a setup: W@30 2 libs", g.ls[g.gid[30]] == 2);
         int mask = get_mask(&g, 39);
         check("F7a: bit 0 set", mask != -1 && (mask & 1));
-        check("F7a: bit 6 set", mask != -1 && (mask & 64));
+        check("F7a: bit 6 NOT set (semeai removed)", mask != -1 && !(mask & 64));
     }
     /* 7b: B@39 2 libs. W@30 2 libs. lastMove=W@40. c=31 gives atari. */
     {
@@ -378,15 +381,14 @@ static void test_feature7_semeai(void) {
         check("F7b setup: W@30 2 libs", g.ls[g.gid[30]] == 2);
         int mask = get_mask(&g, 31);
         check("F7b: bit 0 set", mask != -1 && (mask & 1));
-        check("F7b: bit 6 set", mask != -1 && (mask & 64));
+        check("F7b: bit 6 NOT set (semeai removed)", mask != -1 && !(mask & 64));
     }
 }
-static void test_feature7_realistic(void) {
-    /* Realistic F7: B@H2 leaves WHITE H3 group with 2 libs.
-     * E4 BLACK group has 2 libs (D5, E5). W@E5 kills, W@D5 doesn't.
-     * Neither in 8-nbr of H2.
-     * KNOWN LIMITATION: Feature 7 gated by 8-neighborhood of prev.
-     * Also: code doesn't distinguish killing vs non-killing atari. */
+static void test_feature7_realistic_removed(void) {
+    /* B@H2 leaves WHITE H3 group with 2 libs; the E4 BLACK group has 2 libs
+     * (D5, E5), and W@E5 would kill it.  Neither point is in the 8-nbr of H2,
+     * so with semeai gone no local fires at either (contiguity piggybacks
+     * slots 1-5 only). */
     Game2 g;
     g2_parse_board(&g,
         "9 . . . . . . . . .  \n"
@@ -406,9 +408,8 @@ static void test_feature7_realistic(void) {
 
     int maskE5 = get_mask(&g, 40);
     int maskD5 = get_mask(&g, 39);
-    check("F7c: E5 bit 0 set", maskE5 != -1 && (maskE5 & 1));
-    check("F7c: E5 bit 6 set (kills)", maskE5 != -1 && (maskE5 & 64));
-    check("F7c: D5 bit 6 NOT set (does not kill)", !(maskD5 & 64));
+    check("F7c: E5 no local bits (semeai removed)", maskE5 == 0);
+    check("F7c: D5 no local bits", maskD5 == 0);
 }
 #endif /* MAX_BOARD_SIZE >= 9 */
 
@@ -580,8 +581,8 @@ int main(void) {
     test_feature4_extend();
     test_feature5_extend_self_atari();
     test_feature6_ko_solve();
-    test_feature7_semeai();
-    test_feature7_realistic();
+    test_feature7_semeai_removed();
+    test_feature7_realistic_removed();
 #endif
 
     test_policy_move();
