@@ -1,7 +1,7 @@
 'use strict';
 // BROWSER-COMPATIBLE: no Node.js-only APIs at top level.
 
-// fp-ply-vnet: featurepol filters the root moves, the value network picks one.
+// fp-vnet: featurepol filters the root moves, the value network picks one.
 // Featurepol's top VN_WIDTH moves are the candidates; each is played and the
 // child valued by the net (cnn.h) in WebAssembly — vnet-eval.wasm via
 // vnet-wasm.js (c/wasm_vnet.c) — as 1 - V(child), the mover's chance after the
@@ -31,21 +31,21 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
 
   const VN_WIDTH = cfg.int('VN_WIDTH', 7);
-  if (!(VN_WIDTH >= 0)) throw new Error(`fp-ply-vnet: VN_WIDTH must be >= 0, got ${VN_WIDTH}`);
+  if (!(VN_WIDTH >= 0)) throw new Error(`fp-vnet: VN_WIDTH must be >= 0, got ${VN_WIDTH}`);
 
   const fpPath = _isNode ? cfg.str('VN_FPOL_DATA', require('path').join(__dirname, '..', 'ref', 'ref-fp-stone8AdjLib3.js')) : undefined;
-  const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-ply-vnet', path: fpPath });
+  const { weights: fpWeights, modelName: fpName } = FeaturePol.loadModel({ name: 'fp-vnet', path: fpPath });
 
   const modelPath = _isNode ? cfg.str('VN_MODEL', require('path').join(__dirname, '..', 'out', 'vnet-rfs-ptw1000-lad-6x32-best.bin')) : null;
   const modelBytes = _isNode ? new Uint8Array(require('fs').readFileSync(modelPath))
                              : (typeof window !== 'undefined' && window.vnetModel) || null;
-  if (!modelBytes) throw new Error('fp-ply-vnet: window.vnetModel is not set — the VNET1 file\'s bytes (Uint8Array)');
+  if (!modelBytes) throw new Error('fp-vnet: window.vnetModel is not set — the VNET1 file\'s bytes (Uint8Array)');
   const vw = _isNode ? VnetWasm.loadSync() : (typeof window !== 'undefined' && window.vnetWasm) || null;
-  if (!vw) throw new Error('fp-ply-vnet: window.vnetWasm is not set — load it first: window.vnetWasm = await VnetWasm.load(url)');
+  if (!vw) throw new Error('fp-vnet: window.vnetWasm is not set — load it first: window.vnetWasm = await VnetWasm.load(url)');
   const nParams = vw.setModel(modelBytes);
   let vwN = 0;   // board size the module is initialised for
 
-  console.error(`fp-ply-vnet[${cfg.slot != null ? cfg.slot : '-'}]: width: ${VN_WIDTH === 0 ? 'all' : VN_WIDTH}, ` +
+  console.error(`fp-vnet[${cfg.slot != null ? cfg.slot : '-'}]: width: ${VN_WIDTH === 0 ? 'all' : VN_WIDTH}, ` +
                 `fp: ${fpName} (${fpWeights.map.size} weights), ` +
                 `vnet: ${_isNode ? require('path').basename(modelPath) : 'window.vnetModel'} (${nParams} parameters)`);
 

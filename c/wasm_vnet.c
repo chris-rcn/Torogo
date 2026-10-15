@@ -1,6 +1,6 @@
 /*
  * wasm_vnet.c — the WebAssembly export layer for the value network (cnn.h) in
- * the browser (ai/fp-ply-vnet.js).  Built by c/build-wasm.sh, loaded by
+ * the browser (ai/fp-vnet.js, ai/puct-vnet-wasm.js).  Built by c/build-wasm.sh, loaded by
  * vnet-wasm.js.
  *
  * The model comes from JS: the bytes of a VNET1 file (vnet_save's format)

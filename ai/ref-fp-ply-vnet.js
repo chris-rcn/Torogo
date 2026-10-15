@@ -1,6 +1,6 @@
 'use strict';
 
-// ref-fp-ply-vnet — frozen reference: ai/fp-ply-vnet.js as of 2026-10-15
+// ref-fp-ply-vnet — frozen reference: ai/fp-ply-vnet.js (since renamed ai/fp-vnet.js) as of 2026-10-15
 // (ae0049e) at VN_WIDTH 7, with the files frozen as ref/ref-fp-ply-vnet-vnet.bin
 // (out/vnet-sweep-frozen.bin: vnet-rfs-ptw1000-lad-6x32-best as written at
 // 13:37:12, MD-test elo 1719 at width 7), ref/ref-fp-ply-vnet-fp.js
