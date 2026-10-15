@@ -24,7 +24,7 @@
  * window's sample positions with a random board symmetry.
  *
  * Rows (games geometric x1.4, and the last game of a --games run): play% is
- * the interval's wall time spent in self-play; komi the scoring komi; bWin% and
+ * the interval's wall time spent in self-play; bWin% and
  * moves black's win share and the mean game length over the interval's games
  * (bootstrap games included); trLoss and trMSE against the TD targets; teMSE
  * (with --test-evals) against those oracle labels, as train_vnet's; infer the
@@ -33,10 +33,8 @@
  * gate; --test-fp-width W > 0 values featurepol's top W only, default 5; 0 = full
  * width, independent of --fp-width).  The checkpoint is written at every row.
  *
- * --komi auto steps komi by +/-1 every 500 non-bootstrap games while black's
- * win share sits outside [45%, 55%] (auto:<start> seeds it; a VNET1 file does
- * not carry komi).  The default is fixed at the game's komi (3.5 on 13x13), the
- * currency of the MD file's and the ptw1000 sets' labels.
+ * --komi K: the scoring komi, default the game's (3.5 on 13x13), the currency
+ * of the MD file's and the ptw1000 sets' labels.
  *
  * --ext random | fp | puct: g2_random_legal_move; featurepol (fpol.c, the
  * --fp-model, stone8AdjLib3 only) sampled at temperature 1; or puct.c (the
@@ -68,7 +66,6 @@
 #include "rng.h"
 #include "vnet_tool.h"
 
-#define KOMI_WINDOW 500
 #define NEXT -1.0f   /* wout: bootstrap from the next slot */
 #define NONE -2.0f   /* wout: not a sample */
 #define PUCT_PPAT_MIN_PHASE 0.55   /* puct-ppat-fp's PPAT_MIN_PHASE */
@@ -174,7 +171,7 @@ int main(int argc, char **argv) {
     if (arg_flag(argc, argv, "--help")) {
         fprintf(stderr, "usage: train_vnet_td.bin [--size 13] [--channels 32] [--blocks 6] [--hidden 32] [--load PATH] [--save PATH]\n"
                         "         [--games N] [--bootstrap N] [--epsilon 0.1] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]\n"
-                        "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi auto|auto:<start>|<number>]\n"
+                        "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
                         "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 5]\n");
         return 1;
@@ -219,15 +216,12 @@ int main(int argc, char **argv) {
     }
     if ((ext_ratio > 0) != (ext != EXT_NONE)) { fprintf(stderr, "train_vnet_td: --ext and --ext-ratio > 0 go together\n"); return 1; }
     if (fp_width < 0 || (ext == EXT_PUCT && ext_playouts < 1)) { fprintf(stderr, "train_vnet_td: bad --fp-width / --ext-playouts\n"); return 1; }
-    int auto_komi = 0;
     g2_init_topology(N);
     komi = g2_komi(N);
     if (komi_s) {
-        if (!strncmp(komi_s, "auto", 4)) {
-            auto_komi = 1;
-            if (komi_s[4] == ':') komi = atof(komi_s + 5);
-            else if (komi_s[4]) { fprintf(stderr, "train_vnet_td: --komi auto | auto:<start> | <number>\n"); return 1; }
-        } else komi = atof(komi_s);
+        char *end;
+        komi = strtod(komi_s, &end);
+        if (*end) { fprintf(stderr, "train_vnet_td: --komi takes a number (got '%s')\n", komi_s); return 1; }
     }
 #ifdef _OPENMP
     omp_set_num_threads(threads);
@@ -296,18 +290,17 @@ int main(int argc, char **argv) {
     if (ext != EXT_NONE) printf("  ext-ratio %g", ext_ratio);
     if (ext == EXT_PUCT) printf("  ext-playouts %d  ppat-model %s", ext_playouts, ppat_f);
     if (need_fp) printf("  fp-model %s", fp_f);
-    printf("  fp-width %d  komi %s%g  bootstrap %ld  games %ld\n", fp_width, auto_komi ? "auto from " : "", komi, bootstrap, games_limit);
+    printf("  fp-width %d  komi %g  bootstrap %ld  games %ld\n", fp_width, komi, bootstrap, games_limit);
     printf("training: window %ld  reuse %g  save %s\n", window, reuse, save_f);
     if (test_f) printf("test: %s (%d records)\n", test_f, te.n);
     if (md) md_test_describe(md);
-    printf("\n%10s %10s %9s %6s %5s %6s %6s %8s %8s%s %7s%s\n", "games", "positions", "elapsed", "play%", "komi", "bWin%", "moves",
+    printf("\n%10s %10s %9s %6s %6s %6s %8s %8s%s %7s%s\n", "games", "positions", "elapsed", "play%", "bWin%", "moves",
            "trLoss", "trMSE", test_f ? "    teMSE" : "", "infer", md ? "   mdMae    elo" : "");
 
     long games = 0, next_row = round_games, step = 0;
     double owed = 0;
     long iv_games = 0, iv_bwins = 0, iv_moves = 0, iv_n = 0, iv_nf = 0;
     double iv_loss = 0, iv_se = 0, iv_play = 0, iv_fcpu = 0, infer = 0;
-    long komi_games = 0, komi_bwins = 0;
     const double t0 = wall_s();
     double iv_t0 = t0;
     for (;;) {
@@ -339,14 +332,6 @@ int main(int argc, char **argv) {
                 total_pos++;
             }
             iv_moves += R->n; iv_bwins += R->winner == BLACK;
-            if (auto_komi && games + i >= bootstrap) {
-                komi_games++; komi_bwins += R->winner == BLACK;
-                if (komi_games >= KOMI_WINDOW) {
-                    const double bw = (double)komi_bwins / komi_games;
-                    if (bw > 0.55) komi += 1; else if (bw < 0.45) komi -= 1;
-                    komi_games = komi_bwins = 0;
-                }
-            }
         }
         games += ng; iv_games += ng;
 
@@ -415,8 +400,8 @@ int main(int argc, char **argv) {
             char ibuf[16], lbuf[16], mbuf[16];
             if (iv_n) { snprintf(lbuf, sizeof lbuf, "%8.5f", iv_loss / iv_n); snprintf(mbuf, sizeof mbuf, "%8.5f", iv_se / iv_n); }
             else { strcpy(lbuf, "       -"); strcpy(mbuf, "       -"); }
-            printf("%10ld %10ld %8.2fm %6.1f %5.1f %6.1f %6.1f %s %s%s %7s%s\n", games, total_pos, (now - t0) / 60,
-                   100 * iv_play / (now - iv_t0), komi, 100.0 * iv_bwins / iv_games, (double)iv_moves / iv_games,
+            printf("%10ld %10ld %8.2fm %6.1f %6.1f %6.1f %s %s%s %7s%s\n", games, total_pos, (now - t0) / 60,
+                   100 * iv_play / (now - iv_t0), 100.0 * iv_bwins / iv_games, (double)iv_moves / iv_games,
                    lbuf, mbuf, tcol, infer > 0 ? fmt_time(infer, ibuf) : "-", mdcol);
             iv_games = iv_bwins = iv_moves = iv_n = iv_nf = 0;
             iv_loss = iv_se = iv_play = iv_fcpu = 0;
