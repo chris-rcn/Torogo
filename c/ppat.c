@@ -379,7 +379,7 @@ static bool not_self_atari_cheap(int32_t idx, int b4, const Game2 *g,
  * cheap bound clears most candidates; the exact path ORs the joined chains'
  * liberty bitsets and credits capture-freed points, so snapbacks label
  * correctly as size-1 self-atari. */
-static uint32_t sa_lib[MAX_BW];
+static _Thread_local uint32_t sa_lib[MAX_BW];   /* thread-local scratch, as below: callers may run on several threads */
 static int self_atari_size(const Game2 *g, int32_t idx, int b4, int8_t cur) {
     if (not_self_atari_cheap(idx, b4, g, cur)) return 0;
     const int W = g->W;
@@ -743,7 +743,7 @@ static inline int local_feat(const PpatCtx *X, int32_t idx, int sa, int32_t *fea
 }
 
 void ppat_extract(const Game2 *g, PpatState *st) {
-    static PpatCtx X;
+    static _Thread_local PpatCtx X;
     ctx_setup(g, &X);
     const bool want_sa = ppat_self_atari || X.has_prev || ppat_xa_n || ppat_cs_n;
 
@@ -766,7 +766,7 @@ void ppat_extract(const Game2 *g, PpatState *st) {
 
 /* ── Policy move ───────────────────────────────────────────────────────────── */
 
-static float logits_buf[MAX_CAP];
+static _Thread_local float logits_buf[MAX_CAP];
 static int sample_logits(int n, float mx, bool early_pass, float pass_logit, Rng *rng);
 
 /* Fast approximate exp for softmax sampling.
@@ -927,7 +927,7 @@ void ppat_inc_note(const Game2 *g, PpatInc *inc, int32_t move, int32_t old_ko, b
  * st exactly as ppat_extract writes them.  Returns n; *mx_out is the max. */
 static int inc_scan(const Game2 *g, PpatInc *inc, const float *weights, PpatState *st,
                     float *logits, float *mx_out) {
-    static PpatCtx X;
+    static _Thread_local PpatCtx X;
     ctx_setup(g, &X);
     if (inc->weights != weights) {   /* cached base logits are sums of these */
         memset(inc->dirty, 1, sizeof inc->dirty);

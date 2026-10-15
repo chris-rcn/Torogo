@@ -80,7 +80,7 @@ static double playout(PuctSearch *s, Game2 *g, Rng *rng) {
     double weight = 1.0;
     memset(s->played, 0, sizeof s->played);
     const float saved_gate = ppat_min_phase;
-    ppat_min_phase = 0;
+    if (saved_gate != 0) ppat_min_phase = 0;   /* no write when already off: no race between threads */
     ppat_inc_reset(&s->inc);   /* every move below goes through the cache */
     for (int moves = 0; !g->game_over && moves < move_limit; moves++) {
         const int8_t cur = g->current;
@@ -90,12 +90,13 @@ static double playout(PuctSearch *s, Game2 *g, Rng *rng) {
         ppat_inc_play(g, &s->inc, idx);
         weight -= step;
     }
-    ppat_min_phase = saved_gate;
+    if (saved_gate != 0) ppat_min_phase = saved_gate;
     return g2_estimate_winner(g) == BLACK ? 1 : 0;
 }
 
-/* _pruneToTopK's stable descending sort by featurepol probability. */
-static const double *sort_prob;
+/* _pruneToTopK's stable descending sort by featurepol probability.  Scratch
+ * here and in make_node is thread-local: searches may run on several threads. */
+static _Thread_local const double *sort_prob;
 static int by_prob_desc(const void *a, const void *b) {
     const int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
     const double px = sort_prob[x & 0xffff], py = sort_prob[y & 0xffff];
@@ -124,14 +125,14 @@ static int make_node(PuctSearch *s, int parent, int ci, const Game2 *g) {
     const bool has_pass = m < area / 3.0 || g->consecutive_passes > 0;
     if (has_pass) n->moves[m++] = PASS;
 
-    static double prob_by_move[MAX_CAP];
+    static _Thread_local double prob_by_move[MAX_CAP];
     if (have_fp) {
         memset(prob_by_move, 0, sizeof(double) * area);
         for (int i = 0; i < s->fp.n; i++) prob_by_move[s->fp.moves[i]] = s->fp.probs[i];
     }
     const int k = (int)floor(c->top_k_a + (c->top_k_b - c->top_k_a) * phase_of(g) + 0.5);  /* Math.round */
     if (k > 0 && have_fp) {
-        static int32_t keyed[MAX_CAP];
+        static _Thread_local int32_t keyed[MAX_CAP];
         int np = 0;
         for (int i = 0; i < m; i++) if (n->moves[i] != PASS) { keyed[np] = (np << 16) | n->moves[i]; np++; }
         sort_prob = prob_by_move;
