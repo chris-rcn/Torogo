@@ -13,7 +13,9 @@
  * same split — and infer, one test record's forward pass (encoding included)
  * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
  * trained over total elapsed time, test passes included.  The checkpoint is
- * written at every row and -best on a new best teMSE.
+ * written at every row and -best on a new best teMSE.  Without --test-evals
+ * there is no teMSE column and no -best, and infer is timed on the interval's
+ * training forwards (encoding included, augmentation's symmetry map too).
  *
  * --elo-map [FILE] (default out/elo-map-trunc30k-827.json) adds a 1-ply test
  * of the net as a player on the map's own MD file (its mdFile); --md FILE
@@ -34,7 +36,7 @@
  * pass / --threads, scaled by how far the last run's actual time was off that
  * estimate.  Other rows print '-'.
  *
- *   train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6]
+ *   train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 0] [--fp-model FILE]
@@ -60,8 +62,8 @@ int main(int argc, char **argv) {
     vt_prog = "train_vnet";
     setvbuf(stdout, NULL, _IOLBF, 0);   /* every line as it is printed, into a file or pipe too */
     const char *train_f = arg_str(argc, argv, "--evals", NULL), *test_f = arg_str(argc, argv, "--test-evals", NULL);
-    if (arg_flag(argc, argv, "--help") || !train_f || !test_f) {
-        fprintf(stderr, "usage: train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6] [--hidden 32]\n"
+    if (arg_flag(argc, argv, "--help") || !train_f) {
+        fprintf(stderr, "usage: train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
                         "         [--test-fp-width 0] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
@@ -99,7 +101,7 @@ int main(int argc, char **argv) {
     Set tr = {0}, te = {0};
     const double t_load = wall_s();
     load_set(train_f, &tr, &N, train_cap, threads);
-    load_set(test_f, &te, &N, test_cap, threads);
+    if (test_f) load_set(test_f, &te, &N, test_cap, threads);
     const int area = N * N;
     int32_t nbr9[MAX_CAP * 9]; vnet_topology(N, nbr9);
     if (test_fp_width > 0) fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
@@ -124,19 +126,22 @@ int main(int argc, char **argv) {
     Game3 **G3 = malloc(sizeof(Game3 *) * threads);
     for (int t = 0; t < threads; t++) { TG[t] = calloc(np, sizeof(float)); WK[t] = vnet_work_new(&L, area); G3[t] = g3_new(N); }
 
-    printf("train: %s (%d records)  test: %s (%d records)  size %d  [%.1fs to load]\n",
-           train_f, tr.n, test_f, te.n, N, wall_s() - t_load);
+    printf("train: %s (%d records)  ", train_f, tr.n);
+    if (test_f) printf("test: %s (%d records)  ", test_f, te.n);
+    else printf("test: (none)  ");
+    printf("size %d  [%.1fs to load]\n", N, wall_s() - t_load);
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
-    printf("save: %s (best: %s)\n", save_f, best_f);
+    if (test_f) printf("save: %s (best: %s)\n", save_f, best_f);
+    else printf("save: %s\n", save_f);
     if (md) md_test_describe(md);
-    printf("\n%10s %6s %9s %7s %8s %8s %8s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", "teMSE", "infer",
+    printf("\n%10s %6s %9s %7s %8s %8s%s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", test_f ? "    teMSE " : "", "infer",
            md ? "   mdMae    elo" : "");
 
     int *order = malloc(sizeof(int) * tr.n);
     for (int i = 0; i < tr.n; i++) order[i] = i;
     long done = 0, next_row = batch;
-    double iv_loss = 0, iv_se = 0; long iv_n = 0;
+    double iv_loss = 0, iv_se = 0, iv_fcpu = 0; long iv_n = 0;   /* iv_fcpu: training forwards' CPU, timed without a test set */
     double best = 1e30;
     const double t0 = wall_s();
     for (int ep = 0; ep < epochs; ep++) {
@@ -145,8 +150,8 @@ int main(int argc, char **argv) {
         for (int i = tr.n - 1; i > 0; i--) { s = mix(s, i); const int j = s % (uint32_t)(i + 1); const int tmp = order[i]; order[i] = order[j]; order[j] = tmp; }
         for (int b0 = 0; b0 < tr.n; b0 += batch) {
             const int bn = b0 + batch <= tr.n ? batch : tr.n - b0;
-            double loss = 0, se = 0;
-            #pragma omp parallel for schedule(static) reduction(+:loss, se)
+            double loss = 0, se = 0, fcpu = 0;
+            #pragma omp parallel for schedule(static) reduction(+:loss, se, fcpu)
             for (int i = 0; i < bn; i++) {
                 int t = 0;
 #ifdef _OPENMP
@@ -154,8 +159,10 @@ int main(int argc, char **argv) {
 #endif
                 const Record *R = &tr.r[order[b0 + i]];
                 const int sy = (int)(mix(seed ^ (uint32_t)ep * 2654435761u, (uint32_t)order[b0 + i]) & 7);
+                const double c0 = test_f ? 0 : thread_cpu_s();
                 vnet_encode_compact(R->code, &R->meta, area, sym + (size_t)sy * area, vnet_work_input(WK[t]));
                 const float v = vnet_forward(&L, w, nbr9, area, WK[t]);
+                if (!test_f) fcpu += thread_cpu_s() - c0;
                 const float vc = v < 1e-7f ? 1e-7f : v > 1 - 1e-7f ? 1 - 1e-7f : v;
                 loss += -(R->label * log(vc) + (1 - R->label) * log(1 - vc));
                 se += (double)(v - R->label) * (v - R->label);
@@ -164,7 +171,7 @@ int main(int argc, char **argv) {
             /* Reduce in thread order (deterministic), then Adam. */
             for (int j = 0; j < np; j++) { float g = 0; for (int t = 0; t < threads; t++) { g += TG[t][j]; TG[t][j] = 0; } G[j] = g / bn; }
             adam_step(&adam, w, G, lr);
-            done += bn; iv_loss += loss; iv_se += se; iv_n += bn;
+            done += bn; iv_loss += loss; iv_se += se; iv_fcpu += fcpu; iv_n += bn;
             const int epoch_end = b0 + bn >= tr.n;
             if (done >= next_row || epoch_end) {
                 double tse = 0;
@@ -179,22 +186,23 @@ int main(int argc, char **argv) {
                     const double d = vnet_forward(&L, w, nbr9, area, WK[t]) - te.r[i].label;
                     tse += d * d;
                 }
-                const double infer = (cpu_s() - c0) / te.n;
-                const double temse = tse / te.n, el = wall_s() - t0;
-                char ibuf[16];
-                const int is_best = temse < best;
+                const double infer = test_f ? (cpu_s() - c0) / te.n : iv_fcpu / iv_n;
+                const double temse = test_f ? tse / te.n : 0, el = wall_s() - t0;
+                char ibuf[16], tcol[16] = "";
+                const int is_best = test_f && temse < best;
                 if (is_best) { best = temse; vnet_save(best_f, &L, w); }
+                if (test_f) snprintf(tcol, sizeof tcol, " %8.5f%s", temse, is_best ? "*" : " ");
                 vnet_save(save_f, &L, w);
                 char mdcol[40] = "";
                 if (md) md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, mdcol);
-                printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
-                       done / el, iv_loss / iv_n, iv_se / iv_n, temse, is_best ? "*" : " ", fmt_time(infer, ibuf), mdcol);
+                printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
+                       done / el, iv_loss / iv_n, iv_se / iv_n, tcol, fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
-                iv_loss = iv_se = 0; iv_n = 0;
+                iv_loss = iv_se = iv_fcpu = 0; iv_n = 0;
                 while (next_row <= done) next_row = (long)(next_row * 1.4) + 1;
             }
         }
     }
-    printf("\nbest teMSE %.5f  (%s)\n", best, best_f);
+    if (test_f) printf("\nbest teMSE %.5f  (%s)\n", best, best_f);
     return 0;
 }

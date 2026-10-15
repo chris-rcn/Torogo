@@ -58,6 +58,7 @@ void args_check(int argc, char **argv) {
 }
 double wall_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 double cpu_s(void)  { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+double thread_cpu_s(void) { struct timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 const char *fmt_time(double s, char *buf) {
     if (s < 1e-3) snprintf(buf, 16, "%.0fus", s * 1e6);
     else if (s < 1) snprintf(buf, 16, "%.1fms", s * 1e3);

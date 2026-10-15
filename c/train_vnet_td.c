@@ -94,8 +94,6 @@ typedef struct {
     int8_t winner;
 } GameRec;
 
-static double thread_cpu(void) { struct timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
-
 static int8_t winner_of(const Game2 *g) {
     const Score s = g2_estimate_score(g);   /* white's includes g2_komi */
     return s.black > s.white - g2_komi(g->N) + komi ? BLACK : WHITE;
@@ -358,10 +356,10 @@ int main(int argc, char **argv) {
                 float target = wout[slot];
                 if (target < 0) {
                     const long j = (slot + 2) % window;
-                    const double c0 = thread_cpu();
+                    const double c0 = thread_cpu_s();
                     vnet_encode_compact(wcode + (size_t)j * area, &wmeta[j], area, NULL, vnet_work_input(WK[t]));
                     target = vnet_forward(&L, w, nbr9, area, WK[t]);
-                    fcpu += thread_cpu() - c0; nf++;
+                    fcpu += thread_cpu_s() - c0; nf++;
                 }
                 const int sy = (int)(mix(h, 0x51u) & 7);
                 vnet_encode_compact(wcode + (size_t)slot * area, &wmeta[slot], area, sym + (size_t)sy * area, vnet_work_input(WK[t]));

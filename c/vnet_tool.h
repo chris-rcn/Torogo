@@ -23,6 +23,7 @@ int         arg_flag(int argc, char **argv, const char *flag);
 void        args_check(int argc, char **argv);
 double      wall_s(void);
 double      cpu_s(void);               /* process CPU time */
+double      thread_cpu_s(void);        /* this thread's CPU time */
 const char *fmt_time(double s, char *buf);   /* "850us" / "2.2ms" / "1.3s" (buf: 16 bytes) */
 uint32_t    mix(uint32_t a, uint32_t b);     /* a 32-bit hash of two words */
 
