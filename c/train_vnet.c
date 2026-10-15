@@ -94,6 +94,7 @@ static uint32_t mix(uint32_t a, uint32_t b) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IOLBF, 0);   /* every line as it is printed, into a file or pipe too */
     const char *train_f = arg_str(argc, argv, "--evals", NULL), *test_f = arg_str(argc, argv, "--test-evals", NULL);
     if (arg_flag(argc, argv, "--help") || !train_f || !test_f) {
         fprintf(stderr, "usage: train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6] [--hidden 32]\n"
