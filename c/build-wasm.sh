@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the browser WebAssembly module for ppat playouts (c/wasm_ppat.c) with
-# wasi-sdk:  WASI_SDK=/path/to/wasi-sdk-25.0-x86_64-linux c/build-wasm.sh
+# wasi-sdk:  c/build-wasm.sh  (WASI_SDK defaults to ~/opt/wasi-sdk-25.0-x86_64-linux)
 #
 #   ../ppat-playout.wasm       the module ppat-wasm.js loads (stripped; fatal errors via
 #                              the JS hook in c/fatal.h, so no stdio)
@@ -11,7 +11,8 @@
 # wasi-sdk 25: https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-25
 set -e
 cd "$(dirname "$0")"
-if [ -z "$WASI_SDK" ] || [ ! -x "$WASI_SDK/bin/clang" ]; then
+WASI_SDK="${WASI_SDK:-$HOME/opt/wasi-sdk-25.0-x86_64-linux}"
+if [ ! -x "$WASI_SDK/bin/clang" ]; then
     echo "build-wasm.sh: set WASI_SDK to an unpacked wasi-sdk (wasi-sdk-25.0-x86_64-linux from the release above)" >&2
     exit 1
 fi
