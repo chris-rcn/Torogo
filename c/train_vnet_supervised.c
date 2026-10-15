@@ -1,5 +1,5 @@
 /*
- * train_vnet.c — supervised training of the toroidal residual value network
+ * train_vnet_supervised.c — supervised training of the toroidal residual value network
  * (cnn.h) on gen-agent-evals labels: each record's position (replayed from the
  * board with the free centre stone, as gen-agent-evals writes it) against its
  * win ratio, P(side to move wins).
@@ -38,7 +38,7 @@
  * pass / --threads, scaled by how far the last run's actual time was off that
  * estimate.  Other rows print '-'.
  *
- *   train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
+ *   train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 5] [--fp-model FILE]
@@ -61,11 +61,11 @@
 #include "vnet_tool.h"
 
 int main(int argc, char **argv) {
-    vt_prog = "train_vnet";
+    vt_prog = "train_vnet_supervised";
     setvbuf(stdout, NULL, _IOLBF, 0);   /* every line as it is printed, into a file or pipe too */
     const char *train_f = arg_str(argc, argv, "--evals", NULL), *test_f = arg_str(argc, argv, "--test-evals", NULL);
     if (arg_flag(argc, argv, "--help") || !train_f) {
-        fprintf(stderr, "usage: train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
+        fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
                         "         [--test-fp-width 5] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
@@ -87,17 +87,17 @@ int main(int argc, char **argv) {
     const int test_fp_width = atoi(test_fp_s ? test_fp_s : "5");
     const char *fp_f = arg_str(argc, argv, "--fp-model", "ref/ref-fp-stone8AdjLib3.js");
     args_check(argc, argv);
-    if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
+    if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet_supervised: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
     char best_f[300];
     {   const char *dot = strrchr(save_f, '.');
         if (dot && dot > strrchr(save_f, '/')) snprintf(best_f, sizeof best_f, "%.*s-best%s", (int)(dot - save_f), save_f, dot);
         else snprintf(best_f, sizeof best_f, "%s-best", save_f); }
-    if (C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || epochs < 1) { fprintf(stderr, "train_vnet: bad size/batch/threads/epochs\n"); return 1; }
+    if (C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || epochs < 1) { fprintf(stderr, "train_vnet_supervised: bad size/batch/threads/epochs\n"); return 1; }
 #ifdef _OPENMP
     omp_set_num_threads(threads);
 #else
-    if (threads > 1) { fprintf(stderr, "train_vnet: built without OpenMP; --threads must be 1\n"); return 1; }
+    if (threads > 1) { fprintf(stderr, "train_vnet_supervised: built without OpenMP; --threads must be 1\n"); return 1; }
 #endif
 
     int N = 0;

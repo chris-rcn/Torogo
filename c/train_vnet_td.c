@@ -28,11 +28,12 @@
  * the interval's wall time spent in self-play; bWin% and
  * moves black's win share and the mean game length over the interval's games
  * (bootstrap games included); trLoss and trMSE against the TD targets; teMSE
- * (with --test-evals) against those oracle labels, as train_vnet's; infer the
- * CPU time of one target evaluation (compact encoding + forward); mdMae / elo
- * the MD 1-ply test, as train_vnet's (--elo-map / --md, the same 20% wall-time
- * gate; --test-fp-width W > 0 values featurepol's top W only, default 5; 0 = full
- * width, independent of --fp-width).  The checkpoint is written at every row.
+ * (with --test-evals) against those oracle labels, as train_vnet_supervised's;
+ * infer the CPU time of one target evaluation (compact encoding + forward);
+ * mdMae / elo the MD 1-ply test, as train_vnet_supervised's (--elo-map / --md,
+ * the same 20% wall-time gate; --test-fp-width W > 0 values featurepol's top W
+ * only, default 5; 0 = full width, independent of --fp-width).  The checkpoint
+ * is written at every row.
  *
  * --komi K: the scoring komi, default the game's (3.5 on 13x13), the currency
  * of the MD file's and the ptw1000 sets' labels.

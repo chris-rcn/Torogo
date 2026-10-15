@@ -1,4 +1,4 @@
-/* vnet_tool.h — what the value-net trainers (train_vnet, train_vnet_td)
+/* vnet_tool.h — what the value-net trainers (train_vnet_supervised, train_vnet_td)
  * share: command-line helpers, gen-agent-evals record sets, Adam, and the MD
  * 1-ply test with its Elo estimate. */
 #ifndef VNET_TOOL_H
