@@ -39,10 +39,17 @@
  * pass / --threads, scaled by how far the last run's actual time was off that
  * estimate.  Other rows print '-'.
  *
+ * --smooth-weights A: a Polyak average of the weights (train-vpat-td's knob),
+ * updated after every Adam step as ema = A*ema + (1-A)*w; the test pass, the MD
+ * test, the checkpoint and -best all use it, training continues on w.  auto
+ * (the default): A = 1 - 4/step, a window of about the last quarter of the
+ * run's steps; 0 = off (the raw weights throughout).
+ *
  *   train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
+ *       [--smooth-weights auto]
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.
@@ -69,12 +76,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
-                        "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
+                        "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n");
         return 1;
     }
     const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
     const int Hd = atoi(arg_str(argc, argv, "--hidden", "32")), batch = atoi(arg_str(argc, argv, "--batch", "256"));
     const float lr = (float)atof(arg_str(argc, argv, "--lr", "0.001"));
+    const char *smooth_s = arg_str(argc, argv, "--smooth-weights", "auto");
+    const int smooth_auto = !strcmp(smooth_s, "auto");
+    char *smooth_end;
+    const double smooth_a = smooth_auto ? 0 : strtod(smooth_s, &smooth_end);
+    if (!smooth_auto && (*smooth_end || !(smooth_a >= 0 && smooth_a < 1))) {
+        fprintf(stderr, "train_vnet_supervised: --smooth-weights takes auto or a decay in [0, 1) (got '%s')\n", smooth_s); return 1;
+    }
+    const int smooth = smooth_auto || smooth_a > 0;
     const int epochs = atoi(arg_str(argc, argv, "--epochs", "10")), threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const int train_cap = atoi(arg_str(argc, argv, "--train-pos", "0")), test_cap = atoi(arg_str(argc, argv, "--test-pos", "0"));
     const uint32_t seed = (uint32_t)atol(arg_str(argc, argv, "--seed", "1"));
@@ -123,6 +138,10 @@ int main(int argc, char **argv) {
         vnet_init(&L, w, seed);
     }
     const int np = L.n_params;
+    /* ew: the weights tested and saved — the Polyak average, or w itself when off */
+    float *ema = smooth ? malloc(sizeof(float) * (size_t)np) : NULL;
+    if (ema) memcpy(ema, w, sizeof(float) * (size_t)np);
+    const float *ew = ema ? ema : w;
     float *G = calloc(np, sizeof(float));
     Adam adam = adam_new(np);
     float **TG = malloc(sizeof(float *) * threads);
@@ -134,8 +153,9 @@ int main(int argc, char **argv) {
     if (test_f) printf("test: %s (%d records)  ", test_f, te.n);
     else printf("test: (none)  ");
     printf("size %d  [%.1fs to load]\n", N, wall_s() - t_load);
-    printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
-           L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
+    printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u  smooth-weights %s\n",
+           L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed,
+           smooth_auto ? "auto" : smooth ? smooth_s : "off");
     const char *best_by = md ? (md_test_elo_valid(md) ? "elo" : "mdMae") : "teMSE";
     if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, best_by, best_f);
     else printf("save: %s\n", save_f);
@@ -176,6 +196,10 @@ int main(int argc, char **argv) {
             /* Reduce in thread order (deterministic), then Adam. */
             for (int j = 0; j < np; j++) { float g = 0; for (int t = 0; t < threads; t++) { g += TG[t][j]; TG[t][j] = 0; } G[j] = g / bn; }
             adam_step(&adam, w, G, lr);
+            if (ema) {
+                const float a = smooth_auto ? (adam.step > 4 ? 1.0f - 4.0f / (float)adam.step : 0.0f) : (float)smooth_a;
+                for (int j = 0; j < np; j++) ema[j] = a * ema[j] + (1 - a) * w[j];
+            }
             done += bn; iv_loss += loss; iv_se += se; iv_fcpu += fcpu; iv_n += bn;
             const int epoch_end = b0 + bn >= tr.n;
             if (done >= next_row || epoch_end) {
@@ -188,7 +212,7 @@ int main(int argc, char **argv) {
                     t = omp_get_thread_num();
 #endif
                     vnet_encode_compact(te.r[i].code, &te.r[i].meta, area, NULL, vnet_work_input(WK[t]));
-                    const double d = vnet_forward(&L, w, nbr9, area, WK[t]) - te.r[i].label;
+                    const double d = vnet_forward(&L, ew, nbr9, area, WK[t]) - te.r[i].label;
                     tse += d * d;
                 }
                 const double infer = test_f ? (cpu_s() - c0) / te.n : iv_fcpu / iv_n;
@@ -196,12 +220,12 @@ int main(int argc, char **argv) {
                 char ibuf[16], tcol[16] = "";
                 /* -best: by the MD test (elo, else mdMae) when it runs, else by teMSE */
                 const int te_best = !md && test_f && temse < best;
-                if (te_best) { best = temse; vnet_save(best_f, &L, w); }
+                if (te_best) { best = temse; vnet_save(best_f, &L, ew); }
                 if (test_f) snprintf(tcol, sizeof tcol, " %8.5f%s", temse, te_best ? "*" : " ");
-                vnet_save(save_f, &L, w);
+                vnet_save(save_f, &L, ew);
                 char mdcol[40] = "";
-                if (md && md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, &best, mdcol))
-                    vnet_save(best_f, &L, w);
+                if (md && md_test_row(md, &L, ew, nbr9, area, WK, G3, threads, infer, wall_s() - t0, &best, mdcol))
+                    vnet_save(best_f, &L, ew);
                 printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
                        done / el, iv_loss / iv_n, iv_se / iv_n, tcol, fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
