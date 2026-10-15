@@ -40,7 +40,8 @@ Adam adam_new(int n);
 void adam_step(Adam *a, float *w, const float *G, float lr);
 
 /* The MD 1-ply test: at every MD position (movedetails, *.md) each legal move
- * except filling one's own true eye is played and valued 1 - V(child), and the
+ * except filling one's own true eye (or, fp_width > 0, featurepol's top
+ * fp_width of them: fpol_load first) is played and valued 1 - V(child), and the
  * best is charged its gap to the file's top move (the worst rated candidate
  * when it has no rating, as evalmovedetails does).  mdMae is the mean gap; elo
  * maps the per-band gaps to a CGOS Elo estimate with the elo map's curves
@@ -48,7 +49,7 @@ void adam_step(Adam *a, float *w, const float *G, float lr);
  * the map's own (sha256 fingerprint of its sorted rows). */
 typedef struct MdTest MdTest;
 /* md_f NULL = the map's own mdFile. */
-MdTest *md_test_open(const char *elo_f, const char *md_f, int N);
+MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width);
 void    md_test_describe(const MdTest *T);   /* the "md: ..." header line */
 /* One row's "  mdMae    elo" cell into col (40 bytes): the test runs only
  * when it keeps its share of the run's wall time (now, seconds) within 20%,

@@ -28,7 +28,8 @@
  * (with --test-evals) against those oracle labels, as train_vnet's; infer the
  * CPU time of one target evaluation (compact encoding + forward); mdMae / elo
  * the MD 1-ply test, as train_vnet's (--elo-map / --md, the same 20% wall-time
- * gate).  The checkpoint is written at every row.
+ * gate; --test-fp-width W > 0 values featurepol's top W only, default 0 = full
+ * width, independent of --fp-width).  The checkpoint is written at every row.
  *
  * --komi auto steps komi by +/-1 every 500 non-bootstrap games while black's
  * win share sits outside [45%, 55%] (auto:<start> seeds it; a VNET1 file does
@@ -46,6 +47,7 @@
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
  *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
+ *       [--test-fp-width 0]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -168,7 +170,7 @@ int main(int argc, char **argv) {
                         "         [--games N] [--bootstrap N] [--epsilon 0.1] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi auto|auto:<start>|<number>]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
-                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]\n");
+                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 0]\n");
         return 1;
     }
     N = atoi(arg_str(argc, argv, "--size", "13"));
@@ -197,7 +199,9 @@ int main(int argc, char **argv) {
     if (md_f && !elo_f) elo_f = "out/elo-map-trunc30k-827.json";   /* --md alone: the default map */
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
+    const int test_fp_width = atoi(arg_str(argc, argv, "--test-fp-width", "0"));
     args_check(argc, argv);
+    if (test_fp_width < 0 || (test_fp_width > 0 && !elo_f)) { fprintf(stderr, "train_vnet_td: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-td-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
 
     if (N < 3 || N > MAX_BOARD_SIZE || C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || window < 3) {
@@ -226,7 +230,8 @@ int main(int argc, char **argv) {
 
     area = N * N;
     vnet_topology(N, nbr9);
-    if (fp_width > 0 || ext == EXT_FP || ext == EXT_PUCT) {
+    const int need_fp = fp_width > 0 || ext == EXT_FP || ext == EXT_PUCT || test_fp_width > 0;
+    if (need_fp) {
         fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
         /* fpol builds its neighbour table on first use: once here, not racing in the threads */
         Game2 g; g2_new_empty(&g, N); FpolState fs; fpol_eval(&g, &fs, 1.0);
@@ -242,7 +247,7 @@ int main(int argc, char **argv) {
         int sz = N;
         load_set(test_f, &te, &sz, test_cap);
     }
-    MdTest *md = elo_f ? md_test_open(elo_f, md_f, N) : NULL;
+    MdTest *md = elo_f ? md_test_open(elo_f, md_f, N, test_fp_width) : NULL;
     static int32_t sym[8 * MAX_CAP]; vnet_sym_map(N, sym);
 
     float *w;
@@ -282,7 +287,7 @@ int main(int argc, char **argv) {
     printf("self-play: size %d  epsilon %g  ext %s", N, epsilon, ext_s ? ext_s : "(none)");
     if (ext != EXT_NONE) printf("  ext-ratio %g", ext_ratio);
     if (ext == EXT_PUCT) printf("  ext-playouts %d  ppat-model %s", ext_playouts, ppat_f);
-    if (fp_width > 0 || ext == EXT_FP || ext == EXT_PUCT) printf("  fp-model %s", fp_f);
+    if (need_fp) printf("  fp-model %s", fp_f);
     printf("  fp-width %d  komi %s%g  bootstrap %ld  games %ld\n", fp_width, auto_komi ? "auto from " : "", komi, bootstrap, games_limit);
     printf("training: window %ld  reuse %g  save %s\n", window, reuse, save_f);
     if (test_f) printf("test: %s (%d records)\n", test_f, te.n);

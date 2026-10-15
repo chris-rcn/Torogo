@@ -8,6 +8,7 @@
 #include <omp.h>
 #endif
 #include "vnet_tool.h"
+#include "fpol.h"
 
 const char *vt_prog = "vnet";
 
@@ -122,7 +123,22 @@ static void idx_to_coord(int32_t m, int N, char *out) {
 
 /* f1 <size> <phase> <history> <candidates>: history replays from an EMPTY board
  * (it starts with the centre stone); candidates "move:kwr" best-first. */
-static void load_md(const char *path, int N, MdSet *M) {
+/* The moves the test values at g: featurepol's top fp_width (0 = every legal
+ * non-true-eye move, index order) into out; returns the count. */
+static int md_cands(const Game2 *g, int fp_width, int32_t *out) {
+    int n = 0;
+    if (fp_width > 0) {
+        FpolState fs; int order[MAX_CAP];
+        fpol_eval(g, &fs, 1.0);
+        fpol_rank(&fs, order);
+        for (int i = 0; i < fs.n && i < fp_width; i++) out[n++] = fs.moves[order[i]];
+    } else
+        for (int m = 0; m < g->cap; m++)
+            if (g->cells[m] == EMPTY && g2_is_legal(g, m) && !g2_is_true_eye_at(g, m)) out[n++] = m;
+    return n;
+}
+
+static void load_md(const char *path, int N, int fp_width, MdSet *M) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "%s: cannot open --md %s\n", vt_prog, path); exit(1); }
     static char line[65536], hist[32768], cands[32768];
@@ -161,8 +177,8 @@ static void load_md(const char *path, int N, MdSet *M) {
                 C->wr = colon[1] ? atoi(colon + 1) / 1000.0f : -1.0f;
             }
         if (P->nc == 0 || P->c[0].wr < 0) { fprintf(stderr, "%s: --md %s line %d: no rated top candidate\n", vt_prog, path, lineno); exit(1); }
-        for (int m = 0; m < P->g.cap; m++)   /* the moves md_eval will evaluate */
-            if (P->g.cells[m] == EMPTY && g2_is_legal(&P->g, m) && !g2_is_true_eye_at(&P->g, m)) M->evals++;
+        int32_t cand[MAX_CAP];
+        M->evals += md_cands(&P->g, fp_width, cand);   /* the moves md_eval will evaluate */
         M->n++;
     }
     fclose(f);
@@ -273,7 +289,7 @@ static int band_of(double phase, int nb) { int b = (int)floor(phase * nb); retur
 
 /* The 1-ply player's mean gap over the MD set, with per-band sums for the elo. */
 static double md_eval(const MdSet *M, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
-                      VnetWork **WK, Game3 **G3, int buckets, double *band_sum, int *band_n) {
+                      VnetWork **WK, Game3 **G3, int fp_width, int buckets, double *band_sum, int *band_n) {
     double gsum = 0;
     for (int b = 0; b < buckets; b++) { band_sum[b] = 0; band_n[b] = 0; }
     #pragma omp parallel for schedule(dynamic, 4) reduction(+:gsum)
@@ -285,12 +301,13 @@ static double md_eval(const MdSet *M, const VnetLayout *L, const float *w, const
         const MdPos *P = &M->p[i];
         const int N = P->g.N;
         int32_t best = PASS; float best_v = -1;
-        for (int m = 0; m < area; m++) {
-            if (P->g.cells[m] != EMPTY || !g2_is_legal(&P->g, m) || g2_is_true_eye_at(&P->g, m)) continue;
-            Game2 child; g2_clone(&child, &P->g); g2_play(&child, m);
+        int32_t cand[MAX_CAP];
+        const int nc = md_cands(&P->g, fp_width, cand);
+        for (int c = 0; c < nc; c++) {
+            Game2 child; g2_clone(&child, &P->g); g2_play(&child, cand[c]);
             vnet_encode(&child, G3[t], NULL, vnet_work_input(WK[t]));
             const float v = 1 - vnet_forward(L, w, nbr9, area, WK[t]);   /* the opponent is to move in child */
-            if (v > best_v) { best_v = v; best = m; }
+            if (v > best_v) { best_v = v; best = cand[c]; }
         }
         char ms[8]; idx_to_coord(best, N, ms);
         float wr = -1;
@@ -333,17 +350,19 @@ struct MdTest {
     MdSet md;
     EloMap elo;
     const char *md_f, *elo_f;
+    int fp_width;
     int elo_valid;
     double total;   /* wall time spent in the test */
     double scale;   /* last run's actual time / its estimate */
 };
 
-MdTest *md_test_open(const char *elo_f, const char *md_f, int N) {
+MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width) {
     MdTest *T = calloc(1, sizeof *T);
+    T->fp_width = fp_width;
     T->elo = load_elo_map(elo_f);
     T->elo_f = elo_f;
     T->md_f = md_f ? md_f : T->elo.md;
-    load_md(T->md_f, N, &T->md);
+    load_md(T->md_f, N, fp_width, &T->md);   /* on this thread: fpol's first use builds its tables */
     char fp[17]; md_fingerprint(&T->md, fp);
     T->elo_valid = strcmp(fp, T->elo.fp) == 0;
     if (!T->elo_valid) fprintf(stderr, "%s: %s (fingerprint %s) is not the elo map's MD file (%s): elo not estimated\n", vt_prog, T->md_f, fp, T->elo.fp);
@@ -352,7 +371,9 @@ MdTest *md_test_open(const char *elo_f, const char *md_f, int N) {
 }
 
 void md_test_describe(const MdTest *T) {
-    printf("md: %s (%d positions, %ld net evaluations per test), elo map: %s%s\n", T->md_f, T->md.n, T->md.evals, T->elo_f, T->elo_valid ? "" : " (not this MD file: elo -)");
+    char fw[32] = "full width";
+    if (T->fp_width > 0) snprintf(fw, sizeof fw, "featurepol top %d", T->fp_width);
+    printf("md: %s (%d positions, %s: %ld net evaluations per test), elo map: %s%s\n", T->md_f, T->md.n, fw, T->md.evals, T->elo_f, T->elo_valid ? "" : " (not this MD file: elo -)");
 }
 
 void md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
@@ -362,7 +383,7 @@ void md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *
     const double m0 = wall_s();
     double bs[16]; int bn[16];
     const EloMap *E = &T->elo;
-    const double mae = md_eval(&T->md, L, w, nbr9, area, WK, G3, E->buckets, bs, bn);
+    const double mae = md_eval(&T->md, L, w, nbr9, area, WK, G3, T->fp_width, E->buckets, bs, bn);
     double e = E->intercept; int have = T->elo_valid;
     for (int j = 0; j < E->nb && have; j++) {
         const int b = band_of((E->lo[j] + E->hi[j]) / 2, E->buckets);
