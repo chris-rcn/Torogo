@@ -52,12 +52,15 @@ typedef struct MdTest MdTest;
 /* md_f NULL = the map's own mdFile. */
 MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width);
 void    md_test_describe(const MdTest *T);   /* the "md: ..." header line */
+int     md_test_elo_valid(const MdTest *T);   /* the elo map applies to this MD file */
 /* One row's "  mdMae    elo" cell into col (40 bytes): the test runs only
  * when it keeps its share of the run's wall time (now, seconds) within 20%,
  * its cost estimated as its evaluations x infer (CPU seconds per forward) /
  * threads, scaled by how far the last run's actual time was off its estimate;
  * otherwise '-'.  WK and G3: one per thread.  best (NULL = not tracked): the
- * lowest mdMae so far; a run below it updates it, stars the cell and returns 1. */
+ * best so far, by elo when the map applies to the MD file (stored negated), else
+ * by mdMae — lower is better; a run that beats it updates it, stars the cell's
+ * deciding value and returns 1. */
 int     md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
                     VnetWork **WK, Game3 **G3, int threads, double infer, double now, double *best, char *col);
 

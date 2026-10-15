@@ -13,8 +13,9 @@
  * same split — and infer, one test record's forward pass (encoding included)
  * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
  * trained over total elapsed time, test passes included.  The checkpoint is
- * written at every row, and -best on a new best mdMae when the MD test runs
- * (rows it skips cannot be best), else on a new best teMSE.  Without
+ * written at every row, and -best on a new best elo when the MD test runs on
+ * the elo map's own MD file, a new best mdMae when it runs on another (rows it
+ * skips cannot be best), else on a new best teMSE.  Without
  * --test-evals there is no teMSE column, and infer is timed on the interval's
  * training forwards (encoding included, augmentation's symmetry map too).
  *
@@ -135,7 +136,8 @@ int main(int argc, char **argv) {
     printf("size %d  [%.1fs to load]\n", N, wall_s() - t_load);
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
-    if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, md ? "mdMae" : "teMSE", best_f);
+    const char *best_by = md ? (md_test_elo_valid(md) ? "elo" : "mdMae") : "teMSE";
+    if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, best_by, best_f);
     else printf("save: %s\n", save_f);
     if (md) md_test_describe(md);
     printf("\n%10s %6s %9s %7s %8s %8s%s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", test_f ? "    teMSE " : "", "infer",
@@ -192,7 +194,7 @@ int main(int argc, char **argv) {
                 const double infer = test_f ? (cpu_s() - c0) / te.n : iv_fcpu / iv_n;
                 const double temse = test_f ? tse / te.n : 0, el = wall_s() - t0;
                 char ibuf[16], tcol[16] = "";
-                /* -best: by mdMae when the MD test runs, else by teMSE */
+                /* -best: by the MD test (elo, else mdMae) when it runs, else by teMSE */
                 const int te_best = !md && test_f && temse < best;
                 if (te_best) { best = temse; vnet_save(best_f, &L, w); }
                 if (test_f) snprintf(tcol, sizeof tcol, " %8.5f%s", temse, te_best ? "*" : " ");
@@ -208,6 +210,9 @@ int main(int argc, char **argv) {
             }
         }
     }
-    if (best < 1e30) printf("\nbest %s %.5f  (%s)\n", md ? "mdMae" : "teMSE", best, best_f);
+    if (best < 1e30) {
+        if (md && md_test_elo_valid(md)) printf("\nbest elo %.0f  (%s)\n", -best, best_f);
+        else printf("\nbest %s %.5f  (%s)\n", best_by, best, best_f);
+    }
     return 0;
 }

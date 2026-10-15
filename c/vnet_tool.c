@@ -417,6 +417,8 @@ MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width) {
     return T;
 }
 
+int md_test_elo_valid(const MdTest *T) { return T->elo_valid; }
+
 void md_test_describe(const MdTest *T) {
     char fw[32] = "full width";
     if (T->fp_width > 0) snprintf(fw, sizeof fw, "featurepol top %d", T->fp_width);
@@ -437,10 +439,14 @@ int md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *n
         if (bn[b] == 0) have = 0;
         else e -= E->A * exp(E->k * (E->lo[j] + E->hi[j]) / 2) * (bs[b] / bn[b]);
     }
-    const int is_best = best && mae < *best;
-    if (is_best) *best = mae;
-    if (have) snprintf(col, 40, "  %6.4f%c%6.0f", mae, is_best ? '*' : ' ', e);
-    else snprintf(col, 40, "  %6.4f%c     -", mae, is_best ? '*' : ' ');
+    /* The criterion: the elo when the map applies (higher is better, kept
+     * negated so lower is better throughout), else mdMae; the star follows it. */
+    const double key = T->elo_valid ? (have ? -e : 1e30) : mae;
+    const int is_best = best && key < *best;
+    if (is_best) *best = key;
+    const char ms = is_best && !T->elo_valid ? '*' : ' ', es = is_best && T->elo_valid ? '*' : ' ';
+    if (have) snprintf(col, 40, "  %6.4f%c%6.0f%c", mae, ms, e, es);
+    else snprintf(col, 40, "  %6.4f%c     - ", mae, ms);
     const double took = wall_s() - m0;
     T->total += took;
     if (raw > 0) T->scale = took / raw;
