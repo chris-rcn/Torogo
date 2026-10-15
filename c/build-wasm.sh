@@ -7,6 +7,7 @@
 #   ppat-playout-test.wasm     the same plus wasm_test_bench (-DWASM_PPAT_TEST)
 #   bench_ppat.wasm            bench_ppat.c as a WASI program (file loader), for
 #                              the hand-off check and timings under node:wasi
+#   ../vnet-eval.wasm          the value net (c/wasm_vnet.c) vnet-wasm.js loads
 #
 # wasi-sdk 25: https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-25
 set -e
@@ -27,4 +28,9 @@ $CC $CFLAGS -mexec-model=reactor -DPPAT_NO_FILE_IO -DTOROGO_WASM_FATAL -DWASM_PP
 $CC $CFLAGS -Wl,-z,stack-size=8388608 -Wl,--strip-all \
     -o bench_ppat.wasm game2.c ppat.c bench_ppat.c $LIBS
 
-echo "built ../ppat-playout.wasm, ppat-playout-test.wasm, bench_ppat.wasm"
+# The value net: vnet_encode's ladder reads keep a Ladder2Result per point on
+# the stack, so 1 MB of stack.
+$CC $CFLAGS -mexec-model=reactor -DVNET_NO_FILE_IO -DTOROGO_WASM_FATAL -Wl,-z,stack-size=1048576 -Wl,--strip-all \
+    -o ../vnet-eval.wasm game2.c game3.c ladder2.c cnn.c wasm_vnet.c $LIBS
+
+echo "built ../ppat-playout.wasm, ppat-playout-test.wasm, bench_ppat.wasm, ../vnet-eval.wasm"

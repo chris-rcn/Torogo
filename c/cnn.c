@@ -411,6 +411,7 @@ void vnet_backward(const VnetLayout *L, const float *w, const int32_t *nbr9, int
     else conv_bwd(k->x, P, k->dpre, C, NULL, G + L->stem_w, G + L->stem_b, NULL, nbr9, area);   /* no input gradient */
 }
 
+#ifndef VNET_NO_FILE_IO   /* the WASM module (wasm_vnet.c) takes its model from JS */
 /* Atomic: written to <path>.tmp, then renamed over path, so a reader or a
  * crash mid-write never sees a partial file.  On failure the previous file
  * stays and the tmp is removed. */
@@ -446,3 +447,4 @@ float *vnet_load(const char *path, VnetLayout *L) {
     fclose(f);
     return w;
 }
+#endif /* VNET_NO_FILE_IO */
