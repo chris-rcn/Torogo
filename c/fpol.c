@@ -199,7 +199,7 @@ int32_t fpol_sample(const FpolState *st, Rng *rng) {
     return st->moves[st->n - 1];           /* rounding: the last candidate */
 }
 
-static const FpolState *rank_st;
+static _Thread_local const FpolState *rank_st;   /* thread-local: callers rank on several threads */
 static int rank_cmp(const void *a, const void *b) {
     const int i = *(const int *)a, j = *(const int *)b;
     const double li = rank_st->logits[i], lj = rank_st->logits[j];
