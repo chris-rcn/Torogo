@@ -50,6 +50,7 @@
 #include <omp.h>
 #endif
 #include "game2.h"
+#include "game3.h"
 #include "cnn.h"
 
 /* The value after `flag`, or def when the flag is absent.  A flag given
@@ -103,6 +104,7 @@ static void load_set(const char *path, Set *S, int *size, int limit) {
     if (!f) { fprintf(stderr, "train_vnet: cannot open %s\n", path); exit(1); }
     static char line[16384], moves[16384];
     int lineno = 0, bad = 0;
+    Game3 *g3 = NULL;   /* ladder-read scratch for vnet_compact */
     while (fgets(line, sizeof line, f) && (limit <= 0 || S->n < limit)) {
         lineno++;
         if (line[0] == '#' || line[0] == '\n') continue;
@@ -120,10 +122,12 @@ static void load_set(const char *path, Set *S, int *size, int limit) {
         if (!ok) { if (++bad <= 5) fprintf(stderr, "train_vnet: %s line %d: an illegal move on replay\n", path, lineno); continue; }
         if (S->n == S->cap) { S->cap = S->cap ? 2 * S->cap : 65536; S->r = realloc(S->r, sizeof(Record) * (size_t)S->cap); }
         Record *R = &S->r[S->n++];
-        vnet_compact(&g, R->code, &R->meta);
+        if (!g3) g3 = g3_new(n);
+        vnet_compact(&g, g3, R->code, &R->meta);
         R->label = (float)label;
     }
     fclose(f);
+    if (g3) g3_free(g3);
     if (bad) fprintf(stderr, "train_vnet: %s: %d record(s) dropped (see above)\n", path, bad);
     if (S->n == 0) { fprintf(stderr, "train_vnet: no records in %s\n", path); exit(1); }
 }
@@ -293,7 +297,7 @@ static int band_of(double phase, int nb) { int b = (int)floor(phase * nb); retur
 
 /* The 1-ply player's mean gap over the MD set, with per-band sums for the elo. */
 static double md_eval(const MdSet *M, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
-                      VnetWork **WK, int buckets, double *band_sum, int *band_n) {
+                      VnetWork **WK, Game3 **G3, int buckets, double *band_sum, int *band_n) {
     double gsum = 0;
     for (int b = 0; b < buckets; b++) { band_sum[b] = 0; band_n[b] = 0; }
     #pragma omp parallel for schedule(dynamic, 4) reduction(+:gsum)
@@ -308,7 +312,7 @@ static double md_eval(const MdSet *M, const VnetLayout *L, const float *w, const
         for (int m = 0; m < area; m++) {
             if (P->g.cells[m] != EMPTY || !g2_is_legal(&P->g, m) || g2_is_true_eye_at(&P->g, m)) continue;
             Game2 child; g2_clone(&child, &P->g); g2_play(&child, m);
-            vnet_encode(&child, NULL, vnet_work_input(WK[t]));
+            vnet_encode(&child, G3[t], NULL, vnet_work_input(WK[t]));
             const float v = 1 - vnet_forward(L, w, nbr9, area, WK[t]);   /* the opponent is to move in child */
             if (v > best_v) { best_v = v; best = m; }
         }
@@ -403,7 +407,8 @@ int main(int argc, char **argv) {
     float *m = calloc(np, sizeof(float)), *v2 = calloc(np, sizeof(float)), *G = calloc(np, sizeof(float));
     float **TG = malloc(sizeof(float *) * threads);
     VnetWork **WK = malloc(sizeof(VnetWork *) * threads);
-    for (int t = 0; t < threads; t++) { TG[t] = calloc(np, sizeof(float)); WK[t] = vnet_work_new(&L, area); }
+    Game3 **G3 = malloc(sizeof(Game3 *) * threads);
+    for (int t = 0; t < threads; t++) { TG[t] = calloc(np, sizeof(float)); WK[t] = vnet_work_new(&L, area); G3[t] = g3_new(N); }
 
     printf("train: %s (%d records)  test: %s (%d records)  size %d  [%.1fs to load]\n",
            train_f, tr.n, test_f, te.n, N, wall_s() - t_load);
@@ -487,7 +492,7 @@ int main(int argc, char **argv) {
                 else if (md_f) {
                     const double m0 = wall_s();
                     double bs[16]; int bn_[16];
-                    const double mae = md_eval(&md, &L, w, nbr9, area, WK, elo.buckets, bs, bn_);
+                    const double mae = md_eval(&md, &L, w, nbr9, area, WK, G3, elo.buckets, bs, bn_);
                     double e = elo.intercept; int have = elo_valid;
                     for (int j = 0; j < elo.nb && have; j++) {
                         const int b = band_of((elo.lo[j] + elo.hi[j]) / 2, elo.buckets);

@@ -4,6 +4,8 @@
 #include <string.h>
 #include <math.h>
 #include "cnn.h"
+#include "ladder2.h"
+#include "fatal.h"
 
 #define P VNET_PLANES
 
@@ -113,7 +115,7 @@ void vnet_sym_map(int N, int32_t *map) {
             }
 }
 
-void vnet_compact(const Game2 *g, int8_t *code, VnetMeta *meta) {
+void vnet_compact(const Game2 *g, Game3 *g3, int8_t *code, VnetMeta *meta) {
     const int8_t cur = g->current;
     for (int p = 0; p < g->cap; p++) {
         const int8_t c = g->cells[p];
@@ -121,6 +123,22 @@ void vnet_compact(const Game2 *g, int8_t *code, VnetMeta *meta) {
         const int lib = g->ls[g->gid[p]];
         const int cls = lib >= 3 ? 2 : lib - 1;
         code[p] = (int8_t)((c == cur ? 1 : 4) + cls);
+    }
+    if (!g3_from_game2(g3, g)) FATAL("vnet_compact: position not reachable by legal play\n");
+    Ladder2Result st[MAX_CAP];
+    const int n = ladder2_get_all_statuses(g3, 1, st, MAX_CAP);
+    /* Own chain: not urgent = safe, urgent = 2 if a move saves it else 1.
+     * Opponent chain: not urgent = dead even moving first (1), urgent = 2 if a
+     * move captures it, else safe. */
+    for (int i = 0; i < n; i++) {
+        const Ladder2Status *s = &st[i].status;
+        const int urgent = s->urgent_count > 0 || !s->mover_succeeds;
+        const int own = st[i].color == cur;
+        const int lad = own ? (!urgent ? 0 : s->mover_succeeds ? 2 : 1)
+                            : (!urgent ? 1 : s->mover_succeeds ? 2 : 0);
+        if (!lad) continue;
+        for (int p = 0; p < g3->cap; p++)
+            if (g3->gid[p] == st[i].gid) code[p] |= (int8_t)(lad << 3);
     }
     meta->ko = g->ko;
     meta->last = g->last_move;
@@ -131,19 +149,20 @@ void vnet_encode_compact(const int8_t *code, const VnetMeta *meta, int area, con
     memset(x, 0, sizeof(float) * (size_t)area * P);
     for (int p = 0; p < area; p++) {
         float *xp = x + (size_t)(map ? map[p] : p) * P;
-        const int c = code[p];
+        const int c = code[p] & 7, lad = code[p] >> 3;
         if (c == 0) xp[6] = 1;
         else xp[c - 1] = 1;                       /* codes 1-6 -> planes 0-5 */
         if (meta->black_to_move) xp[9] = 1;
+        if (lad) xp[10 + (c >= 4 ? 2 : 0) + (lad - 1)] = 1;   /* own lost / urgent, opponent dead / urgent */
     }
     if (meta->ko >= 0)   x[(size_t)(map ? map[meta->ko] : meta->ko) * P + 7] = 1;
     if (meta->last >= 0) x[(size_t)(map ? map[meta->last] : meta->last) * P + 8] = 1;
 }
 
-void vnet_encode(const Game2 *g, const int32_t *map, float *x) {
+void vnet_encode(const Game2 *g, Game3 *g3, const int32_t *map, float *x) {
     int8_t code[MAX_CAP];
     VnetMeta meta;
-    vnet_compact(g, code, &meta);
+    vnet_compact(g, g3, code, &meta);
     vnet_encode_compact(code, &meta, g->cap, map, x);
 }
 

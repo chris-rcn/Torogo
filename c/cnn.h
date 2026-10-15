@@ -21,11 +21,16 @@
 
 #include <stdint.h>
 #include "game2.h"
+#include "game3.h"
 
 /* Input planes: own stones whose chain has 1 / 2 / 3+ liberties, the same for
- * the opponent, empty, the ko point, the last move, and a constant plane that
- * is 1 when black is to move (komi makes the value colour-dependent). */
-#define VNET_PLANES 10
+ * the opponent, empty, the ko point, the last move, a constant plane that is 1
+ * when black is to move (komi makes the value colour-dependent), then ladder2's
+ * status of every chain it reads (1-2 liberties, or 3 with the attacker to
+ * move): own stones lost even moving first, own stones that only a move now
+ * saves, opponent stones dead even if the opponent moves first, opponent
+ * stones that a move now captures. */
+#define VNET_PLANES 14
 
 typedef struct {
     int C, B, H;                  /* channels, residual blocks, head width */
@@ -55,18 +60,21 @@ float    *vnet_work_input(VnetWork *w);     /* area * VNET_PLANES floats, [point
  * Call after g2_init_topology(N). */
 void vnet_topology(int N, int32_t *nbr9);
 
-/* The compact form a position is stored and encoded from: code[p] = 0 empty,
- * 1-3 own stone whose chain has 1 / 2 / 3+ liberties, 4-6 the same for the
- * opponent ("own" = the side to move); ko and last move (or PASS); black to move. */
+/* The compact form a position is stored and encoded from: code[p] & 7 = 0
+ * empty, 1-3 own stone whose chain has 1 / 2 / 3+ liberties, 4-6 the same for
+ * the opponent ("own" = the side to move); code[p] >> 3 = the chain's ladder
+ * status: 0 safe or not read, 1 lost / dead whoever moves, 2 decided by the
+ * side to move's next move; ko and last move (or PASS); black to move.
+ * g3 is scratch for the ladder reads: g3_new(N), one per thread. */
 typedef struct { int16_t ko, last; int8_t black_to_move; } VnetMeta;
-void vnet_compact(const Game2 *g, int8_t *code, VnetMeta *meta);
+void vnet_compact(const Game2 *g, Game3 *g3, int8_t *code, VnetMeta *meta);
 
 /* Planes from the compact form into `x` (area * VNET_PLANES floats), point p
  * written at map[p] (a symmetry permutation, or NULL for the identity). */
 void vnet_encode_compact(const int8_t *code, const VnetMeta *meta, int area, const int32_t *map, float *x);
 
 /* Both at once, from a board. */
-void vnet_encode(const Game2 *g, const int32_t *map, float *x);
+void vnet_encode(const Game2 *g, Game3 *g3, const int32_t *map, float *x);
 
 /* The 8 reflection/rotation symmetries of the N x N torus as point
  * permutations: map[t*area + p] = image of p under symmetry t (t = 0 identity).

@@ -21,11 +21,13 @@ $CC $CFLAGS -o test_fpol.bin            game2.c fpol.c test_fpol.c -lm
 $CC $CFLAGS -o test_puct.bin            game2.c fpol.c ppat.c puct.c test_puct.c -lm
 $CC $CFLAGS -o ppat_match.bin          game2.c fpol.c ppat.c puct.c match.c ppat_match.c -lm
 $CC $CFLAGS -o test_match.bin          game2.c fpol.c ppat.c puct.c test_match.c -lm
-$CC $CFLAGS -o test_cnn.bin            game2.c cnn.c test_cnn.c -lm
+$CC $CFLAGS -o test_cnn.bin            game2.c game3.c ladder2.c cnn.c test_cnn.c -lm
 # The double-precision gradient check: the network recompiled with float = double.
 $CC $CFLAGS -c -o game2-for-double.o   game2.c
-$CC $CFLAGS -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_double.bin game2-for-double.o cnn.c test_cnn.c -lm
-rm -f game2-for-double.o
-$CC $CFLAGS -fopenmp -o train_vnet.bin game2.c cnn.c train_vnet.c -lm
+$CC $CFLAGS -c -o game3-for-double.o   game3.c
+$CC $CFLAGS -c -o ladder2-for-double.o ladder2.c
+$CC $CFLAGS -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_double.bin game2-for-double.o game3-for-double.o ladder2-for-double.o cnn.c test_cnn.c -lm
+rm -f game2-for-double.o game3-for-double.o ladder2-for-double.o
+$CC $CFLAGS -fopenmp -o train_vnet.bin game2.c game3.c ladder2.c cnn.c train_vnet.c -lm
 
 echo "built 20 binaries"

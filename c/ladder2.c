@@ -29,10 +29,11 @@
 #define LADDER2_NODE_CAP 4000
 
 /* Move-path for the cycle prune; plays in get_status also participate.
- * Depth is bounded by the 2x-area limit plus the get_status prefix. */
-static int32_t l2_path[2 * MAX_CAP + 64];
-static int32_t l2_path_len = 0;
-static int32_t l2_budget   = LADDER2_NODE_CAP;
+ * Depth is bounded by the 2x-area limit plus the get_status prefix.
+ * Thread-local, so threads can read ladders on their own Game3s. */
+static _Thread_local int32_t l2_path[2 * MAX_CAP + 64];
+static _Thread_local int32_t l2_path_len = 0;
+static _Thread_local int32_t l2_budget   = LADDER2_NODE_CAP;
 
 /* Play with the period-6 cycle check: returns false (state unchanged) when
  * the move is illegal OR completes a 6-move repeat. */

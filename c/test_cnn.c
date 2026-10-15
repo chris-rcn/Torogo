@@ -10,12 +10,14 @@
  * -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE, where eps 1e-5 leaves both
  * negligible and every parameter with a gradient above 1e-5 is checked to 1e-4
  * relative.  Both a 4-channel net (the generic kernels) and a 32-channel one
- * (the register-blocked kernels) are checked. */
+ * (the register-blocked kernels) are checked.  Also the ladder planes on a
+ * diagram. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "game2.h"
+#include "game3.h"
 #include "cnn.h"
 
 static int passed = 0, failed = 0;
@@ -59,7 +61,13 @@ static void test_gradients(int C, int B, int H) {
     for (int j = 0; j < L.H; j++) w[L.out_w + j] = 1.5f * (rng_float(&r) + 0.5f);
     Game2 g; random_position(&g, N, 30, 3);
     VnetWork *k = vnet_work_new(&L, area);
-    vnet_encode(&g, NULL, vnet_work_input(k));
+    Game3 *g3 = g3_new(N);
+    vnet_encode(&g, g3, NULL, vnet_work_input(k));
+    g3_free(g3);
+    /* Shift the output bias so v starts near 0.5: a saturated sigmoid leaves
+     * the float loss no resolution for the finite differences. */
+    const float v0 = vnet_forward(&L, w, nbr9, area, k);
+    w[L.out_b] -= logf(v0 / (1 - v0));
     const float t = 0.3f;
     const float v = vnet_forward(&L, w, nbr9, area, k);
     vnet_backward(&L, w, nbr9, area, k, v - t, G);
@@ -111,19 +119,59 @@ static void test_translation_invariance(void) {
     for (int i = 0; i < L.n_params; i++) w[i] += 0.2f * (rng_float(&r) - 0.5f);
     Game2 g; random_position(&g, N, 40, 11);
     VnetWork *k = vnet_work_new(&L, area);
-    vnet_encode(&g, NULL, vnet_work_input(k));
+    Game3 *g3 = g3_new(N);
+    vnet_encode(&g, g3, NULL, vnet_work_input(k));
     const float v0 = vnet_forward(&L, w, nbr9, area, k);
     double worst = 0;
     int32_t map[MAX_CAP];
     for (int dy = 0; dy < N; dy++) for (int dx = 0; dx < N; dx++) {
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) map[y * N + x] = ((y + dy) % N) * N + (x + dx) % N;
-        vnet_encode(&g, map, vnet_work_input(k));
+        vnet_encode(&g, g3, map, vnet_work_input(k));
         const double d = fabs(vnet_forward(&L, w, nbr9, area, k) - v0);
         if (d > worst) worst = d;
     }
     printf("  translation invariance: value %.6f, worst |difference| over all %d shifts %.2e\n", v0, area, worst);
     check("value is translation-invariant on the torus", worst < 1e-5);
-    vnet_work_free(k); free(w);
+    g3_free(g3); vnet_work_free(k); free(w);
+}
+
+/* The four ladder planes (10-13) at c5 (in atari, and its liberty d5 is
+ * suicide), g2 (in atari, but h2 reaches 3 liberties) and nowhere else (h8 is
+ * safe, the white chains unreadable or safe), with each side to move. */
+static void test_ladder_planes(void) {
+    const int N = 9, area = N * N;
+    g2_init_topology(N);
+    const char *board =
+        "9 . . . . . . . . .\n"
+        "8 . . . . . . . X .\n"
+        "7 . . . . . . . . .\n"
+        "6 . . O O . . . . .\n"
+        "5 . O X . O . . . .\n"
+        "4 . . O O . . . . .\n"
+        "3 . . . . . . O . .\n"
+        "2 . . . . . O X . .\n"
+        "1 . . . . . . O . .\n";
+    const int c5 = 4 * N + 2, g2 = 1 * N + 6;
+    Game3 *g3 = g3_new(N);
+    float x[MAX_CAP * VNET_PLANES];
+    for (int side = 0; side < 2; side++) {
+        Game2 g; g2_parse_board(&g, board, side ? WHITE : BLACK);
+        vnet_encode(&g, g3, NULL, x);
+        /* Black to move: c5 own lost (10), g2 own urgent (11).  White to move:
+         * c5 opponent dead (12), g2 opponent capturable now (13). */
+        const int want_c5 = side ? 12 : 10, want_g2 = side ? 13 : 11;
+        int ok = 1, lit = 0;
+        for (int p = 0; p < area; p++)
+            for (int q = 10; q < VNET_PLANES; q++) {
+                const float v = x[p * VNET_PLANES + q];
+                lit += v != 0;
+                if (v != ((p == c5 && q == want_c5) || (p == g2 && q == want_g2))) ok = 0;
+            }
+        printf("  ladder planes, %s to move: %d lit, want c5 plane %d, g2 plane %d\n",
+               side ? "white" : "black", lit, want_c5, want_g2);
+        check(side ? "ladder planes, white to move" : "ladder planes, black to move", ok);
+    }
+    g3_free(g3);
 }
 
 static void test_save_load(void) {
@@ -144,6 +192,7 @@ int main(void) {
     test_gradients(4, 2, 8);
     test_gradients(32, 2, 8);
     test_translation_invariance();
+    test_ladder_planes();
     test_save_load();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed > 0;
