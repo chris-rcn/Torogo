@@ -505,7 +505,7 @@ int main(int argc, char **argv) {
                     md_total += took;
                     if (md_raw > 0) md_scale = took / md_raw;
                 }
-                printf("%10ld %6.2f %8.1fs %7.0f %8.5f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el,
+                printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
                        done / el, iv_loss / iv_n, iv_se / iv_n, temse, is_best ? "*" : " ", fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
                 iv_loss = iv_se = 0; iv_n = 0;
