@@ -19,7 +19,7 @@
 // most visited root edge.
 //
 // Config (cfg reader, slot-aware):
-//   C_PUCT      exploration weight of the prior                    (default 0.5)
+//   C_PUCT      exploration weight of the prior                    (default 0.1)
 //   TOP_K_A     kept moves at phase 0 (0 with TOP_K_B 0 = full width) (default 10)
 //   TOP_K_B     kept moves at phase 1                              (default 40)
 //   PLAYOUTS    simulations (= net evaluations) per decision; 0 = the time
@@ -51,7 +51,7 @@ function create(cfg) {
   cfg = cfg || Util.makeCfg();
   const tag = `puct-vnet-wasm[${cfg.slot != null ? cfg.slot : '-'}]`;
 
-  const C_PUCT   = cfg.float('C_PUCT', 0.5);
+  const C_PUCT   = cfg.float('C_PUCT', 0.1);
   const TOP_K_A  = cfg.int('TOP_K_A', 10);
   const TOP_K_B  = cfg.int('TOP_K_B', 40);
   const PLAYOUTS = cfg.int('PLAYOUTS', 0);
