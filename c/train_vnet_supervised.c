@@ -47,12 +47,13 @@
  *
  *   train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
- *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
+ *       [--train-pos N] [--test-pos N] [--seed N] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
  *       [--smooth-weights auto]
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
- * depend only on the seed and the thread count.
+ * depend only on the seed and the thread count.  The seed is random unless
+ * --seed is given; the model line prints it.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,7 +76,7 @@ int main(int argc, char **argv) {
     if (arg_flag(argc, argv, "--help") || !train_f) {
         fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
-                        "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
+                        "         [--seed N] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
                         "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n");
         return 1;
     }
@@ -92,7 +93,7 @@ int main(int argc, char **argv) {
     const int smooth = smooth_auto || smooth_a > 0;
     const int epochs = atoi(arg_str(argc, argv, "--epochs", "10")), threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const int train_cap = atoi(arg_str(argc, argv, "--train-pos", "0")), test_cap = atoi(arg_str(argc, argv, "--test-pos", "0"));
-    const uint32_t seed = (uint32_t)atol(arg_str(argc, argv, "--seed", "1"));
+    const uint32_t seed = arg_seed(argc, argv);   /* default: random (printed) */
     const char *load_f = arg_str(argc, argv, "--load", NULL);
     const char *md_f = arg_str(argc, argv, "--md", NULL);
     const char *elo_f = arg_opt(argc, argv, "--elo-map", "out/elo-map-trunc30k-827.json");

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -375,6 +376,14 @@ uint32_t mix(uint32_t a, uint32_t b) {
     z = (z ^ (z >> 16)) * 0x85ebca6bu;
     z = (z ^ (z >> 13)) * 0xc2b2ae35u;
     return z ^ (z >> 16);
+}
+
+uint32_t arg_seed(int argc, char **argv) {
+    const char *v = arg_str(argc, argv, "--seed", NULL);
+    if (v) return (uint32_t)atol(v);
+    struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+    const uint32_t s = mix(mix((uint32_t)t.tv_sec, (uint32_t)t.tv_nsec), (uint32_t)getpid());
+    return s ? s : 1;
 }
 
 Adam adam_new(int n) {

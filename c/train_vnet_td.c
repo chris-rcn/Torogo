@@ -48,7 +48,7 @@
  *       [--rand-open 3] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
- *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
+ *       [--seed N] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
  *       [--test-fp-width 7]
  */
 #include <stdio.h>
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
                         "         [--games N] [--bootstrap N] [--epsilon 0.1] [--rand-open 3] [--ext random|fp|puct --ext-ratio R]\n"
                         "         [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
-                        "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
+                        "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed N]\n"
                         "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 7]\n");
         return 1;
     }
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
     const char *komi_s = arg_str(argc, argv, "--komi", NULL);
     const long window = atol(arg_str(argc, argv, "--window", "200000"));
     const double reuse = atof(arg_str(argc, argv, "--reuse", "1"));
-    const uint32_t seed = (uint32_t)atol(arg_str(argc, argv, "--seed", "1"));
+    const uint32_t seed = arg_seed(argc, argv);   /* default: random (printed) */
     const char *load_f = arg_str(argc, argv, "--load", NULL);
     const char *test_f = arg_str(argc, argv, "--test-evals", NULL);
     const int test_cap = atoi(arg_str(argc, argv, "--test-pos", "0"));
