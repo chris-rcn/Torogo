@@ -15,7 +15,9 @@
  * trained over total elapsed time, test passes included.  The checkpoint is
  * written at every row and -best on a new best teMSE.
  *
- * --md FILE adds a 1-ply test of the net as a player: at every MD position
+ * --elo-map [FILE] (default out/elo-map-trunc30k-827.json) adds a 1-ply test
+ * of the net as a player on the map's own MD file (its mdFile); --md FILE
+ * runs the test on another MD file instead.  The test: at every MD position
  * (movedetails, *.md) each legal move except filling one's own true eye is
  * played and valued 1 - V(child) (the opponent is to move there), and the best
  * is charged its gap to the file's top move — the worst rated candidate when it
@@ -29,7 +31,7 @@
  *   train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
- *       [--md FILE] [--elo-map FILE]
+ *       [--elo-map [FILE]] [--md FILE]
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.
@@ -45,9 +47,24 @@
 #include "game2.h"
 #include "cnn.h"
 
+/* The value after `flag`, or def when the flag is absent.  A flag given
+ * without a value (last, or followed by another --flag) is an error, never a
+ * silent default. */
 static const char *arg_str(int argc, char **argv, const char *flag, const char *def) {
-    for (int i = 1; i + 1 < argc; i++) if (!strcmp(argv[i], flag)) return argv[i + 1];
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], flag)) {
+            if (i + 1 >= argc || !strncmp(argv[i + 1], "--", 2)) {
+                fprintf(stderr, "train_vnet: %s needs a value\n", flag); exit(1);
+            }
+            return argv[i + 1];
+        }
     return def;
+}
+/* A flag whose value is optional: def when given bare, NULL when absent. */
+static const char *arg_opt(int argc, char **argv, const char *flag, const char *def) {
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], flag)) return (i + 1 < argc && strncmp(argv[i + 1], "--", 2)) ? argv[i + 1] : def;
+    return NULL;
 }
 static int arg_flag(int argc, char **argv, const char *flag) {
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], flag)) return 1;
@@ -223,7 +240,7 @@ static void md_fingerprint(const MdSet *M, char *out) {
 
 /* The elo map (md-phase-fit.js --save): intercept, the mae curve's A and k,
  * phaseBuckets, the bands, and the fingerprint of the MD file it was fit on. */
-typedef struct { double intercept, A, k; int buckets, nb; double lo[16], hi[16]; char fp[17]; } EloMap;
+typedef struct { double intercept, A, k; int buckets, nb; double lo[16], hi[16]; char fp[17]; char md[512]; } EloMap;
 static const char *json_after(const char *s, const char *key) { const char *p = strstr(s, key); return p ? p + strlen(key) : NULL; }
 static EloMap load_elo_map(const char *path) {
     EloMap E; memset(&E, 0, sizeof E);
@@ -244,6 +261,12 @@ static EloMap load_elo_map(const char *path) {
     while (*p && *p != '"') p++;
     if (*p != '"') goto bad;
     memcpy(E.fp, p + 1, 16); E.fp[16] = 0;
+    if (!(p = json_after(js, "\"mdFile\":"))) goto bad;
+    while (*p && *p != '"') p++;
+    if (*p != '"') goto bad;
+    {   const char *q = strchr(p + 1, '"');
+        if (!q || q - p - 1 >= (int)sizeof E.md) goto bad;
+        memcpy(E.md, p + 1, q - p - 1); E.md[q - p - 1] = 0; }
     {   const char *b = json_after(js, "\"bands\":"), *end = b ? strchr(b, ']') : NULL;
         if (!b || !end) goto bad;
         for (const char *q = b; (q = strstr(q, "\"lo\":")) && q < end && E.nb < 16; ) {
@@ -256,7 +279,7 @@ static EloMap load_elo_map(const char *path) {
     if (E.nb == 0 || E.buckets <= 0 || E.buckets > 16) goto bad;
     return E;
 bad:
-    fprintf(stderr, "train_vnet: --elo-map %s: missing intercept / phaseBuckets / bands / curves.mae / mdFingerprint\n", path);
+    fprintf(stderr, "train_vnet: --elo-map %s: missing intercept / phaseBuckets / bands / curves.mae / mdFingerprint / mdFile\n", path);
     exit(1);
 }
 static int band_of(double phase, int nb) { int b = (int)floor(phase * nb); return b < 0 ? 0 : b >= nb ? nb - 1 : b; }
@@ -312,7 +335,7 @@ int main(int argc, char **argv) {
     if (arg_flag(argc, argv, "--help") || !train_f || !test_f) {
         fprintf(stderr, "usage: train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
-                        "         [--seed 1] [--save PATH] [--load PATH] [--md FILE] [--elo-map FILE]\n");
+                        "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n");
         return 1;
     }
     const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
@@ -323,7 +346,8 @@ int main(int argc, char **argv) {
     const uint32_t seed = (uint32_t)atol(arg_str(argc, argv, "--seed", "1"));
     const char *load_f = arg_str(argc, argv, "--load", NULL);
     const char *md_f = arg_str(argc, argv, "--md", NULL);
-    const char *elo_f = arg_str(argc, argv, "--elo-map", "out/elo-map-trunc30k-827.json");
+    const char *elo_f = arg_opt(argc, argv, "--elo-map", "out/elo-map-trunc30k-827.json");
+    if (md_f && !elo_f) elo_f = "out/elo-map-trunc30k-827.json";   /* --md alone: the default map */
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
@@ -348,9 +372,10 @@ int main(int argc, char **argv) {
     MdSet md = {0};
     EloMap elo = {0};
     int elo_valid = 0;
-    if (md_f) {
-        load_md(md_f, N, &md);
+    if (elo_f) {
         elo = load_elo_map(elo_f);
+        if (!md_f) md_f = elo.md;   /* the map's own MD file */
+        load_md(md_f, N, &md);
         char fp[17]; md_fingerprint(&md, fp);
         elo_valid = strcmp(fp, elo.fp) == 0;
         if (!elo_valid) fprintf(stderr, "train_vnet: %s (fingerprint %s) is not the elo map's MD file (%s): elo not estimated\n", md_f, fp, elo.fp);
