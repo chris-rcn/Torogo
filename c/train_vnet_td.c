@@ -2,8 +2,8 @@
  * train_vnet_td.c — TD(0) self-play training of the toroidal residual value
  * network (cnn.h): train-vpat-td's scheme with the net in place of vpat.
  *
- * Self-play: each game starts from the empty board with black's centre stone
- * played.  A move is uniformly random with probability --epsilon; otherwise,
+ * Self-play: each game starts from the empty board, black to move (no stone
+ * placed for it: on the torus every first stone is equivalent).  A move is uniformly random with probability --epsilon; otherwise,
  * with probability --ext-ratio, --ext's; otherwise the net's own: the legal
  * non-eye move (among featurepol's top --fp-width, 0 = all) with the best
  * 1 - V(child), PASS when there is none.  --bootstrap N plays the first N games
@@ -13,9 +13,10 @@
  * Targets, 1-ply TD(0): every position s_t moves toward 1 - V(s_t+1) (V is
  * P(side to move wins), and the opponent is to move at s_t+1), evaluated with
  * the current weights when the sample is drawn; a game's last position moves
- * toward its outcome.  No target crosses an --epsilon move: a position whose
- * move was one is not a sample (--bootstrap games' moves are not epsilon
- * moves, so they are).  Loss:
+ * toward its outcome.  No target crosses a random move — an --epsilon move or
+ * one of a game's first --rand-open moves: a position
+ * whose move was one is not a sample (--bootstrap games' moves are neither,
+ * so they are).  Loss:
  * cross-entropy against the target (no gradient through it).  Optimiser: Adam.
  *
  * Positions go into a window of the last --window; after each round the
@@ -43,7 +44,7 @@
  *
  *   train_vnet_td.bin [--size 13] [--channels 32] [--blocks 6] [--hidden 32]
  *       [--load PATH] [--save PATH] [--games N] [--bootstrap N] [--epsilon 0.1]
- *       [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
+ *       [--rand-open 0]       [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
  *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
@@ -74,6 +75,7 @@ enum { EXT_NONE, EXT_RANDOM, EXT_FP, EXT_PUCT };
 
 /* Run-wide settings, fixed after main's parsing. */
 static int N, area, fp_width, ext, ext_playouts;
+static int rand_open;
 static double epsilon, ext_ratio, komi;
 static VnetLayout L;
 static int32_t nbr9[MAX_CAP * 9];
@@ -91,7 +93,7 @@ typedef struct {
 typedef struct {
     int8_t *code;          /* n * area */
     VnetMeta *meta;
-    uint8_t *eps;          /* the move played there was an --epsilon move */
+    uint8_t *eps;          /* the move played there was random: --epsilon or --rand-open */
     int n, cap;
     int8_t winner;
 } GameRec;
@@ -132,7 +134,6 @@ static int32_t net_move(const Game2 *g, const float *w, Thread *T) {
 static void play_game(uint32_t seed, int random_only, const float *w, Thread *T, GameRec *R) {
     Rng r; rng_seed(&r, (long)seed);
     Game2 g; g2_new_empty(&g, N);
-    g2_play(&g, (N / 2) * N + N / 2);   /* black's centre stone */
     R->n = 0;
     while (!g.game_over) {
         if (R->n == R->cap) {
@@ -146,6 +147,7 @@ static void play_game(uint32_t seed, int random_only, const float *w, Thread *T,
         int32_t mv;
         R->eps[R->n - 1] = 0;
         if (random_only) mv = g2_random_legal_move(&g, &r);
+        else if (R->n <= rand_open) { mv = g2_random_legal_move(&g, &r); R->eps[R->n - 1] = 1; }
         else if (rng_float(&r) < epsilon) { mv = g2_random_legal_move(&g, &r); R->eps[R->n - 1] = 1; }
         else if (ext != EXT_NONE && rng_float(&r) < ext_ratio) {
             if (ext == EXT_RANDOM) mv = g2_random_legal_move(&g, &r);
@@ -170,7 +172,8 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (arg_flag(argc, argv, "--help")) {
         fprintf(stderr, "usage: train_vnet_td.bin [--size 13] [--channels 32] [--blocks 6] [--hidden 32] [--load PATH] [--save PATH]\n"
-                        "         [--games N] [--bootstrap N] [--epsilon 0.1] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]\n"
+                        "         [--games N] [--bootstrap N] [--epsilon 0.1] [--rand-open 0] [--ext random|fp|puct --ext-ratio R]\n"
+                        "         [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
                         "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 5]\n");
@@ -183,6 +186,7 @@ int main(int argc, char **argv) {
     const int threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const long games_limit = atol(arg_str(argc, argv, "--games", "0")), bootstrap = atol(arg_str(argc, argv, "--bootstrap", "0"));
     epsilon = atof(arg_str(argc, argv, "--epsilon", "0.1"));
+    rand_open = atoi(arg_str(argc, argv, "--rand-open", "0"));
     const char *ext_s = arg_str(argc, argv, "--ext", NULL);
     ext = parse_ext(ext_s);
     ext_ratio = atof(arg_str(argc, argv, "--ext-ratio", "0"));
@@ -211,6 +215,7 @@ int main(int argc, char **argv) {
     if (N < 3 || N > MAX_BOARD_SIZE || C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || window < 3) {
         fprintf(stderr, "train_vnet_td: bad size/channels/blocks/batch/threads/window\n"); return 1;
     }
+    if (rand_open < 0) { fprintf(stderr, "train_vnet_td: --rand-open must be >= 0\n"); return 1; }
     if (!(epsilon >= 0 && epsilon <= 1) || !(ext_ratio >= 0 && ext_ratio <= 1) || !(reuse > 0)) {
         fprintf(stderr, "train_vnet_td: --epsilon and --ext-ratio must be in [0, 1], --reuse > 0\n"); return 1;
     }
@@ -278,7 +283,7 @@ int main(int argc, char **argv) {
 
     /* The window: position k at slot k % window.  wout[slot]: the outcome
      * target (0 / 1), NEXT (the TD successor is the next slot, same game) or
-     * NONE (its move was an epsilon move: not a sample). */
+     * NONE (its move was random, --epsilon or --rand-open: not a sample). */
     int8_t *wcode = malloc((size_t)window * area);
     VnetMeta *wmeta = malloc(sizeof(VnetMeta) * (size_t)window);
     float *wout = malloc(sizeof(float) * (size_t)window);
@@ -286,7 +291,7 @@ int main(int argc, char **argv) {
 
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, threads, seed);
-    printf("self-play: size %d  epsilon %g  ext %s", N, epsilon, ext_s ? ext_s : "(none)");
+    printf("self-play: size %d  rand-open %d  epsilon %g  ext %s", N, rand_open, epsilon, ext_s ? ext_s : "(none)");
     if (ext != EXT_NONE) printf("  ext-ratio %g", ext_ratio);
     if (ext == EXT_PUCT) printf("  ext-playouts %d  ppat-model %s", ext_playouts, ppat_f);
     if (need_fp) printf("  fp-model %s", fp_f);
