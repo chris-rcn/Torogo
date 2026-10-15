@@ -152,7 +152,9 @@ function create(cfg) {
   const TRUNC_OVERHEAD   = cfg.float('TRUNC_OVERHEAD', 3.4);
   let _lastPlayoutPpat = 0, _lastPlayoutUniform = 0, _lastPlayoutTrunc = false;   // set by playout, read in runSearch
   // Fixed playout count per decision; when non-zero, overrides the time budget.
+  // -1 = the count that takes about 2000 ms at the root's phase (autoPlayouts).
   const PLAYOUTS   = cfg.int('PLAYOUTS', 0);
+  if (!(PLAYOUTS >= -1)) throw new Error(`puct-trunc-wasm[${cfg.slot != null ? cfg.slot : '-'}]: PLAYOUTS must be >= -1, got ${PLAYOUTS}`);
   // Truncation point: net board-fullness advance past the leaf before the
   // playout stops for a static evaluation (board-size invariant).  The
   // default 1 can never be reached, so out of the box every playout runs to
@@ -565,6 +567,26 @@ function create(cfg) {
     }
   }
 
+  // PLAYOUTS = -1: about as many playouts as 2000 ms buys at this root.  One
+  // simple formula per regime, fitted 2026-10-14 to 2000 ms time-limited
+  // getMoves on featurepol-played 13x13 games (one core, Node, machine load
+  // 8-14 on 32 cores; this agent's defaults: TRUNC_ROOT_PHASE 0.30, delta
+  // 0.21, PPAT_MIN_PHASE 0.55, the default models):
+  //   truncated (root phase < TRUNC_ROOT_PHASE): 57300 / (1 + 0.55 * phase)
+  //     — a fixed-length prefix + vpat eval, a little dearer as the tree grows
+  //     (24 points, 8% rms error);
+  //   untruncated: 81900 / (1 + 14.95 * (1 - clamp(phase, 0.55, 0.80)))
+  //     — a playout's cost is its ppat stretch, past the 0.55 uniform gate
+  //     (40 points to phase 0.80, 4% rms).  Clamped at 0.80: later positions
+  //     swing from ~20k playouts to 100k (games ending inside the playout),
+  //     so they get the 0.80 count, ~2 s or less.
+  function autoPlayouts(game2) {
+    const phase = 1 - game2.emptyCount / (game2.N * game2.N);
+    if (phase < TRUNC_ROOT_PHASE) return Math.round(57300 / (1 + 0.55 * phase));
+    const p = Math.min(Math.max(phase, 0.55), 0.80);
+    return Math.round(81900 / (1 + 14.95 * (1 - p)));
+  }
+
   // Run the search from `game2` and return the populated root.  Shared by getMove
   // (move selection) and valueB (rootWinRatio).
   function runSearch(game2, N, rng, playoutLimit, timeBudgetMs) {
@@ -634,7 +656,7 @@ function create(cfg) {
     }
 
     const rng = options.rng || makeRng();
-    const playoutLimit = options.playoutLimit || PLAYOUTS;
+    const playoutLimit = options.playoutLimit || (PLAYOUTS === -1 ? autoPlayouts(game2) : PLAYOUTS);
     const { root, playouts } = runSearch(game2, N, rng, playoutLimit, timeBudgetMs);
 
     const M = root.legalMoves.length;
@@ -690,7 +712,8 @@ function create(cfg) {
     // Fixed PLAYOUTS wins (as in getMove); else an options.budgetMs time
     // budget; else the historical 1000-playout default.
     const budgetMs = options.budgetMs > 0 ? options.budgetMs : 0;
-    const playoutLimit = PLAYOUTS > 0 ? PLAYOUTS : (budgetMs > 0 ? 0 : 1000);
+    const playoutLimit = PLAYOUTS === -1 ? autoPlayouts(game2)
+                       : PLAYOUTS > 0 ? PLAYOUTS : (budgetMs > 0 ? 0 : 1000);
     const { root } = runSearch(game2, N, r, playoutLimit, budgetMs);
 
     let totalChildWins = 0;
