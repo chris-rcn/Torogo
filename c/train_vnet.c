@@ -22,7 +22,8 @@
  * of the net as a player on the map's own MD file (its mdFile); --md FILE
  * runs the test on another MD file instead.  The test: at every MD position
  * (movedetails, *.md) each legal move except filling one's own true eye (or,
- * with --test-fp-width W > 0, featurepol's top W of them, the --fp-model) is
+ * with --test-fp-width W > 0, default 5, featurepol's top W of them, the
+ * --fp-model; 0 = all) is
  * played and valued 1 - V(child) (the opponent is to move there), and the best
  * is charged its gap to the file's top move — the worst rated candidate when it
  * has no rating, as evalmovedetails does.  mdMae is the mean gap; elo maps the
@@ -40,7 +41,7 @@
  *   train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed 1] [--save PATH] [--load PATH]
- *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 0] [--fp-model FILE]
+ *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 5] [--fp-model FILE]
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.
@@ -67,7 +68,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: train_vnet.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed 1] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
-                        "         [--test-fp-width 0] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
+                        "         [--test-fp-width 5] [--fp-model ref/ref-fp-stone8AdjLib3.js]\n");
         return 1;
     }
     const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
@@ -82,10 +83,11 @@ int main(int argc, char **argv) {
     if (md_f && !elo_f) elo_f = "out/elo-map-trunc30k-827.json";   /* --md alone: the default map */
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
-    const int test_fp_width = atoi(arg_str(argc, argv, "--test-fp-width", "0"));
+    const char *test_fp_s = arg_str(argc, argv, "--test-fp-width", NULL);
+    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "5");
     const char *fp_f = arg_str(argc, argv, "--fp-model", "ref/ref-fp-stone8AdjLib3.js");
     args_check(argc, argv);
-    if (test_fp_width < 0 || (test_fp_width > 0 && !elo_f)) { fprintf(stderr, "train_vnet: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
+    if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
     char best_f[300];
     {   const char *dot = strrchr(save_f, '.');
@@ -105,7 +107,7 @@ int main(int argc, char **argv) {
     if (test_f) load_set(test_f, &te, &N, test_cap, threads);
     const int area = N * N;
     int32_t nbr9[MAX_CAP * 9]; vnet_topology(N, nbr9);
-    if (test_fp_width > 0) fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
+    if (elo_f && test_fp_width > 0) fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
     MdTest *md = elo_f ? md_test_open(elo_f, md_f, N, test_fp_width) : NULL;   /* md_f NULL: the map's own MD file */
     static int32_t sym[8 * MAX_CAP]; vnet_sym_map(N, sym);
 

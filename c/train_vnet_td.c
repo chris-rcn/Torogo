@@ -30,7 +30,7 @@
  * (with --test-evals) against those oracle labels, as train_vnet's; infer the
  * CPU time of one target evaluation (compact encoding + forward); mdMae / elo
  * the MD 1-ply test, as train_vnet's (--elo-map / --md, the same 20% wall-time
- * gate; --test-fp-width W > 0 values featurepol's top W only, default 0 = full
+ * gate; --test-fp-width W > 0 values featurepol's top W only, default 5; 0 = full
  * width, independent of --fp-width).  The checkpoint is written at every row.
  *
  * --komi auto steps komi by +/-1 every 500 non-bootstrap games while black's
@@ -49,7 +49,7 @@
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
  *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
  *       [--seed 1] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
- *       [--test-fp-width 0]
+ *       [--test-fp-width 5]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
                         "         [--games N] [--bootstrap N] [--epsilon 0.1] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi auto|auto:<start>|<number>]\n"
                         "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed 1]\n"
-                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 0]\n");
+                        "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 5]\n");
         return 1;
     }
     N = atoi(arg_str(argc, argv, "--size", "13"));
@@ -205,9 +205,10 @@ int main(int argc, char **argv) {
     if (md_f && !elo_f) elo_f = "out/elo-map-trunc30k-827.json";   /* --md alone: the default map */
     char save_buf[256];
     const char *save_f = arg_str(argc, argv, "--save", NULL);
-    const int test_fp_width = atoi(arg_str(argc, argv, "--test-fp-width", "0"));
+    const char *test_fp_s = arg_str(argc, argv, "--test-fp-width", NULL);
+    const int test_fp_width = atoi(test_fp_s ? test_fp_s : "5");
     args_check(argc, argv);
-    if (test_fp_width < 0 || (test_fp_width > 0 && !elo_f)) { fprintf(stderr, "train_vnet_td: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
+    if (test_fp_width < 0 || (test_fp_s && !elo_f)) { fprintf(stderr, "train_vnet_td: --test-fp-width needs W >= 0 and the MD test (--elo-map / --md)\n"); return 1; }
     if (!save_f) { snprintf(save_buf, sizeof save_buf, "out/vnet-td-%08x.bin", mix((uint32_t)time(NULL), seed)); save_f = save_buf; }
 
     if (N < 3 || N > MAX_BOARD_SIZE || C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || window < 3) {
@@ -236,7 +237,7 @@ int main(int argc, char **argv) {
 
     area = N * N;
     vnet_topology(N, nbr9);
-    const int need_fp = fp_width > 0 || ext == EXT_FP || ext == EXT_PUCT || test_fp_width > 0;
+    const int need_fp = fp_width > 0 || ext == EXT_FP || ext == EXT_PUCT || (elo_f && test_fp_width > 0);
     if (need_fp) {
         fpol_load(fp_f);   /* exits loudly on a missing file or another spec */
         /* fpol builds its neighbour table on first use: once here, not racing in the threads */
