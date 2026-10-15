@@ -26,9 +26,12 @@
  * out/elo-map-trunc30k-827.json: elo = intercept - A * sum_b exp(k*mid_b) * mae_b),
  * printed only when the MD file is the map's own (sha256 fingerprint of its
  * sorted rows, as evalmovedetails checks).  About 100 net evaluations per MD
- * position, spread over --threads, so it runs at the first row and then only
- * at a row where it would keep the MD test's share of the run's wall time
- * within 20% (judging its cost by the previous MD run); other rows print '-'.
+ * position, spread over --threads, so it runs only at a row where it would
+ * keep the MD test's share of the run's wall time within 20%.  Its cost is
+ * estimated before it runs: the evaluations it needs (the MD file's legal
+ * non-eye moves, counted at load) x the row's measured CPU time per forward
+ * pass / --threads, scaled by how far the last run's actual time was off that
+ * estimate.  Other rows print '-'.
  *
  *   train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6]
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
@@ -129,7 +132,7 @@ static void load_set(const char *path, Set *S, int *size, int limit) {
 
 typedef struct { char m[8]; float wr; } Cand;           /* wr < 0: no rating (terminal) */
 typedef struct { Game2 g; double phase; int nc; Cand *c; } MdPos;
-typedef struct { MdPos *p; int n; char *rows; } MdSet;   /* rows: the data lines, NUL-separated, for the fingerprint */
+typedef struct { MdPos *p; int n; char *rows; long evals; } MdSet;   /* rows: the data lines, NUL-separated, for the fingerprint; evals: net evaluations one test needs */
 
 static int32_t coord_to_idx(const char *s, int N) { return s[0] == 'p' ? PASS : (atoi(s + 1) - 1) * N + (s[0] - 'a'); }
 static void idx_to_coord(int32_t m, int N, char *out) {
@@ -178,6 +181,8 @@ static void load_md(const char *path, int N, MdSet *M) {
                 C->wr = colon[1] ? atoi(colon + 1) / 1000.0f : -1.0f;
             }
         if (P->nc == 0 || P->c[0].wr < 0) { fprintf(stderr, "train_vnet: --md %s line %d: no rated top candidate\n", path, lineno); exit(1); }
+        for (int m = 0; m < P->g.cap; m++)   /* the moves md_eval will evaluate */
+            if (P->g.cells[m] == EMPTY && g2_is_legal(&P->g, m) && !g2_is_true_eye_at(&P->g, m)) M->evals++;
         M->n++;
     }
     fclose(f);
@@ -405,7 +410,7 @@ int main(int argc, char **argv) {
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
     printf("save: %s (best: %s)\n", save_f, best_f);
-    if (md_f) printf("md: %s (%d positions), elo map: %s%s\n", md_f, md.n, elo_f, elo_valid ? "" : " (not this MD file: elo -)");
+    if (md_f) printf("md: %s (%d positions, %ld net evaluations per test), elo map: %s%s\n", md_f, md.n, md.evals, elo_f, elo_valid ? "" : " (not this MD file: elo -)");
     printf("\n%10s %6s %9s %7s %8s %8s %8s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", "teMSE", "infer",
            md_f ? "   mdMae    elo" : "");
 
@@ -415,8 +420,8 @@ int main(int argc, char **argv) {
     double iv_loss = 0, iv_se = 0; long iv_n = 0;
     double best = 1e30;
     const double t0 = wall_s();
-    double md_total = 0, md_last = 0;   /* wall time spent in the MD test, and its last run */
-    int md_runs = 0;
+    double md_total = 0;    /* wall time spent in the MD test */
+    double md_scale = 1;    /* last run's actual time / its estimate */
     long step = 0;
     for (int ep = 0; ep < epochs; ep++) {
         /* Fisher-Yates from a per-epoch stream */
@@ -472,10 +477,12 @@ int main(int argc, char **argv) {
                 if (is_best) { best = temse; vnet_save(best_f, &L, w); }
                 vnet_save(save_f, &L, w);
                 char mdcol[40] = "";
-                /* The MD test: at the first row, then only where its time
-                 * stays within 20% of the run's (its cost = the last run's). */
+                /* The MD test, only where its time stays within 20% of the
+                 * run's: estimated as its evaluations x this row's CPU time
+                 * per forward / threads, scaled by the last run's error. */
                 const double now = wall_s() - t0;
-                if (md_f && md_runs > 0 && md_total + md_last > 0.20 * (now + md_last))
+                const double md_raw = md_f ? md.evals * infer / threads : 0, md_est = md_raw * md_scale;
+                if (md_f && md_total + md_est > 0.20 * (now + md_est))
                     snprintf(mdcol, sizeof mdcol, "  %6s %6s", "-", "-");
                 else if (md_f) {
                     const double m0 = wall_s();
@@ -489,7 +496,9 @@ int main(int argc, char **argv) {
                     }
                     if (have) snprintf(mdcol, sizeof mdcol, "  %6.4f %6.0f", mae, e);
                     else snprintf(mdcol, sizeof mdcol, "  %6.4f      -", mae);
-                    md_last = wall_s() - m0; md_total += md_last; md_runs++;
+                    const double took = wall_s() - m0;
+                    md_total += took;
+                    if (md_raw > 0) md_scale = took / md_raw;
                 }
                 printf("%10ld %6.2f %8.1fs %7.0f %8.5f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el,
                        done / el, iv_loss / iv_n, iv_se / iv_n, temse, is_best ? "*" : " ", fmt_time(infer, ibuf), mdcol);
