@@ -8,9 +8,11 @@
  * symmetry (of the 8 reflections/rotations; translations need none — the value
  * is translation-invariant by construction).  Loss: cross-entropy against the
  * soft label.  Optimiser: Adam.  Rows (positions geometric x1.4, plus every
- * epoch end) report the interval's training loss and MSE and the test-file MSE
+ * epoch end) report the interval's training loss and MSE, the test-file MSE
  * (unaugmented) — the same quantity as train-vpat-supervised's teMSE on the
- * same split.  The checkpoint is written at every row and -best on a new best
+ * same split — and infer, one test record's forward pass (encoding included)
+ * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
+ * trained over total elapsed time, test passes included.  The checkpoint is written at every row and -best on a new best
  * teMSE.
  *
  *   train_vnet.bin --evals TRAIN --test-evals TEST [--channels 32] [--blocks 6]
@@ -40,6 +42,14 @@ static int arg_flag(int argc, char **argv, const char *flag) {
     return 0;
 }
 static double wall_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+static double cpu_s(void)  { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+/* A duration as "850us" / "2.2ms" / "1.3s". */
+static const char *fmt_time(double s, char *buf) {
+    if (s < 1e-3) snprintf(buf, 16, "%.0fus", s * 1e6);
+    else if (s < 1) snprintf(buf, 16, "%.1fms", s * 1e3);
+    else snprintf(buf, 16, "%.1fs", s);
+    return buf;
+}
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
 
@@ -153,7 +163,7 @@ int main(int argc, char **argv) {
     printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed);
     printf("save: %s (best: %s)\n\n", save_f, best_f);
-    printf("%10s %6s %9s %7s %8s %8s %8s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", "teMSE");
+    printf("%10s %6s %9s %7s %8s %8s %8s %7s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", "teMSE", "infer");
 
     int *order = malloc(sizeof(int) * tr.n);
     for (int i = 0; i < tr.n; i++) order[i] = i;
@@ -198,6 +208,7 @@ int main(int argc, char **argv) {
             const int epoch_end = b0 + bn >= tr.n;
             if (done >= next_row || epoch_end) {
                 double tse = 0;
+                const double c0 = cpu_s();
                 #pragma omp parallel for schedule(static) reduction(+:tse)
                 for (int i = 0; i < te.n; i++) {
                     int t = 0;
@@ -208,12 +219,14 @@ int main(int argc, char **argv) {
                     const double d = vnet_forward(&L, w, nbr9, area, WK[t]) - te.r[i].label;
                     tse += d * d;
                 }
+                const double infer = (cpu_s() - c0) / te.n;
                 const double temse = tse / te.n, el = wall_s() - t0;
+                char ibuf[16];
                 const int is_best = temse < best;
                 if (is_best) { best = temse; vnet_save(best_f, &L, w); }
                 vnet_save(save_f, &L, w);
-                printf("%10ld %6.2f %8.1fs %7.0f %8.5f %8.5f %8.5f%s\n", done, ep + (double)(b0 + bn) / tr.n, el,
-                       done / el, iv_loss / iv_n, iv_se / iv_n, temse, is_best ? "*" : "");
+                printf("%10ld %6.2f %8.1fs %7.0f %8.5f %8.5f %8.5f%s %7s\n", done, ep + (double)(b0 + bn) / tr.n, el,
+                       done / el, iv_loss / iv_n, iv_se / iv_n, temse, is_best ? "*" : " ", fmt_time(infer, ibuf));
                 fflush(stdout);
                 iv_loss = iv_se = 0; iv_n = 0;
                 while (next_row <= done) next_row = (long)(next_row * 1.4) + 1;
