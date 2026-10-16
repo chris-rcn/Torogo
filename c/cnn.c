@@ -60,6 +60,26 @@ void vnet_init(const VnetLayout *L, float *w, uint64_t seed) {
     for (int i = 0; i < H; i++) w[L->out_w + i] = (float)(sd * sm_normal(&s));
 }
 
+float *vnet_grow_blocks(const VnetLayout *L, const float *w, int B, uint64_t seed, VnetLayout *G) {
+    *G = vnet_layout(L->C, B, L->H);
+    float *g = malloc(sizeof(float) * (size_t)G->n_params);
+    vnet_init(G, g, seed);   /* the new blocks: first conv random, second conv zero */
+    const size_t C = (size_t)L->C, H = (size_t)L->H, conv = 9 * C * C;
+    memcpy(g + G->stem_w, w + L->stem_w, sizeof(float) * 9 * P * C);
+    memcpy(g + G->stem_b, w + L->stem_b, sizeof(float) * C);
+    for (int b = 0; b < L->B; b++) {
+        memcpy(g + G->blk_w1[b], w + L->blk_w1[b], sizeof(float) * conv);
+        memcpy(g + G->blk_b1[b], w + L->blk_b1[b], sizeof(float) * C);
+        memcpy(g + G->blk_w2[b], w + L->blk_w2[b], sizeof(float) * conv);
+        memcpy(g + G->blk_b2[b], w + L->blk_b2[b], sizeof(float) * C);
+    }
+    memcpy(g + G->head_w, w + L->head_w, sizeof(float) * C * H);
+    memcpy(g + G->head_b, w + L->head_b, sizeof(float) * H);
+    memcpy(g + G->out_w, w + L->out_w, sizeof(float) * H);
+    memcpy(g + G->out_b, w + L->out_b, sizeof(float));
+    return g;
+}
+
 struct VnetWork {
     int area, C, B, H;
     float *x, *h, *a, *g, *z, y;

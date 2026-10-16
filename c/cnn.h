@@ -49,6 +49,13 @@ VnetLayout vnet_layout(int C, int B, int H);
  * block zero (each block starts as the identity), from `seed`. */
 void vnet_init(const VnetLayout *L, float *params, uint64_t seed);
 
+/* L's parameters w with blocks appended up to B blocks (B >= L->B): the new
+ * blocks initialised as vnet_init does (first conv He-normal from `seed`,
+ * second conv and biases zero), so each is the identity — a block's input is
+ * a ReLU output, relu(x + 0) = x — and the grown net computes exactly what w
+ * did.  Fills *G and returns a malloc'd parameter array. */
+float *vnet_grow_blocks(const VnetLayout *L, const float *w, int B, uint64_t seed, VnetLayout *G);
+
 /* Per-thread scratch for one forward + backward pass. */
 typedef struct VnetWork VnetWork;
 VnetWork *vnet_work_new(const VnetLayout *L, int area);

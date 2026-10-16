@@ -174,6 +174,33 @@ static void test_ladder_planes(void) {
     g3_free(g3);
 }
 
+/* A net grown by vnet_grow_blocks computes exactly what it did. */
+static void test_grow_blocks(void) {
+    const int N = 9, area = N * N;
+    g2_init_topology(N);
+    int32_t nbr9[MAX_CAP * 9]; vnet_topology(N, nbr9);
+    const VnetLayout L = vnet_layout(32, 2, 8);
+    float *w = malloc(sizeof(float) * L.n_params);
+    vnet_init(&L, w, 4);
+    Rng r; rng_seed(&r, 8);
+    for (int i = 0; i < L.n_params; i++) w[i] += 0.05f * (rng_float(&r) - 0.5f);   /* every weight nonzero */
+    VnetLayout G;
+    float *g = vnet_grow_blocks(&L, w, 5, 9, &G);
+    VnetWork *k = vnet_work_new(&L, area), *kg = vnet_work_new(&G, area);
+    Game3 *g3 = g3_new(N);
+    double worst = 0;
+    for (int p = 0; p < 20; p++) {
+        Game2 pos; random_position(&pos, N, 10 + 3 * p, 100 + p);
+        vnet_encode(&pos, g3, NULL, vnet_work_input(k));
+        vnet_encode(&pos, g3, NULL, vnet_work_input(kg));
+        const double d = fabs((double)vnet_forward(&L, w, nbr9, area, k) - vnet_forward(&G, g, nbr9, area, kg));
+        if (d > worst) worst = d;
+    }
+    printf("  grow 2 -> 5 blocks: %d -> %d parameters, worst |value difference| over 20 positions %.2e\n", L.n_params, G.n_params, worst);
+    check("grown net computes exactly what it did", G.B == 5 && worst == 0);
+    g3_free(g3); vnet_work_free(k); vnet_work_free(kg); free(w); free(g);
+}
+
 static void test_save_load(void) {
     const VnetLayout L = vnet_layout(8, 3, 5);
     float *w = malloc(sizeof(float) * L.n_params);
@@ -193,6 +220,7 @@ int main(void) {
     test_gradients(32, 2, 8);
     test_translation_invariance();
     test_ladder_planes();
+    test_grow_blocks();
     test_save_load();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed > 0;

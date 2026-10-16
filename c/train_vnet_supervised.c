@@ -51,6 +51,11 @@
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
  *       [--smooth-weights auto]
  *
+ * --load takes the file's layout: --channels / --hidden, when given, must
+ * match it, and --blocks above its count grows the net (vnet_grow_blocks:
+ * identity blocks appended, so the first rows start at the loaded net's
+ * strength); --blocks below it is an error.
+ *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.  The seed is random unless
  * --seed is given; the model line prints it.
@@ -80,8 +85,10 @@ int main(int argc, char **argv) {
                         "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n");
         return 1;
     }
-    const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
-    const int Hd = atoi(arg_str(argc, argv, "--hidden", "32")), batch = atoi(arg_str(argc, argv, "--batch", "256"));
+    const char *C_s = arg_str(argc, argv, "--channels", NULL), *B_s = arg_str(argc, argv, "--blocks", NULL);
+    const char *H_s = arg_str(argc, argv, "--hidden", NULL);
+    const int C = atoi(C_s ? C_s : "32"), B = atoi(B_s ? B_s : "6"), Hd = atoi(H_s ? H_s : "32");
+    const int batch = atoi(arg_str(argc, argv, "--batch", "256"));
     const float lr = (float)atof(arg_str(argc, argv, "--lr", "0.001"));
     const char *smooth_s = arg_str(argc, argv, "--smooth-weights", "auto");
     const int smooth_auto = !strcmp(smooth_s, "auto");
@@ -130,9 +137,24 @@ int main(int argc, char **argv) {
 
     VnetLayout L;
     float *w;
+    int grown_from = 0;   /* the loaded net's block count when --blocks grew it */
     if (load_f) {
         w = vnet_load(load_f, &L);
         if (!w) return 1;
+        /* --load takes the file's layout; --blocks above its count grows it
+         * (identity blocks appended); any other size flag must match. */
+        if ((C_s && C != L.C) || (H_s && Hd != L.H) || (B_s && B < L.B)) {
+            fprintf(stderr, "train_vnet_supervised: %s is %d channels, %d blocks, head %d: --channels / --hidden must match it, "
+                            "--blocks must be at least %d (more grows it)\n", load_f, L.C, L.B, L.H, L.B);
+            return 1;
+        }
+        if (B_s && B > L.B) {
+            VnetLayout G;
+            float *g = vnet_grow_blocks(&L, w, B, seed, &G);
+            free(w);
+            grown_from = L.B;
+            w = g; L = G;
+        }
     } else {
         L = vnet_layout(C, B, Hd);
         w = malloc(sizeof(float) * (size_t)L.n_params);
@@ -158,6 +180,7 @@ int main(int argc, char **argv) {
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed,
            smooth_auto ? "auto" : smooth ? smooth_s : "off");
     const char *best_by = md ? (md_test_elo_valid(md) ? "elo" : "mdMae") : "teMSE";
+    if (grown_from) printf("grown: %d -> %d blocks (the new ones start as the identity)\n", grown_from, L.B);
     if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, best_by, best_f);
     else printf("save: %s\n", save_f);
     if (md) md_test_describe(md);
