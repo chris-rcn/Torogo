@@ -31,4 +31,15 @@ rm -f game2-for-double.o game3-for-double.o ladder2-for-double.o
 $CC $CFLAGS -fopenmp -o train_vnet_supervised.bin game2.c game3.c ladder2.c cnn.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 $CC $CFLAGS -fopenmp -o train_vnet_td.bin game2.c game3.c ladder2.c cnn.c vnet_tool.c fpol.c ppat.c puct.c train_vnet_td.c -lm
 
-echo "built 21 binaries"
+# EXPERIMENT — symmetric 3x3 kernels (c/cnn_sym.c, a drop-in for cnn.c): the
+# unchanged trainer and vnet_tool built against it, and its tests.  Delete
+# this block with cnn_sym.c / test_cnn_sym.c to drop the experiment.
+$CC $CFLAGS -o test_cnn_sym.bin        game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -c -o game2-for-sym-double.o   game2.c
+$CC $CFLAGS -c -o game3-for-sym-double.o   game3.c
+$CC $CFLAGS -c -o ladder2-for-sym-double.o ladder2.c
+$CC $CFLAGS -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_sym_double.bin game2-for-sym-double.o game3-for-sym-double.o ladder2-for-sym-double.o cnn_sym.c test_cnn_sym.c -lm
+rm -f game2-for-sym-double.o game3-for-sym-double.o ladder2-for-sym-double.o
+$CC $CFLAGS -fopenmp -o train_vnet_sym.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+
+echo "built 24 binaries"
