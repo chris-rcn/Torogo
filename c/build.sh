@@ -41,5 +41,8 @@ $CC $CFLAGS -c -o ladder2-for-sym-double.o ladder2.c
 $CC $CFLAGS -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_sym_double.bin game2-for-sym-double.o game3-for-sym-double.o ladder2-for-sym-double.o cnn_sym.c test_cnn_sym.c -lm
 rm -f game2-for-sym-double.o game3-for-sym-double.o ladder2-for-sym-double.o
 $CC $CFLAGS -fopenmp -o train_vnet_sym.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+# ... and with the diagonal-arrangement planes too (-DVSYM_DIAG: 56 planes).
+$CC $CFLAGS -DVSYM_DIAG -o test_cnn_sym_diag.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -DVSYM_DIAG -fopenmp -o train_vnet_sym_diag.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 
-echo "built 24 binaries"
+echo "built 26 binaries"

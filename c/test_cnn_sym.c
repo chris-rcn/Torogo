@@ -165,7 +165,11 @@ static void test_grow_blocks(void) {
 /* The neighbour-arrangement planes (after cnn.c's VNET_PLANES): exactly one
  * per point, and two own stones opposite vs adjacent land on different ones. */
 static void test_orbit_planes(void) {
+#ifdef VSYM_DIAG
+    const int N = 9, area = N * N, PL = VNET_PLANES + 42;
+#else
     const int N = 9, area = N * N, PL = VNET_PLANES + 21;
+#endif
     g2_init_topology(N);
     Game2 g;
     g2_parse_board(&g,
@@ -181,18 +185,46 @@ static void test_orbit_planes(void) {
         BLACK);
     const int opposite = 5 * N + 2, adjacent = 4 * N + 6;   /* c6 (X above and below), g5 (X above and left) */
     Game3 *g3 = g3_new(N);
-    static float x[MAX_CAP * (VNET_PLANES + 21)];
+    static float x[MAX_CAP * (VNET_PLANES + 42)];
     vnet_encode(&g, g3, NULL, x);
     int one_each = 1, po = -1, pa = -1;
     for (int p = 0; p < area; p++) {
         int n = 0;
-        for (int q = VNET_PLANES; q < PL; q++) if (x[p * PL + q] != 0) { n++; if (p == opposite) po = q; if (p == adjacent) pa = q; }
+        for (int q = VNET_PLANES; q < VNET_PLANES + 21; q++) if (x[p * PL + q] != 0) { n++; if (p == opposite) po = q; if (p == adjacent) pa = q; }
         if (n != 1) one_each = 0;
+#ifdef VSYM_DIAG
+        n = 0;
+        for (int q = VNET_PLANES + 21; q < PL; q++) if (x[p * PL + q] != 0) n++;
+        if (n != 1) one_each = 0;
+#endif
     }
     printf("  orbit planes: one per point %s; c6 (own above + below) plane %d, g5 (own above + left) plane %d\n",
            one_each ? "yes" : "NO", po - VNET_PLANES, pa - VNET_PLANES);
     check("exactly one neighbour-arrangement plane per point", one_each);
     check("own stones opposite vs adjacent: different planes", po >= 0 && pa >= 0 && po != pa);
+#ifdef VSYM_DIAG
+    /* Diagonals: own stones on opposite corners vs on the same side. */
+    {
+        Game2 h;
+        g2_parse_board(&h,
+            "9 . . . . . . . . .\n"
+            "8 . . . . . . . . .\n"
+            "7 . X . . . . . . .\n"
+            "6 . . . . . X . X .\n"
+            "5 . . . X . . . . .\n"
+            "4 . . . . . . . . .\n"
+            "3 . . . . . . . . .\n"
+            "2 . . . . . . . . .\n"
+            "1 . . . . . . . . .\n",
+            BLACK);
+        const int dopp = 5 * N + 2, dsame = 4 * N + 6;   /* c6 (X at b7 and d5: opposite corners), g5 (X at f6 and h6: same side) */
+        vnet_encode(&h, g3, NULL, x);
+        int qo = -1, qs = -1;
+        for (int q = VNET_PLANES + 21; q < PL; q++) { if (x[dopp * PL + q] != 0) qo = q; if (x[dsame * PL + q] != 0) qs = q; }
+        printf("  diagonal orbit planes: c6 (opposite corners) plane %d, g5 (same side) plane %d\n", qo - VNET_PLANES - 21, qs - VNET_PLANES - 21);
+        check("own stones on opposite vs same-side diagonals: different planes", qo >= 0 && qs >= 0 && qo != qs);
+    }
+#endif
     g3_free(g3);
 }
 
