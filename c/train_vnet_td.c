@@ -35,6 +35,13 @@
  * only, default 7; 0 = full width, independent of --fp-width).  The checkpoint
  * is written at every row.
  *
+ * --load takes the file's layout: --channels / --hidden, when given, must
+ * match it, and --blocks above its count grows the net (vnet_grow_blocks:
+ * identity blocks appended); --blocks below it is an error.  --lr-warmup
+ * STEPS ramps the learning rate linearly to --lr over the first STEPS Adam
+ * steps (default 500; 0 = off): at the full rate, Adam's first steps (fresh
+ * moments) wreck a loaded or grown net.
+ *
  * --komi K: the scoring komi, default the game's (3.5 on 13x13), the currency
  * of the MD file's and the ptw1000 sets' labels.
  *
@@ -47,7 +54,7 @@
  *       [--load PATH] [--save PATH] [--games N] [--bootstrap N] [--epsilon 0.1]
  *       [--rand-open 3] [--ext random|fp|puct --ext-ratio R] [--ext-playouts 1000]
  *       [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]
- *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1]
+ *       [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--lr-warmup 500] [--threads 1]
  *       [--seed N] [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE]
  *       [--test-fp-width 7]
  */
@@ -176,14 +183,18 @@ int main(int argc, char **argv) {
                         "         [--games N] [--bootstrap N] [--epsilon 0.1] [--rand-open 3] [--ext random|fp|puct --ext-ratio R]\n"
                         "         [--ext-playouts 1000]\n"
                         "         [--fp-width 5] [--fp-model FILE] [--ppat-model FILE] [--komi K]\n"
-                        "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--threads 1] [--seed N]\n"
+                        "         [--window 200000] [--reuse 1] [--batch 256] [--lr 0.001] [--lr-warmup 500] [--threads 1] [--seed N]\n"
                         "         [--test-evals FILE] [--test-pos N] [--elo-map [FILE]] [--md FILE] [--test-fp-width 7]\n");
         return 1;
     }
     N = atoi(arg_str(argc, argv, "--size", "13"));
-    const int C = atoi(arg_str(argc, argv, "--channels", "32")), B = atoi(arg_str(argc, argv, "--blocks", "6"));
-    const int Hd = atoi(arg_str(argc, argv, "--hidden", "32")), batch = atoi(arg_str(argc, argv, "--batch", "256"));
+    const char *C_s = arg_str(argc, argv, "--channels", NULL), *B_s = arg_str(argc, argv, "--blocks", NULL);
+    const char *H_s = arg_str(argc, argv, "--hidden", NULL);
+    const int C = atoi(C_s ? C_s : "32"), B = atoi(B_s ? B_s : "6"), Hd = atoi(H_s ? H_s : "32");
+    const int batch = atoi(arg_str(argc, argv, "--batch", "256"));
     const float lr = (float)atof(arg_str(argc, argv, "--lr", "0.001"));
+    const int warmup = atoi(arg_str(argc, argv, "--lr-warmup", "500"));
+    if (warmup < 0) { fprintf(stderr, "train_vnet_td: --lr-warmup must be >= 0 (Adam steps)\n"); return 1; }
     const int threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const long games_limit = atol(arg_str(argc, argv, "--games", "0")), bootstrap = atol(arg_str(argc, argv, "--bootstrap", "0"));
     epsilon = atof(arg_str(argc, argv, "--epsilon", "0.1"));
@@ -258,9 +269,24 @@ int main(int argc, char **argv) {
     static int32_t sym[8 * MAX_CAP]; vnet_sym_map(N, sym);
 
     float *w;
+    int grown_from = 0;   /* the loaded net's block count when --blocks grew it */
     if (load_f) {
         w = vnet_load(load_f, &L);
         if (!w) return 1;
+        /* --load takes the file's layout; --blocks above its count grows it
+         * (identity blocks appended); any other size flag must match. */
+        if ((C_s && C != L.C) || (H_s && Hd != L.H) || (B_s && B < L.B)) {
+            fprintf(stderr, "train_vnet_td: %s is %d channels, %d blocks, head %d: --channels / --hidden must match it, "
+                            "--blocks must be at least %d (more grows it)\n", load_f, L.C, L.B, L.H, L.B);
+            return 1;
+        }
+        if (B_s && B > L.B) {
+            VnetLayout Gl;
+            float *g = vnet_grow_blocks(&L, w, B, seed, &Gl);
+            free(w);
+            grown_from = L.B;
+            w = g; L = Gl;
+        }
     } else {
         L = vnet_layout(C, B, Hd);
         w = malloc(sizeof(float) * (size_t)L.n_params);
@@ -297,7 +323,8 @@ int main(int argc, char **argv) {
     if (ext == EXT_PUCT) printf("  ext-playouts %d  ppat-model %s", ext_playouts, ppat_f);
     if (need_fp) printf("  fp-model %s", fp_f);
     printf("  fp-width %d  komi %g  bootstrap %ld  games %ld\n", fp_width, komi, bootstrap, games_limit);
-    printf("training: window %ld  reuse %g  save %s\n", window, reuse, save_f);
+    if (grown_from) printf("grown: %d -> %d blocks (the new ones start as the identity)\n", grown_from, L.B);
+    printf("training: window %ld  reuse %g  lr-warmup %d  save %s\n", window, reuse, warmup, save_f);
     if (test_f) printf("test: %s (%d records)\n", test_f, te.n);
     if (md) md_test_describe(md);
     printf("\n%10s %10s %9s %6s %6s %6s %8s %8s%s %7s%s\n", "games", "positions", "elapsed", "play%", "bWin%", "moves",
@@ -375,7 +402,10 @@ int main(int argc, char **argv) {
             }
             /* Reduce in thread order (deterministic), then Adam. */
             for (int j = 0; j < np; j++) { float g = 0; for (int t = 0; t < threads; t++) { g += TG[t][j]; TG[t][j] = 0; } G[j] = g / batch; }
-            adam_step(&adam, w, G, lr);
+            /* Warm-up: Adam's first steps move every weight by about the rate
+             * whatever its gradient's size (fresh moments), which wrecks a
+             * loaded net; ramping the rate up keeps those steps small. */
+            adam_step(&adam, w, G, adam.step < warmup ? lr * (float)(adam.step + 1) / (float)warmup : lr);
             step++;
             iv_loss += loss; iv_se += se; iv_n += batch; iv_fcpu += fcpu; iv_nf += nf;
         }
