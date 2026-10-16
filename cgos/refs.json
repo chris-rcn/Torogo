@@ -35,6 +35,7 @@
     { "name": "ref-fp-fastladder", "agent": "ref-fp-fastladder", "budget": 1 },
     { "name": "ref-line", "agent": "ref-line", "budget": 1 },
     { "name": "ref-ply8", "agent": "ref-ply8", "budget": 1 },
-    { "name": "ref-puct-trunc-wasm", "agent": "ref-puct-trunc-wasm", "budget": 1 }
+    { "name": "ref-puct-trunc-wasm", "agent": "ref-puct-trunc-wasm", "budget": 1 },
+    { "name": "ref-fp-ply-vnet", "agent": "ref-fp-ply-vnet", "budget": 1 }
   ]
 }
