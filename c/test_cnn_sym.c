@@ -162,6 +162,40 @@ static void test_grow_blocks(void) {
     g3_free(g3); vnet_work_free(k); vnet_work_free(kg); free(w); free(g);
 }
 
+/* The neighbour-arrangement planes (after cnn.c's VNET_PLANES): exactly one
+ * per point, and two own stones opposite vs adjacent land on different ones. */
+static void test_orbit_planes(void) {
+    const int N = 9, area = N * N, PL = VNET_PLANES + 21;
+    g2_init_topology(N);
+    Game2 g;
+    g2_parse_board(&g,
+        "9 . . . . . . . . .\n"
+        "8 . . . . . . . . .\n"
+        "7 . . X . . . . . .\n"
+        "6 . . . . . . X . .\n"
+        "5 . . X . . X . . .\n"
+        "4 . . . . . . . . .\n"
+        "3 . . . . . . . . .\n"
+        "2 . . . . . . . . .\n"
+        "1 . . . . . . . . .\n",
+        BLACK);
+    const int opposite = 5 * N + 2, adjacent = 4 * N + 6;   /* c6 (X above and below), g5 (X above and left) */
+    Game3 *g3 = g3_new(N);
+    static float x[MAX_CAP * (VNET_PLANES + 21)];
+    vnet_encode(&g, g3, NULL, x);
+    int one_each = 1, po = -1, pa = -1;
+    for (int p = 0; p < area; p++) {
+        int n = 0;
+        for (int q = VNET_PLANES; q < PL; q++) if (x[p * PL + q] != 0) { n++; if (p == opposite) po = q; if (p == adjacent) pa = q; }
+        if (n != 1) one_each = 0;
+    }
+    printf("  orbit planes: one per point %s; c6 (own above + below) plane %d, g5 (own above + left) plane %d\n",
+           one_each ? "yes" : "NO", po - VNET_PLANES, pa - VNET_PLANES);
+    check("exactly one neighbour-arrangement plane per point", one_each);
+    check("own stones opposite vs adjacent: different planes", po >= 0 && pa >= 0 && po != pa);
+    g3_free(g3);
+}
+
 static void test_save_load(void) {
     const VnetLayout L = vnet_layout(8, 3, 5);
     float *w = malloc(sizeof(float) * L.n_params);
@@ -188,6 +222,7 @@ int main(void) {
     test_gradients(32, 1, 8);
     test_invariance();
     test_grow_blocks();
+    test_orbit_planes();
     test_save_load();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed > 0;
