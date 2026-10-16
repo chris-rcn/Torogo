@@ -55,6 +55,10 @@ typedef struct MdTest MdTest;
 MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width);
 void    md_test_describe(const MdTest *T);   /* the "md: ..." header line */
 int     md_test_elo_valid(const MdTest *T);   /* the elo map applies to this MD file */
+/* The columns' header ("   mdMae    elo", or "   mdMae" when the map does not
+ * apply: no elo column then), and a row's cell when the test does not run. */
+const char *md_test_header(const MdTest *T);
+void    md_test_skip_cell(const MdTest *T, char *col);
 /* One row's "  mdMae    elo" cell into col (40 bytes): the test runs only
  * when it keeps its share of the run's wall time (now, seconds) within 20%,
  * its cost estimated as its evaluations x infer (CPU seconds per forward) /

@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
     if (test_f) printf("test: %s (%d records)\n", test_f, te.n);
     if (md) md_test_describe(md);
     printf("\n%10s %10s %9s %6s %6s %6s %8s %8s%s %7s%s\n", "games", "positions", "elapsed", "play%", "bWin%", "moves",
-           "trLoss", "trMSE", test_f ? "    teMSE" : "", "infer", md ? "   mdMae    elo" : "");
+           "trLoss", "trMSE", test_f ? "    teMSE" : "", "infer", md ? md_test_header(md) : "");
 
     long games = 0, next_row = round_games, step = 0;
     double owed = 0;
@@ -401,7 +401,7 @@ int main(int argc, char **argv) {
             vnet_save(save_f, &L, w);
             char mdcol[40] = "";
             if (md && infer > 0) md_test_row(md, &L, w, nbr9, area, WK, G3, threads, infer, wall_s() - t0, NULL, mdcol);
-            else if (md) snprintf(mdcol, sizeof mdcol, "  %6s %6s", "-", "-");   /* no cost estimate yet */
+            else if (md) md_test_skip_cell(md, mdcol);   /* no cost estimate yet */
             const double now = wall_s();
             char ibuf[16], lbuf[16], mbuf[16];
             if (iv_n) { snprintf(lbuf, sizeof lbuf, "%8.5f", iv_loss / iv_n); snprintf(mbuf, sizeof mbuf, "%8.5f", iv_se / iv_n); }

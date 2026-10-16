@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
     else printf("save: %s\n", save_f);
     if (md) md_test_describe(md);
     printf("\n%10s %6s %9s %7s %8s %8s%s %7s%s\n", "positions", "epoch", "elapsed", "pos/s", "trLoss", "trMSE", test_f ? "    teMSE " : "", "infer",
-           md ? "   mdMae    elo" : "");
+           md ? md_test_header(md) : "");
 
     int *order = malloc(sizeof(int) * tr.n);
     for (int i = 0; i < tr.n; i++) order[i] = i;

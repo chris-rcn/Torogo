@@ -428,6 +428,13 @@ MdTest *md_test_open(const char *elo_f, const char *md_f, int N, int fp_width) {
 
 int md_test_elo_valid(const MdTest *T) { return T->elo_valid; }
 
+const char *md_test_header(const MdTest *T) { return T->elo_valid ? "   mdMae    elo" : "   mdMae"; }
+
+void md_test_skip_cell(const MdTest *T, char *col) {
+    if (T->elo_valid) snprintf(col, 40, "  %6s %6s", "-", "-");
+    else snprintf(col, 40, "  %6s", "-");
+}
+
 void md_test_describe(const MdTest *T) {
     char fw[32] = "full width";
     if (T->fp_width > 0) snprintf(fw, sizeof fw, "featurepol top %d", T->fp_width);
@@ -437,7 +444,7 @@ void md_test_describe(const MdTest *T) {
 int md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *nbr9, int area,
                 VnetWork **WK, Game3 **G3, int threads, double infer, double now, double *best, char *col) {
     const double raw = T->md.evals * infer / threads, est = raw * T->scale;
-    if (T->total + est > 0.20 * (now + est)) { snprintf(col, 40, "  %6s %6s", "-", "-"); return 0; }
+    if (T->total + est > 0.20 * (now + est)) { md_test_skip_cell(T, col); return 0; }
     const double m0 = wall_s();
     double bs[16]; int bn[16];
     const EloMap *E = &T->elo;
@@ -454,7 +461,8 @@ int md_test_row(MdTest *T, const VnetLayout *L, const float *w, const int32_t *n
     const int is_best = best && key < *best;
     if (is_best) *best = key;
     const char ms = is_best && !T->elo_valid ? '*' : ' ', es = is_best && T->elo_valid ? '*' : ' ';
-    if (have) snprintf(col, 40, "  %6.4f%c%6.0f%c", mae, ms, e, es);
+    if (!T->elo_valid) snprintf(col, 40, "  %6.4f%c", mae, ms);   /* no elo column */
+    else if (have) snprintf(col, 40, "  %6.4f%c%6.0f%c", mae, ms, e, es);
     else snprintf(col, 40, "  %6.4f%c     - ", mae, ms);
     const double took = wall_s() - m0;
     T->total += took;
