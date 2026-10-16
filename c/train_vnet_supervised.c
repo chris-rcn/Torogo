@@ -39,6 +39,12 @@
  * pass / --threads, scaled by how far the last run's actual time was off that
  * estimate.  Other rows print '-'.
  *
+ * --lr-warmup STEPS: the learning rate ramps linearly up to --lr over the
+ * first STEPS Adam steps (default 500; 0 = off).  Adam's first steps move every
+ * weight by about the rate whatever its gradient's size, which on --load
+ * (fresh moments) wrecks the loaded net — and a grown net's zero-initialised
+ * blocks — at the full rate.
+ *
  * --smooth-weights A: a Polyak average of the weights (train-vpat-td's knob),
  * updated after every Adam step as ema = A*ema + (1-A)*w; the test pass, the MD
  * test, the checkpoint and -best all use it, training continues on w.  auto
@@ -49,7 +55,7 @@
  *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed N] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
- *       [--smooth-weights auto]
+ *       [--smooth-weights auto] [--lr-warmup 500]
  *
  * --load takes the file's layout: --channels / --hidden, when given, must
  * match it, and --blocks above its count grows the net (vnet_grow_blocks:
@@ -82,7 +88,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
                         "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed N] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
-                        "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n");
+                        "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n"
+                        "         [--lr-warmup 500]\n");
         return 1;
     }
     const char *C_s = arg_str(argc, argv, "--channels", NULL), *B_s = arg_str(argc, argv, "--blocks", NULL);
@@ -90,6 +97,8 @@ int main(int argc, char **argv) {
     const int C = atoi(C_s ? C_s : "32"), B = atoi(B_s ? B_s : "6"), Hd = atoi(H_s ? H_s : "32");
     const int batch = atoi(arg_str(argc, argv, "--batch", "256"));
     const float lr = (float)atof(arg_str(argc, argv, "--lr", "0.001"));
+    const int warmup = atoi(arg_str(argc, argv, "--lr-warmup", "500"));
+    if (warmup < 0) { fprintf(stderr, "train_vnet_supervised: --lr-warmup must be >= 0 (Adam steps)\n"); return 1; }
     const char *smooth_s = arg_str(argc, argv, "--smooth-weights", "auto");
     const int smooth_auto = !strcmp(smooth_s, "auto");
     char *smooth_end;
@@ -176,9 +185,9 @@ int main(int argc, char **argv) {
     if (test_f) printf("test: %s (%d records)  ", test_f, te.n);
     else printf("test: (none)  ");
     printf("size %d  [%.1fs to load]\n", N, wall_s() - t_load);
-    printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u  smooth-weights %s\n",
+    printf("model: %d channels, %d blocks, head %d: %d parameters%s%s  batch %d  lr %g  epochs %d  threads %d  seed %u  smooth-weights %s  lr-warmup %d\n",
            L.C, L.B, L.H, np, load_f ? "  loaded from " : "", load_f ? load_f : "", batch, (double)lr, epochs, threads, seed,
-           smooth_auto ? "auto" : smooth ? smooth_s : "off");
+           smooth_auto ? "auto" : smooth ? smooth_s : "off", warmup);
     const char *best_by = md ? (md_test_elo_valid(md) ? "elo" : "mdMae") : "teMSE";
     if (grown_from) printf("grown: %d -> %d blocks (the new ones start as the identity)\n", grown_from, L.B);
     if (md || test_f) printf("save: %s (best by %s: %s)\n", save_f, best_by, best_f);
@@ -219,7 +228,10 @@ int main(int argc, char **argv) {
             }
             /* Reduce in thread order (deterministic), then Adam. */
             for (int j = 0; j < np; j++) { float g = 0; for (int t = 0; t < threads; t++) { g += TG[t][j]; TG[t][j] = 0; } G[j] = g / bn; }
-            adam_step(&adam, w, G, lr);
+            /* Warm-up: Adam's first steps move every weight by about the rate
+             * whatever its gradient's size (fresh moments), which wrecks a
+             * loaded net; ramping the rate up keeps those steps small. */
+            adam_step(&adam, w, G, adam.step < warmup ? lr * (float)(adam.step + 1) / (float)warmup : lr);
             if (ema) {
                 const float a = smooth_auto ? (adam.step > 4 ? 1.0f - 4.0f / (float)adam.step : 0.0f) : (float)smooth_a;
                 for (int j = 0; j < np; j++) ema[j] = a * ema[j] + (1 - a) * w[j];
