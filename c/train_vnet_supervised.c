@@ -52,7 +52,7 @@
  * run's steps; 0 = off (the raw weights throughout).
  *
  *   train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6]
- *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1]
+ *       [--hidden 32] [--batch 256] [--lr 0.001] [--epochs 0] [--threads 1]
  *       [--train-pos N] [--test-pos N] [--seed N] [--save PATH] [--load PATH]
  *       [--elo-map [FILE]] [--md FILE] [--test-fp-width 7] [--fp-model FILE]
  *       [--smooth-weights auto] [--lr-warmup 500]
@@ -61,6 +61,8 @@
  * match it, and --blocks above its count grows the net (vnet_grow_blocks:
  * identity blocks appended, so the first rows start at the loaded net's
  * strength); --blocks below it is an error.
+ *
+ * --epochs N stops after N epochs; 0 (the default) trains until stopped.
  *
  * --threads parallelises each batch with OpenMP (and the test pass); results
  * depend only on the seed and the thread count.  The seed is random unless
@@ -86,7 +88,7 @@ int main(int argc, char **argv) {
     const char *train_f = arg_str(argc, argv, "--evals", NULL), *test_f = arg_str(argc, argv, "--test-evals", NULL);
     if (arg_flag(argc, argv, "--help") || !train_f) {
         fprintf(stderr, "usage: train_vnet_supervised.bin --evals TRAIN [--test-evals TEST] [--channels 32] [--blocks 6] [--hidden 32]\n"
-                        "         [--batch 256] [--lr 0.001] [--epochs 10] [--threads 1] [--train-pos N] [--test-pos N]\n"
+                        "         [--batch 256] [--lr 0.001] [--epochs 0] [--threads 1] [--train-pos N] [--test-pos N]\n"
                         "         [--seed N] [--save PATH] [--load PATH] [--elo-map [FILE]] [--md FILE]\n"
                         "         [--test-fp-width 7] [--fp-model ref/ref-fp-stone8AdjLib3.js] [--smooth-weights auto]\n"
                         "         [--lr-warmup 500]\n");
@@ -107,7 +109,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "train_vnet_supervised: --smooth-weights takes auto or a decay in [0, 1) (got '%s')\n", smooth_s); return 1;
     }
     const int smooth = smooth_auto || smooth_a > 0;
-    const int epochs = atoi(arg_str(argc, argv, "--epochs", "10")), threads = atoi(arg_str(argc, argv, "--threads", "1"));
+    const int epochs = atoi(arg_str(argc, argv, "--epochs", "0")), threads = atoi(arg_str(argc, argv, "--threads", "1"));
     const int train_cap = atoi(arg_str(argc, argv, "--train-pos", "0")), test_cap = atoi(arg_str(argc, argv, "--test-pos", "0"));
     const uint32_t seed = arg_seed(argc, argv);   /* default: random (printed) */
     const char *load_f = arg_str(argc, argv, "--load", NULL);
@@ -126,7 +128,7 @@ int main(int argc, char **argv) {
     {   const char *dot = strrchr(save_f, '.');
         if (dot && dot > strrchr(save_f, '/')) snprintf(best_f, sizeof best_f, "%.*s-best%s", (int)(dot - save_f), save_f, dot);
         else snprintf(best_f, sizeof best_f, "%s-best", save_f); }
-    if (C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || epochs < 1) { fprintf(stderr, "train_vnet_supervised: bad size/batch/threads/epochs\n"); return 1; }
+    if (C < 1 || B < 0 || B > VNET_MAX_BLOCKS || Hd < 1 || batch < 1 || threads < 1 || epochs < 0) { fprintf(stderr, "train_vnet_supervised: bad size/batch/threads/epochs\n"); return 1; }
 #ifdef _OPENMP
     omp_set_num_threads(threads);
 #else
@@ -202,7 +204,7 @@ int main(int argc, char **argv) {
     double iv_loss = 0, iv_se = 0, iv_fcpu = 0; long iv_n = 0;   /* iv_fcpu: training forwards' CPU, timed without a test set */
     double best = 1e30;
     const double t0 = wall_s();
-    for (int ep = 0; ep < epochs; ep++) {
+    for (int ep = 0; epochs == 0 || ep < epochs; ep++) {   /* --epochs 0: until stopped */
         /* Fisher-Yates from a per-epoch stream */
         uint32_t s = mix(seed, 1000003u + ep);
         for (int i = tr.n - 1; i > 0; i--) { s = mix(s, i); const int j = s % (uint32_t)(i + 1); const int tmp = order[i]; order[i] = order[j]; order[j] = tmp; }
