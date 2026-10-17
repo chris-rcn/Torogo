@@ -55,5 +55,8 @@ $CC $CFLAGS -c -o ladder2-for-symm-double.o ladder2.c
 $CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -DVSYM_MAXPOOL -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_sym_corner_edge_max_double.bin game2-for-symm-double.o game3-for-symm-double.o ladder2-for-symm-double.o cnn_sym.c test_cnn_sym.c -lm
 rm -f game2-for-symm-double.o game3-for-symm-double.o ladder2-for-symm-double.o
 $CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -DVSYM_MAXPOOL -fopenmp -o train_vnet_sym_corner_edge_max.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+# ... and max pool on the orthogonal planes alone (-DVSYM_MAXPOOL: 35 planes).
+$CC $CFLAGS -DVSYM_MAXPOOL -o test_cnn_sym_max.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -DVSYM_MAXPOOL -fopenmp -o train_vnet_sym_max.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 
-echo "built 31 binaries"
+echo "built 33 binaries"
