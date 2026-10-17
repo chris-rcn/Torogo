@@ -34,6 +34,8 @@
  * middle state and the unordered pair of end states, again a 4-hot: how the
  * two diagonals of a side relate through the orthogonal between them
  * (with the corners, 71 planes; train_vnet_sym_corner_edge.bin).
+ * -DVSYM_MAXPOOL feeds the head each channel's max over the board after its
+ * mean (files "VSYMM"; train_vnet_sym_corner_edge_max.bin).
  */
 #include <stdio.h>
 #include <errno.h>
@@ -63,6 +65,16 @@
 #define OFF_EDGE   (OFF_CORNER + N_CORNER)
 #define P          (OFF_EDGE + N_EDGE)
 #define T 3   /* tap classes */
+/* The head's input: each channel's mean over the board, then (-DVSYM_MAXPOOL)
+ * its max — invariant too, so the net stays exact; the max keeps what a
+ * single point says strongly, which the mean dilutes by the board area. */
+#ifdef VSYM_MAXPOOL
+#define POOLS 2
+#define VSYM_MAGIC "VSYMM"
+#else
+#define POOLS 1
+#define VSYM_MAGIC "VSYM1"
+#endif
 
 /* The orbit (0..20) of a point's 4 orthogonal neighbours' states s_d (0
  * empty, 1 own, 2 opponent; d in g2_nbr's order up, down, left, right) under
@@ -83,7 +95,7 @@ VnetLayout vnet_layout(int C, int B, int H) {
         L.blk_w2[i] = o; o += T * C * C;
         L.blk_b2[i] = o; o += C;
     }
-    L.head_w = o; o += C * H;
+    L.head_w = o; o += POOLS * C * H;
     L.head_b = o; o += H;
     L.out_w  = o; o += H;
     L.out_b  = o; o += 1;
@@ -115,8 +127,8 @@ void vnet_init(const VnetLayout *L, float *w, uint64_t seed) {
     for (int b = 0; b < L->B; b++)
         for (int i = 0; i < T * C * C; i++) w[L->blk_w1[b] + i] = (float)(sd * sm_normal(&s));
         /* blk_w2 stays zero: every block starts as the identity */
-    sd = sqrt(2.0 / C);
-    for (int i = 0; i < C * H; i++) w[L->head_w + i] = (float)(sd * sm_normal(&s));
+    sd = sqrt(2.0 / (POOLS * C));
+    for (int i = 0; i < POOLS * C * H; i++) w[L->head_w + i] = (float)(sd * sm_normal(&s));
     sd = 0.1 * sqrt(1.0 / H);
     for (int i = 0; i < H; i++) w[L->out_w + i] = (float)(sd * sm_normal(&s));
 }
@@ -134,7 +146,7 @@ float *vnet_grow_blocks(const VnetLayout *L, const float *w, int B, uint64_t see
         memcpy(g + G->blk_w2[b], w + L->blk_w2[b], sizeof(float) * conv);
         memcpy(g + G->blk_b2[b], w + L->blk_b2[b], sizeof(float) * C);
     }
-    memcpy(g + G->head_w, w + L->head_w, sizeof(float) * C * H);
+    memcpy(g + G->head_w, w + L->head_w, sizeof(float) * POOLS * C * H);
     memcpy(g + G->head_b, w + L->head_b, sizeof(float) * H);
     memcpy(g + G->out_w, w + L->out_w, sizeof(float) * H);
     memcpy(g + G->out_b, w + L->out_b, sizeof(float));
@@ -143,7 +155,8 @@ float *vnet_grow_blocks(const VnetLayout *L, const float *w, int B, uint64_t see
 
 struct VnetWork {
     int area, C, B, H;
-    float *x, *h, *a, *g, *z, y;
+    float *x, *h, *a, *g, *z, y;   /* g: the head's input, POOLS * C */
+    int *gmax;                     /* the point holding each channel's max (VSYM_MAXPOOL) */
     float *dh, *dpre, *da, *dz;
     float *F;                      /* one conv's features, area x 3*max(P, C) */
     float *gF;                     /* their gradient */
@@ -156,7 +169,8 @@ VnetWork *vnet_work_new(const VnetLayout *L, int area) {
     w->x    = calloc((size_t)area * P, sizeof(float));
     w->h    = calloc(AC * (L->B + 1), sizeof(float));
     w->a    = calloc(AC * (L->B ? L->B : 1), sizeof(float));
-    w->g    = calloc(L->C, sizeof(float));
+    w->g    = calloc((size_t)POOLS * L->C, sizeof(float));
+    w->gmax = calloc(L->C, sizeof(int));
     w->z    = calloc(L->H, sizeof(float));
     w->dh   = calloc(AC, sizeof(float));
     w->dpre = calloc(AC, sizeof(float));
@@ -169,7 +183,7 @@ VnetWork *vnet_work_new(const VnetLayout *L, int area) {
 
 void vnet_work_free(VnetWork *w) {
     if (!w) return;
-    free(w->x); free(w->h); free(w->a); free(w->g); free(w->z);
+    free(w->x); free(w->h); free(w->a); free(w->g); free(w->gmax); free(w->z);
     free(w->dh); free(w->dpre); free(w->da); free(w->dz); free(w->F); free(w->gF); free(w);
 }
 
@@ -400,10 +414,15 @@ float vnet_forward(const VnetLayout *L, const float *w, const int32_t *nbr9, int
     for (int c = 0; c < C; c++) k->g[c] = 0;
     for (int p = 0; p < area; p++) for (int c = 0; c < C; c++) k->g[c] += hB[(size_t)p * C + c];
     for (int c = 0; c < C; c++) k->g[c] /= area;
+#ifdef VSYM_MAXPOOL
+    for (int c = 0; c < C; c++) { k->g[C + c] = hB[c]; k->gmax[c] = 0; }
+    for (int p = 1; p < area; p++)
+        for (int c = 0; c < C; c++) { const float v = hB[(size_t)p * C + c]; if (v > k->g[C + c]) { k->g[C + c] = v; k->gmax[c] = p; } }
+#endif
     float y = w[L->out_b];
     for (int j = 0; j < H; j++) {
         float s = w[L->head_b + j];
-        for (int c = 0; c < C; c++) s += k->g[c] * w[L->head_w + c * H + j];
+        for (int c = 0; c < POOLS * C; c++) s += k->g[c] * w[L->head_w + c * H + j];
         k->z[j] = s > 0 ? s : 0;
         y += w[L->out_w + j] * k->z[j];
     }
@@ -420,7 +439,7 @@ void vnet_backward(const VnetLayout *L, const float *w, const int32_t *nbr9, int
         G[L->out_w + j] += dy * k->z[j];
         k->dz[j] = k->z[j] > 0 ? dy * w[L->out_w + j] : 0;
         G[L->head_b + j] += k->dz[j];
-        for (int c = 0; c < C; c++) G[L->head_w + c * H + j] += k->g[c] * k->dz[j];
+        for (int c = 0; c < POOLS * C; c++) G[L->head_w + c * H + j] += k->g[c] * k->dz[j];
     }
     for (int c = 0; c < C; c++) {
         float s = 0;
@@ -428,6 +447,13 @@ void vnet_backward(const VnetLayout *L, const float *w, const int32_t *nbr9, int
         s /= area;
         for (int p = 0; p < area; p++) k->dh[(size_t)p * C + c] = s;
     }
+#ifdef VSYM_MAXPOOL
+    for (int c = 0; c < C; c++) {   /* the max's gradient goes to the point that held it */
+        float s = 0;
+        for (int j = 0; j < H; j++) s += w[L->head_w + (C + c) * H + j] * k->dz[j];
+        k->dh[(size_t)k->gmax[c] * C + c] += s;
+    }
+#endif
     for (int i = B - 1; i >= 0; i--) {
         const float *hin = k->h + AC * i, *a = k->a + AC * i, *hout = k->h + AC * (i + 1);
         for (size_t j = 0; j < AC; j++) k->dpre[j] = hout[j] > 0 ? k->dh[j] : 0;
@@ -450,7 +476,7 @@ int vnet_save(const char *path, const VnetLayout *L, const float *w) {
     FILE *f = fopen(tmp, "wb");
     if (!f) { fprintf(stderr, "vnet_save: cannot open %s: %s\n", tmp, strerror(errno)); return 0; }
     const int32_t hdr[5] = { L->C, L->B, L->H, P, L->n_params };
-    int ok = fwrite("VSYM1", 1, 5, f) == 5 && fwrite(hdr, sizeof hdr, 1, f) == 1 &&
+    int ok = fwrite(VSYM_MAGIC, 1, 5, f) == 5 && fwrite(hdr, sizeof hdr, 1, f) == 1 &&
              fwrite(w, sizeof(float), (size_t)L->n_params, f) == (size_t)L->n_params;
     ok &= fclose(f) == 0;
     if (!ok) { fprintf(stderr, "vnet_save: write to %s failed; %s not updated\n", tmp, path); remove(tmp); return 0; }
@@ -463,9 +489,12 @@ float *vnet_load(const char *path, VnetLayout *L) {
     if (!f) { fprintf(stderr, "vnet_load: cannot open %s\n", path); return NULL; }
     char magic[5]; int32_t hdr[5];
     if (fread(magic, 1, 5, f) != 5 || fread(hdr, sizeof hdr, 1, f) != 1) { fprintf(stderr, "vnet_load: %s: short file\n", path); fclose(f); return NULL; }
-    if (memcmp(magic, "VSYM1", 5) != 0) {
-        fprintf(stderr, "vnet_load: %s is not a symmetric-kernel net (VSYM1)%s\n", path,
-                memcmp(magic, "VNET1", 5) == 0 ? ": it is a cnn.c net (VNET1)" : "");
+    if (memcmp(magic, VSYM_MAGIC, 5) != 0) {
+        fprintf(stderr, "vnet_load: %s is not a %s symmetric-kernel net (%s)%s\n", path,
+                POOLS == 2 ? "max-pool" : "mean-pool", VSYM_MAGIC,
+                memcmp(magic, "VNET1", 5) == 0 ? ": it is a cnn.c net (VNET1)" :
+                memcmp(magic, "VSYM1", 5) == 0 ? ": it is a mean-pool one (VSYM1)" :
+                memcmp(magic, "VSYMM", 5) == 0 ? ": it is a max-pool one (VSYMM)" : "");
         fclose(f); return NULL;
     }
     if (hdr[3] != P) { fprintf(stderr, "vnet_load: %s has %d input planes, this build %d\n", path, hdr[3], P); fclose(f); return NULL; }

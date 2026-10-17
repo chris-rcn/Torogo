@@ -91,7 +91,14 @@ static void test_gradients(int C, int B, int H) {
     const double cosine = dot / sqrt(nn * na);
     printf("  gradient check, %d channels %d blocks (%s): %d of %d checked singly, %d over %g (worst %.2e); cosine %.8f\n",
            C, B, sizeof(float) == 8 ? "double" : "float", checked, L.n_params, bad, (double)tol, worst, cosine);
-#ifdef CNN_TEST_DOUBLE
+#if defined(CNN_TEST_DOUBLE) && defined(VSYM_MAXPOOL)
+    /* The max is not differentiable where a channel's top two values are
+     * within a finite-difference step: nudging a conv weight can move the max
+     * to another point, so a few conv weights miss (13 of ~10,000 at 32
+     * channels, all in the blocks, none in the head, which cannot move it). */
+    check("backward matches finite differences (max-pool kinks: < 0.5% missed, cosine > 0.9999999)",
+          checked > L.n_params / 2 && bad * 200 < checked && cosine > 0.9999999);
+#elif defined(CNN_TEST_DOUBLE)
     check("backward matches finite differences, every parameter", checked > L.n_params / 2 && bad == 0);
 #else
     check("backward matches finite differences (cosine > 0.999)", cosine > 0.999);

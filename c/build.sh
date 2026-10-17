@@ -47,5 +47,13 @@ $CC $CFLAGS -DVSYM_CORNER -fopenmp -o train_vnet_sym_corner.bin game2.c game3.c 
 # ... and with the 3x3's edges too (-DVSYM_CORNER -DVSYM_EDGE: 71 planes).
 $CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -o test_cnn_sym_corner_edge.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
 $CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -fopenmp -o train_vnet_sym_corner_edge.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+# ... and with the head's max pool too (-DVSYM_MAXPOOL), float and double tests.
+$CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -DVSYM_MAXPOOL -o test_cnn_sym_corner_edge_max.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -c -o game2-for-symm-double.o   game2.c
+$CC $CFLAGS -c -o game3-for-symm-double.o   game3.c
+$CC $CFLAGS -c -o ladder2-for-symm-double.o ladder2.c
+$CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -DVSYM_MAXPOOL -Dfloat=double -Dexpf=exp -DCNN_TEST_DOUBLE -o test_cnn_sym_corner_edge_max_double.bin game2-for-symm-double.o game3-for-symm-double.o ladder2-for-symm-double.o cnn_sym.c test_cnn_sym.c -lm
+rm -f game2-for-symm-double.o game3-for-symm-double.o ladder2-for-symm-double.o
+$CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -DVSYM_MAXPOOL -fopenmp -o train_vnet_sym_corner_edge_max.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 
-echo "built 28 binaries"
+echo "built 31 binaries"
