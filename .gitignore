@@ -23,3 +23,6 @@ ai/rff2.js
 ai/rfl.js
 
 md-phase/
+
+# Built by c/build-wasm.sh; the page loads ppat-playout-wasm.js (tracked) instead
+ppat-playout.wasm
