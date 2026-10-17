@@ -167,7 +167,7 @@ static void test_grow_blocks(void) {
 static void test_orbit_planes(void) {
 #ifdef VSYM_DIAG
     const int N = 9, area = N * N, PL = VNET_PLANES + 42;
-#elif defined(VSYM_BLOCK2)
+#elif defined(VSYM_CORNER)
     const int N = 9, area = N * N, PL = VNET_PLANES + 21 + 18;
 #else
     const int N = 9, area = N * N, PL = VNET_PLANES + 21;
@@ -204,9 +204,9 @@ static void test_orbit_planes(void) {
            one_each ? "yes" : "NO", po - VNET_PLANES, pa - VNET_PLANES);
     check("exactly one neighbour-arrangement plane per point", one_each);
     check("own stones opposite vs adjacent: different planes", po >= 0 && pa >= 0 && po != pa);
-#ifdef VSYM_BLOCK2
-    /* Blocks: 1 to 4 classes set per point; own stones at N + NE (one block)
-     * vs N + SW (two blocks) set different planes. */
+#ifdef VSYM_CORNER
+    /* Corner L-shapes: 1 to 4 classes set per point; own stones at N + NE
+     * (one corner) vs N + SW (two corners) set different planes. */
     {
         int ok_count = 1;
         for (int p = 0; p < area; p++) {
@@ -214,7 +214,7 @@ static void test_orbit_planes(void) {
             for (int q = VNET_PLANES + 21; q < PL; q++) n += x[p * PL + q] != 0;
             if (n < 1 || n > 4) ok_count = 0;
         }
-        check("1 to 4 block classes per point", ok_count);
+        check("1 to 4 corner classes per point", ok_count);
         Game2 h;
         g2_parse_board(&h,
             "9 . . . . . . . . .\n"
@@ -231,8 +231,8 @@ static void test_orbit_planes(void) {
         vnet_encode(&h, g3, NULL, x);
         int same = 1;
         for (int q = VNET_PLANES + 21; q < PL; q++) if ((x[a * PL + q] != 0) != (x[b * PL + q] != 0)) same = 0;
-        printf("  block planes: N + NE and N + SW %s\n", same ? "SAME" : "differ");
-        check("own stones at N + NE vs N + SW: different block planes", !same);
+        printf("  corner planes: N + NE and N + SW %s\n", same ? "SAME" : "differ");
+        check("own stones at N + NE vs N + SW: different corner planes", !same);
     }
 #endif
 #ifdef VSYM_DIAG

@@ -24,13 +24,13 @@
  * So this build has VNET_PLANES + 21 = 35 input planes, saved in the header.
  * -DVSYM_DIAG adds 21 more for the 4 diagonal neighbours' arrangement, the
  * same way (VNET_PLANES + 42 = 56 planes; train_vnet_sym_diag.bin).
- * -DVSYM_BLOCK2 instead adds 18 for the four 2x2 blocks around the point: a
- * block is a diagonal neighbour and the two orthogonal neighbours beside it,
- * its class (diagonal state, unordered pair of the two orthogonal states) is
- * the block's form under the one symmetry that keeps the centre fixed, and
- * each class present sets its plane to 1 (a 4-hot at most): how the diagonals
- * line up with the orthogonals, which the separate orbits cannot say
- * (VNET_PLANES + 21 + 18 = 53 planes; train_vnet_sym_block2.bin).
+ * -DVSYM_CORNER instead adds 18 for the four corner L-shapes around the
+ * point: a diagonal neighbour and the two orthogonal neighbours beside it,
+ * classed by (diagonal state, unordered pair of the two orthogonal states) —
+ * the shape's form under the one symmetry that keeps the centre fixed — with
+ * each class present setting its plane to 1 (a 4-hot at most): how the
+ * diagonals line up with the orthogonals, which the separate orbits cannot
+ * say (VNET_PLANES + 21 + 18 = 53 planes; train_vnet_sym_corner.bin).
  */
 #include <stdio.h>
 #include <errno.h>
@@ -42,14 +42,14 @@
 #include "fatal.h"
 
 #define NB4_ORBITS 21
-#if defined(VSYM_DIAG) && defined(VSYM_BLOCK2)
-#error "VSYM_DIAG and VSYM_BLOCK2 are alternatives"
+#if defined(VSYM_DIAG) && defined(VSYM_CORNER)
+#error "VSYM_DIAG and VSYM_CORNER are alternatives"
 #endif
-#define BLOCK2_CLASSES 18
+#define CORNER_CLASSES 18
 #ifdef VSYM_DIAG
 #define P (VNET_PLANES + 2 * NB4_ORBITS)
-#elif defined(VSYM_BLOCK2)
-#define P (VNET_PLANES + NB4_ORBITS + BLOCK2_CLASSES)   /* cnn.c's planes, the orthogonal orbits, the 2x2 block classes */   /* cnn.c's planes, the orthogonal, then the diagonal arrangement orbits */
+#elif defined(VSYM_CORNER)
+#define P (VNET_PLANES + NB4_ORBITS + CORNER_CLASSES)   /* cnn.c's planes, the orthogonal orbits, the corner L-shape classes */   /* cnn.c's planes, the orthogonal, then the diagonal arrangement orbits */
 #else
 #define P (VNET_PLANES + NB4_ORBITS)   /* cnn.c's planes, then the neighbour-arrangement orbits */
 #endif
@@ -256,7 +256,7 @@ void vnet_encode_compact(const int8_t *code, const VnetMeta *meta, int area, con
         }
         x[(size_t)(map ? map[p] : p) * P + VNET_PLANES + NB4_ORBITS + NB4D_ORBIT[cfg]] = 1;
 #endif
-#ifdef VSYM_BLOCK2
+#ifdef VSYM_CORNER
         {
             /* g2_dnbr d (up-left, up-right, down-left, down-right) is flanked
              * by g2_nbr (up, down, left, right) FLANK[d]; the unordered state
