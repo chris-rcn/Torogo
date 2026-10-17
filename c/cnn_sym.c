@@ -24,6 +24,13 @@
  * So this build has VNET_PLANES + 21 = 35 input planes, saved in the header.
  * -DVSYM_DIAG adds 21 more for the 4 diagonal neighbours' arrangement, the
  * same way (VNET_PLANES + 42 = 56 planes; train_vnet_sym_diag.bin).
+ * -DVSYM_BLOCK2 instead adds 18 for the four 2x2 blocks around the point: a
+ * block is a diagonal neighbour and the two orthogonal neighbours beside it,
+ * its class (diagonal state, unordered pair of the two orthogonal states) is
+ * the block's form under the one symmetry that keeps the centre fixed, and
+ * each class present sets its plane to 1 (a 4-hot at most): how the diagonals
+ * line up with the orthogonals, which the separate orbits cannot say
+ * (VNET_PLANES + 21 + 18 = 53 planes; train_vnet_sym_block2.bin).
  */
 #include <stdio.h>
 #include <errno.h>
@@ -35,8 +42,14 @@
 #include "fatal.h"
 
 #define NB4_ORBITS 21
+#if defined(VSYM_DIAG) && defined(VSYM_BLOCK2)
+#error "VSYM_DIAG and VSYM_BLOCK2 are alternatives"
+#endif
+#define BLOCK2_CLASSES 18
 #ifdef VSYM_DIAG
-#define P (VNET_PLANES + 2 * NB4_ORBITS)   /* cnn.c's planes, the orthogonal, then the diagonal arrangement orbits */
+#define P (VNET_PLANES + 2 * NB4_ORBITS)
+#elif defined(VSYM_BLOCK2)
+#define P (VNET_PLANES + NB4_ORBITS + BLOCK2_CLASSES)   /* cnn.c's planes, the orthogonal orbits, the 2x2 block classes */   /* cnn.c's planes, the orthogonal, then the diagonal arrangement orbits */
 #else
 #define P (VNET_PLANES + NB4_ORBITS)   /* cnn.c's planes, then the neighbour-arrangement orbits */
 #endif
@@ -242,6 +255,21 @@ void vnet_encode_compact(const int8_t *code, const VnetMeta *meta, int area, con
             cfg += m * (c == 0 ? 0 : c <= 3 ? 1 : 2);
         }
         x[(size_t)(map ? map[p] : p) * P + VNET_PLANES + NB4_ORBITS + NB4D_ORBIT[cfg]] = 1;
+#endif
+#ifdef VSYM_BLOCK2
+        {
+            /* g2_dnbr d (up-left, up-right, down-left, down-right) is flanked
+             * by g2_nbr (up, down, left, right) FLANK[d]; the unordered state
+             * pair indexes PAIR. */
+            static const int FLANK[4][2] = { { 0, 2 }, { 0, 3 }, { 1, 2 }, { 1, 3 } };
+            static const int PAIR[3][3] = { { 0, 1, 2 }, { 1, 3, 4 }, { 2, 4, 5 } };
+            float *xp = x + (size_t)(map ? map[p] : p) * P + VNET_PLANES + NB4_ORBITS;
+            for (int d = 0; d < 4; d++) {
+                const int cd = code[g2_dnbr[p * 4 + d]] & 7, ca = code[g2_nbr[p * 4 + FLANK[d][0]]] & 7, cb = code[g2_nbr[p * 4 + FLANK[d][1]]] & 7;
+                const int sd = cd == 0 ? 0 : cd <= 3 ? 1 : 2, sa = ca == 0 ? 0 : ca <= 3 ? 1 : 2, sb = cb == 0 ? 0 : cb <= 3 ? 1 : 2;
+                xp[sd * 6 + PAIR[sa][sb]] = 1;
+            }
+        }
 #endif
     }
 }

@@ -44,5 +44,8 @@ $CC $CFLAGS -fopenmp -o train_vnet_sym.bin game2.c game3.c ladder2.c cnn_sym.c f
 # ... and with the diagonal-arrangement planes too (-DVSYM_DIAG: 56 planes).
 $CC $CFLAGS -DVSYM_DIAG -o test_cnn_sym_diag.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
 $CC $CFLAGS -DVSYM_DIAG -fopenmp -o train_vnet_sym_diag.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+# ... or with the 2x2-block 4-hot instead (-DVSYM_BLOCK2: 53 planes).
+$CC $CFLAGS -DVSYM_BLOCK2 -o test_cnn_sym_block2.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -DVSYM_BLOCK2 -fopenmp -o train_vnet_sym_block2.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 
-echo "built 26 binaries"
+echo "built 28 binaries"

@@ -167,6 +167,8 @@ static void test_grow_blocks(void) {
 static void test_orbit_planes(void) {
 #ifdef VSYM_DIAG
     const int N = 9, area = N * N, PL = VNET_PLANES + 42;
+#elif defined(VSYM_BLOCK2)
+    const int N = 9, area = N * N, PL = VNET_PLANES + 21 + 18;
 #else
     const int N = 9, area = N * N, PL = VNET_PLANES + 21;
 #endif
@@ -185,7 +187,7 @@ static void test_orbit_planes(void) {
         BLACK);
     const int opposite = 5 * N + 2, adjacent = 4 * N + 6;   /* c6 (X above and below), g5 (X above and left) */
     Game3 *g3 = g3_new(N);
-    static float x[MAX_CAP * (VNET_PLANES + 42)];
+    static float x[MAX_CAP * (VNET_PLANES + 42)];   /* the largest variant */
     vnet_encode(&g, g3, NULL, x);
     int one_each = 1, po = -1, pa = -1;
     for (int p = 0; p < area; p++) {
@@ -202,6 +204,37 @@ static void test_orbit_planes(void) {
            one_each ? "yes" : "NO", po - VNET_PLANES, pa - VNET_PLANES);
     check("exactly one neighbour-arrangement plane per point", one_each);
     check("own stones opposite vs adjacent: different planes", po >= 0 && pa >= 0 && po != pa);
+#ifdef VSYM_BLOCK2
+    /* Blocks: 1 to 4 classes set per point; own stones at N + NE (one block)
+     * vs N + SW (two blocks) set different planes. */
+    {
+        int ok_count = 1;
+        for (int p = 0; p < area; p++) {
+            int n = 0;
+            for (int q = VNET_PLANES + 21; q < PL; q++) n += x[p * PL + q] != 0;
+            if (n < 1 || n > 4) ok_count = 0;
+        }
+        check("1 to 4 block classes per point", ok_count);
+        Game2 h;
+        g2_parse_board(&h,
+            "9 . . . . . . . . .\n"
+            "8 . . . . . . . . .\n"
+            "7 . . X X . . . . .\n"
+            "6 . . . . . . X . .\n"
+            "5 . . . . . . . . .\n"
+            "4 . . . . . X . . .\n"
+            "3 . . . . . . . . .\n"
+            "2 . . . . . . . . .\n"
+            "1 . . . . . . . . .\n",
+            BLACK);
+        const int a = 5 * N + 2, b = 4 * N + 6;   /* c6: X at c7 (N) and d7 (NE); g5: X at g6 (N) and f4 (SW) */
+        vnet_encode(&h, g3, NULL, x);
+        int same = 1;
+        for (int q = VNET_PLANES + 21; q < PL; q++) if ((x[a * PL + q] != 0) != (x[b * PL + q] != 0)) same = 0;
+        printf("  block planes: N + NE and N + SW %s\n", same ? "SAME" : "differ");
+        check("own stones at N + NE vs N + SW: different block planes", !same);
+    }
+#endif
 #ifdef VSYM_DIAG
     /* Diagonals: own stones on opposite corners vs on the same side. */
     {
