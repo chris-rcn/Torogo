@@ -2,6 +2,13 @@
 
 // Production agent (self-contained copy of ai/puct-trunc.js, hardcoded config —
 // promoted 2026-10-06, replacing the puct-ppat-fp prod, now ai/prodOldE.js).
+// 2026-10-17: the playouts of its UNTRUNCATED decisions (root phase >=
+// TRUNC_ROOT_PHASE) now run in WebAssembly, as ai/puct-trunc-wasm.js does —
+// ppat-playout.wasm via ppat-wasm.js, the same ppat policy compiled from C,
+// played from the module's own random stream seeded per playout from this
+// agent's rng.  Same settings otherwise; the previous prod is ai/prodOldF.js.
+// In the browser the page loads the module first (window.ppatWasm = await
+// PpatWasm.load('ppat-playout.wasm')); Node loads it from the repo root.
 // Won 59.2% of 316 games (+65 ± 20 Elo) against the old prod at 2 s per move
 // as ProdCand20261006.
 //
@@ -64,6 +71,7 @@ const { game3FromGame2 }     = Util.load('./game3.js', 'Game3');
 const _ppat                 = Util.load('./ppat-lib.js', 'PPatterns');
 const VPat                  = Util.load('./vpatterns.js', 'VPatterns');
 const Symmetry              = Util.load('./symmetry.js', 'Symmetry');
+const PpatWasm              = Util.load('./ppat-wasm.js', 'PpatWasm');
 const { createState, ppatMove, loadWeights } = _ppat;
 
 const performance = (typeof window !== 'undefined' && window.performance)
@@ -137,6 +145,13 @@ function create() {
       (_isNode ? PPAT_PATH : 'window.PPATWeights'));
   }
   _model.ppatMinPhase = PPAT_MIN_PHASE;
+
+  // The WebAssembly playouts for untruncated decisions, with this ppat model.
+  const _pw = _isNode ? PpatWasm.loadSync()
+                      : (typeof window !== 'undefined' && window.ppatWasm) || null;
+  if (!_pw) throw new Error('prod: window.ppatWasm is not set — load it first: window.ppatWasm = await PpatWasm.load(url)');
+  _pw.setModel(_model);
+  let _pwN = 0;   // board size the module is initialised for
 
   // featurepol policy model (priors + top-K pruning); browser: window.featurepolModel.
   const fpModel     = FeaturePol.loadModel({ name: 'prod', path: FPOL_PATH });
@@ -443,6 +458,10 @@ function create() {
     // Root-decision truncation: this decision truncates iff the root phase is
     // below TRUNC_ROOT_PHASE.  Decided once here, applied to every playout.
     _truncActive = (1 - game2.emptyCount / (N * N)) < TRUNC_ROOT_PHASE;
+    if (!_truncActive) {
+      if (_pwN !== N) { _pw.init(N); _pwN = N; }
+      _pw.setRoot(game2);
+    }
     // Lockstep Game3 mirror for featurepol feature extraction — built once per
     // decision, then maintained by play/undo across simulations so extraction
     // never rebuilds it.
@@ -458,7 +477,13 @@ function create() {
       playouts++;
       const { node, game2: simGame2, path, depth, doPlayout } = selectAndExpand(root, game2, N, rng, game3);
       let value, trace = null, work = PLAYOUT_OVERHEAD;
-      if (doPlayout && !simGame2.gameOver) {
+      if (doPlayout && !simGame2.gameOver && !_truncActive) {
+        // The module plays out from root + path, seeded from this agent's rng.
+        _pw.descend(path, path.length);
+        value = _pw.playout((rng.random() * 4294967296) >>> 0, _model.ppatMinPhase);
+        trace = _pw.trace();
+        work = PLAYOUT_OVERHEAD + _pw.ppatMoves + _pw.uniformMoves * UNIFORM_WEIGHT;
+      } else if (doPlayout && !simGame2.gameOver) {
         played.fill(0);
         value = playout(simGame2, played, rng);
         trace = played;
