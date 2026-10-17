@@ -7,7 +7,7 @@
  * Each epoch shuffles the training records and gives every one a random board
  * symmetry (of the 8 reflections/rotations; translations need none — the value
  * is translation-invariant by construction).  Loss: cross-entropy against the
- * soft label.  Optimiser: Adam.  Rows (positions geometric x1.4, plus the
+ * soft label.  Optimiser: Adam.  Rows (positions geometric x1.3, plus the
  * end of an --epochs N run) report the interval's training loss and MSE, the test-file MSE
  * (unaugmented) — the same quantity as train-vpat-supervised's teMSE on the
  * same split — and infer, one test record's forward pass (encoding included)
@@ -268,7 +268,7 @@ int main(int argc, char **argv) {
                        done / el, iv_loss / iv_n, iv_se / iv_n, tcol, fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
                 iv_loss = iv_se = iv_fcpu = 0; iv_n = 0;
-                while (next_row <= done) next_row = (long)(next_row * 1.4) + 1;
+                while (next_row <= done) next_row = (long)(next_row * 1.3) + 1;
             }
         }
     }

@@ -24,7 +24,7 @@
  * batches of --batch, each drawn uniformly (with replacement) from the
  * window's sample positions with a random board symmetry.
  *
- * Rows (games geometric x1.4, and the last game of a --games run): play% is
+ * Rows (games geometric x1.3, and the last game of a --games run): play% is
  * the interval's wall time spent in self-play; bWin% and
  * moves black's win share and the mean game length over the interval's games
  * (bootstrap games included); trLoss and trMSE against the TD targets; teMSE
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
             iv_games = iv_bwins = iv_moves = iv_n = iv_nf = 0;
             iv_loss = iv_se = iv_play = iv_fcpu = 0;
             iv_t0 = now;
-            while (next_row <= games) next_row = (long)(next_row * 1.4) + 1;
+            while (next_row <= games) next_row = (long)(next_row * 1.3) + 1;
         }
         if (last) break;
     }
