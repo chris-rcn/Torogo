@@ -7,8 +7,9 @@
  * Each epoch shuffles the training records and gives every one a random board
  * symmetry (of the 8 reflections/rotations; translations need none — the value
  * is translation-invariant by construction).  Loss: cross-entropy against the
- * soft label.  Optimiser: Adam.  Rows (positions geometric x1.3, plus the
- * end of an --epochs N run) report the interval's training loss and MSE, the test-file MSE
+ * soft label.  Optimiser: Adam.  Rows (positions, shown in thousands: from
+ * 1K, geometric x1.3, plus the end of an --epochs N run) report the
+ * interval's training loss and MSE, the test-file MSE
  * (unaugmented) — the same quantity as train-vpat-supervised's teMSE on the
  * same split — and infer, one test record's forward pass (encoding included)
  * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
@@ -200,7 +201,7 @@ int main(int argc, char **argv) {
 
     int *order = malloc(sizeof(int) * tr.n);
     for (int i = 0; i < tr.n; i++) order[i] = i;
-    long done = 0, next_row = batch;
+    long done = 0, next_row = 1000;   /* the first row at 1K positions */
     double iv_loss = 0, iv_se = 0, iv_fcpu = 0; long iv_n = 0;   /* iv_fcpu: training forwards' CPU, timed without a test set */
     double best = 1e30;
     const double t0 = wall_s();
@@ -264,7 +265,9 @@ int main(int argc, char **argv) {
                 char mdcol[40] = "";
                 if (md && md_test_row(md, &L, ew, nbr9, area, WK, G3, threads, infer, wall_s() - t0, &best, mdcol))
                     vnet_save(best_f, &L, ew);
-                printf("%10ld %6.2f %8.2fm %7.0f %8.5f %8.5f%s %7s%s\n", done, ep + (double)(b0 + bn) / tr.n, el / 60,
+                char kbuf[16];   /* positions in thousands */
+                snprintf(kbuf, sizeof kbuf, "%.0fK", done / 1000.0);
+                printf("%10s %6.2f %8.2fm %7.0f %8.5f %8.5f%s %7s%s\n", kbuf, ep + (double)(b0 + bn) / tr.n, el / 60,
                        done / el, iv_loss / iv_n, iv_se / iv_n, tcol, fmt_time(infer, ibuf), mdcol);
                 fflush(stdout);
                 iv_loss = iv_se = iv_fcpu = 0; iv_n = 0;
