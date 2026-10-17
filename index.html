@@ -288,16 +288,19 @@
 <script src="ai/puct-ppat.js"></script>
 <script src="ai/prod.js"></script>
 <script src="ppat-wasm.js"></script>
+<script src="ppat-playout-wasm.js"></script>
 <script>
-  // prod plays its untruncated decisions' playouts in WebAssembly: load the
-  // module before the UI starts (the first computer move builds the agent).
-  PpatWasm.load('ppat-playout.wasm').then(pw => {
+  // prod plays its untruncated decisions' playouts in WebAssembly: instantiate
+  // the module (embedded as base64 by ppat-playout-wasm.js, so this works from
+  // file:// too) before the UI starts (the first computer move builds the agent).
+  const wasmBytes = Uint8Array.from(atob(window.ppatPlayoutWasm), c => c.charCodeAt(0));
+  PpatWasm.instantiate(wasmBytes).then(pw => {
     window.ppatWasm = pw;
     const ui = document.createElement('script');
     ui.src = 'ui.js';
     document.body.appendChild(ui);
   }).catch(e => {
-    document.body.insertAdjacentHTML('afterbegin', '<p style="color:#c33">Cannot load ppat-playout.wasm: ' + e.message + '</p>');
+    document.body.insertAdjacentHTML('afterbegin', '<p style="color:#c33">Cannot start ppat-playout.wasm: ' + e.message + '</p>');
     throw e;
   });
 </script>
