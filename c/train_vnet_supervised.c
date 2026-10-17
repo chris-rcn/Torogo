@@ -7,8 +7,8 @@
  * Each epoch shuffles the training records and gives every one a random board
  * symmetry (of the 8 reflections/rotations; translations need none — the value
  * is translation-invariant by construction).  Loss: cross-entropy against the
- * soft label.  Optimiser: Adam.  Rows (positions geometric x1.4, plus every
- * epoch end) report the interval's training loss and MSE, the test-file MSE
+ * soft label.  Optimiser: Adam.  Rows (positions geometric x1.4, plus the
+ * end of an --epochs N run) report the interval's training loss and MSE, the test-file MSE
  * (unaugmented) — the same quantity as train-vpat-supervised's teMSE on the
  * same split — and infer, one test record's forward pass (encoding included)
  * in CPU time: the cost on one core whatever --threads is.  pos/s is positions
@@ -239,8 +239,8 @@ int main(int argc, char **argv) {
                 for (int j = 0; j < np; j++) ema[j] = a * ema[j] + (1 - a) * w[j];
             }
             done += bn; iv_loss += loss; iv_se += se; iv_fcpu += fcpu; iv_n += bn;
-            const int epoch_end = b0 + bn >= tr.n;
-            if (done >= next_row || epoch_end) {
+            const int run_end = epochs > 0 && ep == epochs - 1 && b0 + bn >= tr.n;
+            if (done >= next_row || run_end) {
                 double tse = 0;
                 const double c0 = cpu_s();
                 #pragma omp parallel for schedule(static) reduction(+:tse)
