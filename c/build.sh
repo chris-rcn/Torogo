@@ -47,5 +47,8 @@ $CC $CFLAGS -DVSYM_DIAG -fopenmp -o train_vnet_sym_diag.bin game2.c game3.c ladd
 # ... or with the corner-L-shape 4-hot instead (-DVSYM_CORNER: 53 planes).
 $CC $CFLAGS -DVSYM_CORNER -o test_cnn_sym_corner.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
 $CC $CFLAGS -DVSYM_CORNER -fopenmp -o train_vnet_sym_corner.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
+# ... and with the 3x3's edges too (-DVSYM_CORNER -DVSYM_EDGE: 71 planes).
+$CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -o test_cnn_sym_corner_edge.bin game2.c game3.c ladder2.c cnn_sym.c test_cnn_sym.c -lm
+$CC $CFLAGS -DVSYM_CORNER -DVSYM_EDGE -fopenmp -o train_vnet_sym_corner_edge.bin game2.c game3.c ladder2.c cnn_sym.c fpol.c vnet_tool.c train_vnet_supervised.c -lm
 
-echo "built 28 binaries"
+echo "built 30 binaries"
